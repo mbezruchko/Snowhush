@@ -75,6 +75,175 @@ impl Snowfall {
     }
 }
 
+/// What falls from the sky. Snow is the default; the others follow the seasons, or the pick in the tray menu.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Theme {
+    #[default]
+    Snow,
+    Leaves,
+    Blossom,
+    Candy,
+    Drops,
+}
+
+impl Theme {
+    pub const ALL: [Theme; 5] = [Theme::Snow, Theme::Leaves, Theme::Blossom, Theme::Candy, Theme::Drops];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Theme::Snow => "Snow",
+            Theme::Leaves => "Leaves",
+            Theme::Blossom => "Blossom",
+            Theme::Candy => "Candy",
+            Theme::Drops => "Drops",
+        }
+    }
+
+    pub fn index(self) -> usize {
+        Theme::ALL.iter().position(|&t| t == self).unwrap_or(0)
+    }
+
+    /// A drop of water runs off instead of piling up.
+    pub fn accumulates(self) -> bool {
+        self != Theme::Drops
+    }
+
+    /// The silhouette the shader draws: 0 snow, 1 leaf, 2 petal, 3 candy, 4 drop, 5 ripple.
+    fn shape(self) -> f32 {
+        match self {
+            Theme::Snow => 0.0,
+            Theme::Leaves => 1.0,
+            Theme::Blossom => 2.0,
+            Theme::Candy => 3.0,
+            Theme::Drops => 4.0,
+        }
+    }
+
+    /// The theme that suits the month, for "Auto".
+    pub fn seasonal() -> Theme {
+        let seconds = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        // Civil date from days since the Unix epoch (Howard Hinnant's algorithm); the UTC month is close enough for a season.
+        let z = (seconds / 86_400) as i64 + 719_468;
+        let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+        let doe = z - era * 146_097;
+        let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let month = mp + if mp < 10 { 3 } else { -9 };
+        match month {
+            3..=5 => Theme::Blossom,
+            6..=8 => Theme::Drops,
+            9..=11 => Theme::Leaves,
+            _ => Theme::Snow,
+        }
+    }
+}
+
+/// How a particle of a theme falls and looks.
+#[derive(Clone, Copy)]
+struct Style {
+    size: f32,
+    size_jitter: f32,
+    fall_speed: f32,
+    fall_jitter: f32,
+    alpha: f32,
+    soft: f32,
+    sway: f32,
+    sway_rate: (f32, f32),
+    tint: [f32; 3],
+    shape: f32,
+}
+
+/// The colour and silhouette a particle of `theme` takes.
+fn look(theme: Theme, random: &mut Random) -> ([f32; 3], f32, f32) {
+    let pick = |random: &mut Random, palette: &[[f32; 3]]| palette[(random.next() * palette.len() as f32) as usize % palette.len()];
+    match theme {
+        Theme::Snow => ([1.0; 3], 0.0, Theme::Snow.shape()),
+        Theme::Leaves => {
+            let palette = [[0.78, 0.36, 0.14], [0.86, 0.55, 0.16], [0.64, 0.26, 0.16], [0.60, 0.52, 0.24], [0.72, 0.22, 0.16], [0.82, 0.66, 0.24]];
+            (pick(random, &palette), 1.0, Theme::Leaves.shape())
+        }
+        Theme::Blossom => {
+            let palette = [[0.96, 0.68, 0.77], [0.92, 0.55, 0.66], [0.98, 0.76, 0.83], [0.88, 0.58, 0.67]];
+            (pick(random, &palette), 1.0, Theme::Blossom.shape())
+        }
+        Theme::Candy => {
+            let palette = [[0.74, 0.50, 0.82], [0.94, 0.62, 0.30], [0.92, 0.80, 0.44], [0.56, 0.72, 0.86]];
+            (pick(random, &palette), 1.0, Theme::Candy.shape())
+        }
+        Theme::Drops => {
+            let palette = [[0.66, 0.80, 0.93], [0.74, 0.86, 0.96], [0.58, 0.74, 0.90]];
+            (pick(random, &palette), 1.0, Theme::Drops.shape())
+        }
+    }
+}
+
+fn style_for(theme: Theme, depth: f32, random: &mut Random) -> Style {
+    let (tint, _, shape) = look(theme, random);
+    match theme {
+        Theme::Snow => Style {
+            size: 1.4 + depth * 4.4,
+            size_jitter: 1.0,
+            fall_speed: 16.0 + depth * 50.0,
+            fall_jitter: 10.0,
+            alpha: 0.4 + depth * 0.5,
+            soft: 0.75 - depth * 0.45,
+            sway: 4.0 + depth * 10.0,
+            sway_rate: (0.5, 1.4),
+            tint,
+            shape,
+        },
+        Theme::Leaves => Style {
+            size: 2.6 + depth * 5.2,
+            size_jitter: 1.8,
+            fall_speed: 20.0 + depth * 42.0,
+            fall_jitter: 14.0,
+            alpha: 0.62 + depth * 0.34,
+            soft: 0.5 - depth * 0.28,
+            sway: 12.0 + depth * 22.0,
+            sway_rate: (0.7, 1.7),
+            tint,
+            shape,
+        },
+        Theme::Blossom => Style {
+            size: 1.7 + depth * 3.2,
+            size_jitter: 1.2,
+            fall_speed: 13.0 + depth * 30.0,
+            fall_jitter: 9.0,
+            alpha: 0.55 + depth * 0.4,
+            soft: 0.65 - depth * 0.35,
+            sway: 14.0 + depth * 20.0,
+            sway_rate: (0.8, 2.0),
+            tint,
+            shape,
+        },
+        Theme::Candy => Style {
+            size: 2.2 + depth * 4.0,
+            size_jitter: 1.4,
+            fall_speed: 36.0 + depth * 78.0,
+            fall_jitter: 18.0,
+            alpha: 0.7 + depth * 0.28,
+            soft: 0.4 - depth * 0.25,
+            sway: 3.0 + depth * 6.0,
+            sway_rate: (0.4, 1.0),
+            tint,
+            shape,
+        },
+        Theme::Drops => Style {
+            size: 1.1 + depth * 2.4,
+            size_jitter: 0.6,
+            fall_speed: 260.0 + depth * 300.0,
+            fall_jitter: 90.0,
+            alpha: 0.42 + depth * 0.45,
+            soft: 0.35 - depth * 0.2,
+            sway: 1.0 + depth * 3.0,
+            sway_rate: (0.9, 2.2),
+            tint,
+            shape,
+        },
+    }
+}
+
 /// How briskly the scene changes, which sets how often it is drawn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Pace {
@@ -100,6 +269,8 @@ pub struct Sprite {
     pub tint: [f32; 3],
     /// Gives a lump of snow its ragged outline and tumble; zero for a round flake.
     pub lump: f32,
+    /// The silhouette to draw: 0 snow, 1 leaf, 2 petal, 3 candy, 4 drop, 5 ripple.
+    pub shape: f32,
 }
 
 /// A bit of something that crumbles into snow, such as a window: it keeps its colour for a moment while it falls.
@@ -146,6 +317,9 @@ struct Flake {
     mass: f32,
     tint: [f32; 3],
     tint_amount: f32,
+    /// Themed snowfall keeps its colour; a scattered window piece fades the tint out as it settles.
+    keeps_tint: bool,
+    shape: f32,
     /// The direction of the gust that caught the flake and carries it off the screen; zero until then.
     blown: f32,
 }
@@ -160,6 +334,9 @@ struct Grain {
     lump: f32,
     /// Powder carried off by a gust: it rides the wind off the screen instead of settling.
     blown: bool,
+    tint: [f32; 3],
+    tint_amount: f32,
+    shape: f32,
 }
 
 /// Powder thrown up by a lump bursting: it billows, slows in the air and fades without settling.
@@ -171,6 +348,12 @@ struct Mote {
     alpha: f32,
     age: f32,
     life: f32,
+    /// A splash's ripple sits still, spreads and fades instead of falling.
+    rises: bool,
+    shape: f32,
+    grow: f32,
+    tint: [f32; 3],
+    tint_amount: f32,
 }
 
 struct Random(u64);
@@ -206,6 +389,7 @@ struct Air {
     flakes: Vec<Flake>,
     grains: Vec<Grain>,
     motes: Vec<Mote>,
+    theme: Theme,
     random: Random,
     clock: f64,
     strength: f32,
@@ -275,6 +459,7 @@ impl SnowSimulation {
                 flakes: Vec::new(),
                 grains: Vec::new(),
                 motes: Vec::new(),
+                theme: Theme::Snow,
                 random: Random::new(),
                 clock: 0.0,
                 strength: 1.0,
@@ -320,6 +505,28 @@ impl SnowSimulation {
     pub fn set_snowfall_held(&mut self, held: bool) {
         self.snowfall_held = held;
         self.update_target();
+    }
+
+    pub fn theme(&self) -> Theme {
+        self.air.theme
+    }
+
+    /// Recolours what is already falling and, for the water, clears the drifts.
+    pub fn set_theme(&mut self, theme: Theme) {
+        if self.air.theme == theme {
+            return;
+        }
+        self.air.theme = theme;
+        self.air.apply_theme();
+        if !theme.accumulates() {
+            for layer in &mut self.layers {
+                for i in 0..layer.count() {
+                    layer.set(i, 0.0);
+                }
+                layer.refresh_top();
+            }
+        }
+        self.air.heights_changed = true;
     }
 
     /// Whether the held snowfall started by itself since the last call.
@@ -408,6 +615,7 @@ impl SnowSimulation {
             soft: flake.soft,
             tint_amount: flake.tint_amount,
             tint: flake.tint,
+            shape: flake.shape,
             ..Sprite::default()
         });
         let grains = self.air.grains.iter().map(|grain| Sprite {
@@ -422,14 +630,25 @@ impl SnowSimulation {
                 0.95
             },
             soft: if grain.lump > 0.0 { 0.2 } else { 0.3 },
-            tint: [1.0; 3],
+            tint_amount: grain.tint_amount,
+            tint: grain.tint,
             lump: grain.lump,
+            shape: grain.shape,
             ..Sprite::default()
         });
         let motes = self.air.motes.iter().map(|mote| {
             let t = mote.age / mote.life;
             let fade = (mote.age / 0.06).min(1.0) * (1.0 - t).powf(1.5);
-            Sprite { position: mote.position, size: mote.size * (1.0 + t), alpha: mote.alpha * fade, soft: 1.0, tint: [1.0; 3], ..Sprite::default() }
+            Sprite {
+                position: mote.position,
+                size: mote.size * (1.0 + t * mote.grow),
+                alpha: mote.alpha * fade,
+                soft: 1.0,
+                tint_amount: mote.tint_amount,
+                tint: mote.tint,
+                shape: mote.shape,
+                ..Sprite::default()
+            }
         });
         let mut count = 0;
         for (slot, sprite) in buffer.iter_mut().zip(flakes.chain(grains).chain(motes)) {
@@ -464,6 +683,7 @@ impl SnowSimulation {
     /// Turns the pieces into snowflakes that drift down and fade to white; together they leave a small drift.
     pub fn scatter(&mut self, pieces: &[ScatterPiece]) {
         self.scattered_until = self.air.clock + 8.0;
+        let theme = self.air.theme;
         for piece in pieces {
             let random = &mut self.air.random;
             let depth = random.next().powf(0.7);
@@ -482,6 +702,8 @@ impl SnowSimulation {
                 mass: 0.06,
                 tint: piece.color,
                 tint_amount: 1.0,
+                keeps_tint: theme != Theme::Snow,
+                shape: theme.shape(),
                 blown: 0.0,
             });
         }
@@ -685,7 +907,7 @@ impl SnowSimulation {
             }
             let sway = (flake.phase.cos() + 0.3 * (flake.phase * 2.3).cos()) * flake.sway_amount;
             let flutter = 1.0 + 0.12 * (flake.phase * 1.3).sin();
-            if flake.tint_amount > 0.0 {
+            if flake.tint_amount > 0.0 && !flake.keeps_tint {
                 flake.tint_amount = (flake.tint_amount - dt * 1.3).max(0.0);
             }
             let previous_y = flake.position.y;
@@ -700,6 +922,15 @@ impl SnowSimulation {
                 flake.position.x += self.width + 60.0;
             } else if flake.position.x > self.width + 30.0 {
                 flake.position.x -= self.width + 60.0;
+            }
+
+            if flake.settles && self.air.theme == Theme::Drops && flake.blown == 0.0 {
+                if let Some((li, column)) = landing(&self.layers, flake.position.x, previous_y, flake.position.y) {
+                    let y = self.layers[li].surface(column);
+                    self.air.splash(V2::new(flake.position.x, y), flake.size);
+                    self.recycle(i);
+                    continue;
+                }
             }
 
             if flake.settles && self.accumulates && flake.blown == 0.0 {
@@ -750,8 +981,14 @@ impl SnowSimulation {
                 self.air.grains.swap_remove(i);
             } else if !grain.blown
                 && grain.velocity.y <= 0.0
-                && let Some((li, _)) = landing(&self.layers, grain.position.x, previous_y, grain.position.y)
+                && let Some((li, column)) = landing(&self.layers, grain.position.x, previous_y, grain.position.y)
             {
+                if self.air.theme == Theme::Drops {
+                    let y = self.layers[li].surface(column);
+                    self.air.splash(V2::new(grain.position.x, y), grain.size);
+                    self.air.grains.swap_remove(i);
+                    continue;
+                }
                 let layer = &mut self.layers[li];
                 if grain.lump > 0.0 {
                     self.air.burst(&grain, layer);
@@ -931,6 +1168,78 @@ impl SnowSimulation {
 }
 
 impl Air {
+    /// Recolours what is already falling after a change of theme.
+    fn apply_theme(&mut self) {
+        let theme = self.theme;
+        for flake in &mut self.flakes {
+            if flake.mass < 1.0 {
+                continue;
+            }
+            let style = style_for(theme, flake.depth, &mut self.random);
+            flake.tint = style.tint;
+            flake.tint_amount = if theme == Theme::Snow { 0.0 } else { 1.0 };
+            flake.keeps_tint = flake.tint_amount > 0.0;
+            flake.shape = style.shape;
+            flake.soft = style.soft;
+        }
+        let (tint, amount, shape) = look(theme, &mut self.random);
+        for grain in &mut self.grains {
+            grain.tint = tint;
+            grain.tint_amount = amount;
+            grain.shape = shape;
+        }
+        if !theme.accumulates() {
+            self.grains.clear();
+            self.motes.clear();
+        }
+    }
+
+    /// A drop striking a surface: a ring spreads where it hit and a few beads hop up. Nothing settles.
+    fn splash(&mut self, position: V2, size: f32) {
+        if self.motes.len() >= MAX_MOTES {
+            return;
+        }
+        let force = (size / 4.0).clamp(0.4, 1.4);
+        let color = look(Theme::Drops, &mut self.random).0;
+        // Sit the ring just inside the screen, so a splash on the bottom edge still reads.
+        let center = position + V2::new(0.0, 3.0);
+        // Not every drop leaves a ring, or a heavy fall would carpet the edge.
+        if self.random.next() < 0.45 {
+            self.motes.push(Mote {
+                position: center,
+                velocity: V2::ZERO,
+                size: (size * 1.6).max(3.5),
+                alpha: 0.4 * force,
+                age: 0.0,
+                life: self.random.range(0.3, 0.55),
+                rises: true,
+                shape: 5.0,
+                grow: 3.4,
+                tint: color,
+                tint_amount: 1.0,
+            });
+        }
+        let beads = (MAX_MOTES - self.motes.len()).min((1.0 + force * 2.0) as usize);
+        for _ in 0..beads {
+            let random = &mut self.random;
+            let angle = random.range(0.25, PI - 0.25);
+            let speed = random.range(45.0, 120.0) * force;
+            self.motes.push(Mote {
+                position: center + V2::new(random.range(-1.5, 1.5), 0.0),
+                velocity: V2::new(angle.cos() * speed, angle.sin() * speed * 0.9),
+                size: random.range(1.2, 2.4) * force,
+                alpha: random.range(0.4, 0.65),
+                age: 0.0,
+                life: random.range(0.24, 0.5),
+                rises: false,
+                shape: 4.0,
+                grow: 0.0,
+                tint: color,
+                tint_amount: 1.0,
+            });
+        }
+    }
+
     /// Carries snow along with a window that the whole desktop is sliding past: nothing pushes the snow, so it doesn't react.
     fn pan(&mut self, ledge: &mut SnowLayer, left: f32, top: f32) {
         let shift = V2::new(left, top) - ledge.origin;
@@ -1144,6 +1453,7 @@ impl Air {
     fn throw_lump(&mut self, area: f32, position: V2, velocity: V2) {
         let pieces = (area / 90.0) as usize + 1;
         let share = area / pieces as f32;
+        let (tint, tint_amount, shape) = look(self.theme, &mut self.random);
         for _ in 0..pieces {
             if self.grains.len() >= MAX_GRAINS {
                 break;
@@ -1157,6 +1467,9 @@ impl Air {
                 size: (share.sqrt() * 1.05).min(11.0),
                 lump: random.range(0.05, 1.0),
                 blown: false,
+                tint,
+                tint_amount,
+                shape,
             });
         }
     }
@@ -1176,6 +1489,7 @@ impl Air {
         self.release(crumbs, V2::new(lump.position.x, surface + 1.0), velocity, V2::new(lump.size * 0.4, 1.0), 0.6);
 
         let count = MAX_MOTES.saturating_sub(self.motes.len()).min((2.0 + lump.size * 0.6 * force) as usize);
+        let (tint, tint_amount, shape) = look(self.theme, &mut self.random);
         for _ in 0..count {
             let random = &mut self.random;
             let angle = random.range(0.15, PI - 0.15);
@@ -1187,6 +1501,11 @@ impl Air {
                 alpha: random.range(0.1, 0.22),
                 age: 0.0,
                 life: random.range(0.45, 0.9),
+                rises: false,
+                shape,
+                grow: 0.0,
+                tint,
+                tint_amount,
             });
         }
     }
@@ -1203,6 +1522,7 @@ impl Air {
         }
         let count = room.min(((area / 3.0) as usize).clamp(1, 6));
         let share = area / count as f32;
+        let (tint, tint_amount, shape) = look(self.theme, &mut self.random);
         for _ in 0..count {
             let random = &mut self.random;
             let jitter = V2::new(random.range(-12.0, 12.0) - 40.0 * scatter * random.range(-1.0, 1.0), random.range(-10.0, 8.0));
@@ -1213,6 +1533,9 @@ impl Air {
                 size: (share.sqrt() * 1.05).clamp(1.1, 5.0),
                 lump: 0.0,
                 blown: false,
+                tint,
+                tint_amount,
+                shape,
             });
         }
     }
@@ -1309,6 +1632,7 @@ impl Air {
         let offset = origin - center;
         let length = offset.length();
         let outward = if length > 0.001 { offset / length } else { V2::new(0.0, 1.0) };
+        let (tint, tint_amount, shape) = look(self.theme, &mut self.random);
 
         for _ in 0..count {
             let random = &mut self.random;
@@ -1322,6 +1646,9 @@ impl Air {
                 size: (share.sqrt() * 1.05).clamp(1.1, 4.2),
                 lump: 0.0,
                 blown: false,
+                tint,
+                tint_amount,
+                shape,
             });
         }
         area
@@ -1340,6 +1667,10 @@ impl Air {
             mote.age += dt;
             if mote.age >= mote.life {
                 self.motes.swap_remove(i);
+            } else if mote.rises {
+                // A ripple spreads flat on the surface and leans nowhere.
+                mote.velocity *= (-7.0 * dt).exp();
+                mote.position += mote.velocity * dt;
             } else {
                 mote.velocity.y -= 35.0 * dt;
                 mote.velocity *= damping;
@@ -1350,25 +1681,29 @@ impl Air {
 
     fn make_flake(&mut self, width: f32, y: f32) -> Flake {
         let wind = self.wind_speed();
+        let theme = self.theme;
         let random = &mut self.random;
-        let near = random.next() < 0.02;
+        let near = theme == Theme::Snow && random.next() < 0.02;
         let depth = if near { 1.0 } else { random.next().powf(1.6) };
-        let fall_speed = if near { random.range(75.0, 100.0) } else { 16.0 + depth * 50.0 + random.range(0.0, 10.0) };
+        let style = style_for(theme, depth, random);
+        let fall_speed = if near { random.range(75.0, 100.0) } else { style.fall_speed + random.range(0.0, style.fall_jitter) };
         Flake {
             position: V2::new(random.range(-30.0, width + 30.0), y),
             velocity: V2::new(wind * (0.35 + 0.65 * depth), -fall_speed),
             fall_speed,
-            size: if near { random.range(8.0, 13.0) } else { 1.4 + depth * 4.4 + random.range(0.0, 1.0) },
+            size: if near { random.range(8.0, 13.0) } else { style.size + random.range(0.0, style.size_jitter) },
             depth,
-            alpha: if near { 0.28 } else { 0.4 + depth * 0.5 },
-            soft: if near { 0.95 } else { 0.75 - depth * 0.45 },
+            alpha: if near { 0.28 } else { style.alpha },
+            soft: if near { 0.95 } else { style.soft },
             phase: random.range(0.0, PHASE_WRAP),
-            sway_rate: random.range(0.5, 1.4),
-            sway_amount: if near { random.range(10.0, 20.0) } else { random.range(4.0, 9.0) + depth * 10.0 },
+            sway_rate: random.range(style.sway_rate.0, style.sway_rate.1),
+            sway_amount: if near { random.range(10.0, 20.0) } else { style.sway },
             settles: !near,
             mass: 1.0,
-            tint: [1.0; 3],
-            tint_amount: 0.0,
+            tint: style.tint,
+            tint_amount: if theme == Theme::Snow { 0.0 } else { 1.0 },
+            keeps_tint: theme != Theme::Snow,
+            shape: style.shape,
             blown: 0.0,
         }
     }
@@ -1398,6 +1733,7 @@ impl Air {
         if self.grains.len() >= MAX_GRAINS {
             return;
         }
+        let (tint, tint_amount, shape) = look(self.theme, &mut self.random);
         let random = &mut self.random;
         self.grains.push(Grain {
             position: position + V2::new(random.range(-1.0, 1.0), random.range(-3.0, 0.0)),
@@ -1406,6 +1742,9 @@ impl Air {
             size: random.range(1.1, 2.6),
             lump: 0.0,
             blown: true,
+            tint,
+            tint_amount,
+            shape,
         });
         if random.next() >= 0.35 || self.motes.len() >= MAX_MOTES {
             return;
@@ -1417,6 +1756,11 @@ impl Air {
             alpha: random.range(0.06, 0.14),
             age: 0.0,
             life: random.range(0.6, 1.3),
+            rises: false,
+            shape,
+            grow: 0.0,
+            tint,
+            tint_amount,
         });
     }
 }

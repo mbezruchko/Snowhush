@@ -14,7 +14,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{HSTRING, PCWSTR, Result, w};
 
 use snowhush::geometry::V2;
-use snowhush::simulation::{ScatterPiece, SnowSimulation, Snowfall};
+use snowhush::simulation::{ScatterPiece, SnowSimulation, Snowfall, Theme};
 
 use crate::desktop::{self, DesktopLayer};
 use crate::light::{Wallpapers, daylight};
@@ -34,6 +34,10 @@ pub struct Piece {
 
 pub enum Command {
     Snowfall(Snowfall),
+    Theme {
+        theme: Theme,
+        auto: bool,
+    },
     Accumulate(bool),
     Melt(bool),
     SnowOnWindows(bool),
@@ -102,6 +106,12 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                 Command::Snowfall(snowfall) => {
                     settings.snowfall = snowfall;
                     screens.iter_mut().for_each(|screen| screen.simulation.set_snowfall(snowfall));
+                }
+                Command::Theme { theme, auto } => {
+                    settings.theme = theme;
+                    settings.theme_auto = auto;
+                    let resolved = settings.resolved_theme();
+                    screens.iter_mut().for_each(|screen| screen.simulation.set_theme(resolved));
                 }
                 Command::Accumulate(on) => {
                     settings.accumulate = on;
@@ -205,6 +215,13 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                 log!("power: {budget:?}");
                 let density = if budget == PowerBudget::Saver { 0.75 } else { 1.0 };
                 screens.iter_mut().for_each(|screen| screen.simulation.set_density(density));
+            }
+            // Auto follows the calendar; a change of season takes over without a restart.
+            if settings.theme_auto {
+                let resolved = settings.resolved_theme();
+                if screens.iter().any(|screen| screen.simulation.theme() != resolved) {
+                    screens.iter_mut().for_each(|screen| screen.simulation.set_theme(resolved));
+                }
             }
             screens.iter().for_each(Screen::raise);
             // Behind windows, the overlays live inside Explorer's windows and vanish when it restarts; until the
@@ -344,6 +361,7 @@ fn new_simulation(monitor: &Monitor, settings: &Settings) -> SnowSimulation {
     let mut simulation = SnowSimulation::new(width as f32, height as f32, settings.snowfall);
     simulation.thaws = settings.melt;
     simulation.accumulates = settings.accumulate;
+    simulation.set_theme(settings.resolved_theme());
     simulation.set_snowfall_held(!settings.welcomed);
     simulation
 }

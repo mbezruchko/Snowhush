@@ -472,6 +472,14 @@ body.snow-behind canvas.snow { z-index: 1; }
           <button class="menu-item" type="button" role="menuitemradio" data-snowfall="heavy" aria-checked="false">Heavy</button>
           <button class="menu-item" type="button" role="menuitemradio" data-snowfall="variable" aria-checked="false">Variable</button>
           <div class="menu-sep" role="separator"></div>
+          <div class="menu-head" role="presentation">Theme</div>
+          <button class="menu-item" type="button" role="menuitemradio" data-theme="snow" aria-checked="true">Snow</button>
+          <button class="menu-item" type="button" role="menuitemradio" data-theme="leaves" aria-checked="false">Leaves</button>
+          <button class="menu-item" type="button" role="menuitemradio" data-theme="blossom" aria-checked="false">Blossom</button>
+          <button class="menu-item" type="button" role="menuitemradio" data-theme="candy" aria-checked="false">Candy</button>
+          <button class="menu-item" type="button" role="menuitemradio" data-theme="drops" aria-checked="false">Drops</button>
+          <button class="menu-item" type="button" role="menuitemcheckbox" data-toggle="themeAuto" aria-checked="false">Auto (by Season)</button>
+          <div class="menu-sep" role="separator"></div>
           <button class="menu-item" type="button" role="menuitemcheckbox" data-toggle="accumulate" aria-checked="true">Accumulate</button>
           <button class="menu-item" type="button" role="menuitemcheckbox" data-toggle="melt" aria-checked="true">Melt Snow</button>
           <button class="menu-item" type="button" role="menuitemcheckbox" data-toggle="windows" aria-checked="true">Snow on Windows</button>
@@ -483,7 +491,7 @@ body.snow-behind canvas.snow { z-index: 1; }
           <div class="menu-sep" role="separator"></div>
           <button class="menu-item" type="button" role="menuitem" data-action="quit"><span>Quit</span><span class="menu-key">⌘Q</span></button>
         </div>
-        <p class="caption">This menu works. Try Heavy, turn off Melt Snow and watch the drift grow, or flip Show in Screenshots and see what a screenshot keeps.</p>
+        <p class="caption">This menu works. Try Heavy, pick a Theme, turn off Melt Snow and watch the drift grow, or flip Show in Screenshots and see what a screenshot keeps.</p>
       </aside>
     </div>
     <canvas class="snow" aria-hidden="true"></canvas>

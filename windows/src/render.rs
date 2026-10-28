@@ -38,6 +38,9 @@ struct Uniforms {
     origin: [f32; 2],
     pile_bottom: f32,
     height_offset: i32,
+    theme: i32,
+    /// HLSL packs the following float4 at the next 16-byte boundary.
+    _padding: [i32; 3],
     light: [f32; 4],
     shadow_tint: [f32; 4],
     occluders: [[f32; 4]; 16],
@@ -116,6 +119,7 @@ impl Gpu {
                 element(s!("TINTAMOUNT"), DXGI_FORMAT_R32_FLOAT, 28),
                 element(s!("TINTCOLOR"), DXGI_FORMAT_R32G32B32_FLOAT, 32),
                 element(s!("LUMP"), DXGI_FORMAT_R32_FLOAT, 44),
+                element(s!("SHAPE"), DXGI_FORMAT_R32_FLOAT, 48),
             ];
             let mut sprite_layout = None;
             device.CreateInputLayout(&elements, blob_bytes(&sprite_code), Some(&mut sprite_layout))?;
@@ -273,6 +277,8 @@ impl Surface {
                 origin: [0.0; 2],
                 pile_bottom: 0.0,
                 height_offset: 0,
+                theme: simulation.theme().index() as i32,
+                _padding: [0; 3],
                 light: [ambient.light[0], ambient.light[1], ambient.light[2], 1.0],
                 shadow_tint: ambient.shadow_tint,
                 occluders: [[0.0; 4]; 16],

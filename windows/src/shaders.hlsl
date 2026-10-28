@@ -9,6 +9,7 @@ cbuffer Uniforms : register(b0) {
     float2 origin;
     float pileBottom;
     int heightOffset;
+    int theme;
     float4 light;
     float4 shadowTint;
     float4 occluders[16];
@@ -25,6 +26,7 @@ struct SpriteIn {
     float tintAmount : TINTAMOUNT;
     float3 tintColor : TINTCOLOR;
     float lump : LUMP;
+    float shape : SHAPE;
     uint vid : SV_VertexID;
 };
 
@@ -37,6 +39,7 @@ struct SpriteOut {
     float2 streak : STREAK;
     float radius : RADIUS;
     float lump : LUMP;
+    float shape : SHAPE;
     float spin : SPIN;
 };
 
@@ -61,7 +64,17 @@ SpriteOut spriteVertex(SpriteIn s) {
     o.soft = s.soft;
     o.tint = float4(s.tintColor, s.tintAmount);
     o.lump = s.lump;
-    o.spin = s.lump > 0.0 ? time * (s.lump - 0.5) * 9.0 + s.lump * 40.0 : 0.0;
+    o.shape = s.shape;
+    // Leaves and petals tumble as they fall; a lump of snow keeps its own slow roll.
+    float seed = frac(s.position.x * 0.017 + s.position.y * 0.031);
+    int kind = (int)(s.shape + 0.5);
+    float turn = kind == 1 ? 0.8 : kind == 2 ? 1.25 : kind == 3 ? 0.5 : 0.0;
+    // A drop hangs from its own weight and points straight up; the others tumble as they fall.
+    o.spin = kind == 4
+        ? 0.0
+        : (s.lump > 0.0
+            ? time * (s.lump - 0.5) * 9.0 + s.lump * 40.0
+            : time * turn * (0.7 + seed) + seed * 6.283);
     return o;
 }
 
@@ -72,13 +85,48 @@ float4 spriteFragment(SpriteOut i) : SV_Target {
     float span = dot(half_, half_);
     float t = span > 0.0 ? clamp(dot(p, half_) / span, -1.0, 1.0) : 0.0;
     float2 d = p - half_ * t;
-    float r = length(d) / max(i.radius, 0.001);
+    float R = max(i.radius, 0.001);
+    float r = length(d) / R;
     float shading = 0.0;
+    int kind = (int)(i.shape + 0.5);
+    // The particle's own axes, so a leaf or a petal turns as it falls. Sized to the particle, not to its streak.
+    float ca = cos(i.spin), sa = sin(i.spin);
+    float2 q = float2(ca * p.x - sa * p.y, sa * p.x + ca * p.y) / R;
+
     if (i.lump > 0.0) {
         float angle = atan2(d.y, d.x) + i.spin;
         r /= 1.0 + 0.14 * sin(3.0 * angle) + 0.08 * sin(5.0 * angle + i.lump * 21.0) + 0.05 * sin(2.0 * angle + i.lump * 9.0);
-        shading = saturate(dot(d / max(i.radius, 0.001), float2(0.45, -0.6))) * 0.4;
+        shading = saturate(dot(d / R, float2(0.45, -0.6))) * 0.4;
+    } else if (kind == 1) {
+        // A leaf: a pointed blade on a short stem, with a faint midrib.
+        float2 blade = float2(q.x, q.y - 0.18);
+        float body = length(float2(blade.x / (0.46 * (1.0 - 0.26 * blade.y)), blade.y / 0.80));
+        float stem = length(float2(q.x / 0.055, (q.y + 0.62) / 0.20));
+        r = min(body, stem);
+        shading = smoothstep(0.055, 0.0, abs(q.x)) * 0.24;
+    } else if (kind == 2) {
+        // A blossom petal: soft and rounded, with a small notch at the tip.
+        float notch = 0.18 * smoothstep(0.30, 0.95, q.y) * smoothstep(0.22, 0.0, abs(q.x));
+        r = length(float2(q.x / 0.74, q.y / 1.02)) + notch;
+        shading = smoothstep(-0.1, -0.9, q.y) * 0.10;
+    } else if (kind == 3) {
+        // A wrapped sweet: a round centre pinched into two crinkled ends.
+        float ax = abs(q.x);
+        float flap = lerp(0.40, 0.11, smoothstep(0.24, 0.70, ax)) * (1.0 + 0.16 * sin(ax * 15.0));
+        float wrapEnd = length(float2(q.x / 0.72, q.y / max(flap, 0.02)));
+        float body = length(q / float2(0.34, 0.40));
+        r = min(body, wrapEnd);
+        shading = smoothstep(0.34, 0.02, length(q - float2(-0.14, 0.14))) * 0.30;
+    } else if (kind == 4) {
+        // A drop: round below, drawn up to a point, with a small highlight.
+        float width = lerp(0.74, 0.24, smoothstep(-0.15, 1.0, q.y));
+        r = length(float2(q.x / width, q.y / 1.05));
+        shading = smoothstep(0.30, 0.0, length(q - float2(-0.18, -0.18))) * 0.34;
+    } else if (kind == 5) {
+        // A ripple: a thin ring spreading out from where a drop landed.
+        r = abs(length(p) / R - 0.86) * 7.0;
     }
+
     // Brighter at the head, where the flake is now, than at the tail, where it was.
     float head = span > 0.0 ? 0.15 + 0.85 * pow(t * 0.5 + 0.5, 1.5) : 1.0;
     float a = (1.0 - smoothstep(lerp(0.6, 0.0, i.soft), 1.0, r)) * i.alpha * head;
@@ -138,15 +186,35 @@ float4 pileFragment(PileOut i) : SV_Target {
     float slope = (heightAt(heightOffset, x + 2.0) - heightAt(heightOffset, x - 2.0)) * 0.25;
     float lit = dot(normalize(float2(-slope, 1.0)), normalize(float2(-0.5, 1.0)));
 
-    float3 shadow = lerp(float3(0.72, 0.78, 0.88), shadowTint.rgb, shadowTint.a);
-    float3 surface = lerp(float3(0.925, 0.94, 0.965), min(shadowTint.rgb * 1.18, float3(1.0, 1.0, 1.0)), shadowTint.a * 0.2);
+    float3 shadowColor;
+    float3 surface;
+    float3 highlight;
+    if (theme == 1) {
+        shadowColor = float3(0.32, 0.19, 0.10);
+        surface = float3(0.69, 0.42, 0.21);
+        highlight = float3(0.86, 0.62, 0.34);
+    } else if (theme == 2) {
+        shadowColor = float3(0.72, 0.50, 0.60);
+        surface = float3(0.96, 0.82, 0.86);
+        highlight = float3(1.0, 0.93, 0.95);
+    } else if (theme == 3) {
+        shadowColor = float3(0.44, 0.28, 0.50);
+        surface = float3(0.82, 0.64, 0.84);
+        highlight = float3(0.96, 0.86, 0.96);
+    } else {
+        shadowColor = float3(0.72, 0.78, 0.88);
+        surface = float3(0.925, 0.94, 0.965);
+        highlight = float3(0.975, 0.982, 0.995);
+    }
+    shadowColor = lerp(shadowColor, shadowTint.rgb, shadowTint.a * 0.6);
+    surface = lerp(surface, min(shadowTint.rgb * 1.18, float3(1.0, 1.0, 1.0)), shadowTint.a * 0.2);
     float shade = (1.0 - exp(-depth / 30.0)) * 0.32 + (1.0 - lit) * 0.6 * exp(-depth / 5.0);
-    float3 color = lerp(surface, shadow, saturate(shade));
-    color = lerp(color, float3(0.975, 0.982, 0.995), exp(-depth * 0.9) * 0.6);
+    float3 color = lerp(surface, shadowColor, saturate(shade));
+    color = lerp(color, highlight, exp(-depth * 0.9) * 0.6);
     color += (hash(floor(i.position.xy)) - 0.5) * 0.02;
 
     float seed = hash(floor(i.position.xy * 0.5) + 31.7);
-    if (seed > 0.992) {
+    if (seed > 0.992 && (theme == 0 || theme == 4)) {
         float twinkle = pow(saturate(sin(time * (0.6 + seed * 1.8) + seed * 90.0)), 28.0);
         color = lerp(color, float3(1.0, 1.0, 1.0), twinkle * exp(-depth / 7.0));
     }

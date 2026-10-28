@@ -7,7 +7,7 @@ use windows::Win32::System::Registry::{
 use windows::Win32::UI::WindowsAndMessaging::{SPI_GETCLIENTAREAANIMATION, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW};
 use windows::core::{BOOL, PCWSTR, w};
 
-use snowhush::simulation::Snowfall;
+use snowhush::simulation::{Snowfall, Theme};
 
 const KEY: PCWSTR = w!("Software\\Snowhush");
 const RUN: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
@@ -16,6 +16,8 @@ const RUN_VALUE: PCWSTR = w!("Snowhush");
 #[derive(Clone, Copy)]
 pub struct Settings {
     pub snowfall: Snowfall,
+    pub theme: Theme,
+    pub theme_auto: bool,
     pub accumulate: bool,
     pub melt: bool,
     pub snow_on_windows: bool,
@@ -28,8 +30,11 @@ impl Settings {
     pub fn load() -> Settings {
         let calm = !animations_enabled();
         let snowfall = read(w!("snowfall")).and_then(|i| Snowfall::ALL.get(i as usize).copied());
+        let theme = read(w!("theme")).and_then(|i| Theme::ALL.get(i as usize).copied());
         Settings {
             snowfall: snowfall.unwrap_or(if calm { Snowfall::Light } else { Snowfall::Steady }),
+            theme: theme.unwrap_or_default(),
+            theme_auto: read(w!("themeAuto")).is_some_and(|v| v != 0),
             accumulate: read(w!("accumulate")).is_none_or(|v| v != 0),
             melt: read(w!("meltSnow")).is_none_or(|v| v != 0),
             snow_on_windows: read(w!("snowOnWindows")).is_none_or(|v| v != 0),
@@ -39,9 +44,16 @@ impl Settings {
         }
     }
 
+    /// The theme to show now: the season under Auto, otherwise the pick.
+    pub fn resolved_theme(&self) -> Theme {
+        if self.theme_auto { Theme::seasonal() } else { self.theme }
+    }
+
     pub fn save(&self) {
         let snowfall = Snowfall::ALL.iter().position(|&s| s == self.snowfall).unwrap_or(2);
         write(w!("snowfall"), snowfall as u32);
+        write(w!("theme"), self.theme.index() as u32);
+        write(w!("themeAuto"), self.theme_auto as u32);
         write(w!("accumulate"), self.accumulate as u32);
         write(w!("meltSnow"), self.melt as u32);
         write(w!("snowOnWindows"), self.snow_on_windows as u32);

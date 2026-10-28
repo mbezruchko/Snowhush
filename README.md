@@ -30,7 +30,7 @@ A tiny app that lives in the menu bar on macOS and in the tray on Windows. Soft 
 - **Hides.** Screenshots and screen sharing show your desktop without it, unless you turn on Show in Screenshots.
 - **Rests.** About 6% of one processor core and 65 MB of memory, and less on battery or in Low Power Mode. It pauses while your screen sleeps, locks or is covered.
 
-Everything else lives in the menu bar: Snowfall (Off, Light, Steady, Heavy, Variable), Accumulate, Melt Snow, Snow on Windows, Clear Snow, Behind Windows, Show in Screenshots and Open at Login.
+Everything else lives in the menu bar: Snowfall (Off, Light, Steady, Heavy, Variable), Theme (Snow, Leaves, Blossom, Candy, Drops, or Auto by season), Accumulate, Melt Snow, Snow on Windows, Clear Snow, Behind Windows, Show in Screenshots and Open at Login.
 
 ## Building
 

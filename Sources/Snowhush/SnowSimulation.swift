@@ -16,6 +16,8 @@ struct Sprite {
     var tintBlue: Float = 1
     /// Gives a lump of snow its ragged outline and tumble; zero for a round flake.
     var lump: Float = 0
+    /// The silhouette to draw: 0 snow, 1 leaf, 2 petal, 3 candy, 4 drop, 5 ripple. See `Theme.shape`.
+    var shape: Float = 0
 }
 
 /// A bit of something that crumbles into snow, such as a window: it keeps its colour for a moment while it falls.
@@ -51,6 +53,10 @@ private struct Flake {
     var mass: Float = 1
     var tint = SIMD3<Float>(repeating: 1)
     var tintAmount: Float = 0
+    /// Themed snowfall keeps its colour; a scattered window piece fades the tint out as it settles.
+    var keepsTint = false
+    /// The silhouette to draw: see `Theme.shape`.
+    var shape: Float = 0
     /// The direction of the gust that caught the flake and carries it off the screen; zero until then.
     var blown: Float = 0
 }
@@ -64,6 +70,9 @@ private struct Grain {
     var lump: Float = 0
     /// Powder carried off by a gust: it rides the wind off the screen instead of settling.
     var blown = false
+    var tint = SIMD3<Float>(repeating: 1)
+    var tintAmount: Float = 0
+    var shape: Float = 0
 }
 
 /// Powder thrown up by a lump bursting: it billows, slows in the air and fades without settling.
@@ -74,6 +83,12 @@ private struct Mote {
     var alpha: Float
     var age: Float = 0
     var life: Float
+    /// A splash's ripple rises instead of falling, and grows as it fades.
+    var rises = false
+    var shape: Float = 0
+    var grow: Float = 0
+    var tint = SIMD3<Float>(repeating: 1)
+    var tintAmount: Float = 0
 }
 
 private struct RandomSource {
@@ -123,6 +138,15 @@ final class SnowSimulation {
     }
     var thaws = false
     var accumulates = true
+    /// What falls. Changing it recolours what is already in the air and, for the water, clears the drifts.
+    var theme: Theme = .snow {
+        didSet {
+            guard theme != oldValue else { return }
+            applyTheme()
+        }
+    }
+    /// Whether snow piles up at all: the preference, and whether this theme settles (water runs off).
+    private var deposits: Bool { accumulates && theme.accumulates }
     /// Keeps the snowfall from starting until a scattered window's snow first reaches the bottom of the screen.
     var snowfallHeld = false {
         didSet { updateTarget() }
@@ -272,7 +296,8 @@ final class SnowSimulation {
                 tintAmount: flake.tintAmount,
                 tintRed: flake.tint.x,
                 tintGreen: flake.tint.y,
-                tintBlue: flake.tint.z
+                tintBlue: flake.tint.z,
+                shape: flake.shape
             )
             count += 1
         }
@@ -283,14 +308,29 @@ final class SnowSimulation {
                 size: grain.size,
                 alpha: grain.lump > 0 ? 0.97 : grain.blown ? 0.8 : 0.95,
                 soft: grain.lump > 0 ? 0.2 : 0.3,
-                lump: grain.lump
+                tintAmount: grain.tintAmount,
+                tintRed: grain.tint.x,
+                tintGreen: grain.tint.y,
+                tintBlue: grain.tint.z,
+                lump: grain.lump,
+                shape: grain.shape
             )
             count += 1
         }
         for mote in motes where count < capacity {
             let t = mote.age / mote.life
             let fade = min(1, mote.age / 0.06) * pow(1 - t, 1.5)
-            buffer[count] = Sprite(position: mote.position, size: mote.size * (1 + t), alpha: mote.alpha * fade, soft: 1)
+            buffer[count] = Sprite(
+                position: mote.position,
+                size: mote.size * (1 + t * mote.grow),
+                alpha: mote.alpha * fade,
+                soft: 1,
+                tintAmount: mote.tintAmount,
+                tintRed: mote.tint.x,
+                tintGreen: mote.tint.y,
+                tintBlue: mote.tint.z,
+                shape: mote.shape
+            )
             count += 1
         }
         return count
@@ -597,6 +637,7 @@ final class SnowSimulation {
 
     private func throwLump(_ area: Float, at position: SIMD2<Float>, velocity: SIMD2<Float>) {
         let pieces = Int(area / 90) + 1
+        let look = self.look()
         for _ in 0..<pieces where grains.count < maxGrains {
             let share = area / Float(pieces)
             grains.append(Grain(
@@ -605,7 +646,10 @@ final class SnowSimulation {
                 velocity: velocity * (1 + random.range(-0.2, 0.2)) + SIMD2(random.range(-25, 25), random.range(-80, 0)),
                 area: share,
                 size: min(11, share.squareRoot() * 1.05),
-                lump: random.range(0.05, 1)
+                lump: random.range(0.05, 1),
+                tint: look.tint,
+                tintAmount: look.amount,
+                shape: look.shape
             ))
         }
     }
@@ -631,6 +675,7 @@ final class SnowSimulation {
 
         let count = min(maxMotes - motes.count, Int(2 + lump.size * 0.6 * force))
         guard count > 0 else { return }
+        let look = self.look()
         for _ in 0..<count {
             let angle = random.range(0.15, .pi - 0.15)
             let speed = random.range(25, 110) * force
@@ -639,7 +684,49 @@ final class SnowSimulation {
                 velocity: SIMD2(cos(angle) * speed * 1.4 + lump.velocity.x * 0.2, sin(angle) * speed * 0.6),
                 size: random.range(0.3, 0.6) * lump.size + 1,
                 alpha: random.range(0.1, 0.22),
-                life: random.range(0.45, 0.9)
+                life: random.range(0.45, 0.9),
+                shape: look.shape,
+                tint: look.tint,
+                tintAmount: look.amount
+            ))
+        }
+    }
+
+    /// A drop striking a surface: a ring spreads where it hit and a few beads hop up. Nothing settles.
+    private func splash(at position: SIMD2<Float>, size: Float) {
+        guard motes.count < maxMotes else { return }
+        let force = min(max(size / 4, 0.4), 1.4)
+        let color = waterColor()
+        // Sit the ring just inside the screen, so a splash on the bottom edge still reads.
+        let center = position + SIMD2(0, 3)
+        // Not every drop leaves a ring, or a heavy fall would carpet the edge.
+        if random.next() < 0.45 {
+            motes.append(Mote(
+                position: center,
+                velocity: .zero,
+                size: max(3.5, size * 1.6),
+                alpha: 0.4 * force,
+                life: random.range(0.3, 0.55),
+                rises: true,
+                shape: 5,
+                grow: 3.4,
+                tint: color,
+                tintAmount: 1
+            ))
+        }
+        let beads = min(maxMotes - motes.count, Int(1 + force * 2))
+        for _ in 0..<beads {
+            let angle = random.range(0.25, .pi - 0.25)
+            let speed = random.range(45, 120) * force
+            motes.append(Mote(
+                position: center + SIMD2(random.range(-1.5, 1.5), 0),
+                velocity: SIMD2(cos(angle) * speed, sin(angle) * speed * 0.9),
+                size: random.range(1.2, 2.4) * force,
+                alpha: random.range(0.4, 0.65),
+                life: random.range(0.24, 0.5),
+                shape: 4,
+                tint: color,
+                tintAmount: 1
             ))
         }
     }
@@ -654,12 +741,16 @@ final class SnowSimulation {
         }
         let count = min(room, max(1, min(6, Int(area / 3))))
         let share = area / Float(count)
+        let look = self.look()
         for _ in 0..<count {
             grains.append(Grain(
                 position: position + SIMD2(random.range(-spread.x, spread.x), random.range(0, spread.y)),
                 velocity: velocity * (1 + random.range(-scatter, scatter)) + SIMD2(random.range(-12, 12) - 40 * scatter * random.range(-1, 1), random.range(-10, 8)),
                 area: share,
-                size: min(5, max(1.1, share.squareRoot() * 1.05))
+                size: min(5, max(1.1, share.squareRoot() * 1.05)),
+                tint: look.tint,
+                tintAmount: look.amount,
+                shape: look.shape
             ))
         }
     }
@@ -781,6 +872,7 @@ final class SnowSimulation {
         let offset = origin - center
         let length = simd_length(offset)
         let outward = length > 0.001 ? offset / length : SIMD2<Float>(0, 1)
+        let look = self.look()
 
         for _ in 0..<count {
             var v = velocity * random.range(0.55, 1.25) + outward * (speed * random.range(0.05, 0.25))
@@ -790,7 +882,10 @@ final class SnowSimulation {
                 position: origin + SIMD2(random.range(-1, 1), random.range(0, 2)),
                 velocity: v,
                 area: share,
-                size: min(4.2, max(1.1, share.squareRoot() * 1.05))
+                size: min(4.2, max(1.1, share.squareRoot() * 1.05)),
+                tint: look.tint,
+                tintAmount: look.amount,
+                shape: look.shape
             ))
         }
         return area
@@ -851,7 +946,7 @@ final class SnowSimulation {
             if flake.phase > phaseWrap { flake.phase -= phaseWrap }
             let sway = (cos(flake.phase) + 0.3 * cos(flake.phase * 2.3)) * flake.swayAmount
             let flutter = 1 + 0.12 * sin(flake.phase * 1.3)
-            if flake.tintAmount > 0 { flake.tintAmount = max(0, flake.tintAmount - dt * 1.3) }
+            if flake.tintAmount > 0 && !flake.keepsTint { flake.tintAmount = max(0, flake.tintAmount - dt * 1.3) }
             let previousY = flake.position.y
             flake.position.x += (flake.velocity.x + sway) * dt
             flake.position.y += flake.velocity.y * flutter * dt
@@ -865,6 +960,15 @@ final class SnowSimulation {
                 flake.position.x += width + 60
             } else if flake.position.x > width + 30 {
                 flake.position.x -= width + 60
+            }
+
+            if flake.settles && theme == .drops, flake.blown == 0,
+               let hit = landing(x: flake.position.x, from: previousY, to: flake.position.y) {
+                // A drop breaks on the first surface it meets: a ring spreads, a few beads hop up, nothing gathers.
+                splash(at: SIMD2(flake.position.x, hit.layer.surface(hit.index)), size: flake.size)
+                recycle(i)
+                i -= 1
+                continue
             }
 
             if flake.settles && accumulates && flake.blown == 0 {
@@ -911,6 +1015,12 @@ final class SnowSimulation {
             if grain.position.x < -10 || grain.position.x > width + 10 || grain.position.y < -10 {
                 removeGrain(i)
             } else if !grain.blown, grain.velocity.y <= 0, let hit = landing(x: grain.position.x, from: previousY, to: grain.position.y) {
+                if theme == .drops {
+                    splash(at: SIMD2(grain.position.x, hit.layer.surface(hit.index)), size: grain.size)
+                    removeGrain(i)
+                    i -= 1
+                    continue
+                }
                 if grain.lump > 0 {
                     burst(grain, into: hit.layer)
                     heightsChanged = true
@@ -941,9 +1051,15 @@ final class SnowSimulation {
                 motes.swapAt(i, motes.count - 1)
                 motes.removeLast()
             } else {
-                mote.velocity.y -= 35 * dt
-                mote.velocity *= damping
-                mote.position += (mote.velocity + SIMD2(drift, 0)) * dt
+                if mote.rises {
+                    // A ripple spreads flat on the surface and leans nowhere.
+                    mote.velocity *= exp(-7 * dt)
+                    mote.position += mote.velocity * dt
+                } else {
+                    mote.velocity.y -= 35 * dt
+                    mote.velocity *= damping
+                    mote.position += (mote.velocity + SIMD2(drift, 0)) * dt
+                }
                 motes[i] = mote
             }
             i -= 1
@@ -969,7 +1085,9 @@ final class SnowSimulation {
                 settles: true,
                 mass: 0.06,
                 tint: piece.color,
-                tintAmount: 1
+                tintAmount: 1,
+                keepsTint: theme != .snow,
+                shape: theme.shape
             ))
         }
     }
@@ -1001,22 +1119,174 @@ final class SnowSimulation {
     }
 
     private func makeFlake(y: Float) -> Flake {
-        let near = random.next() < 0.02
+        let near = theme == .snow && random.next() < 0.02
         let depth = near ? 1 : pow(random.next(), 1.6)
-        let fallSpeed = near ? random.range(75, 100) : 16 + depth * 50 + random.range(0, 10)
+        let style = particleStyle(depth: depth)
+        let fallSpeed = near ? random.range(75, 100) : style.fallSpeed + random.range(0, style.fallJitter)
         return Flake(
             position: SIMD2(random.range(-30, width + 30), y),
             velocity: SIMD2(windSpeed() * (0.35 + 0.65 * depth), -fallSpeed),
             fallSpeed: fallSpeed,
-            size: near ? random.range(8, 13) : 1.4 + depth * 4.4 + random.range(0, 1),
+            size: near ? random.range(8, 13) : style.size + random.range(0, style.sizeJitter),
             depth: depth,
-            alpha: near ? 0.28 : 0.4 + depth * 0.5,
-            soft: near ? 0.95 : 0.75 - depth * 0.45,
+            alpha: near ? 0.28 : style.alpha,
+            soft: near ? 0.95 : style.soft,
             phase: random.range(0, phaseWrap),
-            swayRate: random.range(0.5, 1.4),
-            swayAmount: near ? random.range(10, 20) : random.range(4, 9) + depth * 10,
-            settles: !near
+            swayRate: random.range(style.swayRate.0, style.swayRate.1),
+            swayAmount: near ? random.range(10, 20) : style.sway,
+            settles: !near && style.settles,
+            tint: style.tint,
+            tintAmount: style.tintAmount,
+            keepsTint: style.tintAmount > 0,
+            shape: style.shape
         )
+    }
+
+    // MARK: - Theme
+
+    /// How a particle of the current theme falls and looks.
+    private struct ParticleStyle {
+        var size: Float
+        var sizeJitter: Float
+        var fallSpeed: Float
+        var fallJitter: Float
+        var alpha: Float
+        var soft: Float
+        var sway: Float
+        var swayRate: (Float, Float)
+        var settles: Bool
+        var tint: SIMD3<Float>
+        var tintAmount: Float
+        var shape: Float
+    }
+
+    private func particleStyle(depth: Float) -> ParticleStyle {
+        let look = self.look()
+        switch theme {
+        case .snow:
+            return ParticleStyle(
+                size: 1.4 + depth * 4.4, sizeJitter: 1,
+                fallSpeed: 16 + depth * 50, fallJitter: 10,
+                alpha: 0.4 + depth * 0.5, soft: 0.75 - depth * 0.45,
+                sway: 4 + depth * 10, swayRate: (0.5, 1.4),
+                settles: true, tint: look.tint, tintAmount: look.amount, shape: look.shape
+            )
+        case .leaves:
+            return ParticleStyle(
+                size: 2.6 + depth * 5.2, sizeJitter: 1.8,
+                fallSpeed: 20 + depth * 42, fallJitter: 14,
+                alpha: 0.62 + depth * 0.34, soft: 0.5 - depth * 0.28,
+                sway: 12 + depth * 22, swayRate: (0.7, 1.7),
+                settles: true, tint: look.tint, tintAmount: look.amount, shape: look.shape
+            )
+        case .blossom:
+            return ParticleStyle(
+                size: 1.7 + depth * 3.2, sizeJitter: 1.2,
+                fallSpeed: 13 + depth * 30, fallJitter: 9,
+                alpha: 0.55 + depth * 0.4, soft: 0.65 - depth * 0.35,
+                sway: 14 + depth * 20, swayRate: (0.8, 2.0),
+                settles: true, tint: look.tint, tintAmount: look.amount, shape: look.shape
+            )
+        case .candy:
+            return ParticleStyle(
+                size: 2.2 + depth * 4.0, sizeJitter: 1.4,
+                fallSpeed: 36 + depth * 78, fallJitter: 18,
+                alpha: 0.7 + depth * 0.28, soft: 0.4 - depth * 0.25,
+                sway: 3 + depth * 6, swayRate: (0.4, 1.0),
+                settles: true, tint: look.tint, tintAmount: look.amount, shape: look.shape
+            )
+        case .drops:
+            return ParticleStyle(
+                size: 1.1 + depth * 2.4, sizeJitter: 0.6,
+                fallSpeed: 260 + depth * 300, fallJitter: 90,
+                alpha: 0.42 + depth * 0.45, soft: 0.35 - depth * 0.2,
+                sway: 1 + depth * 3, swayRate: (0.9, 2.2),
+                settles: true, tint: look.tint, tintAmount: look.amount, shape: look.shape
+            )
+        }
+    }
+
+    /// The colour and silhouette a particle of the current theme takes.
+    private func look() -> (tint: SIMD3<Float>, amount: Float, shape: Float) {
+        switch theme {
+        case .snow: return (SIMD3(repeating: 1), 0, 0)
+        case .leaves: return (leafColor(), 1, Theme.leaves.shape)
+        case .blossom: return (blossomColor(), 1, Theme.blossom.shape)
+        case .candy: return (candyColor(), 1, Theme.candy.shape)
+        case .drops: return (waterColor(), 1, Theme.drops.shape)
+        }
+    }
+
+    /// Muted autumn colours, so a drift reads as fallen leaves rather than confetti.
+    private func leafColor() -> SIMD3<Float> {
+        let palette: [SIMD3<Float>] = [
+            SIMD3(0.78, 0.36, 0.14),
+            SIMD3(0.86, 0.55, 0.16),
+            SIMD3(0.64, 0.26, 0.16),
+            SIMD3(0.60, 0.52, 0.24),
+            SIMD3(0.72, 0.22, 0.16),
+            SIMD3(0.82, 0.66, 0.24),
+        ]
+        return palette[Int(random.next() * Float(palette.count)) % palette.count]
+    }
+
+    /// Pale pinks and a little white, like a cherry tree in bloom.
+    private func blossomColor() -> SIMD3<Float> {
+        let palette: [SIMD3<Float>] = [
+            SIMD3(0.96, 0.68, 0.77),
+            SIMD3(0.92, 0.55, 0.66),
+            SIMD3(0.98, 0.76, 0.83),
+            SIMD3(0.88, 0.58, 0.67),
+        ]
+        return palette[Int(random.next() * Float(palette.count)) % palette.count]
+    }
+
+    /// Wrapped sweets: grape, caramel, lemon and a soft blue, kept away from holiday red and green.
+    private func candyColor() -> SIMD3<Float> {
+        let palette: [SIMD3<Float>] = [
+            SIMD3(0.74, 0.50, 0.82),
+            SIMD3(0.94, 0.62, 0.30),
+            SIMD3(0.92, 0.80, 0.44),
+            SIMD3(0.56, 0.72, 0.86),
+        ]
+        return palette[Int(random.next() * Float(palette.count)) % palette.count]
+    }
+
+    /// Cool, slightly translucent water, brighter near the surface.
+    private func waterColor() -> SIMD3<Float> {
+        let palette: [SIMD3<Float>] = [
+            SIMD3(0.66, 0.80, 0.93),
+            SIMD3(0.74, 0.86, 0.96),
+            SIMD3(0.58, 0.74, 0.90),
+        ]
+        return palette[Int(random.next() * Float(palette.count)) % palette.count]
+    }
+
+    /// Recolours what is already falling, and clears the drifts when the new theme does not gather.
+    private func applyTheme() {
+        for i in flakes.indices where flakes[i].mass >= 1 {
+            let style = particleStyle(depth: flakes[i].depth)
+            flakes[i].tint = style.tint
+            flakes[i].tintAmount = style.tintAmount
+            flakes[i].keepsTint = style.tintAmount > 0
+            flakes[i].shape = style.shape
+            flakes[i].soft = style.soft
+        }
+        let look = self.look()
+        for i in grains.indices {
+            grains[i].tint = look.tint
+            grains[i].tintAmount = look.amount
+            grains[i].shape = look.shape
+        }
+        if !theme.accumulates {
+            for layer in layers {
+                for i in 0..<layer.count { layer.set(i, 0) }
+                layer.refreshTop()
+            }
+            grains.removeAll(keepingCapacity: true)
+            motes.removeAll(keepingCapacity: true)
+        }
+        heightsChanged = true
     }
 
     private func windSpeed() -> Float {
@@ -1127,12 +1397,16 @@ final class SnowSimulation {
     /// A pinch of snow torn off by the gust: a grain of powder, now and then with a faint puff around it.
     private func lift(at position: SIMD2<Float>, direction: Float) {
         guard grains.count < maxGrains else { return }
+        let look = self.look()
         grains.append(Grain(
             position: position + SIMD2(random.range(-1, 1), random.range(-3, 0)),
             velocity: SIMD2(direction * random.range(800, 1800), random.range(60, 420)),
             area: 0,
             size: random.range(1.1, 2.6),
-            blown: true
+            blown: true,
+            tint: look.tint,
+            tintAmount: look.amount,
+            shape: look.shape
         ))
         guard random.next() < 0.35, motes.count < maxMotes else { return }
         motes.append(Mote(
@@ -1140,7 +1414,10 @@ final class SnowSimulation {
             velocity: SIMD2(direction * random.range(200, 600), random.range(20, 120)),
             size: random.range(6, 14),
             alpha: random.range(0.06, 0.14),
-            life: random.range(0.6, 1.3)
+            life: random.range(0.6, 1.3),
+            shape: look.shape,
+            tint: look.tint,
+            tintAmount: look.amount
         ))
     }
 

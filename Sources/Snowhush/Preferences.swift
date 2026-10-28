@@ -33,6 +33,8 @@ enum Preferences {
     private static let snowOnWindowsKey = "snowOnWindows"
     private static let welcomedKey = "welcomed"
     private static let showInScreenshotsKey = "showInScreenshots"
+    private static let themeKey = "theme"
+    private static let themeAutoKey = "themeAuto"
 
     static func registerDefaults() {
         let calm = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
@@ -43,8 +45,24 @@ enum Preferences {
             accumulateKey: true,
             snowOnWindowsKey: true,
             showInScreenshotsKey: false,
+            themeKey: Theme.snow.rawValue,
+            themeAutoKey: false,
         ])
     }
+
+    /// Whether the theme follows the season instead of the menu pick.
+    static var themeAuto: Bool {
+        get { defaults.bool(forKey: themeAutoKey) }
+        set { defaults.set(newValue, forKey: themeAutoKey) }
+    }
+
+    static var theme: Theme {
+        get { Theme(rawValue: defaults.integer(forKey: themeKey)) ?? .snow }
+        set { defaults.set(newValue.rawValue, forKey: themeKey) }
+    }
+
+    /// The theme to show now: the season under Auto, otherwise the pick.
+    static var resolvedTheme: Theme { themeAuto ? Theme.seasonal() : theme }
 
     static var snowfall: Snowfall {
         get { Snowfall(rawValue: defaults.integer(forKey: snowfallKey)) ?? .steady }

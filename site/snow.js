@@ -31,8 +31,55 @@
   const DENSITY = { off: 0, light: 150, steady: 380, heavy: 800, variable: 380 };
   const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
 
-  const settings = { snowfall: 'steady', accumulate: true, melt: true, windows: true, behind: false, screenshots: false, login: false, quit: false };
+  const settings = {
+    snowfall: 'steady',
+    theme: 'snow',
+    themeAuto: false,
+    accumulate: true,
+    melt: true,
+    windows: true,
+    behind: false,
+    screenshots: false,
+    login: false,
+    quit: false,
+  };
   const variation = { strength: 1, target: 1, next: 0, clock: 0 };
+
+  const THEME_INDEX = { snow: 0, leaves: 1, blossom: 2, candy: 3, drops: 4 };
+  const THEME_SHAPE = { snow: 0, leaves: 1, blossom: 2, candy: 3, drops: 4 };
+  const THEME_PALETTES = {
+    leaves: [[0.78, 0.36, 0.14], [0.86, 0.55, 0.16], [0.64, 0.26, 0.16], [0.60, 0.52, 0.24], [0.72, 0.22, 0.16], [0.82, 0.66, 0.24]],
+    blossom: [[0.96, 0.68, 0.77], [0.92, 0.55, 0.66], [0.98, 0.76, 0.83], [0.88, 0.58, 0.67]],
+    candy: [[0.74, 0.50, 0.82], [0.94, 0.62, 0.30], [0.92, 0.80, 0.44], [0.56, 0.72, 0.86]],
+    drops: [[0.66, 0.80, 0.93], [0.74, 0.86, 0.96], [0.58, 0.74, 0.90]],
+  };
+
+  const seasonalTheme = () => {
+    const month = new Date().getMonth() + 1;
+    return month >= 3 && month <= 5 ? 'blossom' : month >= 6 && month <= 8 ? 'drops' : month >= 9 && month <= 11 ? 'leaves' : 'snow';
+  };
+  const resolvedTheme = () => (settings.themeAuto ? seasonalTheme() : settings.theme);
+  const piles = () => settings.accumulate && resolvedTheme() !== 'drops';
+
+  /// The colour and silhouette a particle of `theme` takes.
+  function look(theme) {
+    const palette = THEME_PALETTES[theme];
+    const tint = palette ? palette[Math.floor(Math.random() * palette.length)] : [1, 1, 1];
+    return { tint, amount: palette ? 1 : 0, shape: THEME_SHAPE[theme] };
+  }
+
+  /// How a particle of `theme` falls and looks.
+  function styleFor(theme, depth) {
+    const lookAt = look(theme);
+    const styles = {
+      snow: { size: 1.4 + depth * 4.4, sizeJitter: 1, fallSpeed: 16 + depth * 50, fallJitter: 10, alpha: 0.4 + depth * 0.5, soft: 0.75 - depth * 0.45, sway: 4 + depth * 10, swayRate: [0.5, 1.4] },
+      leaves: { size: 2.6 + depth * 5.2, sizeJitter: 1.8, fallSpeed: 20 + depth * 42, fallJitter: 14, alpha: 0.62 + depth * 0.34, soft: 0.5 - depth * 0.28, sway: 12 + depth * 22, swayRate: [0.7, 1.7] },
+      blossom: { size: 1.7 + depth * 3.2, sizeJitter: 1.2, fallSpeed: 13 + depth * 30, fallJitter: 9, alpha: 0.55 + depth * 0.4, soft: 0.65 - depth * 0.35, sway: 14 + depth * 20, swayRate: [0.8, 2.0] },
+      candy: { size: 2.2 + depth * 4.0, sizeJitter: 1.4, fallSpeed: 36 + depth * 78, fallJitter: 18, alpha: 0.7 + depth * 0.28, soft: 0.4 - depth * 0.25, sway: 3 + depth * 6, swayRate: [0.4, 1.0] },
+      drops: { size: 1.1 + depth * 2.4, sizeJitter: 0.6, fallSpeed: 260 + depth * 300, fallJitter: 90, alpha: 0.42 + depth * 0.45, soft: 0.35 - depth * 0.2, sway: 1 + depth * 3, swayRate: [0.9, 2.2] },
+    };
+    return { ...styles[theme], ...lookAt };
+  }
 
   const rand = (a, b) => a + Math.random() * (b - a);
   const smoothstep = (a, b, x) => {
@@ -230,6 +277,8 @@
   const SPRITE_VERTEX = `#version 300 es
     in vec2 aPosition;
     in vec4 aLook;
+    in vec4 aTint;
+    in float aShape;
     uniform vec2 uView;
     uniform float uScale;
     uniform float uTime;
@@ -240,6 +289,8 @@
     out float vLight;
     out float vGrow;
     out float vLump;
+    out vec4 vTint;
+    out float vShape;
     out float vSpin;
     void main() {
       float light = uNight == 1 && uLamp.z > 0.5 ? lampCone(aPosition) : 0.0;
@@ -253,7 +304,14 @@
       vLight = light;
       vGrow = grow;
       vLump = aLook.w;
-      vSpin = aLook.w > 0.0 ? uTime * (aLook.w - 0.5) * 9.0 + aLook.w * 40.0 : 0.0;
+      vTint = aTint;
+      vShape = aShape;
+      // Leaves and petals tumble as they fall; a lump of snow keeps its own slow roll.
+      float seed = fract(aPosition.x * 0.017 + aPosition.y * 0.031);
+      int kind = int(aShape + 0.5);
+      float turn = kind == 1 ? 0.8 : kind == 2 ? 1.25 : kind == 3 ? 0.5 : 0.0;
+      // A drop hangs from its own weight and points straight up; the others tumble as they fall.
+      vSpin = kind == 4 ? 0.0 : (aLook.w > 0.0 ? uTime * (aLook.w - 0.5) * 9.0 + aLook.w * 40.0 : uTime * turn * (0.7 + seed) + seed * 6.283);
     }
   `;
 
@@ -265,6 +323,8 @@
     in float vLight;
     in float vGrow;
     in float vLump;
+    in vec4 vTint;
+    in float vShape;
     in float vSpin;
     uniform int uNight;
     uniform vec3 uLamp;
@@ -272,15 +332,49 @@
     void main() {
       vec2 p = gl_PointCoord - 0.5;
       float r = length(p) * 2.0;
-      float d = r * vGrow;
       float shading = 0.0;
+      int kind = int(vShape + 0.5);
+      // The particle's own axes, so a leaf or a petal turns as it falls. Sized to the particle, not to its point.
+      float ca = cos(vSpin), sa = sin(vSpin);
+      vec2 q = vec2(ca * p.x - sa * p.y, sa * p.x + ca * p.y) * 2.0;
+
       if (vLump > 0.0) {
         float angle = atan(p.y, p.x) + vSpin;
-        d /= 1.0 + 0.14 * sin(3.0 * angle) + 0.08 * sin(5.0 * angle + vLump * 21.0) + 0.05 * sin(2.0 * angle + vLump * 9.0);
-        shading = clamp(dot(p * 2.0 * vGrow, vec2(0.45, 0.6)), 0.0, 1.0) * 0.4;
+        r /= 1.0 + 0.14 * sin(3.0 * angle) + 0.08 * sin(5.0 * angle + vLump * 21.0) + 0.05 * sin(2.0 * angle + vLump * 9.0);
+        shading = clamp(dot(p * 2.0, vec2(0.45, 0.6)), 0.0, 1.0) * 0.4;
+      } else if (kind == 1) {
+        // A leaf: a pointed blade on a short stem, with a faint midrib.
+        vec2 blade = vec2(q.x, q.y - 0.18);
+        float body = length(vec2(blade.x / (0.46 * (1.0 - 0.26 * blade.y)), blade.y / 0.80));
+        float stem = length(vec2(q.x / 0.055, (q.y + 0.62) / 0.20));
+        r = min(body, stem);
+        shading = smoothstep(0.055, 0.0, abs(q.x)) * 0.24;
+      } else if (kind == 2) {
+        // A blossom petal: soft and rounded, with a small notch at the tip.
+        float notch = 0.18 * smoothstep(0.30, 0.95, q.y) * smoothstep(0.22, 0.0, abs(q.x));
+        r = length(vec2(q.x / 0.74, q.y / 1.02)) + notch;
+        shading = smoothstep(-0.1, -0.9, q.y) * 0.10;
+      } else if (kind == 3) {
+        // A wrapped sweet: a round centre pinched into two crinkled ends.
+        float ax = abs(q.x);
+        float flap = mix(0.40, 0.11, smoothstep(0.24, 0.70, ax)) * (1.0 + 0.16 * sin(ax * 15.0));
+        float wrapEnd = length(vec2(q.x / 0.72, q.y / max(flap, 0.02)));
+        float body = length(q / vec2(0.34, 0.40));
+        r = min(body, wrapEnd);
+        shading = smoothstep(0.34, 0.02, length(q - vec2(-0.14, 0.14))) * 0.30;
+      } else if (kind == 4) {
+        // A drop: round below, drawn up to a point, with a small highlight.
+        float width = mix(0.74, 0.24, smoothstep(-0.15, 1.0, q.y));
+        r = length(vec2(q.x / width, q.y / 1.05));
+        shading = smoothstep(0.30, 0.0, length(q - vec2(-0.18, -0.18))) * 0.34;
+      } else if (kind == 5) {
+        // A ripple: a thin ring spreading out from where a drop landed.
+        r = abs(length(p) * 2.0 - 0.86) * 7.0;
       }
-      float a = (1.0 - smoothstep(mix(0.6, 0.0, vSoft), 1.0, d)) * vAlpha;
-      vec3 color = mix(vec3(0.965, 0.975, 0.995), vec3(0.62, 0.67, 0.77), clamp(smoothstep(0.35, 1.0, d) * 0.65 + shading, 0.0, 1.0));
+
+      float a = (1.0 - smoothstep(mix(0.6, 0.0, vSoft), 1.0, r)) * vAlpha;
+      vec3 color = mix(vec3(0.965, 0.975, 0.995), vec3(0.62, 0.67, 0.77), clamp(smoothstep(0.35, 1.0, r) * 0.65 + shading, 0.0, 1.0));
+      color = mix(color, vTint.rgb, vTint.a);
       if (uNight == 1) {
         vec3 warm = vec3(1.0, 0.9, 0.74);
         float ambient = uLamp.z > 0.5 ? 0.22 : 0.55;
@@ -322,6 +416,7 @@
     uniform float uTime;
     uniform float uWidth;
     uniform int uNight;
+    uniform int uTheme;
     ${LIGHT}
     out vec4 outColor;
 
@@ -353,16 +448,34 @@
       float slope = (heightAt(0, x + 2.0) - heightAt(0, x - 2.0)) * 0.25;
       float light = dot(normalize(vec2(-slope, 1.0)), normalize(vec2(-0.5, 1.0)));
 
-      vec3 surface = vec3(0.925, 0.94, 0.965);
-      vec3 shadow = vec3(0.72, 0.78, 0.88);
+      vec3 surface;
+      vec3 shadow;
+      vec3 highlight;
+      if (uTheme == 1) {
+        shadow = vec3(0.32, 0.19, 0.10);
+        surface = vec3(0.69, 0.42, 0.21);
+        highlight = vec3(0.86, 0.62, 0.34);
+      } else if (uTheme == 2) {
+        shadow = vec3(0.72, 0.50, 0.60);
+        surface = vec3(0.96, 0.82, 0.86);
+        highlight = vec3(1.0, 0.93, 0.95);
+      } else if (uTheme == 3) {
+        shadow = vec3(0.44, 0.28, 0.50);
+        surface = vec3(0.82, 0.64, 0.84);
+        highlight = vec3(0.96, 0.86, 0.96);
+      } else {
+        shadow = vec3(0.72, 0.78, 0.88);
+        surface = vec3(0.925, 0.94, 0.965);
+        highlight = vec3(0.975, 0.982, 0.995);
+      }
       float shade = (1.0 - exp(-depth / 30.0)) * 0.32 + (1.0 - light) * 0.6 * exp(-depth / 5.0);
       vec3 color = mix(surface, shadow, clamp(shade, 0.0, 1.0));
-      color = mix(color, vec3(0.975, 0.982, 0.995), exp(-depth * 0.9) * 0.6);
+      color = mix(color, highlight, exp(-depth * 0.9) * 0.6);
       color += (hash(floor(gl_FragCoord.xy)) - 0.5) * 0.02;
 
       float seed = hash(floor(gl_FragCoord.xy * 0.5) + 31.7);
       float twinkle = 0.0;
-      if (seed > 0.992) {
+      if (seed > 0.992 && (uTheme == 0 || uTheme == 4)) {
         twinkle = pow(clamp(sin(uTime * (0.6 + seed * 1.8) + seed * 90.0), 0.0, 1.0), 28.0) * exp(-depth / 7.0);
         color = mix(color, vec3(1.0), twinkle);
       }
@@ -424,6 +537,7 @@
       this.cursorVelocity = [0, 0];
       this.gust = null;
       this.time = rand(0, 100);
+      this.theme = 'snow';
       this.visible = false;
       this.width = 0;
       this.height = 0;
@@ -451,10 +565,16 @@
       gl.bindBuffer(gl.ARRAY_BUFFER, this.spriteBuffer);
       const position = gl.getAttribLocation(this.sprite.program, 'aPosition');
       const look = gl.getAttribLocation(this.sprite.program, 'aLook');
+      const tint = gl.getAttribLocation(this.sprite.program, 'aTint');
+      const shape = gl.getAttribLocation(this.sprite.program, 'aShape');
       gl.enableVertexAttribArray(position);
-      gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 24, 0);
+      gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 44, 0);
       gl.enableVertexAttribArray(look);
-      gl.vertexAttribPointer(look, 4, gl.FLOAT, false, 24, 8);
+      gl.vertexAttribPointer(look, 4, gl.FLOAT, false, 44, 8);
+      gl.enableVertexAttribArray(tint);
+      gl.vertexAttribPointer(tint, 4, gl.FLOAT, false, 44, 24);
+      gl.enableVertexAttribArray(shape);
+      gl.vertexAttribPointer(shape, 1, gl.FLOAT, false, 44, 40);
       gl.bindVertexArray(null);
       this.pileVAO = gl.createVertexArray();
       this.textures = new Map();
@@ -514,24 +634,81 @@
     }
 
     makeFlake(y) {
-      const near = Math.random() < 0.02;
+      const theme = resolvedTheme();
+      const near = theme === 'snow' && Math.random() < 0.02;
       const depth = near ? 1 : Math.pow(Math.random(), 1.6);
-      const fall = near ? rand(75, 100) : 16 + depth * 50 + rand(0, 10);
+      const style = styleFor(theme, depth);
+      const fall = near ? rand(75, 100) : style.fallSpeed + rand(0, style.fallJitter);
       return {
         x: rand(-30, this.width + 30),
         y,
         vx: this.wind() * (0.35 + 0.65 * depth),
         vy: fall,
         fall,
-        size: near ? rand(8, 13) : 1.4 + depth * 4.4 + rand(0, 1),
+        size: near ? rand(8, 13) : style.size + rand(0, style.sizeJitter),
         depth,
-        alpha: near ? 0.28 : 0.4 + depth * 0.5,
-        soft: near ? 0.95 : 0.75 - depth * 0.45,
+        alpha: near ? 0.28 : style.alpha,
+        soft: near ? 0.95 : style.soft,
         phase: rand(0, PHASE_WRAP),
-        swayRate: rand(0.5, 1.4),
-        swayAmount: near ? rand(10, 20) : rand(4, 9) + depth * 10,
+        swayRate: rand(style.swayRate[0], style.swayRate[1]),
+        swayAmount: near ? rand(10, 20) : style.sway,
         settles: !near,
+        tint: style.tint,
+        tintAmount: near ? 0 : style.amount,
+        shape: style.shape,
       };
+    }
+
+    /// Recolours what is already falling after a change of theme, and clears the drifts for water.
+    setTheme(theme) {
+      this.theme = theme;
+      for (const flake of this.flakes) {
+        const style = styleFor(theme, flake.depth);
+        flake.tint = style.tint;
+        flake.tintAmount = theme === 'snow' ? 0 : 1;
+        flake.soft = flake.settles ? style.soft : flake.soft;
+        flake.shape = style.shape;
+      }
+      if (theme === 'drops') {
+        this.grains.length = 0;
+        this.motes.length = 0;
+        this.ground.clear();
+        for (const { layer } of this.ledges) layer.clear();
+      }
+      this.draw();
+    }
+
+    /// A drop striking a surface: a ring spreads where it hit and a few beads hop up. Nothing settles.
+    splash(x, y, size) {
+      if (this.motes.length >= MAX_MOTES) return;
+      const force = Math.min(Math.max(size / 4, 0.4), 1.4);
+      const { tint } = look('drops');
+      // Sit the ring just inside the view, so a splash on the bottom edge still reads.
+      const center = y - 3;
+      // Not every drop leaves a ring, or a heavy fall would carpet the edge.
+      if (Math.random() < 0.45) {
+        this.motes.push({ x, y: center, vx: 0, vy: 0, size: Math.max(3.5, size * 1.6), alpha: 0.4 * force, age: 0, life: rand(0.3, 0.55), rises: true, grow: 3.4, tint, tintAmount: 1, shape: 5 });
+      }
+      const beads = Math.min(MAX_MOTES - this.motes.length, Math.floor(1 + force * 2));
+      for (let k = 0; k < beads; k++) {
+        const angle = rand(0.25, Math.PI - 0.25);
+        const speed = rand(45, 120) * force;
+        this.motes.push({
+          x: x + rand(-1.5, 1.5),
+          y: center,
+          vx: Math.cos(angle) * speed,
+          vy: -Math.sin(angle) * speed * 0.9,
+          size: rand(1.2, 2.4) * force,
+          alpha: rand(0.4, 0.65),
+          age: 0,
+          life: rand(0.24, 0.5),
+          rises: false,
+          grow: 0,
+          tint,
+          tintAmount: 1,
+          shape: 4,
+        });
+      }
     }
 
     paintLight() {
@@ -646,7 +823,13 @@
         if (f.x < -30) f.x += this.width + 60;
         else if (f.x > this.width + 30) f.x -= this.width + 60;
 
-        if (!gone && f.settles && settings.accumulate && !f.blown) {
+        if (!gone && f.settles && !f.blown && resolvedTheme() === 'drops') {
+          const hit = this.landing(f.x, from, f.y);
+          if (hit) {
+            this.splash(f.x, hit.layer.surface(hit.i), f.size);
+            gone = true;
+          }
+        } else if (!gone && f.settles && piles() && !f.blown) {
           const hit = this.landing(f.x, from, f.y);
           if (hit) {
             const missed = hit.layer.deposit(f.size * f.size * DEPOSITION * hit.layer.fill(hit.i), f.x);
@@ -686,7 +869,10 @@
         let gone = g.x < -10 || g.x > this.width + 10 || g.y > this.height + 20;
         if (!gone && !g.blown && g.vy >= 0) {
           const hit = this.landing(g.x, from, g.y);
-          if (hit && g.lump) {
+          if (hit && resolvedTheme() === 'drops') {
+            this.splash(g.x, hit.layer.surface(hit.i), g.size);
+            gone = true;
+          } else if (hit && g.lump) {
             this.burst(g, hit.layer);
             gone = true;
           } else if (hit) {
@@ -714,11 +900,20 @@
           motes.pop();
           continue;
         }
-        m.vy += 35 * dt;
-        m.vx *= damping;
-        m.vy *= damping;
-        m.x += (m.vx + drift) * dt;
-        m.y += m.vy * dt;
+        if (m.rises) {
+          // A ripple spreads flat on the surface and leans nowhere.
+          const damp = Math.exp(-7 * dt);
+          m.vx *= damp;
+          m.vy *= damp;
+          m.x += m.vx * dt;
+          m.y += m.vy * dt;
+        } else {
+          m.vy += 35 * dt;
+          m.vx *= damping;
+          m.vy *= damping;
+          m.x += (m.vx + drift) * dt;
+          m.y += m.vy * dt;
+        }
       }
     }
 
@@ -726,6 +921,7 @@
     throwLump(area, [x, y]) {
       const pieces = Math.floor(area / 90) + 1;
       const share = area / pieces;
+      const { tint, amount: tintAmount, shape } = look(resolvedTheme());
       for (let k = 0; k < pieces && this.grains.length < MAX_GRAINS; k++) {
         this.grains.push({
           x: x + rand(-2, 2),
@@ -736,6 +932,9 @@
           area: share,
           size: Math.min(11, Math.sqrt(share) * 1.05),
           lump: rand(0.05, 1),
+          tint,
+          tintAmount,
+          shape,
         });
       }
     }
@@ -752,6 +951,7 @@
       const surface = layer.surface(layer.clamped(lump.x));
       this.release(crumbs, [lump.x, surface - 1], [lump.vx * 0.3, -impact * rand(0.08, 0.16)], [lump.size * 0.4, 1], 0.6);
       const count = Math.min(MAX_MOTES - this.motes.length, Math.floor(2 + lump.size * 0.6 * force));
+      const { tint, amount: tintAmount, shape } = look(resolvedTheme());
       for (let k = 0; k < count; k++) {
         const angle = rand(0.15, Math.PI - 0.15);
         const speed = rand(25, 110) * force;
@@ -764,6 +964,9 @@
           alpha: rand(0.1, 0.22),
           age: 0,
           life: rand(0.45, 0.9),
+          tint,
+          tintAmount,
+          shape,
         });
       }
     }
@@ -773,8 +976,8 @@
       const falling = DENSITY[settings.snowfall] * variation.strength;
       const meltPace = falling > 0 ? BUILDUP * (falling / THAW_BALANCE) ** THAW_EXPONENT : 1;
       for (const layer of this.layers) {
-        if (!settings.accumulate || settings.melt) {
-          const floor = !settings.accumulate ? 0 : layer === this.ground ? THAW_DEPTH : LEDGE_THAW_DEPTH;
+        if (!piles() || settings.melt) {
+          const floor = !piles() ? 0 : layer === this.ground ? THAW_DEPTH : LEDGE_THAW_DEPTH;
           layer.thaw(dt * meltPace, floor);
         }
         layer.relax(REPOSE);
@@ -793,11 +996,12 @@
       if (area <= 0.02) return;
       const room = MAX_GRAINS - this.grains.length;
       if (room <= 0) {
-        this.ground.deposit(area, x);
+        if (piles()) this.ground.deposit(area, x);
         return;
       }
       const count = Math.min(room, Math.max(1, Math.min(6, Math.floor(area / 3))));
       const share = area / count;
+      const { tint, amount: tintAmount, shape } = look(resolvedTheme());
       for (let k = 0; k < count; k++) {
         const spread = 1 + rand(-scatter, scatter);
         this.grains.push({
@@ -807,6 +1011,9 @@
           vy: vy * spread + rand(-8, 10),
           area: share,
           size: Math.min(5, Math.max(1.1, Math.sqrt(share) * 1.05)),
+          tint,
+          tintAmount,
+          shape,
         });
       }
     }
@@ -913,6 +1120,7 @@
     /// A pinch of snow torn off by the gust: a grain of powder, now and then with a faint puff around it.
     lift(x, y, direction) {
       if (this.grains.length >= MAX_GRAINS) return;
+      const { tint, amount: tintAmount, shape } = look(resolvedTheme());
       this.grains.push({
         x: x + rand(-1, 1),
         y: y + rand(0, 3),
@@ -921,9 +1129,12 @@
         area: 0,
         size: rand(1.1, 2.6),
         blown: true,
+        tint,
+        tintAmount,
+        shape,
       });
       if (Math.random() >= 0.35 || this.motes.length >= MAX_MOTES) return;
-      this.motes.push({ x, y, vx: direction * rand(200, 600), vy: -rand(20, 120), size: rand(6, 14), alpha: rand(0.06, 0.14), age: 0, life: rand(0.6, 1.3) });
+      this.motes.push({ x, y, vx: direction * rand(200, 600), vy: -rand(20, 120), size: rand(6, 14), alpha: rand(0.06, 0.14), age: 0, life: rand(0.6, 1.3), tint, tintAmount, shape });
     }
 
     clear() {
@@ -1031,6 +1242,7 @@
       const length = Math.hypot(offX, offY);
       const outX = length > 0.001 ? offX / length : 0;
       const outY = length > 0.001 ? offY / length : -1;
+      const { tint, amount: tintAmount, shape } = look(resolvedTheme());
       for (let k = 0; k < count; k++) {
         const scale = rand(0.55, 1.25), push = speed * rand(0.05, 0.25);
         this.grains.push({
@@ -1040,6 +1252,9 @@
           vy: vy * scale + outY * push - speed * rand(0.02, 0.2) + rand(-40, 20),
           area: share,
           size: Math.min(4.2, Math.max(1.1, Math.sqrt(share) * 1.05)),
+          tint,
+          tintAmount,
+          shape,
         });
       }
       return area;
@@ -1064,6 +1279,7 @@
       gl.uniform1f(u.uTime, this.time % 1000);
       gl.uniform1f(u.uWidth, this.width);
       gl.uniform1i(u.uNight, this.night ? 1 : 0);
+      gl.uniform1i(u.uTheme, THEME_INDEX[resolvedTheme()]);
       gl.uniform3f(u.uLamp, ...lamp);
       gl.uniform1i(u.uHeights, 0);
       gl.activeTexture(gl.TEXTURE0);
@@ -1086,20 +1302,23 @@
 
       const total = this.flakes.length + this.grains.length + this.motes.length;
       if (!total) return;
-      if (this.spriteData.length < total * 6) this.spriteData = new Float32Array(Math.ceil(total * 1.5) * 6);
+      if (this.spriteData.length < total * 11) this.spriteData = new Float32Array(Math.ceil(total * 1.5) * 11);
       const data = this.spriteData;
       let k = 0;
       for (const f of this.flakes) {
         data[k++] = f.x; data[k++] = f.y; data[k++] = f.size; data[k++] = f.alpha; data[k++] = f.soft; data[k++] = 0;
+        data[k++] = f.tint[0]; data[k++] = f.tint[1]; data[k++] = f.tint[2]; data[k++] = f.tintAmount; data[k++] = f.shape;
       }
       for (const g of this.grains) {
         data[k++] = g.x; data[k++] = g.y; data[k++] = g.size;
         data[k++] = g.lump ? 0.97 : g.blown ? 0.8 : 0.95; data[k++] = g.lump ? 0.2 : 0.3; data[k++] = g.lump || 0;
+        data[k++] = g.tint[0]; data[k++] = g.tint[1]; data[k++] = g.tint[2]; data[k++] = g.tintAmount; data[k++] = g.shape;
       }
       for (const m of this.motes) {
         const t = m.age / m.life;
-        data[k++] = m.x; data[k++] = m.y; data[k++] = m.size * (1 + t);
+        data[k++] = m.x; data[k++] = m.y; data[k++] = m.size * (1 + t * (m.grow || 0));
         data[k++] = m.alpha * Math.min(1, m.age / 0.06) * Math.pow(1 - t, 1.5); data[k++] = 1; data[k++] = 0;
+        data[k++] = m.tint[0]; data[k++] = m.tint[1]; data[k++] = m.tint[2]; data[k++] = m.tintAmount; data[k++] = m.shape;
       }
       gl.useProgram(this.sprite.program);
       const s = this.sprite.uniforms;
@@ -1213,9 +1432,16 @@
       if (item.dataset.snowfall) {
         settings.snowfall = item.dataset.snowfall;
         if (settings.snowfall === 'variable') variation.next = variation.clock;
+      } else if (item.dataset.theme) {
+        settings.theme = item.dataset.theme;
+        settings.themeAuto = false;
       } else if (item.dataset.toggle) {
+        // Turning Auto off keeps the season that is on screen as the manual pick.
+        if (item.dataset.toggle === 'themeAuto' && settings.themeAuto) settings.theme = resolvedTheme();
         settings[item.dataset.toggle] = !settings[item.dataset.toggle];
       }
+      const theme = resolvedTheme();
+      if (scenes[0] && scenes[0].theme !== theme) scenes.forEach(scene => scene.setTheme(theme));
       if (item.dataset.action === 'quit') {
         settings.quit = true;
         scenes.forEach(scene => scene.clear());
@@ -1308,10 +1534,13 @@
   }
 
   function reflect() {
+    const theme = resolvedTheme();
     for (const item of document.querySelectorAll('[data-snow-menu] .menu-item')) {
       if (item.dataset.snowfall) item.setAttribute('aria-checked', String(!settings.quit && item.dataset.snowfall === settings.snowfall));
+      if (item.dataset.theme) item.setAttribute('aria-checked', String(!settings.quit && !settings.themeAuto && item.dataset.theme === settings.theme));
       if (item.dataset.toggle) item.setAttribute('aria-checked', String(settings[item.dataset.toggle]));
-      if (item.dataset.toggle === 'melt') item.setAttribute('aria-disabled', String(!settings.accumulate));
+      if (item.dataset.toggle === 'melt') item.setAttribute('aria-disabled', String(!piles()));
+      if (item.dataset.toggle === 'accumulate') item.setAttribute('aria-disabled', String(theme === 'drops'));
       if (item.dataset.toggle === 'windows') item.setAttribute('aria-disabled', String(settings.behind));
     }
   }

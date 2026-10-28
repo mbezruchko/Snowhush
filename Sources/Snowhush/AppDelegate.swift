@@ -7,6 +7,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var device: MTLDevice!
     private var screens: [ScreenSnow] = []
     private var snowfall = Snowfall.steady
+    private var theme = Theme.snow
+    private var themeAuto = false
     private var accumulates = true
     private var thaws = true
     private var snowOnWindows = true
@@ -21,6 +23,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var behindWindowsItem: NSMenuItem!
     private var screenshotsItem: NSMenuItem!
     private var loginItem: NSMenuItem!
+    private var themeItems: [NSMenuItem] = []
+    private var themeAutoItem: NSMenuItem!
     private var observers: [NSObjectProtocol] = []
     private var screensAsleep = false
     private var screenLocked = false
@@ -41,6 +45,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         }
         self.device = device
         snowfall = Preferences.snowfall
+        theme = Preferences.theme
+        themeAuto = Preferences.themeAuto
         accumulates = Preferences.accumulate
         thaws = Preferences.meltSnow
         snowOnWindows = Preferences.snowOnWindows
@@ -56,6 +62,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         statusItem = makeStatusItem()
         updateStatusIcon()
         observeSystem()
+        // Auto follows the calendar; check now and then so a change of season lands without a relaunch.
+        Timer.scheduledTimer(withTimeInterval: 1800, repeats: true) { [weak self] _ in
+            self?.refreshSeasonalTheme()
+        }
         if snowfallHeld {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in self?.showWelcome() }
         }
@@ -129,6 +139,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         sliderItem.view = snowfallSlider
         menu.addItem(sliderItem)
         menu.addItem(.separator())
+        let themes = NSMenu()
+        for candidate in Theme.allCases {
+            let item = NSMenuItem(title: candidate.title, action: #selector(pickTheme(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = candidate.rawValue
+            item.image = NSImage(systemSymbolName: candidate.symbolName, accessibilityDescription: nil)
+            themes.addItem(item)
+            themeItems.append(item)
+        }
+        themes.addItem(.separator())
+        themeAutoItem = NSMenuItem(title: "Auto (by Season)", action: #selector(pickSeasonalTheme), keyEquivalent: "")
+        themeAutoItem.target = self
+        themes.addItem(themeAutoItem)
+        let themeRoot = NSMenuItem(title: "Theme", action: nil, keyEquivalent: "")
+        themeRoot.submenu = themes
+        menu.addItem(themeRoot)
+        menu.addItem(.separator())
         accumulateItem = add("Accumulate", #selector(toggleAccumulate), to: menu)
         meltItem = add("Melt Snow", #selector(toggleMeltSnow), to: menu)
         snowOnWindowsItem = add("Snow on Windows", #selector(toggleSnowOnWindows), to: menu)
@@ -155,15 +182,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         snowfallSlider.snowfall = snowfall
+        for item in themeItems { item.state = !themeAuto && item.tag == theme.rawValue ? .on : .off }
+        themeAutoItem.state = themeAuto ? .on : .off
+        if themeAuto && screens.contains(where: { $0.simulation.theme != activeTheme }) {
+            applyTheme()
+        }
         accumulateItem.state = accumulates ? .on : .off
+        accumulateItem.isEnabled = activeTheme.accumulates
         meltItem.state = thaws ? .on : .off
-        meltItem.isEnabled = accumulates
+        meltItem.isEnabled = accumulates && activeTheme.accumulates
         snowOnWindowsItem.state = snowOnWindows ? .on : .off
         snowOnWindowsItem.isEnabled = !behindWindows
         clearItem.isEnabled = screens.contains { $0.simulation.hasSnow || $0.simulation.spriteCount > 0 }
         behindWindowsItem.state = behindWindows ? .on : .off
         screenshotsItem.state = Preferences.showInScreenshots ? .on : .off
         loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+    }
+
+    /// The theme on screen: the season under Auto, otherwise the pick.
+    private var activeTheme: Theme { themeAuto ? Theme.seasonal() : theme }
+
+    @objc private func pickTheme(_ sender: NSMenuItem) {
+        guard let picked = Theme(rawValue: sender.tag) else { return }
+        theme = picked
+        themeAuto = false
+        Preferences.theme = picked
+        Preferences.themeAuto = false
+        applyTheme()
+    }
+
+    @objc private func pickSeasonalTheme() {
+        if themeAuto {
+            // Turning Auto off keeps the season that is on screen as the manual pick.
+            theme = activeTheme
+            Preferences.theme = theme
+            themeAuto = false
+            Preferences.themeAuto = false
+        } else {
+            themeAuto = true
+            Preferences.themeAuto = true
+        }
+        applyTheme()
+    }
+
+    private func applyTheme() {
+        let theme = activeTheme
+        for snow in screens { snow.simulation.theme = theme }
+    }
+
+    private func refreshSeasonalTheme() {
+        guard themeAuto, screens.contains(where: { $0.simulation.theme != activeTheme }) else { return }
+        applyTheme()
     }
 
     private func select(_ snowfall: Snowfall) {

@@ -24,12 +24,14 @@ use crate::prefs::{self, Settings};
 use crate::snow::{self, Command, Links};
 use crate::update::{self, Release};
 use crate::welcome::{self, Handlers};
-use snowhush::simulation::Snowfall;
+use snowhush::simulation::{Snowfall, Theme};
 
 const CLASS: PCWSTR = w!("SnowhushController");
 const WM_TRAY: u32 = WM_APP + 1;
 const NIN_KEYSELECT: u32 = NIN_SELECT | 1;
 const ID_SNOWFALL: u32 = 100;
+const ID_THEME: u32 = 300;
+const ID_THEME_AUTO: u32 = 310;
 const ID_ACCUMULATE: u32 = 200;
 const ID_MELT: u32 = 201;
 const ID_SCREENSHOTS: u32 = 202;
@@ -225,10 +227,29 @@ fn show_menu(window: HWND, x: i32, y: i32) {
         let current = Snowfall::ALL.iter().position(|&s| s == settings.snowfall).unwrap_or(0) as u32;
         let _ = CheckMenuRadioItem(snowfall, ID_SNOWFALL, ID_SNOWFALL + 4, ID_SNOWFALL + current, MF_BYCOMMAND.0);
         let checked = |on: bool| if on { MF_CHECKED } else { MF_UNCHECKED };
+        let piles = settings.resolved_theme().accumulates();
         let _ = AppendMenuW(menu, MF_POPUP, snowfall.0 as usize, w!("Snowfall"));
+        let Ok(themes) = CreatePopupMenu() else { return };
+        for (i, option) in Theme::ALL.iter().enumerate() {
+            let title: Vec<u16> = option.title().encode_utf16().chain([0]).collect();
+            let _ = AppendMenuW(themes, MF_STRING, (ID_THEME + i as u32) as usize, PCWSTR(title.as_ptr()));
+        }
+        let current = settings.theme.index() as u32;
+        if !settings.theme_auto {
+            let _ = CheckMenuRadioItem(themes, ID_THEME, ID_THEME + 4, ID_THEME + current, MF_BYCOMMAND.0);
+        }
+        let _ = AppendMenuW(themes, MF_SEPARATOR, 0, PCWSTR::null());
+        let auto = MF_STRING | checked(settings.theme_auto);
+        let _ = AppendMenuW(themes, auto, ID_THEME_AUTO as usize, w!("Auto (by Season)"));
+        let _ = AppendMenuW(menu, MF_POPUP, themes.0 as usize, w!("Theme"));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-        let _ = AppendMenuW(menu, MF_STRING | checked(settings.accumulate), ID_ACCUMULATE as usize, w!("Accumulate"));
-        let melt = MF_STRING | checked(settings.melt) | if settings.accumulate { MF_ENABLED } else { MF_GRAYED };
+        let _ = AppendMenuW(
+            menu,
+            MF_STRING | checked(settings.accumulate) | if piles { MF_ENABLED } else { MF_GRAYED },
+            ID_ACCUMULATE as usize,
+            w!("Accumulate"),
+        );
+        let melt = MF_STRING | checked(settings.melt) | if settings.accumulate && piles { MF_ENABLED } else { MF_GRAYED };
         let _ = AppendMenuW(menu, melt, ID_MELT as usize, w!("Melt Snow"));
         let windows = MF_STRING | checked(settings.snow_on_windows) | if settings.behind_windows { MF_GRAYED } else { MF_ENABLED };
         let _ = AppendMenuW(menu, windows, ID_WINDOWS as usize, w!("Snow on Windows"));
@@ -288,6 +309,21 @@ fn choose(window: HWND, chosen: u32, login: bool) {
                 ID_SCREENSHOTS => {
                     settings.show_in_screenshots = !settings.show_in_screenshots;
                     Command::ShowInScreenshots(settings.show_in_screenshots)
+                }
+                ID_THEME_AUTO => {
+                    let resolved = settings.resolved_theme();
+                    settings.theme_auto = !settings.theme_auto;
+                    // Turning Auto off keeps the season that is on screen as the manual pick.
+                    if !settings.theme_auto {
+                        settings.theme = resolved;
+                    }
+                    Command::Theme { theme: settings.theme, auto: settings.theme_auto }
+                }
+                _ if (ID_THEME..ID_THEME + Theme::ALL.len() as u32).contains(&chosen) => {
+                    let Some(&theme) = Theme::ALL.get((chosen - ID_THEME) as usize) else { return };
+                    settings.theme = theme;
+                    settings.theme_auto = false;
+                    Command::Theme { theme, auto: false }
                 }
                 _ => {
                     let Some(&snowfall) = Snowfall::ALL.get(chosen.wrapping_sub(ID_SNOWFALL) as usize) else { return };

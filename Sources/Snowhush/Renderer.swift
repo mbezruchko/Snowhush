@@ -11,7 +11,8 @@ struct Uniforms {
     var occluderCount: Int32 = 0
     var origin: SIMD2<Float> = .zero
     var pileBottom: Float = 0
-    var padding: Float = 0
+    /// Which theme the pile and particles are drawn in. See `Theme`.
+    var theme: Float = 0
     var light = SIMD4<Float>(1, 1, 1, 1)
     var shadowTint = SIMD4<Float>(0, 0, 0, 0)
 }
@@ -150,6 +151,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             light: SIMD4(ambient.light, 1),
             shadowTint: ambient.shadowTint
         )
+        uniforms.theme = Float(simulation.theme.rawValue)
         let uniformsLength = MemoryLayout<Uniforms>.stride
 
         drawPiles(piles.filter { !$0.isDock }, with: encoder, uniforms: uniforms, heights: heightBuffer)

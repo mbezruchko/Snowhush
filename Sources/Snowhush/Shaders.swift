@@ -12,7 +12,7 @@ struct Uniforms {
     int occluderCount;
     float2 origin;
     float pileBottom;
-    float padding;
+    float theme;
     float4 light;
     float4 shadowTint;
 };
@@ -28,6 +28,7 @@ struct Sprite {
     float tintGreen;
     float tintBlue;
     float lump;
+    float shape;
 };
 
 struct SpriteOut {
@@ -40,6 +41,7 @@ struct SpriteOut {
     float2 streak;
     float radius;
     float lump;
+    float shape;
     float spin;
 };
 
@@ -66,7 +68,17 @@ vertex SpriteOut spriteVertex(uint vid [[vertex_id]],
     out.tint = float4(s.tintRed, s.tintGreen, s.tintBlue, s.tintAmount);
     out.light = u.light.rgb;
     out.lump = s.lump;
-    out.spin = s.lump > 0.0 ? u.time * (s.lump - 0.5) * 9.0 + s.lump * 40.0 : 0.0;
+    out.shape = s.shape;
+    // Leaves and petals tumble as they fall; a lump of snow keeps its own slow roll.
+    float seed = fract(s.position.x * 0.017 + s.position.y * 0.031);
+    int shape = int(s.shape + 0.5);
+    float turn = shape == 1 ? 0.8 : shape == 2 ? 1.25 : shape == 3 ? 0.5 : 0.0;
+    // A drop hangs from its own weight and points straight up; the others tumble as they fall.
+    out.spin = shape == 4
+        ? 0.0
+        : (s.lump > 0.0
+            ? u.time * (s.lump - 0.5) * 9.0 + s.lump * 40.0
+            : u.time * turn * (0.7 + seed) + seed * 6.283);
     return out;
 }
 
@@ -77,13 +89,48 @@ fragment float4 spriteFragment(SpriteOut in [[stage_in]], float2 coord [[point_c
     float span = dot(half_, half_);
     float t = span > 0.0 ? clamp(dot(p, half_) / span, -1.0, 1.0) : 0.0;
     float2 d = p - half_ * t;
-    float r = length(d) / max(in.radius, 0.001);
+    float R = max(in.radius, 0.001);
+    float r = length(d) / R;
     float shading = 0.0;
+    int shape = int(in.shape + 0.5);
+    // The particle's own axes, so a leaf or a petal turns as it falls. Sized to the particle, not to its streak.
+    float ca = cos(in.spin), sa = sin(in.spin);
+    float2 q = float2(ca * p.x - sa * p.y, sa * p.x + ca * p.y) / R;
+
     if (in.lump > 0.0) {
         float angle = atan2(d.y, d.x) + in.spin;
         r /= 1.0 + 0.14 * sin(3.0 * angle) + 0.08 * sin(5.0 * angle + in.lump * 21.0) + 0.05 * sin(2.0 * angle + in.lump * 9.0);
-        shading = saturate(dot(d / max(in.radius, 0.001), float2(0.45, -0.6))) * 0.4;
+        shading = saturate(dot(d / R, float2(0.45, -0.6))) * 0.4;
+    } else if (shape == 1) {
+        // A leaf: a pointed blade on a short stem, with a faint midrib.
+        float2 blade = float2(q.x, q.y - 0.18);
+        float body = length(float2(blade.x / (0.46 * (1.0 - 0.26 * blade.y)), blade.y / 0.80));
+        float stem = length(float2(q.x / 0.055, (q.y + 0.62) / 0.20));
+        r = min(body, stem);
+        shading = smoothstep(0.055, 0.0, abs(q.x)) * 0.24;
+    } else if (shape == 2) {
+        // A blossom petal: soft and rounded, with a small notch at the tip.
+        float notch = 0.18 * smoothstep(0.30, 0.95, q.y) * smoothstep(0.22, 0.0, abs(q.x));
+        r = length(float2(q.x / 0.74, q.y / 1.02)) + notch;
+        shading = smoothstep(-0.1, -0.9, q.y) * 0.10;
+    } else if (shape == 3) {
+        // A wrapped sweet: a round centre pinched into two crinkled ends.
+        float ax = abs(q.x);
+        float flap = mix(0.40, 0.11, smoothstep(0.24, 0.70, ax)) * (1.0 + 0.16 * sin(ax * 15.0));
+        float wrapEnd = length(float2(q.x / 0.72, q.y / max(flap, 0.02)));
+        float body = length(q / float2(0.34, 0.40));
+        r = min(body, wrapEnd);
+        shading = smoothstep(0.34, 0.02, length(q - float2(-0.14, 0.14))) * 0.30;
+    } else if (shape == 4) {
+        // A drop: round below, drawn up to a point, with a small highlight.
+        float width = mix(0.74, 0.24, smoothstep(-0.15, 1.0, q.y));
+        r = length(float2(q.x / width, q.y / 1.05));
+        shading = smoothstep(0.30, 0.0, length(q - float2(-0.18, -0.18))) * 0.34;
+    } else if (shape == 5) {
+        // A ripple: a thin ring spreading out from where a drop landed.
+        r = abs(length(p) / R - 0.86) * 7.0;
     }
+
     // Brighter at the head, where the flake is now, than at the tail, where it was.
     float head = span > 0.0 ? 0.15 + 0.85 * pow(t * 0.5 + 0.5, 1.5) : 1.0;
     float a = (1.0 - smoothstep(mix(0.6, 0.0, in.soft), 1.0, r)) * in.alpha * head;
@@ -145,15 +192,36 @@ fragment float4 pileFragment(PileOut in [[stage_in]],
     float slope = (heightAt(heights, u, x + 2.0) - heightAt(heights, u, x - 2.0)) * 0.25;
     float light = dot(normalize(float2(-slope, 1.0)), normalize(float2(-0.5, 1.0)));
 
-    float3 shadow = mix(float3(0.72, 0.78, 0.88), u.shadowTint.rgb, u.shadowTint.a);
-    float3 surface = mix(float3(0.925, 0.94, 0.965), min(u.shadowTint.rgb * 1.18, float3(1.0)), u.shadowTint.a * 0.2);
+    int theme = int(u.theme + 0.5);
+    float3 shadow;
+    float3 surface;
+    float3 highlight;
+    if (theme == 1) {
+        shadow = float3(0.32, 0.19, 0.10);
+        surface = float3(0.69, 0.42, 0.21);
+        highlight = float3(0.86, 0.62, 0.34);
+    } else if (theme == 2) {
+        shadow = float3(0.72, 0.50, 0.60);
+        surface = float3(0.96, 0.82, 0.86);
+        highlight = float3(1.0, 0.93, 0.95);
+    } else if (theme == 3) {
+        shadow = float3(0.44, 0.28, 0.50);
+        surface = float3(0.82, 0.64, 0.84);
+        highlight = float3(0.96, 0.86, 0.96);
+    } else {
+        shadow = float3(0.72, 0.78, 0.88);
+        surface = float3(0.925, 0.94, 0.965);
+        highlight = float3(0.975, 0.982, 0.995);
+    }
+    shadow = mix(shadow, u.shadowTint.rgb, u.shadowTint.a * 0.6);
+    surface = mix(surface, min(u.shadowTint.rgb * 1.18, float3(1.0)), u.shadowTint.a * 0.2);
     float shade = (1.0 - exp(-depth / 30.0)) * 0.32 + (1.0 - light) * 0.6 * exp(-depth / 5.0);
     float3 color = mix(surface, shadow, saturate(shade));
-    color = mix(color, float3(0.975, 0.982, 0.995), exp(-depth * 0.9) * 0.6);
+    color = mix(color, highlight, exp(-depth * 0.9) * 0.6);
     color += (hash(floor(in.position.xy)) - 0.5) * 0.02;
 
     float seed = hash(floor(in.position.xy * 0.5) + 31.7);
-    if (seed > 0.992) {
+    if (seed > 0.992 && (theme == 0 || theme == 4)) {
         float twinkle = pow(saturate(sin(u.time * (0.6 + seed * 1.8) + seed * 90.0)), 28.0);
         color = mix(color, float3(1.0), twinkle * exp(-depth / 7.0));
     }
