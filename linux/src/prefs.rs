@@ -53,7 +53,11 @@ pub fn set_opens_at_login(on: bool) -> std::io::Result<()> {
     if !on {
         return std::fs::remove_file(path);
     }
-    let exe = std::env::current_exe()?;
+    // Inside an AppImage the app runs from a mount that is gone after a restart; the AppImage says where it is.
+    let exe = match std::env::var_os("APPIMAGE") {
+        Some(appimage) => PathBuf::from(appimage),
+        None => std::env::current_exe()?,
+    };
     if let Some(folder) = path.parent() {
         std::fs::create_dir_all(folder)?;
     }

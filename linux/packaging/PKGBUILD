@@ -1,4 +1,5 @@
 # Builds the KDE version from this checkout: cd linux/packaging && makepkg -si
+# With SNOWHUSH_BINARY set, packages that binary instead of building one, as release.sh does.
 pkgname=snowhush
 pkgver=0.5.6
 pkgrel=1
@@ -13,12 +14,13 @@ options=('!lto')
 _root="$(realpath "$startdir/../..")"
 
 build() {
+    [[ -n $SNOWHUSH_BINARY ]] && return
     cd "$_root/linux"
     CARGO_TARGET_DIR="$srcdir/target" cargo build --release --locked
 }
 
 package() {
-    install -Dm755 "$srcdir/target/release/snowhush" "$pkgdir/usr/bin/snowhush"
+    install -Dm755 "${SNOWHUSH_BINARY:-$srcdir/target/release/snowhush}" "$pkgdir/usr/bin/snowhush"
     install -Dm644 "$_root/linux/packaging/snowhush.desktop" "$pkgdir/usr/share/applications/snowhush.desktop"
     install -Dm644 "$_root/windows/assets/icon-256.png" "$pkgdir/usr/share/icons/hicolor/256x256/apps/snowhush.png"
     install -Dm644 "$_root/site/assets/icon-512.png" "$pkgdir/usr/share/icons/hicolor/512x512/apps/snowhush.png"
