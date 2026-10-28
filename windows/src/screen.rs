@@ -3,15 +3,18 @@ use std::collections::HashSet;
 use std::ffi::c_void;
 use std::mem::size_of;
 use std::sync::Once;
+use std::sync::atomic::{AtomicIsize, Ordering};
 
 use windows::Win32::Foundation::{COLORREF, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{DWM_TIMING_INFO, DwmGetCompositionTimingInfo};
 use windows::Win32::Graphics::Gdi::{
-    DEVMODEW, ENUM_CURRENT_SETTINGS, EnumDisplayMonitors, EnumDisplaySettingsW, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO, MONITORINFOEXW,
-    ScreenToClient,
+    DEVMODEW, ENUM_CURRENT_SETTINGS, EnumDisplayMonitors, EnumDisplaySettingsW, GetMonitorInfoW, HDC, HMONITOR, MONITOR_DEFAULTTONEAREST,
+    MONITORINFO, MONITORINFOEXW, MonitorFromWindow, ScreenToClient,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
+use windows::Win32::System::Threading::SetEvent;
+use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook};
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{BOOL, Error, PCWSTR, Result, w};
@@ -381,6 +384,11 @@ impl Screen {
         }
     }
 
+    /// Whether this display's taskbar, hiding itself where the snow lies, has come over the overlay, as it does when clicked.
+    pub fn under_taskbar(&self) -> bool {
+        self.layer.is_none() && self.monitor.rect == self.monitor.bounds && taskbar_above(self.overlay.0, &self.monitor.bounds)
+    }
+
     /// An overlay inside Explorer's wallpaper layer goes away with it when Explorer restarts.
     pub fn alive(&self) -> bool {
         unsafe { IsWindow(Some(self.overlay.0)).as_bool() }
@@ -421,6 +429,75 @@ pub fn dip_size(monitor: &Monitor) -> (u32, u32) {
 fn physical_size(monitor: &Monitor) -> (i32, i32) {
     let rect = &monitor.rect;
     ((rect.right - rect.left).max(1), (rect.bottom - rect.top).max(1))
+}
+
+/// Wakes the snow loop through `wake` the moment a taskbar that hides itself comes over an overlay, as it does when
+/// clicked. The loop doesn't read its messages between frames and would only raise the overlay at the next one, long
+/// enough for the drift to blink out under the taskbar, so the windows' stacking is watched from a thread of its own.
+pub fn watch_taskbar(wake: isize) {
+    static WAKE: AtomicIsize = AtomicIsize::new(0);
+    unsafe extern "system" fn on_restack(_: HWINEVENTHOOK, _: u32, _: HWND, _: i32, _: i32, _: u32, _: u32) {
+        if overlays_over_hiding_taskbars().any(|(overlay, bounds)| taskbar_above(overlay, &bounds)) {
+            let _ = unsafe { SetEvent(HANDLE(WAKE.load(Ordering::Relaxed) as _)) };
+        }
+    }
+    WAKE.store(wake, Ordering::Relaxed);
+    let _ = std::thread::Builder::new().name("taskbar".into()).spawn(|| unsafe {
+        let flags = WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS;
+        let hooks = [EVENT_SYSTEM_FOREGROUND, EVENT_OBJECT_REORDER].map(|event| SetWinEventHook(event, event, None, Some(on_restack), 0, 0, flags));
+        if hooks.iter().all(|hook| hook.is_invalid()) {
+            return;
+        }
+        let mut message = MSG::default();
+        while GetMessageW(&mut message, None, 0, 0).as_bool() {
+            DispatchMessageW(&message);
+        }
+    });
+}
+
+/// The overlays above windows on displays whose taskbar hides itself, with each display's bounds.
+/// The hidden listener has the same class, but it isn't click-through.
+fn overlays_over_hiding_taskbars() -> impl Iterator<Item = (HWND, RECT)> {
+    let next = |previous: Option<HWND>| unsafe { FindWindowExW(None, previous, CLASS, None) }.ok();
+    std::iter::successors(next(None), move |&window| next(Some(window))).filter_map(|window| unsafe {
+        if GetWindowLongPtrW(window, GWL_EXSTYLE) as u32 & WS_EX_TRANSPARENT.0 == 0 {
+            return None;
+        }
+        let mut info = MONITORINFO { cbSize: size_of::<MONITORINFO>() as u32, ..Default::default() };
+        let found = GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST), &mut info).as_bool();
+        (found && info.rcWork == info.rcMonitor).then_some((window, info.rcMonitor))
+    })
+}
+
+/// Whether the taskbar on the display with these bounds stands above the overlay.
+fn taskbar_above(overlay: HWND, bounds: &RECT) -> bool {
+    let Some(taskbar) = taskbar(bounds) else {
+        return false;
+    };
+    let mut window = overlay;
+    unsafe {
+        while let Ok(above) = GetWindow(window, GW_HWNDPREV) {
+            if above == taskbar {
+                return true;
+            }
+            window = above;
+        }
+    }
+    false
+}
+
+/// The taskbar on the display with these bounds, if it has one.
+fn taskbar(bounds: &RECT) -> Option<HWND> {
+    unsafe {
+        let primary = FindWindowW(w!("Shell_TrayWnd"), None).ok();
+        let secondary = std::iter::successors(FindWindowExW(None, None, w!("Shell_SecondaryTrayWnd"), None).ok(), |&previous| {
+            FindWindowExW(None, Some(previous), w!("Shell_SecondaryTrayWnd"), None).ok()
+        });
+        primary.into_iter().chain(secondary).find(|&window| {
+            let mut info = MONITORINFO { cbSize: size_of::<MONITORINFO>() as u32, ..Default::default() };
+            GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST), &mut info).as_bool() && info.rcMonitor == *bounds
+        })
+    }
 }
 
 fn create_overlay(rect: &RECT, shown_in_screenshots: bool) -> Result<HWND> {

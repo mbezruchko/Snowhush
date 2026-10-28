@@ -21,7 +21,7 @@ use crate::light::{Wallpapers, daylight};
 use crate::log;
 use crate::prefs::Settings;
 use crate::render::Gpu;
-use crate::screen::{BACKDROP_CHANGED, Clock, DISPLAYS_CHANGED, Monitor, PowerBudget, Screen, dip_size, listen, monitors};
+use crate::screen::{BACKDROP_CHANGED, Clock, DISPLAYS_CHANGED, Monitor, PowerBudget, Screen, dip_size, listen, monitors, watch_taskbar};
 use crate::tracker::Tracker;
 
 /// A piece of the welcome window crumbling into snow, in physical screen pixels.
@@ -92,8 +92,10 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
     let mut desktop_logged = String::new();
     let mut stats = Stats::new(started);
     let mut tracker = Tracker::new();
+    watch_taskbar(links.wake);
 
     loop {
+        screens.iter().filter(|screen| screen.under_taskbar()).for_each(Screen::raise);
         while let Ok(command) = commands.try_recv() {
             match command {
                 Command::Quit => return Ok(()),
