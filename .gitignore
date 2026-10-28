@@ -6,3 +6,6 @@ dist/
 windows/target/
 core/target/
 linux/target/
+linux/packaging/pkg/
+linux/packaging/src/
+linux/packaging/*.pkg.tar.zst
