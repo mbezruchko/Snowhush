@@ -42,7 +42,7 @@ const IGNORED: [&str; 10] = [
 ];
 /// Switchers, thumbnails and the shell's flyouts (hidden tray icons, context menus, Start and the like) hide snow behind
 /// them but don't collect any. A flyout's rectangle also takes in a clear margin for its shadow, well outside what shows.
-const COVER_ONLY: [&str; 8] = [
+pub const COVER_ONLY: [&str; 8] = [
     "XamlExplorerHostIslandWindow",
     "MultitaskingViewFrame",
     "TaskListThumbnailWnd",
@@ -374,7 +374,7 @@ fn watch_shell() {
     });
 }
 
-fn cloaked(window: HWND) -> bool {
+pub fn cloaked(window: HWND) -> bool {
     let mut cloaked = 0u32;
     unsafe { DwmGetWindowAttribute(window, DWMWA_CLOAKED, (&raw mut cloaked).cast(), 4) }.is_ok() && cloaked != 0
 }

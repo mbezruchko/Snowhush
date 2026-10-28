@@ -26,7 +26,7 @@ use crate::desktop::DesktopLayer;
 use crate::light::{Backdrop, Wallpapers};
 use crate::log;
 use crate::render::{Ambient, Gpu, Surface};
-use crate::tracker::Tracker;
+use crate::tracker::{COVER_ONLY, Tracker, class_name, cloaked};
 
 const CLASS: PCWSTR = w!("SnowhushOverlay");
 
@@ -383,13 +383,14 @@ impl Screen {
         set_capture(self.overlay.0, shown);
     }
 
-    /// Topmost windows opened later stack above; this puts the snow back on top of them.
+    /// Topmost windows opened later stack above; this puts the snow back on top of them, though still under open menus,
+    /// tooltips and the shell's flyouts, as menus stay in front of the snow on a Mac.
     /// Behind windows, the snow is kept just under the desktop icons instead, and above live wallpapers
     /// like Lively's, which go into the same layer and land on top when they start later.
     pub fn raise(&self) {
         let above = match self.layer {
             Some(layer) => layer.icons.unwrap_or(HWND_TOP),
-            None => HWND_TOPMOST,
+            None => lowest_open_popup().unwrap_or(HWND_TOPMOST),
         };
         unsafe {
             let _ = SetWindowPos(self.overlay.0, Some(above), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
@@ -479,6 +480,29 @@ fn overlays_over_hiding_taskbars() -> impl Iterator<Item = (HWND, RECT)> {
         let found = GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST), &mut info).as_bool();
         (found && info.rcWork == info.rcMonitor).then_some((window, info.rcMonitor))
     })
+}
+
+/// The lowest of the menus, tooltips and shell flyouts open at the very top, which the snow goes just under.
+/// Only those above every other window count: some of the shell's stay showing further down, under the taskbar
+/// among others, and going under one of those would leave the snow under the taskbar too.
+fn lowest_open_popup() -> Option<HWND> {
+    let mut lowest = None;
+    let mut next = unsafe { GetTopWindow(None) }.ok();
+    while let Some(window) = next {
+        if unsafe { GetWindowLongPtrW(window, GWL_EXSTYLE) } as u32 & WS_EX_TOPMOST.0 == 0 {
+            break;
+        }
+        if unsafe { IsWindowVisible(window) }.as_bool() && !cloaked(window) {
+            let class = class_name(window);
+            if class == "#32768" || class == "tooltips_class32" || COVER_ONLY.contains(&class.as_str()) {
+                lowest = Some(window);
+            } else if class != "SnowhushOverlay" {
+                break;
+            }
+        }
+        next = unsafe { GetWindow(window, GW_HWNDNEXT) }.ok();
+    }
+    lowest
 }
 
 /// Whether the taskbar on the display with these bounds stands above the overlay.
