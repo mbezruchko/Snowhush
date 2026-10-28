@@ -40,6 +40,17 @@ open build/Snowhush.app
 windows/build.sh      # dist/Snowhush-Setup.exe, cross-compiled from macOS
 ```
 
+### KDE Plasma (Linux)
+
+`linux/` is a native version for KDE Plasma 6 on Wayland. It shares the snow's physics with the Windows version and draws with OpenGL ES in a layer-shell overlay. Wayland doesn't tell apps where other windows are or where the pointer is, so Snowhush loads a small KWin script (`linux/src/snowhush.js`) while it runs, which reports both. It unloads the script when it quits.
+
+```sh
+cd linux && cargo build --release   # linux/target/release/snowhush
+cd linux/packaging && makepkg -si   # Arch: installs it with its icon and menu entry
+```
+
+Everything lives in the tray, as on Windows. Settings go to `~/.config/snowhush/settings`, Open at Login to `~/.config/autostart/snowhush.desktop`, the log to `~/.local/state/snowhush/snowhush.log`.
+
 ## License
 
 [MIT](LICENSE)

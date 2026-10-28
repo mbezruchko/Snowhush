@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Snowhush
+GenericName=Desktop Snow
+Comment=Snow on your desktop
+Exec=snowhush
+Icon=snowhush
+Categories=Utility;
+Keywords=snow;winter;desktop;
+StartupNotify=false
