@@ -26,6 +26,8 @@ final class Renderer: NSObject, MTKViewDelegate {
     /// Frames per second while the snow is being disturbed: the display's highest rate, up to 120 on ProMotion screens.
     var interactiveFrameRate = 60
     var budget = PowerBudget.full
+    /// Where the Dock's snow is drawn; without one it stays in the main overlay.
+    var dockOverlay: DockOverlay?
     var sceneLight: (CFTimeInterval) -> (light: SIMD3<Float>, shadowTint: SIMD4<Float>) = { _ in (SIMD3(repeating: 1), .zero) }
     private var ambient: (light: SIMD3<Float>, shadowTint: SIMD4<Float>) = (SIMD3(repeating: 1), .zero)
 
@@ -43,6 +45,8 @@ final class Renderer: NSObject, MTKViewDelegate {
     private var slot = 0
     private var lastTime: CFTimeInterval = 0
     private var idleFrames = 0
+    /// Whether the Dock's strip still shows snow.
+    private var dockDrawn = false
     private let epoch = CACurrentMediaTime()
 
     init(device: MTLDevice, pixelFormat: MTLPixelFormat, simulation: SnowSimulation) throws {
@@ -148,22 +152,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         )
         let uniformsLength = MemoryLayout<Uniforms>.stride
 
-        if !piles.isEmpty {
-            encoder.setRenderPipelineState(pilePipeline)
-            for pile in piles {
-                uniforms.columnCount = Int32(pile.count)
-                uniforms.pileTop = pile.top + 2
-                uniforms.pileBottom = pile.bottom
-                uniforms.origin = pile.origin
-                uniforms.occluderCount = Int32(pile.occluders.count)
-                var occluders = pile.occluders.isEmpty ? [SIMD4<Float>(repeating: 0)] : pile.occluders
-                encoder.setVertexBytes(&uniforms, length: uniformsLength, index: 0)
-                encoder.setFragmentBuffer(heightBuffer, offset: pile.offset * MemoryLayout<Float>.stride, index: 0)
-                encoder.setFragmentBytes(&uniforms, length: uniformsLength, index: 1)
-                encoder.setFragmentBytes(&occluders, length: occluders.count * MemoryLayout<SIMD4<Float>>.stride, index: 2)
-                encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
-            }
-        }
+        drawPiles(piles.filter { !$0.isDock }, with: encoder, uniforms: uniforms, heights: heightBuffer)
         if sprites > 0 {
             encoder.setRenderPipelineState(spritePipeline)
             encoder.setVertexBuffer(spriteBuffer, offset: 0, index: 0)
@@ -171,6 +160,41 @@ final class Renderer: NSObject, MTKViewDelegate {
             encoder.drawPrimitives(type: .point, vertexStart: 0, vertexCount: sprites)
         }
         encoder.endEncoding()
+        encodeDock(piles.filter(\.isDock), into: commandBuffer, uniforms: uniforms, heights: heightBuffer)
+    }
+
+    /// Draws the Dock's snow into its own strip below the Dock, and clears the strip once after the snow is gone.
+    private func encodeDock(_ piles: [PileLayer], into commandBuffer: MTLCommandBuffer, uniforms: Uniforms, heights: MTLBuffer) {
+        guard let dockOverlay, !piles.isEmpty || dockDrawn else { return }
+        let top = piles.map { CGFloat($0.origin.y + $0.top + 2) }.max()
+        guard let frame = dockOverlay.nextFrame(reaching: top),
+              let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: frame.pass) else { return }
+        var uniforms = uniforms
+        uniforms.viewSize = SIMD2(simulation.width, Float(dockOverlay.height))
+        drawPiles(piles, with: encoder, uniforms: uniforms, heights: heights)
+        encoder.endEncoding()
+        commandBuffer.present(frame.drawable)
+        dockDrawn = !piles.isEmpty
+    }
+
+    private func drawPiles(_ piles: [PileLayer], with encoder: MTLRenderCommandEncoder, uniforms: Uniforms, heights: MTLBuffer) {
+        guard !piles.isEmpty else { return }
+        var uniforms = uniforms
+        let uniformsLength = MemoryLayout<Uniforms>.stride
+        encoder.setRenderPipelineState(pilePipeline)
+        for pile in piles {
+            uniforms.columnCount = Int32(pile.count)
+            uniforms.pileTop = pile.top + 2
+            uniforms.pileBottom = pile.bottom
+            uniforms.origin = pile.origin
+            uniforms.occluderCount = Int32(pile.occluders.count)
+            var occluders = pile.occluders.isEmpty ? [SIMD4<Float>(repeating: 0)] : pile.occluders
+            encoder.setVertexBytes(&uniforms, length: uniformsLength, index: 0)
+            encoder.setFragmentBuffer(heights, offset: pile.offset * MemoryLayout<Float>.stride, index: 0)
+            encoder.setFragmentBytes(&uniforms, length: uniformsLength, index: 1)
+            encoder.setFragmentBytes(&occluders, length: occluders.count * MemoryLayout<SIMD4<Float>>.stride, index: 2)
+            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        }
     }
 
     private func reserve(sprites: Int, columns: Int) {

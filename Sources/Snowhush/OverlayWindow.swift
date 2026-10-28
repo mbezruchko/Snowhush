@@ -2,16 +2,21 @@ import AppKit
 
 final class OverlayWindow: NSWindow {
     private static let desktopLevel = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopWindow)) + 1)
+    /// Just under the Dock, so its icons stay in front as they grow under the pointer.
+    static let belowDockLevel = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.dockWindow)) - 1)
+
+    private let frontLevel: NSWindow.Level
 
     var behindWindows = false {
-        didSet { level = behindWindows ? Self.desktopLevel : .statusBar }
+        didSet { level = behindWindows ? Self.desktopLevel : frontLevel }
     }
 
     var showsInScreenshots = false {
         didSet { sharingType = showsInScreenshots ? .readOnly : .none }
     }
 
-    init(screen: NSScreen) {
+    init(screen: NSScreen, level: NSWindow.Level = .statusBar) {
+        frontLevel = level
         super.init(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
         isOpaque = false
         backgroundColor = .clear
@@ -20,7 +25,7 @@ final class OverlayWindow: NSWindow {
         isReleasedWhenClosed = false
         animationBehavior = .none
         collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
-        level = .statusBar
+        self.level = level
         sharingType = .none
         setFrame(screen.frame, display: false)
     }

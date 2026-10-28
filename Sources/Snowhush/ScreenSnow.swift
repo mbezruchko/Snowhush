@@ -5,6 +5,7 @@ import MetalKit
 final class ScreenSnow {
     let displayID: CGDirectDisplayID
     let window: OverlayWindow
+    let dock: DockOverlay
     let simulation: SnowSimulation
     private let view: MTKView
     private let renderer: Renderer
@@ -35,6 +36,9 @@ final class ScreenSnow {
         window = OverlayWindow(screen: screen)
         window.behindWindows = Preferences.behindWindows
         window.showsInScreenshots = Preferences.showInScreenshots
+        dock = DockOverlay(screen: screen, device: device)
+        dock.window.showsInScreenshots = Preferences.showInScreenshots
+        renderer.dockOverlay = dock
         view = Self.makeView(device: device, size: screen.frame.size)
 
         renderer.cursorLocation = { [unowned window] in
@@ -58,6 +62,7 @@ final class ScreenSnow {
     func fit(to screen: NSScreen) {
         self.screen = screen
         window.setFrame(screen.frame, display: true)
+        dock.fit(to: screen)
         Renderer.fitDrawable(of: view)
         simulation.resize(width: Float(screen.frame.width), height: Float(screen.frame.height))
         light.invalidate()
@@ -99,6 +104,7 @@ final class ScreenSnow {
         view.isPaused = true
         view.delegate = nil
         window.orderOut(nil)
+        dock.close()
     }
 
     /// Window bounds come in global coordinates with the origin at the top left of the primary display.

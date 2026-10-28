@@ -32,6 +32,7 @@ struct PileLayer {
     var top: Float
     var bottom: Float
     var occluders: [SIMD4<Float>]
+    var isDock: Bool
 }
 
 private struct Flake {
@@ -306,7 +307,8 @@ final class SnowSimulation {
                 origin: layer.base,
                 top: layer.top,
                 bottom: -layer.bedDepth,
-                occluders: layer.occluders
+                occluders: layer.occluders,
+                isDock: layer.isDock
             ))
             offset += 2 * layer.count
         }
@@ -356,6 +358,7 @@ final class SnowSimulation {
             ledge.shapeCorners(radius: Float(surface.cornerRadius), exponent: Float(surface.cornerExponent))
             let blockers = surface.blockers.map { SIMD4<Float>(Float($0.minX), Float($0.minY), Float($0.maxX), Float($0.maxY)) }
             ledge.occluders = Array(blockers.prefix(16))
+            ledge.isDock = surface.isDock
             ledge.updateVisibility(screenWidth: width, blockers: blockers)
         }
 

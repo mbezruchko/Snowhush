@@ -15,6 +15,8 @@ final class SnowLayer {
     private(set) var top: Float = 0
     private(set) var bedDepth: Float = 0
     var occluders: [SIMD4<Float>] = []
+    /// Lies on the Dock's shelf, and so is drawn below the Dock.
+    var isDock = false
     var movedAt: Double = -1
     var spill: (left: Float, right: Float) = (0, 0)
     /// Smoothed path of the supporting edge; the snow reacts to its accelerations, not to raw jittery samples.

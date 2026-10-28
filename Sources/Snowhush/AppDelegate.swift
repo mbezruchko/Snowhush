@@ -212,7 +212,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
 
     @objc private func toggleScreenshots() {
         Preferences.showInScreenshots.toggle()
-        for snow in screens { snow.window.showsInScreenshots = Preferences.showInScreenshots }
+        for snow in screens {
+            snow.window.showsInScreenshots = Preferences.showInScreenshots
+            snow.dock.window.showsInScreenshots = Preferences.showInScreenshots
+        }
     }
 
     @objc private func toggleOpenAtLogin() {

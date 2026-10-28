@@ -22,6 +22,8 @@ struct WindowSurface: Equatable {
     /// Top corners as a superellipse quadrant: macOS windows are close to exponent 2.5, Spotlight's capsule is a circle.
     let cornerRadius: CGFloat
     let cornerExponent: CGFloat
+    /// The Dock's shelf: its snow is drawn below the Dock, so the icons stay in front of it.
+    let isDock: Bool
 }
 
 /// Polls the on-screen window list: a few times a second when nothing moves, every frame while something does.
@@ -290,7 +292,8 @@ final class WindowTracker {
                     frame: frame,
                     blockers: blockers.filter { $0.intersects(region) },
                     cornerRadius: radius,
-                    cornerExponent: capsule ? 2 : 2.5
+                    cornerExponent: capsule ? 2 : 2.5,
+                    isDock: shelf
                 ))
             }
             blockers.append(frame)
