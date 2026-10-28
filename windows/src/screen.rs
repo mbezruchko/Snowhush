@@ -1,4 +1,4 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::ffi::c_void;
 use std::mem::size_of;
@@ -26,7 +26,7 @@ use crate::desktop::DesktopLayer;
 use crate::light::{Backdrop, Wallpapers};
 use crate::log;
 use crate::render::{Ambient, Gpu, Surface};
-use crate::tracker::{COVER_ONLY, Tracker, class_name, cloaked};
+use crate::tracker::{COVER_ONLY, Tracker, class_name, cloaked, process_name};
 
 const CLASS: PCWSTR = w!("SnowhushOverlay");
 
@@ -35,6 +35,8 @@ thread_local! {
     pub static DISPLAYS_CHANGED: Cell<bool> = const { Cell::new(false) };
     /// Set by an overlay window when the desktop picture or colour changes.
     pub static BACKDROP_CHANGED: Cell<bool> = const { Cell::new(false) };
+    /// The windows at the top last logged by `lowest_open_popup`.
+    static TOP_LOGGED: RefCell<String> = const { RefCell::new(String::new()) };
 }
 
 /// How much the snow may spend on drawing.
@@ -482,26 +484,50 @@ fn overlays_over_hiding_taskbars() -> impl Iterator<Item = (HWND, RECT)> {
     })
 }
 
-/// The lowest of the menus, tooltips and shell flyouts open at the very top, which the snow goes just under.
+/// The lowest of the menus, tooltips and shell flyouts open at the very top, which the snow goes just under:
+/// menus and tooltips of any app, and any window of the shell's but its taskbars, since the shell's menus
+/// come in classes that change between versions of Windows.
 /// Only those above every other window count: some of the shell's stay showing further down, under the taskbar
-/// among others, and going under one of those would leave the snow under the taskbar too.
+/// among others, and going under one of those would leave the snow under the taskbar too. Click-through windows
+/// are looked past: they are overlays like this one, such as AMD's, which keeps itself above everything.
 fn lowest_open_popup() -> Option<HWND> {
+    let shell = unsafe { FindWindowW(w!("Shell_TrayWnd"), None) }.map_or(0, |taskbar| {
+        let mut process = 0;
+        unsafe { GetWindowThreadProcessId(taskbar, Some(&mut process)) };
+        process
+    });
     let mut lowest = None;
+    let mut top = Vec::new();
     let mut next = unsafe { GetTopWindow(None) }.ok();
     while let Some(window) = next {
-        if unsafe { GetWindowLongPtrW(window, GWL_EXSTYLE) } as u32 & WS_EX_TOPMOST.0 == 0 {
+        let extended = unsafe { GetWindowLongPtrW(window, GWL_EXSTYLE) } as u32;
+        if extended & WS_EX_TOPMOST.0 == 0 {
             break;
         }
-        if unsafe { IsWindowVisible(window) }.as_bool() && !cloaked(window) {
+        if extended & WS_EX_TRANSPARENT.0 == 0 && unsafe { IsWindowVisible(window) }.as_bool() && !cloaked(window) {
             let class = class_name(window);
-            if class == "#32768" || class == "tooltips_class32" || COVER_ONLY.contains(&class.as_str()) {
-                lowest = Some(window);
-            } else if class != "SnowhushOverlay" {
+            let mut process = 0;
+            unsafe { GetWindowThreadProcessId(window, Some(&mut process)) };
+            let popup = class == "#32768"
+                || class == "tooltips_class32"
+                || COVER_ONLY.contains(&class.as_str())
+                || (process == shell && class != "Shell_TrayWnd" && class != "Shell_SecondaryTrayWnd");
+            top.push((class, process));
+            if !popup {
                 break;
             }
+            lowest = Some(window);
         }
         next = unsafe { GetWindow(window, GW_HWNDNEXT) }.ok();
     }
+    TOP_LOGGED.with_borrow_mut(|logged| {
+        let seen = format!("{top:?} {}", lowest.is_some());
+        if *logged != seen {
+            let names: Vec<String> = top.iter().map(|(class, process)| format!("{class} of {}", process_name(*process))).collect();
+            log!("top windows: {}; snow {}", names.join(", "), if lowest.is_some() { "goes under the last menu" } else { "goes on top" });
+            *logged = seen;
+        }
+    });
     lowest
 }
 
