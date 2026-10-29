@@ -46,7 +46,7 @@ windows/build.sh      # dist/Snowhush-Setup.exe, cross-compiled from macOS
 
 `linux/` is a native version for Wayland: KDE Plasma 6, Sway and niri. It shares the snow's physics with the Windows version and draws with OpenGL ES in a layer-shell overlay. Wayland doesn't tell apps where other windows are or where the pointer is, so each compositor is asked in its own way: on KDE, Snowhush loads a small KWin script (`linux/src/snowhush.js`) while it runs, which reports both; Sway and niri answer over their IPC sockets, though they don't tell where the pointer is, and niri only where floating windows are, so on niri only those collect snow.
 
-Each release carries an AppImage that runs on any distribution, a `.deb`, an `.rpm`, and on Arch there is [`snowhush-bin`](https://aur.archlinux.org/packages/snowhush-bin) on the AUR. To build it yourself:
+Each release carries an AppImage that runs on any distribution, a `.deb` and an `.rpm`. On Arch, `makepkg -si` in `linux/packaging/aur` installs the release's build as a package. To build it yourself:
 
 ```sh
 cd linux && cargo build --release   # linux/target/release/snowhush
