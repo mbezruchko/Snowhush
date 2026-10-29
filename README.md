@@ -49,6 +49,8 @@ cd linux && cargo build --release   # linux/target/release/snowhush
 cd linux/packaging && makepkg -si   # Arch: installs it with its icon and menu entry
 ```
 
+`linux/bench/run.sh sway|niri|kwin` tries it in a compositor inside a container, without a display.
+
 Everything lives in the tray, as on Windows. Settings go to `~/.config/snowhush/settings`, Open at Login to `~/.config/autostart/snowhush.desktop`, the log to `~/.local/state/snowhush/snowhush.log`.
 
 ## License
