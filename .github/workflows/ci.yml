@@ -14,7 +14,7 @@ jobs:
     name: Simulation tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Formatting
         run: |
           cargo fmt --check --manifest-path core/Cargo.toml
@@ -27,25 +27,26 @@ jobs:
     name: Windows app
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: cargo build --locked --release --bin Snowhush --manifest-path windows/Cargo.toml
 
   linux:
     name: Linux app
-    # An older glibc than ubuntu-latest has, so the binary it leaves runs on older distributions too.
+    # An older glibc than ubuntu-latest has, so the packages it leaves run on older distributions too.
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
-      - run: sudo apt-get update -q && sudo apt-get install -y -q libwayland-dev
+      - uses: actions/checkout@v7
+      - run: sudo apt-get update -q && sudo apt-get install -y -q libwayland-dev rpm file
       - run: cargo build --locked --release --manifest-path linux/Cargo.toml
-      - uses: actions/upload-artifact@v4
+      - run: linux/packaging/package.sh linux/target/release/snowhush dist
+      - uses: actions/upload-artifact@v7
         with:
           name: snowhush-linux-x86_64
-          path: linux/target/release/snowhush
+          path: dist
 
   mac:
     name: Mac app
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: swift build -c release

@@ -3,6 +3,7 @@
 # The release carries Snowhush.dmg, which the site's Download button and Sparkle both fetch,
 # appcast.xml, which the app reads from the latest release to find updates,
 # and Snowhush-Setup.exe for Windows, whose app looks for it on the latest release to find updates.
+# Once it is published, GitHub Actions adds the Linux packages to it: .github/workflows/release.yml.
 # When the Homebrew tap repository exists (HOMEBREW_TAP, default mbezruchko/homebrew-tap), its cask follows along.
 #
 # Usage: ./release.sh <version> [notes]
@@ -52,6 +53,13 @@ if [[ "$(sed -n 's/^version = "\(.*\)"$/\1/p' "$cargo_toml" | head -1)" != "$ver
     (cd windows && cargo update --workspace --offline -q)
     bumped+=("$cargo_toml" windows/Cargo.lock)
 fi
+if [[ "$(sed -n 's/^version = "\(.*\)"$/\1/p' linux/Cargo.toml | head -1)" != "$version" ]]; then
+    sed -i '' "1,/^version = /s/^version = \".*\"/version = \"$version\"/" linux/Cargo.toml
+    # The Linux app's dependencies needn't be on this Mac, so its lockfile is edited rather than resolved again.
+    perl -0pi -e "s/(name = \"snowhush\"\nversion = )\"[^\"]*\"/\${1}\"$version\"/" linux/Cargo.lock
+    sed -i '' "s/^pkgver=.*/pkgver=$version/" linux/packaging/PKGBUILD
+    bumped+=(linux/Cargo.toml linux/Cargo.lock linux/packaging/PKGBUILD)
+fi
 (( ${#bumped} )) && git commit -qm "chore: release v$version" "${bumped[@]}"
 
 ./build.sh
@@ -99,6 +107,7 @@ git push -q origin HEAD
 gh release create "v$version" "$dist/Snowhush.dmg" "$dist/appcast/appcast.xml" "$dist/Snowhush-Setup.exe" \
     --repo "$repository" --target "$(git rev-parse HEAD)" --title "Snowhush $version" --notes "$notes"
 echo "Released https://github.com/$repository/releases/tag/v$version"
+echo "GitHub Actions is adding the Linux packages; once they are there, linux/packaging/aur/update.sh $version brings the AUR package along."
 
 tap_repository=${HOMEBREW_TAP:-mbezruchko/homebrew-tap}
 if gh repo view "$tap_repository" >/dev/null 2>&1; then

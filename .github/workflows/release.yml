@@ -1,0 +1,30 @@
+name: Linux packages
+
+# Builds the Linux app's packages and adds them to a release: on its own once release.sh publishes one, or by
+# hand for a release that has none yet, built from the branch the run is started on.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The release to add them to, such as v0.6.0
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    name: Linux packages
+    # An older glibc than ubuntu-latest has, so the app runs on older distributions too.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: sudo apt-get update -q && sudo apt-get install -y -q libwayland-dev rpm file
+      - run: cargo build --locked --release --manifest-path linux/Cargo.toml
+      - run: linux/packaging/package.sh linux/target/release/snowhush dist
+      - run: gh release upload "$TAG" dist/* --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
