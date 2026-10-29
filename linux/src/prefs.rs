@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use snowhush::simulation::Snowfall;
+use snowhush_core::simulation::Snowfall;
 
 #[derive(Clone, Copy)]
 pub struct Settings {

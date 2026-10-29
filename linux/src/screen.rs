@@ -9,8 +9,8 @@ use smithay_client_toolkit::shell::wlr_layer::{Anchor, KeyboardInteractivity, La
 use wayland_client::QueueHandle;
 use wayland_client::protocol::wl_output::WlOutput;
 
-use snowhush::geometry::V2;
-use snowhush::simulation::{Pace, SnowSimulation, WindowId, WindowSurface};
+use snowhush_core::geometry::V2;
+use snowhush_core::simulation::{Pace, SnowSimulation, WindowId, WindowSurface};
 
 use crate::kwin::Report;
 use crate::light::{self, Backdrop};

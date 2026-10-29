@@ -6,7 +6,7 @@ use std::time::SystemTime;
 
 use zbus::blocking::Connection;
 
-use snowhush::geometry::smoothstep;
+use snowhush_core::geometry::smoothstep;
 
 use crate::windows::Area;
 

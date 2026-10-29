@@ -10,7 +10,7 @@ use wayland_client::Proxy;
 use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_egl::WlEglSurface;
 
-use snowhush::simulation::{COLUMN_WIDTH, SnowSimulation, Sprite};
+use snowhush_core::simulation::{COLUMN_WIDTH, SnowSimulation, Sprite};
 
 const SPRITE_VERTEX: &str = include_str!("shaders/sprite.vert");
 const SPRITE_FRAGMENT: &str = include_str!("shaders/sprite.frag");

@@ -18,7 +18,7 @@ use wayland_client::protocol::{wl_output, wl_surface};
 use wayland_client::{Connection, QueueHandle};
 use zbus::blocking::Connection as Bus;
 
-use snowhush::simulation::{SnowSimulation, Snowfall};
+use snowhush_core::simulation::{SnowSimulation, Snowfall};
 
 use crate::kwin::{self, Report, Shared};
 use crate::light::{self, daylight};

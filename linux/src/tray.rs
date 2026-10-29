@@ -4,7 +4,7 @@
 use calloop::channel::Sender;
 use ksni::menu::{CheckmarkItem, MenuItem, RadioGroup, RadioItem, StandardItem, SubMenu};
 
-use snowhush::simulation::Snowfall;
+use snowhush_core::simulation::Snowfall;
 
 use crate::log;
 use crate::prefs::{self, Settings};

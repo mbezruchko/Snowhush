@@ -3,8 +3,8 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-use snowhush::geometry::Rect;
-use snowhush::simulation::{WindowId, WindowSurface};
+use snowhush_core::geometry::Rect;
+use snowhush_core::simulation::{WindowId, WindowSurface};
 
 use crate::kwin::{Display, Report};
 
