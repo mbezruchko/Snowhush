@@ -17,6 +17,10 @@ One-time setup on the release machine:
 
 `windows/` is the Windows app in Rust, cross-compiled from the Mac. Its snow comes from `core/`, the simulation without any platform, which `cd core && cargo test` tests natively. `windows/build.sh` builds the app and its installer, which carries the app, into `dist/Snowhush-Setup.exe`. The installer works per user, without administrator rights, and `Snowhush.exe --uninstall` removes it again. The installer is unsigned, so SmartScreen may warn before running it.
 
+## Checks
+
+Every pull request and every push to `main` runs `.github/workflows/ci.yml` on GitHub: formatting and the simulation tests on Linux, the Windows app built on Windows, and the Mac app built on macOS.
+
 ## Site
 
 `site/` is a static page served by Cloudflare Pages at [snowhush.pages.dev](https://snowhush.pages.dev): no build command, output directory `site`. Every push to `main` deploys it.
