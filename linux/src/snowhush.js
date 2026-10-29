@@ -6,22 +6,40 @@ const SERVICE = "io.github.mbezruchko.Snowhush";
 const PATH = "/io/github/mbezruchko/Snowhush";
 const INTERFACE = "io.github.mbezruchko.Snowhush.KWin";
 
+// Calls in a row that went unanswered, across both senders.
+let unanswered = 0;
+let probeAt = 0;
+
 // One call in flight at a time: what changes meanwhile goes out, latest only, when the answer comes.
-// A call that fails never answers, so after a second the next change goes out anyway.
+// A call that fails never answers, so after a second the next change goes out anyway. After a few
+// unanswered in a row the app is taken to be gone, as after a crash, which leaves this script loaded:
+// it then tries only every half a minute, so a dead app doesn't fill the journal with failed calls,
+// and picks up again if the app was only stalled.
 function sender(method, payload) {
     let busy = false;
     let dirty = false;
     let sentAt = 0;
     function send() {
-        if (busy && Date.now() - sentAt < 1000) {
+        const now = Date.now();
+        if (busy && now - sentAt < 1000) {
             dirty = true;
             return;
         }
+        if (busy) {
+            unanswered++;
+        }
+        if (unanswered >= 5) {
+            if (now < probeAt) {
+                return;
+            }
+            probeAt = now + 30000;
+        }
         busy = true;
         dirty = false;
-        sentAt = Date.now();
+        sentAt = now;
         callDBus(SERVICE, PATH, INTERFACE, method, payload(), function () {
             busy = false;
+            unanswered = 0;
             if (dirty) {
                 send();
             }
