@@ -170,9 +170,7 @@ pub fn load_script(connection: &Connection, show_in_screenshots: bool) -> Result
         return Err("KWin refused the script".into());
     }
     let script = format!("/Scripting/Script{id}");
-    connection
-        .call_method(Some("org.kde.KWin"), script.as_str(), Some("org.kde.kwin.Script"), "run", &())
-        .map_err(|error| error.to_string())?;
+    connection.call_method(Some("org.kde.KWin"), script.as_str(), Some("org.kde.kwin.Script"), "run", &()).map_err(|error| error.to_string())?;
     Ok(())
 }
 

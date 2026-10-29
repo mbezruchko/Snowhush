@@ -78,9 +78,7 @@ pub fn animations_enabled() -> bool {
         let line = line.trim();
         if line.starts_with('[') {
             in_kde = line == "[KDE]";
-        } else if in_kde
-            && let Some(("AnimationDurationFactor", value)) = line.split_once('=').map(|(k, v)| (k.trim(), v.trim()))
-        {
+        } else if in_kde && let Some(("AnimationDurationFactor", value)) = line.split_once('=').map(|(k, v)| (k.trim(), v.trim())) {
             return value.parse::<f32>().map_or(true, |factor| factor > 0.0);
         }
     }

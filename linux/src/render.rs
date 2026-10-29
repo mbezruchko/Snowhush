@@ -196,7 +196,14 @@ impl Gpu {
 
     /// `panel` is a rectangle the panel stands in front of, left, bottom, right, top in the simulation's
     /// coordinates: nothing of the snow shows inside it.
-    pub fn draw(&mut self, surface: &Surface, simulation: &SnowSimulation, ambient: Ambient, panel: Option<[f32; 4]>, time: f32) -> Result<(), String> {
+    pub fn draw(
+        &mut self,
+        surface: &Surface,
+        simulation: &SnowSimulation,
+        ambient: Ambient,
+        panel: Option<[f32; 4]>,
+        time: f32,
+    ) -> Result<(), String> {
         self.egl.make_current(self.display, Some(surface.surface), Some(surface.surface), Some(self.context)).map_err(|error| error.to_string())?;
         let sprite_count = simulation.sprite_count();
         self.sprites.resize(sprite_count, Sprite::default());

@@ -73,8 +73,8 @@ pub fn run() -> Result<(), String> {
     // First of all: the signals are blocked on this thread so the loop can take them, and threads started
     // later (D-Bus, the tray, the graphics driver's) inherit that, or a quit would kill the app on the spot
     // and leave its script in KWin.
-    let signals = calloop::signals::Signals::new(&[calloop::signals::Signal::SIGINT, calloop::signals::Signal::SIGTERM])
-        .map_err(|error| error.to_string())?;
+    let signals =
+        calloop::signals::Signals::new(&[calloop::signals::Signal::SIGINT, calloop::signals::Signal::SIGTERM]).map_err(|error| error.to_string())?;
     event_loop.handle().insert_source(signals, |_, _, app| app.quit = true).map_err(|error| error.to_string())?;
     let (ping, ping_source) = calloop::ping::make_ping().map_err(|error| error.to_string())?;
     event_loop.handle().insert_source(ping_source, |_, _, _| {}).map_err(|error| error.to_string())?;

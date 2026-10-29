@@ -59,12 +59,16 @@ pub fn shelf(report: &Report, display: &Display) -> Option<Shelf> {
         return None;
     }
     let panel = report.panels.iter().find(|panel| {
-        (panel.y + panel.h - bounds.bottom()).abs() < 1.0 && panel.w > panel.h && panel.x >= bounds.x - 1.0 && panel.x + panel.w <= bounds.right() + 1.0
+        (panel.y + panel.h - bounds.bottom()).abs() < 1.0
+            && panel.w > panel.h
+            && panel.x >= bounds.x - 1.0
+            && panel.x + panel.w <= bounds.right() + 1.0
     })?;
     let gap = ((panel.h - room) / 2.0).max(0.0);
-    let touched = report.windows.iter().any(|window| {
-        window.solid && window.y + window.h >= work.bottom() - 1.0 && window.x < panel.x + panel.w && window.x + window.w > panel.x
-    });
+    let touched = report
+        .windows
+        .iter()
+        .any(|window| window.solid && window.y + window.h >= work.bottom() - 1.0 && window.x < panel.x + panel.w && window.x + window.w > panel.x);
     let rect = if gap >= 1.0 && !touched {
         Area { x: panel.x + gap, y: panel.y + gap, w: panel.w - 2.0 * gap, h: panel.h - 2.0 * gap }
     } else {
