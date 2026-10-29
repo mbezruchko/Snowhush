@@ -9,7 +9,7 @@ use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 use windows::core::{PCWSTR, w};
 
-use snowhush::version::{field, newer};
+use snowhush_core::version::{field, newer};
 
 const REPOSITORY: &str = "mbezruchko/Snowhush";
 const INSTALLER: &str = "Snowhush-Setup.exe";

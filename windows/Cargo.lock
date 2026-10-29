@@ -24,9 +24,14 @@ dependencies = [
 name = "snowhush"
 version = "0.5.6"
 dependencies = [
+ "snowhush-core",
  "windows",
  "windows-numerics",
 ]
+
+[[package]]
+name = "snowhush-core"
+version = "0.0.0"
 
 [[package]]
 name = "syn"

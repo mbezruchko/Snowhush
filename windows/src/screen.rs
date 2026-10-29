@@ -19,8 +19,8 @@ use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{BOOL, Error, PCWSTR, Result, w};
 
-use snowhush::geometry::V2;
-use snowhush::simulation::{Pace, SnowSimulation, WindowId, WindowSurface};
+use snowhush_core::geometry::V2;
+use snowhush_core::simulation::{Pace, SnowSimulation, WindowId, WindowSurface};
 
 use crate::desktop::DesktopLayer;
 use crate::light::{Backdrop, Wallpapers};

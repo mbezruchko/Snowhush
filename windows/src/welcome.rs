@@ -9,7 +9,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{PCWSTR, Result, w};
 
 use snowhush::card::{self, Card, Content, Hits, MARGIN};
-use snowhush::geometry::V2;
+use snowhush_core::geometry::V2;
 
 use crate::log;
 use crate::snow::Piece;

@@ -1,0 +1,4 @@
+[package]
+name = "snowhush-core"
+edition = "2024"
+publish = false

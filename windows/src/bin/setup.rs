@@ -102,7 +102,7 @@ fn paint(card: &Card, stage: &Stage, installed: Option<&str>, pressed: bool) -> 
         Stage::Ready | Stage::Installing => {
             let (body, button) = match installed {
                 None => (format!("Version {VERSION}. Installs just for you, without administrator rights."), "INSTALL"),
-                Some(old) if snowhush::version::newer(VERSION, old) => {
+                Some(old) if snowhush_core::version::newer(VERSION, old) => {
                     (format!("Updates Snowhush {old} to {VERSION}. Your settings stay as they are."), "UPDATE")
                 }
                 Some(old) => (format!("Snowhush {old} is already here. Installing {VERSION} again repairs it."), "REINSTALL"),

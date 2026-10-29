@@ -18,6 +18,9 @@ name = "Snowhush-Setup"
 path = "src/bin/setup.rs"
 required-features = ["setup"]
 
+[dependencies]
+snowhush-core = { path = "../core" }
+
 [target.'cfg(windows)'.dependencies]
 windows-numerics = "0.3"
 

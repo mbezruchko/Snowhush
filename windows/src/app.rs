@@ -24,7 +24,7 @@ use crate::prefs::{self, Settings};
 use crate::snow::{self, Command, Links};
 use crate::update::{self, Release};
 use crate::welcome::{self, Handlers};
-use snowhush::simulation::Snowfall;
+use snowhush_core::simulation::Snowfall;
 
 const CLASS: PCWSTR = w!("SnowhushController");
 const WM_TRAY: u32 = WM_APP + 1;

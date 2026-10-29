@@ -13,8 +13,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{HSTRING, PCWSTR, Result, w};
 
-use snowhush::geometry::V2;
-use snowhush::simulation::{ScatterPiece, SnowSimulation, Snowfall};
+use snowhush_core::geometry::V2;
+use snowhush_core::simulation::{ScatterPiece, SnowSimulation, Snowfall};
 
 use crate::desktop::{self, DesktopLayer};
 use crate::light::{Wallpapers, daylight};

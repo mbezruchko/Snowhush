@@ -21,8 +21,8 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{BOOL, PWSTR, w};
 
-use snowhush::geometry::Rect;
-use snowhush::simulation::WindowSurface;
+use snowhush_core::geometry::Rect;
+use snowhush_core::simulation::WindowSurface;
 
 use crate::log;
 use crate::screen::Clock;

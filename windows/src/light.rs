@@ -12,7 +12,7 @@ use windows::Win32::System::SystemInformation::GetLocalTime;
 use windows::Win32::UI::Shell::{DesktopWallpaper, IDesktopWallpaper};
 use windows::core::{PCWSTR, PWSTR, Result};
 
-use snowhush::geometry::smoothstep;
+use snowhush_core::geometry::smoothstep;
 
 /// The scene turns warmer at dawn and dusk, cooler and dimmer at night.
 /// Clock-based rather than solar: close enough for mood, and needs no location.

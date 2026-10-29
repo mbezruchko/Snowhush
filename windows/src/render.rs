@@ -21,7 +21,7 @@ use windows::Win32::Graphics::Dxgi::{
 use windows::core::{Error, Interface, PCSTR, Result, s};
 use windows_numerics::Matrix3x2;
 
-use snowhush::simulation::{COLUMN_WIDTH, SnowSimulation, Sprite};
+use snowhush_core::simulation::{COLUMN_WIDTH, SnowSimulation, Sprite};
 
 const SHADERS: &str = include_str!("shaders.hlsl");
 

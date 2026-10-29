@@ -7,7 +7,7 @@ use windows::Win32::System::Registry::{
 use windows::Win32::UI::WindowsAndMessaging::{SPI_GETCLIENTAREAANIMATION, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW};
 use windows::core::{BOOL, PCWSTR, w};
 
-use snowhush::simulation::Snowfall;
+use snowhush_core::simulation::Snowfall;
 
 const KEY: PCWSTR = w!("Software\\Snowhush");
 const RUN: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
