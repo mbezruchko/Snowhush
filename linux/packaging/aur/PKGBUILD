@@ -11,7 +11,7 @@ depends=('libglvnd' 'wayland' 'gcc-libs' 'glibc')
 provides=('snowhush')
 conflicts=('snowhush')
 source=("snowhush-linux-x86_64-$pkgver.tar.gz::https://github.com/mbezruchko/Snowhush/releases/download/v$pkgver/snowhush-linux-x86_64.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('2283592694e6ded45ccf9a66487eacc2e04d218efaee16fd8f00c2521c9aeddf')
 
 package() {
     cp -a "$srcdir/usr" "$pkgdir/"
