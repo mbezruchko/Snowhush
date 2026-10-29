@@ -175,6 +175,19 @@ fn watch_lock(bus: &Bus, commands: calloop::channel::Sender<Command>) {
             return;
         };
         let Ok(messages) = zbus::blocking::MessageIterator::for_match_rule(rule, &bus, None) else { return };
+        // Asked only once listening, so a lock in between isn't missed: Snowhush may start behind the lock
+        // screen, as with automatic login.
+        if let Ok(reply) = bus.call_method(
+            Some("org.freedesktop.ScreenSaver"),
+            "/org/freedesktop/ScreenSaver",
+            Some("org.freedesktop.ScreenSaver"),
+            "GetActive",
+            &(),
+        ) && let Ok(locked) = reply.body().deserialize::<bool>()
+            && commands.send(Command::Locked(locked)).is_err()
+        {
+            return;
+        }
         for message in messages.flatten() {
             if let Ok(locked) = message.body().deserialize::<bool>()
                 && commands.send(Command::Locked(locked)).is_err()
