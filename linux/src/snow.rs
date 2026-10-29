@@ -276,11 +276,10 @@ impl App {
         let now = Instant::now();
         let report = self.shared.report();
         if report.0 != self.report.0 {
-            if let Some(next) = &report.1 {
-                let order = window_order(next);
-                if self.report.1.as_deref().map(window_order) != Some(order.clone()) {
-                    log!("windows front to back: {order}");
-                }
+            if let Some(next) = &report.1
+                && self.report.1.as_deref().map(window_order) != Some(window_order(next))
+            {
+                log!("windows front to back: {}", window_list(next));
             }
             self.report = report;
             self.place_screens();
@@ -390,6 +389,15 @@ impl App {
 /// The reported windows by app, front to back, for the log.
 fn window_order(report: &Report) -> String {
     report.windows.iter().map(|window| window.class.as_str()).collect::<Vec<_>>().join(", ")
+}
+
+/// The reported windows with where they are, for telling which one the snow lies on.
+fn window_list(report: &Report) -> String {
+    let window = |window: &crate::source::Window| {
+        let solid = if window.solid { "" } else { ", not solid" };
+        format!("{} ({}x{} at {},{}{solid})", window.class, window.w, window.h, window.x, window.y)
+    };
+    report.windows.iter().map(window).collect::<Vec<_>>().join(", ")
 }
 
 fn new_simulation(bounds: &Area, settings: &Settings, budget: PowerBudget) -> SnowSimulation {

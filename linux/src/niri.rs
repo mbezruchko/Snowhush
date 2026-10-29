@@ -1,7 +1,7 @@
 //! niri's windows, from its event stream on `$NIRI_SOCKET`. niri tells where a floating window is, but not
 //! where the windows tiled in its scrolling strip are, so only floating windows collect snow; they always lie
-//! in front of the tiled ones. The overview shows every workspace at once, small, so the snow hides while it
-//! is open.
+//! in front of the tiled ones, and not while one is dragged with the mouse. The overview shows every workspace
+//! at once, small, so the snow hides while it is open.
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -176,7 +176,14 @@ impl State {
         }
         let mut showing: Vec<(&NiriWindow, Logical)> = Vec::new();
         for window in self.windows.values() {
-            let Some(workspace) = self.workspaces.iter().find(|workspace| Some(workspace.id) == window.workspace_id) else { continue };
+            // A window dragged with the mouse is on no workspace and has no place until it is dropped, so its
+            // snow waits for it there, as for a window on another workspace.
+            let Some(workspace) = self.workspaces.iter().find(|workspace| Some(workspace.id) == window.workspace_id) else {
+                if window.workspace_id.is_none() {
+                    report.elsewhere.push(window.id.to_string());
+                }
+                continue;
+            };
             if !workspace.is_active {
                 report.elsewhere.push(window.id.to_string());
                 continue;
