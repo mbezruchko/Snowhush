@@ -1,7 +1,7 @@
 //! Sway's windows, from its IPC socket (`$SWAYSOCK`): the tree of windows, the workspaces showing and the
 //! outputs. Sway announces windows opening, closing and changing workspace, but not a floating window
-//! being dragged, so the tree is also asked for a few times a second, and at about the frame rate while
-//! a floating window moves.
+//! being dragged, so the tree is also asked for ten times a second, and at about the frame rate while a
+//! floating window moves and for a moment after anything Sway announces.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -21,8 +21,11 @@ const SUBSCRIBE: u32 = 2;
 const GET_OUTPUTS: u32 = 3;
 const GET_TREE: u32 = 4;
 /// How often the tree is asked for while nothing moves, to notice a floating window starting to.
-const CALM: Duration = Duration::from_millis(250);
+const CALM: Duration = Duration::from_millis(100);
 const MOVING: Duration = Duration::from_millis(16);
+/// How long after any event the tree is asked for as often as while moving: a drag starts with a click, which
+/// focuses the window, and the drag itself sends nothing.
+const ALERT: Duration = Duration::from_secs(1);
 /// How long after a floating window last moved it still counts as being dragged.
 const SETTLE: Duration = Duration::from_millis(300);
 
@@ -103,6 +106,7 @@ pub fn start(shared: Arc<Shared>) -> Result<(), String> {
         .spawn(move || {
             let mut last: Option<(Report, HashMap<String, Rect>)> = None;
             let mut moved_at: Option<Instant> = None;
+            let mut event_at: Option<Instant> = None;
             loop {
                 let (mut report, floating) = match ask(&mut requests) {
                     Ok(answer) => answer,
@@ -121,10 +125,15 @@ pub fn start(shared: Arc<Shared>) -> Result<(), String> {
                 if last.as_ref().map(|(report, _)| report) != Some(&report) {
                     shared.publish(report.clone());
                 }
-                let wait = if report.moving { MOVING } else { CALM };
+                let alert = event_at.is_some_and(|at| now - at < ALERT);
+                let wait = if report.moving || alert { MOVING } else { CALM };
                 last = Some((report, floating));
                 match changes.recv_timeout(wait) {
-                    Ok(()) | Err(RecvTimeoutError::Timeout) => while changes.try_recv().is_ok() {},
+                    Ok(()) => {
+                        event_at = Some(Instant::now());
+                        while changes.try_recv().is_ok() {}
+                    }
+                    Err(RecvTimeoutError::Timeout) => {}
                     Err(RecvTimeoutError::Disconnected) => return,
                 }
             }
