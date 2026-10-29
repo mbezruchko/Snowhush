@@ -50,6 +50,8 @@ pub struct Gpu {
     sprite_buffer: glow::Buffer,
     pile_array: glow::VertexArray,
     heights: glow::Texture,
+    /// Rows the height texture has room for; it is only made again when that changes.
+    height_rows: usize,
     sprites: Vec<Sprite>,
     columns: Vec<f32>,
     pub adapter: String,
@@ -156,6 +158,7 @@ impl Gpu {
                 sprite_buffer,
                 pile_array,
                 heights,
+                height_rows: 0,
                 sprites: Vec::new(),
                 columns: Vec::new(),
                 adapter,
@@ -228,17 +231,13 @@ impl Gpu {
             if !piles.is_empty() {
                 gl.active_texture(glow::TEXTURE0);
                 gl.bind_texture(glow::TEXTURE_2D, Some(self.heights));
-                gl.tex_image_2d(
-                    glow::TEXTURE_2D,
-                    0,
-                    glow::R32F as i32,
-                    ROW as i32,
-                    rows as i32,
-                    0,
-                    glow::RED,
-                    glow::FLOAT,
-                    glow::PixelUnpackData::Slice(Some(bytes(&self.columns))),
-                );
+                let data = glow::PixelUnpackData::Slice(Some(bytes(&self.columns)));
+                if rows == self.height_rows {
+                    gl.tex_sub_image_2d(glow::TEXTURE_2D, 0, 0, 0, ROW as i32, rows as i32, glow::RED, glow::FLOAT, data);
+                } else {
+                    gl.tex_image_2d(glow::TEXTURE_2D, 0, glow::R32F as i32, ROW as i32, rows as i32, 0, glow::RED, glow::FLOAT, data);
+                    self.height_rows = rows;
+                }
                 let pile = &self.pile;
                 gl.use_program(Some(pile.program));
                 gl.bind_vertex_array(Some(self.pile_array));
