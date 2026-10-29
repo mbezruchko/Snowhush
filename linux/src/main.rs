@@ -2,10 +2,13 @@ mod chores;
 mod kwin;
 mod light;
 mod log;
+mod niri;
 mod prefs;
 mod render;
 mod screen;
 mod snow;
+mod source;
+mod sway;
 mod tray;
 mod windows;
 

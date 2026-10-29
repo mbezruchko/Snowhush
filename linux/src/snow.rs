@@ -21,12 +21,13 @@ use zbus::blocking::Connection as Bus;
 use snowhush_core::simulation::{SnowSimulation, Snowfall};
 
 use crate::chores;
-use crate::kwin::{self, Report, Shared};
+use crate::kwin;
 use crate::light::{Shade, daylight};
 use crate::log;
 use crate::prefs::Settings;
 use crate::render::{Ambient, Gpu};
 use crate::screen::{PowerBudget, Screen};
+use crate::source::{Report, Shared, Source};
 use crate::tray::Tray;
 use crate::windows::{self, Area};
 
@@ -56,6 +57,7 @@ pub struct App {
     gpu: Gpu,
     bus: Bus,
     shared: Arc<Shared>,
+    source: Source,
     settings: Settings,
     screens: Vec<Screen>,
     locked: bool,
@@ -119,6 +121,7 @@ pub fn run() -> Result<(), String> {
         qh: qh.clone(),
         gpu,
         bus: bus.clone(),
+        source: Source::start(&bus, shared.clone(), settings.show_in_screenshots),
         shared,
         settings,
         screens: Vec::new(),
@@ -139,9 +142,6 @@ pub fn run() -> Result<(), String> {
     app.sync_screens();
     WaylandSource::new(connection, queue).insert(event_loop.handle()).map_err(|error| error.to_string())?;
 
-    if let Err(error) = kwin::load_script(&bus, settings.show_in_screenshots) {
-        log!("KWin script failed: {error}; no snow on windows");
-    }
     use ksni::blocking::TrayMethods;
     let tray = Tray::new(settings, commands.clone()).spawn().inspect_err(|error| log!("tray: {error}")).ok();
     watch_lock(&bus, commands);
@@ -152,7 +152,7 @@ pub fn run() -> Result<(), String> {
         app.tick()?;
     }
 
-    kwin::unload_script(&app.bus);
+    app.source.stop(&app.bus);
     if let Some(tray) = tray {
         tray.shutdown().wait();
     }
@@ -233,9 +233,7 @@ impl App {
             }
             Command::ShowInScreenshots(on) => {
                 self.settings.show_in_screenshots = on;
-                if let Err(error) = kwin::load_script(&self.bus, on) {
-                    log!("KWin script failed: {error}");
-                }
+                self.source.show_in_screenshots(&self.bus, on);
             }
             Command::ClearSnow(calm) => {
                 let direction = self.screens.first().map_or(-1.0, |screen| screen.simulation.breeze_direction());

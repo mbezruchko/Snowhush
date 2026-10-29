@@ -12,11 +12,11 @@ use wayland_client::protocol::wl_output::WlOutput;
 use snowhush_core::geometry::V2;
 use snowhush_core::simulation::{Pace, SnowSimulation, WindowId, WindowSurface};
 
-use crate::kwin::Report;
 use crate::light::{self, Backdrop, Shade};
 use crate::log;
 use crate::render::{Ambient, Gpu, Surface};
 use crate::snow::App;
+use crate::source::Report;
 use crate::windows::{self, Area, Shelf};
 
 /// How much the snow may spend on drawing.

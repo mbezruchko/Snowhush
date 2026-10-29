@@ -6,7 +6,7 @@ use std::hash::{Hash, Hasher};
 use snowhush_core::geometry::Rect;
 use snowhush_core::simulation::{WindowId, WindowSurface};
 
-use crate::kwin::{Display, Report};
+use crate::source::{Display, Report};
 
 /// Breeze and its kin round a window's top corners by a few pixels; the exact radius belongs to the
 /// decoration theme and isn't reported, so this is a close guess. Maximized windows stay square.
@@ -112,7 +112,7 @@ pub fn surfaces(report: &Report, area: &Area, shelf: Option<&Shelf>) -> Vec<Wind
         let fills_screen = frame.width * frame.height >= width * height * 0.9;
         if room_above && on_screen && !fills_screen && window.solid && frame.width >= 80.0 && frame.height >= 40.0 {
             let rounded = window.decorated && !window.maximized;
-            let radius = if rounded { CORNER_RADIUS } else { 0.0 }.min(frame.width / 2.0).min(frame.height / 2.0);
+            let radius = window.radius.unwrap_or(if rounded { CORNER_RADIUS } else { 0.0 }).min(frame.width / 2.0).min(frame.height / 2.0);
             let region = Rect { x: frame.x, y: frame.max_y() - radius, width: frame.width, height: 40.0 + radius };
             surfaces.push(WindowSurface {
                 id: window_id(&window.id),
@@ -130,6 +130,9 @@ pub fn surfaces(report: &Report, area: &Area, shelf: Option<&Shelf>) -> Vec<Wind
 /// The full-screen window covering the display with these bounds, if any: the frontmost window on it, looking past
 /// ones kept above the rest, is full screen and fills it.
 pub fn covering<'a>(report: &'a Report, bounds: &Area) -> Option<&'a str> {
+    if report.hidden {
+        return Some("the compositor");
+    }
     for window in &report.windows {
         if window.x + window.w <= bounds.x || window.x >= bounds.right() || window.y + window.h <= bounds.y || window.y >= bounds.bottom() {
             continue;
