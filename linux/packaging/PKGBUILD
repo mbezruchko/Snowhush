@@ -3,11 +3,11 @@
 pkgname=snowhush
 pkgver=0.5.6
 pkgrel=1
-pkgdesc="Snow on your KDE Plasma desktop: it settles on windows and the panel and parts around the cursor"
+pkgdesc="Snow on your Wayland desktop, in KDE Plasma, Sway or niri: it settles on windows and parts around the cursor"
 arch=('x86_64' 'aarch64')
 url="https://github.com/mbezruchko/Snowhush"
 license=('MIT')
-depends=('kwin' 'libglvnd' 'wayland' 'gcc-libs' 'glibc')
+depends=('libglvnd' 'wayland' 'gcc-libs' 'glibc')
 makedepends=('cargo')
 options=('!lto')
 

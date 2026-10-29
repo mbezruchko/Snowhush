@@ -33,24 +33,56 @@ CONFIG
     sway_display=$(socket)
 }
 
-# Snowfall and the drift on the ground, photographed twice after the snow has had time to build.
+# Snowfall on a floating window and on the ground, photographed as the window's snow is put through what a
+# source has to get right: the cap once it has built up, carried along when the window moves slowly, kept
+# waiting while the window is on another workspace and back on it after, and falling when it closes.
+# `$1` names the compositor, whose `_move`, `_workspace` and `_close` do those things to the window.
 snowfall() {
+    shot() { WAYLAND_DISPLAY=$sway_display grim "/out/$1.png"; }
     foot -o tweak.font-monospace-warn=no -W 70x16 -e sleep 600 2>/dev/null &
     sleep 3
-    WAYLAND_DISPLAY=$sway_display grim /out/before.png
+    shot before
     "$app" > /out/app.out 2>&1 &
     sleep 25
-    WAYLAND_DISPLAY=$sway_display grim /out/snow-1.png
-    sleep 10
-    WAYLAND_DISPLAY=$sway_display grim /out/snow-2.png
-    trace "$(grep -E 'adapter|display|frames' "$log")"
+    shot snow
+    for _ in $(seq 30); do "$1_move" 4; sleep 0.05; done
+    sleep 1
+    shot carried
+    "$1_workspace" 2
+    sleep 2
+    shot away
+    "$1_workspace" 1
+    sleep 1
+    shot back
+    # Where the compositor has an overview, the snow hides while it is open.
+    if [[ $(type -t "$1_overview") ]]; then
+        "$1_overview"
+        sleep 1
+        shot overview
+        "$1_overview"
+        sleep 1
+    fi
+    "$1_close"
+    sleep 1.5
+    shot closed
+    trace "$(grep -E 'adapter|display|windows from|frames' "$log")"
 }
+
+sway_move() { swaymsg "[app_id=foot] move right $1 px" > /dev/null; }
+sway_workspace() { swaymsg workspace "$1" > /dev/null; }
+sway_close() { swaymsg "[app_id=foot] kill" > /dev/null; }
+niri_move() { niri msg action move-floating-window -x "+$1" > /dev/null; }
+niri_workspace() { niri msg action focus-workspace "$1" > /dev/null; }
+niri_close() { niri msg action close-window > /dev/null; }
+niri_overview() { niri msg action toggle-overview > /dev/null; }
 
 case $1 in
 sway)
     headless_sway
     export WAYLAND_DISPLAY=$sway_display
-    snowfall
+    SWAYSOCK=$(ls "$XDG_RUNTIME_DIR"/sway-ipc.*)
+    export SWAYSOCK
+    snowfall sway
     ;;
 niri)
     headless_sway
@@ -58,7 +90,10 @@ niri)
     printf 'prefer-no-csd\nhotkey-overlay { skip-at-startup; }\nwindow-rule { open-floating true; }\n' > ~/.config/niri/config.kdl
     WAYLAND_DISPLAY=$sway_display niri > /out/niri.log 2>&1 &
     export WAYLAND_DISPLAY=$(socket "$sway_display")
-    snowfall
+    sleep 1
+    NIRI_SOCKET=$(ls "$XDG_RUNTIME_DIR"/niri.*.sock)
+    export NIRI_SOCKET
+    snowfall niri
     ;;
 kwin)
     # Screenshots aren't to be had from the virtual backend, so the scene reads the logs instead: KWin's

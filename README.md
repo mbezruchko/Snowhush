@@ -40,9 +40,9 @@ open build/Snowhush.app
 windows/build.sh      # dist/Snowhush-Setup.exe, cross-compiled from macOS
 ```
 
-### KDE Plasma (Linux)
+### Linux
 
-`linux/` is a native version for KDE Plasma 6 on Wayland. It shares the snow's physics with the Windows version and draws with OpenGL ES in a layer-shell overlay. Wayland doesn't tell apps where other windows are or where the pointer is, so Snowhush loads a small KWin script (`linux/src/snowhush.js`) while it runs, which reports both. It unloads the script when it quits.
+`linux/` is a native version for Wayland: KDE Plasma 6, Sway and niri. It shares the snow's physics with the Windows version and draws with OpenGL ES in a layer-shell overlay. Wayland doesn't tell apps where other windows are or where the pointer is, so each compositor is asked in its own way: on KDE, Snowhush loads a small KWin script (`linux/src/snowhush.js`) while it runs, which reports both; Sway and niri answer over their IPC sockets, though they don't tell where the pointer is, and niri only where floating windows are, so on niri only those collect snow.
 
 ```sh
 cd linux && cargo build --release   # linux/target/release/snowhush

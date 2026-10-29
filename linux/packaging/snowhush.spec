@@ -5,15 +5,15 @@
 Name:           snowhush
 Version:        %{snowhush_version}
 Release:        1
-Summary:        Snow on your KDE Plasma desktop
+Summary:        Snow on your Wayland desktop
 License:        MIT
 URL:            https://github.com/TryCoffee/Snowhush
 ExclusiveArch:  x86_64
 
 %description
-Soft snow drifts across your KDE Plasma desktop, settles on the tops of your
-windows and the panel, slides off when you drag them and parts around the
-cursor. Needs KDE Plasma 6 on Wayland.
+Soft snow drifts across your desktop, settles on the tops of your windows and
+the panel, slides off when you drag them and parts around the cursor. Needs
+KDE Plasma 6, Sway or niri on Wayland.
 
 %install
 install -Dm755 %{_sourcedir}/snowhush %{buildroot}%{_bindir}/snowhush
