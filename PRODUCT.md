@@ -6,13 +6,13 @@ brand
 
 ## Users
 
-Mac and Windows users who spend long hours at their desk and want a little atmosphere on their screen without paying for it in battery, fan noise or distraction. They find the site through a link or a post, arrive curious, and decide within seconds whether the app feels right. The job: see what the snow looks like and how it behaves, trust that it is light, and download it.
+Mac, Windows and Linux users who spend long hours at their desk and want a little atmosphere on their screen without paying for it in battery, fan noise or distraction. They find the site through a link or a post, arrive curious, and decide within seconds whether the app feels right. The job: see what the snow looks like and how it behaves, trust that it is light, and download it.
 
 ## Product Purpose
 
-Snowhush is a lightweight native macOS menu-bar app, with a native Windows tray version that does the same. Soft snow falls over the desktop, settles into drifts at the bottom of the screen, on the top edges of windows (following their rounded corners) and on the Dock, can be swept away with the cursor with real granular physics, slides off windows that are dragged or shaken, and drops in lumps that burst into powder when a window closes or minimizes. It stays out of screenshots and screen sharing and spends less on battery. Options: Snowfall (Off, Light, Steady, Heavy, Variable), Accumulate, Melt Snow, Snow on Windows, Clear Snow, Behind Windows, Show in Screenshots, Open at Login. It uses about 6% of one CPU core and 65 MB of memory.
+Snowhush is a lightweight native macOS menu-bar app, with native Windows and Linux tray versions that do the same (Linux: KDE Plasma 6, Sway and niri on Wayland). Soft snow falls over the desktop, settles into drifts at the bottom of the screen, on the top edges of windows (following their rounded corners) and on the Dock, can be swept away with the cursor with real granular physics, slides off windows that are dragged or shaken, and drops in lumps that burst into powder when a window closes or minimizes. It stays out of screenshots and screen sharing and spends less on battery. Options: Snowfall (Off, Light, Steady, Heavy, Variable), Accumulate, Melt Snow, Snow on Windows, Clear Snow, Behind Windows, Show in Screenshots, Open at Login. It uses about 6% of one CPU core and 65 MB of memory.
 
-The site's one goal is the download: a .dmg or a Windows installer from GitHub Releases, the visitor's own platform first. Success is a visitor who plays with the snow on the page and clicks Download.
+The site's one goal is the download: a .dmg, a Windows installer or a Linux AppImage from GitHub Releases, the visitor's own platform first. Success is a visitor who plays with the snow on the page and clicks Download.
 
 ## Brand Personality
 
