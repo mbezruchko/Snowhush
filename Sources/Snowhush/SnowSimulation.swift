@@ -237,7 +237,7 @@ final class SnowSimulation {
         expireParking()
         for ledge in ledgeList { carry(ledge, dt: dt) }
         trackCursor(point, dt: dt)
-        for ledge in ledgeList { confine(ledge) }
+        for ledge in ledgeList where !ledge.carried { confine(ledge) }
         blow(dt: dt)
         advanceFlakes(dt: dt)
         advanceGrains(dt: dt)
@@ -341,7 +341,7 @@ final class SnowSimulation {
             if let existing = ledges[surface.id] {
                 ledge = existing
                 if sliding && columns == ledge.count {
-                    pan(ledge, left: left, top: top)
+                    pan(ledge, left: left, top: top, interval: interval)
                 } else {
                     move(ledge, left: left, top: top, columns: columns, interval: interval)
                 }
@@ -399,6 +399,7 @@ final class SnowSimulation {
         ledge.offsetVelocity = .zero
         ledge.previousBaseY = top
         ledge.movedAt = -1
+        ledge.carried = true
     }
 
     /// Off-screen windows that no Space switch accounts for were minimized or hidden: their snow falls.
@@ -410,16 +411,41 @@ final class SnowSimulation {
     }
 
     /// Carries snow along with a window that the whole Space is sliding past: nothing pushes the snow, so it doesn't react.
-    private func pan(_ ledge: SnowLayer, left: Float, top: Float) {
+    private func pan(_ ledge: SnowLayer, left: Float, top: Float, interval: Float) {
         let shift = SIMD2(left, top) - ledge.origin
         guard shift != .zero else { return }
+        ledge.carried = true
         ledge.origin += shift
         ledge.track += shift
         ledge.previousBaseY = ledge.base.y
+        if clock - ledge.trimmedAt > 1 {
+            ledge.trimmedAt = clock
+            // Thrown along the slide, but not at its full speed: the snow would fly across the screen.
+            let velocity = shift / max(interval, 1.0 / 120)
+            trimEnds(of: ledge, velocity: SIMD2(min(max(velocity.x, -600), 600), 0))
+        }
         if ledge.top > 0.05 {
             lastWindowMotion = clock
             windowsChanged = true
         }
+    }
+
+    /// A switch between Spaces shakes the snow off a window's ends: stopping short of the edges, the snow doesn't
+    /// show the frame or two it trails the window by.
+    private func trimEnds(of ledge: SnowLayer, velocity: SIMD2<Float>) {
+        // A twentieth of the window from each end, but no more than 40 points off a wide one.
+        let ends = min(max(1, Int((min(ledge.width * 0.05, 40) / columnWidth).rounded())), ledge.count / 2)
+        var area = (left: Float(0), right: Float(0))
+        for i in 0..<ends {
+            area.left += ledge.heights[i] * columnWidth
+            area.right += ledge.heights[ledge.count - 1 - i] * columnWidth
+            ledge.set(i, 0)
+            ledge.set(ledge.count - 1 - i, 0)
+        }
+        guard area.left + area.right > 0.05 else { return }
+        heightsChanged = true
+        release(area.left, at: edgePoint(of: ledge, left: true), velocity: velocity + SIMD2(-30, -15), spread: SIMD2(1, 2), scatter: 0.25)
+        release(area.right, at: edgePoint(of: ledge, left: false), velocity: velocity + SIMD2(30, -15), spread: SIMD2(1, 2), scatter: 0.25)
     }
 
     private func move(_ ledge: SnowLayer, left: Float, top: Float, columns: Int, interval: Float) {
@@ -431,6 +457,7 @@ final class SnowSimulation {
         let displacement = SIMD2(shift, top - ledge.origin.y)
         let resized = columns != ledge.count || abs(left - oldLeft - shift) > 0.5
         guard displacement != .zero || resized else { return }
+        ledge.carried = false
 
         let elapsed = max(interval, 1.0 / 120)
         // Only a motion that began unobserved, between slow polls, has to be picked up mid-flight.

@@ -20,6 +20,10 @@ final class SnowLayer {
     /// Lies on the Dock's shelf, and so is drawn below the Dock.
     var isDock = false
     var movedAt: Double = -1
+    /// Brought where it is by a switch between Spaces: past the screen's edge, no wall scrapes its snow off.
+    var carried = false
+    /// When a switch between Spaces last shook the snow off the window's ends.
+    var trimmedAt: Double = -10
     var spill: (left: Float, right: Float) = (0, 0)
     /// Smoothed path of the supporting edge; the snow reacts to its accelerations, not to raw jittery samples.
     var track: SIMD2<Float>

@@ -94,6 +94,8 @@ final class ScreenSnow {
         simulation.spaceChanged()
         light.invalidate()
         watchWindows()
+        window.holdInPlace()
+        dock.window.holdInPlace()
     }
 
     func watchWindows() {
