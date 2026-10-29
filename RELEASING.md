@@ -19,7 +19,7 @@ One-time setup on the release machine:
 
 ## Checks
 
-Every pull request and every push to `main` runs `.github/workflows/ci.yml` on GitHub: formatting and the simulation tests on Linux, the Windows app built on Windows, and the Mac app built on macOS.
+Every pull request and every push to `main` runs `.github/workflows/ci.yml` on GitHub: formatting and the simulation tests on Linux, the Linux app built on Ubuntu 22.04 and kept as a download for testing, the Windows app built on Windows, and the Mac app built on macOS.
 
 ## Site
 

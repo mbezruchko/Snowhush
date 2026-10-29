@@ -19,6 +19,7 @@ jobs:
         run: |
           cargo fmt --check --manifest-path core/Cargo.toml
           cargo fmt --check --manifest-path windows/Cargo.toml
+          cargo fmt --check --manifest-path linux/Cargo.toml
       - name: Tests
         run: cargo test --locked --manifest-path core/Cargo.toml
 
@@ -28,6 +29,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: cargo build --locked --release --bin Snowhush --manifest-path windows/Cargo.toml
+
+  linux:
+    name: Linux app
+    # An older glibc than ubuntu-latest has, so the binary it leaves runs on older distributions too.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -q && sudo apt-get install -y -q libwayland-dev
+      - run: cargo build --locked --release --manifest-path linux/Cargo.toml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: snowhush-linux-x86_64
+          path: linux/target/release/snowhush
 
   mac:
     name: Mac app
