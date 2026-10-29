@@ -52,6 +52,12 @@ function own(window) {
     return window.pid === APP_PID;
 }
 
+// Windows that are there but never seen, such as the bridge that lets X11 apps share a Wayland screen, neither
+// hold snow nor hide it.
+function invisible(window) {
+    return window.opacity < 0.05 || window.resourceClass === "xwaylandvideobridge";
+}
+
 function onCurrentDesktop(window) {
     const desktop = workspace.currentDesktop;
     const activity = workspace.currentActivity;
@@ -84,7 +90,7 @@ function windows() {
             const g = window.frameGeometry;
             panels.push({ id: String(window.internalId), x: g.x, y: g.y, w: g.width, h: g.height });
         }
-        if (window.deleted || window.desktopWindow || window.dock || own(window)) {
+        if (window.deleted || window.desktopWindow || window.dock || own(window) || invisible(window)) {
             continue;
         }
         if (window.move || window.resize) {
