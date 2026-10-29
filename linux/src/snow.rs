@@ -2,7 +2,7 @@
 //! and what pauses the snow. Everything runs on the main thread around one event loop; the tray and the
 //! KWin reports come in from threads of their own.
 
-use std::sync::Arc;
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use calloop::EventLoop;
@@ -20,8 +20,9 @@ use zbus::blocking::Connection as Bus;
 
 use snowhush_core::simulation::{SnowSimulation, Snowfall};
 
+use crate::chores;
 use crate::kwin::{self, Report, Shared};
-use crate::light::{self, daylight};
+use crate::light::{Shade, daylight};
 use crate::log;
 use crate::prefs::Settings;
 use crate::render::{Ambient, Gpu};
@@ -40,6 +41,9 @@ pub enum Command {
     Locked(bool),
     /// Blows all the snow away; when calm, for less motion, melts it where it lies instead.
     ClearSnow(bool),
+    Power(PowerBudget),
+    /// Each display's desktop picture, with the tint it gives the shadows.
+    Backdrops(Vec<Shade>),
     Quit,
 }
 
@@ -63,7 +67,8 @@ pub struct App {
     started: Instant,
     chores_at: Instant,
     light_at: Instant,
-    power_at: Instant,
+    /// Asks the chores for the desktop pictures again.
+    backdrops_wanted: mpsc::Sender<()>,
     stats: Stats,
 }
 
@@ -126,7 +131,7 @@ pub fn run() -> Result<(), String> {
         started: now,
         chores_at: now,
         light_at: now,
-        power_at: now,
+        backdrops_wanted: chores::start(bus.clone(), commands.clone()),
         stats: Stats::new(now),
     };
     // The displays are known after a round trip; the snow starts on them right away.
@@ -233,6 +238,15 @@ impl App {
                 }
                 log!("locked: {locked}");
             }
+            Command::Power(budget) => {
+                if budget == self.budget {
+                    return;
+                }
+                self.budget = budget;
+                log!("power: {budget:?}");
+                self.screens.iter_mut().for_each(|screen| screen.simulation.set_density(density(budget)));
+            }
+            Command::Backdrops(shades) => self.screens.iter_mut().for_each(|screen| screen.update_backdrop(&shades)),
         }
     }
 
@@ -266,26 +280,14 @@ impl App {
         {
             self.displays_changed_at = None;
             self.sync_screens();
-            self.light_at = now;
+            let _ = self.backdrops_wanted.send(());
         }
 
         if now >= self.chores_at {
             self.chores_at = now + Duration::from_secs(1);
-            if now >= self.power_at {
-                self.power_at = now + Duration::from_secs(5);
-                let next = power_budget();
-                if next != self.budget {
-                    self.budget = next;
-                    log!("power: {next:?}");
-                    let density = if next == PowerBudget::Saver { 0.75 } else { 1.0 };
-                    self.screens.iter_mut().for_each(|screen| screen.simulation.set_density(density));
-                }
-            }
             if now >= self.light_at {
                 self.light_at = now + Duration::from_secs(60);
                 self.light = daylight();
-                let backdrops = light::backdrops(&self.bus);
-                self.screens.iter_mut().for_each(|screen| screen.update_backdrop(&backdrops));
             }
         }
 
@@ -344,7 +346,7 @@ impl App {
             }
             let refresh = info.modes.iter().find(|mode| mode.current).map_or(60, |mode| (mode.refresh_rate as f32 / 1000.0).round() as u32);
             log!("display {name}: {bounds:?}, scale {}, {refresh} Hz", info.scale_factor);
-            let simulation = new_simulation(&bounds, &self.settings);
+            let simulation = new_simulation(&bounds, &self.settings, self.budget);
             let screen = Screen::new(
                 (&self.compositor, &self.layer_shell, &self.qh),
                 output.clone(),
@@ -379,47 +381,17 @@ fn window_order(report: &Report) -> String {
     report.windows.iter().map(|window| window.class.as_str()).collect::<Vec<_>>().join(", ")
 }
 
-fn new_simulation(bounds: &Area, settings: &Settings) -> SnowSimulation {
+fn new_simulation(bounds: &Area, settings: &Settings, budget: PowerBudget) -> SnowSimulation {
     let mut simulation = SnowSimulation::new(bounds.w as f32, bounds.h as f32, settings.snowfall);
     simulation.thaws = settings.melt;
     simulation.accumulates = settings.accumulate;
+    simulation.set_density(density(budget));
     simulation
 }
 
-/// On battery from the power supplies the kernel lists; power saver from power-profiles-daemon.
-fn power_budget() -> PowerBudget {
-    if power_saver() {
-        return PowerBudget::Saver;
-    }
-    let mut battery = false;
-    let mut mains_online = false;
-    if let Ok(entries) = std::fs::read_dir("/sys/class/power_supply") {
-        for entry in entries.flatten() {
-            let read = |file: &str| std::fs::read_to_string(entry.path().join(file)).unwrap_or_default().trim().to_string();
-            match read("type").as_str() {
-                "Battery" if read("scope") != "Device" => battery = true,
-                "Mains" | "USB" if read("online") == "1" => mains_online = true,
-                _ => {}
-            }
-        }
-    }
-    if battery && !mains_online { PowerBudget::Battery } else { PowerBudget::Full }
-}
-
-fn power_saver() -> bool {
-    let Ok(system) = zbus::blocking::Connection::system() else { return false };
-    let reply = system.call_method(
-        Some("org.freedesktop.UPower.PowerProfiles"),
-        "/org/freedesktop/UPower/PowerProfiles",
-        Some("org.freedesktop.DBus.Properties"),
-        "Get",
-        &("org.freedesktop.UPower.PowerProfiles", "ActiveProfile"),
-    );
-    reply
-        .ok()
-        .and_then(|reply| reply.body().deserialize::<zbus::zvariant::OwnedValue>().ok())
-        .and_then(|value| String::try_from(value).ok())
-        .is_some_and(|profile| profile == "power-saver")
+/// Power saver makes do with a little less snow.
+fn density(budget: PowerBudget) -> f32 {
+    if budget == PowerBudget::Saver { 0.75 } else { 1.0 }
 }
 
 /// What a frame costs, written to the log twice a minute.

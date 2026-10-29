@@ -1,3 +1,4 @@
+mod chores;
 mod kwin;
 mod light;
 mod log;

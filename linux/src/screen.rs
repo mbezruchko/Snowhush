@@ -13,7 +13,7 @@ use snowhush_core::geometry::V2;
 use snowhush_core::simulation::{Pace, SnowSimulation, WindowId, WindowSurface};
 
 use crate::kwin::Report;
-use crate::light::{self, Backdrop};
+use crate::light::{self, Backdrop, Shade};
 use crate::log;
 use crate::render::{Ambient, Gpu, Surface};
 use crate::snow::App;
@@ -307,12 +307,13 @@ impl Screen {
     }
 
     /// Picks up the shadow colour again if the desktop picture changed.
-    pub fn update_backdrop(&mut self, backdrops: &[(i32, i32, Backdrop)]) {
-        let backdrop = light::backdrop_of(backdrops, &self.bounds);
+    pub fn update_backdrop(&mut self, shades: &[Shade]) {
+        let shade = light::shade_of(shades, &self.bounds);
+        let backdrop = shade.map(|shade| shade.backdrop.clone());
         if backdrop == self.backdrop {
             return;
         }
-        self.shadow_tint = backdrop.as_ref().and_then(light::tint).unwrap_or([0.0; 4]);
+        self.shadow_tint = shade.and_then(|shade| shade.tint).unwrap_or([0.0; 4]);
         log!("backdrop of {}: {backdrop:?}, shadow {:?}", self.name, self.shadow_tint);
         self.backdrop = backdrop;
     }

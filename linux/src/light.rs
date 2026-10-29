@@ -79,9 +79,18 @@ print(lines.join("\n"));"#;
         .collect()
 }
 
-/// The backdrop of the display with these bounds.
-pub fn backdrop_of(backdrops: &[(i32, i32, Backdrop)], bounds: &Area) -> Option<Backdrop> {
-    backdrops.iter().find(|(x, y, _)| *x as f64 == bounds.x && *y as f64 == bounds.y).map(|(_, _, backdrop)| backdrop.clone())
+/// A display's backdrop, by where the display sits, with the tint it gives the shadows.
+#[derive(Clone, PartialEq, Debug)]
+pub struct Shade {
+    pub x: i32,
+    pub y: i32,
+    pub backdrop: Backdrop,
+    pub tint: Option<[f32; 4]>,
+}
+
+/// The shade of the display with these bounds.
+pub fn shade_of<'a>(shades: &'a [Shade], bounds: &Area) -> Option<&'a Shade> {
+    shades.iter().find(|shade| shade.x as f64 == bounds.x && shade.y as f64 == bounds.y)
 }
 
 /// The backdrop's average colour along the bottom quarter, brought to the brightness of snow in shade.
