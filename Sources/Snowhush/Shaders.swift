@@ -15,6 +15,7 @@ struct Uniforms {
     float padding;
     float4 light;
     float4 shadowTint;
+    float4 rim;
 };
 
 struct Sprite {
@@ -159,6 +160,7 @@ fragment float4 pileFragment(PileOut in [[stage_in]],
     }
 
     color *= u.light.rgb;
+    color = mix(color, u.rim.rgb, u.rim.a * exp(-depth / 2.5));
     return float4(color * coverage, coverage);
 }
 """

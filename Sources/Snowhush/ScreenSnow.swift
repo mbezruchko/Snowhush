@@ -12,7 +12,12 @@ final class ScreenSnow {
     private let tracker = WindowTracker()
     private let light = SceneLight()
     private(set) var screen: NSScreen
-    var halloween = false
+    var halloween = false {
+        didSet {
+            light.halloween = halloween
+            light.invalidate()
+        }
+    }
 
     init?(screen: NSScreen, device: MTLDevice, snowOnWindows: @escaping () -> Bool) {
         guard let displayID = screen.displayID else { return nil }
@@ -51,7 +56,7 @@ final class ScreenSnow {
         }
         renderer.sceneLight = { [unowned self] now in
             light.update(screen: self.screen, now: now)
-            return (light.light, light.shadowTint)
+            return (light.light, light.shadowTint, light.rim)
         }
         renderer.interactiveFrameRate = Self.interactiveFrameRate(of: screen)
         measure()

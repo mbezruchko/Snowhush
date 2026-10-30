@@ -14,6 +14,7 @@ struct Uniforms {
     var padding: Float = 0
     var light = SIMD4<Float>(1, 1, 1, 1)
     var shadowTint = SIMD4<Float>(0, 0, 0, 0)
+    var rim = SIMD4<Float>(0, 0, 0, 0)
 }
 
 enum RendererError: Error {
@@ -28,8 +29,8 @@ final class Renderer: NSObject, MTKViewDelegate {
     var budget = PowerBudget.full
     /// Where the Dock's snow is drawn; without one it stays in the main overlay.
     var dockOverlay: DockOverlay?
-    var sceneLight: (CFTimeInterval) -> (light: SIMD3<Float>, shadowTint: SIMD4<Float>) = { _ in (SIMD3(repeating: 1), .zero) }
-    private var ambient: (light: SIMD3<Float>, shadowTint: SIMD4<Float>) = (SIMD3(repeating: 1), .zero)
+    var sceneLight: (CFTimeInterval) -> (light: SIMD3<Float>, shadowTint: SIMD4<Float>, rim: SIMD4<Float>) = { _ in (SIMD3(repeating: 1), .zero, .zero) }
+    private var ambient: (light: SIMD3<Float>, shadowTint: SIMD4<Float>, rim: SIMD4<Float>) = (SIMD3(repeating: 1), .zero, .zero)
 
     private let simulation: SnowSimulation
     private let device: MTLDevice
@@ -149,7 +150,8 @@ final class Renderer: NSObject, MTKViewDelegate {
             time: time,
             columnWidth: simulation.columnWidth,
             light: SIMD4(ambient.light, 1),
-            shadowTint: ambient.shadowTint
+            shadowTint: ambient.shadowTint,
+            rim: ambient.rim
         )
         let uniformsLength = MemoryLayout<Uniforms>.stride
 
