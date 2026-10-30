@@ -16,6 +16,7 @@ struct Uniforms {
     float4 light;
     float4 shadowTint;
     float4 rim;
+    float4 lantern;
 };
 
 struct Sprite {
@@ -42,7 +43,17 @@ struct SpriteOut {
     float radius;
     float lump;
     float spin;
+    float warm;
 };
+
+constant float3 candle = float3(1.0, 0.62, 0.26);
+
+/// How much of the cursor's candlelight reaches a point.
+static float candlelight(constant Uniforms &u, float2 point) {
+    float2 d = point - u.lantern.xy;
+    float flicker = 0.86 + 0.08 * sin(u.time * 11.0) + 0.06 * sin(u.time * 29.0 + 1.3);
+    return u.lantern.w * flicker * exp(-dot(d, d) / (u.lantern.z * u.lantern.z));
+}
 
 vertex SpriteOut spriteVertex(uint vid [[vertex_id]],
                               const device Sprite *sprites [[buffer(0)]],
@@ -68,6 +79,7 @@ vertex SpriteOut spriteVertex(uint vid [[vertex_id]],
     out.light = u.light.rgb;
     out.lump = s.lump;
     out.spin = s.lump > 0.0 ? u.time * (s.lump - 0.5) * 9.0 + s.lump * 40.0 : 0.0;
+    out.warm = candlelight(u, s.position);
     return out;
 }
 
@@ -93,6 +105,8 @@ fragment float4 spriteFragment(SpriteOut in [[stage_in]], float2 coord [[point_c
     float3 rim = float3(0.62, 0.67, 0.77);
     float3 color = mix(core, rim, saturate(smoothstep(0.35, 1.0, r) * 0.65 + shading));
     color = mix(color, in.tint.rgb, in.tint.a) * in.light;
+    color = mix(color, candle, in.warm * 0.7);
+    a = min(1.0, a * (1.0 + in.warm * 0.8));
     return float4(color * a, a);
 }
 
@@ -161,6 +175,7 @@ fragment float4 pileFragment(PileOut in [[stage_in]],
 
     color *= u.light.rgb;
     color = mix(color, u.rim.rgb, u.rim.a * exp(-depth / 2.5));
+    color = mix(color, candle, candlelight(u, world) * (0.35 + 0.65 * exp(-depth / 14.0)) * 0.55);
     return float4(color * coverage, coverage);
 }
 """

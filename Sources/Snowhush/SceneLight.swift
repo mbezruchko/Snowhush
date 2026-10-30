@@ -11,6 +11,8 @@ final class SceneLight {
     private(set) var shadowTint = SIMD4<Float>(repeating: 0)
     /// The colour the snow's surface glows, and how much.
     private(set) var rim = SIMD4<Float>(repeating: 0)
+    /// How brightly the cursor glows like a candle in a jack-o'-lantern.
+    private(set) var lantern: Float = 0
     var halloween = false
 
     private var wallpaper: (url: URL, modified: Date?)?
@@ -29,12 +31,14 @@ final class SceneLight {
         light = Self.daylight(at: hour)
         shadowTint = wallpaperTint
         rim = .zero
+        lantern = 0
         guard halloween else { return }
         // Halloween night: cold moonlight, violet shadows and a candle's glow along the drifts' edges.
         let night = 1 - Self.day(at: hour)
         light += (SIMD3(0.76, 0.84, 1) - light) * night
         shadowTint += (SIMD4(0.42, 0.3, 0.68, 0.6) - shadowTint) * night
         rim = SIMD4(1, 0.56, 0.2, 0.3 * night)
+        lantern = night
     }
 
     private func updateWallpaper(screen: NSScreen?) {

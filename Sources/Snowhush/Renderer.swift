@@ -15,6 +15,8 @@ struct Uniforms {
     var light = SIMD4<Float>(1, 1, 1, 1)
     var shadowTint = SIMD4<Float>(0, 0, 0, 0)
     var rim = SIMD4<Float>(0, 0, 0, 0)
+    /// The cursor's glow: where it is, how far it reaches and how bright it is.
+    var lantern = SIMD4<Float>(0, 0, 0, 0)
 }
 
 enum RendererError: Error {
@@ -29,8 +31,9 @@ final class Renderer: NSObject, MTKViewDelegate {
     var budget = PowerBudget.full
     /// Where the Dock's snow is drawn; without one it stays in the main overlay.
     var dockOverlay: DockOverlay?
-    var sceneLight: (CFTimeInterval) -> (light: SIMD3<Float>, shadowTint: SIMD4<Float>, rim: SIMD4<Float>) = { _ in (SIMD3(repeating: 1), .zero, .zero) }
-    private var ambient: (light: SIMD3<Float>, shadowTint: SIMD4<Float>, rim: SIMD4<Float>) = (SIMD3(repeating: 1), .zero, .zero)
+    var sceneLight: (CFTimeInterval) -> (light: SIMD3<Float>, shadowTint: SIMD4<Float>, rim: SIMD4<Float>, lantern: Float) = { _ in (SIMD3(repeating: 1), .zero, .zero, 0) }
+    private var ambient: (light: SIMD3<Float>, shadowTint: SIMD4<Float>, rim: SIMD4<Float>, lantern: Float) = (SIMD3(repeating: 1), .zero, .zero, 0)
+    private var lanternAt = SIMD2<Float>(-10_000, -10_000)
 
     private let simulation: SnowSimulation
     private let device: MTLDevice
@@ -98,7 +101,11 @@ final class Renderer: NSObject, MTKViewDelegate {
             simulation.updateWindows(update.surfaces, interval: update.interval, parked: update.parked, elsewhere: update.elsewhere, sliding: update.sliding)
             if update.slideVelocity != 0 { simulation.spaceSlid(velocity: update.slideVelocity) }
         }
-        let changed = simulation.step(dt: dt, cursor: cursorLocation())
+        let cursor = cursorLocation()
+        let changed = simulation.step(dt: dt, cursor: cursor)
+        // The lantern follows the cursor even over snow that lies still.
+        let lanternMoved = ambient.lantern > 0 && simd_distance(cursor, lanternAt) > 0.5
+        lanternAt = cursor
         let fastest = budget == .full ? interactiveFrameRate : min(60, interactiveFrameRate)
         // 24 only where it divides the display's rate evenly; elsewhere it would judder.
         let calm = budget == .saver && interactiveFrameRate % 24 == 0 ? 24 : 30
@@ -107,10 +114,11 @@ final class Renderer: NSObject, MTKViewDelegate {
         case .lively: min(60, fastest)
         case .interactive: fastest
         }
-        if view.preferredFramesPerSecond != frameRate { view.preferredFramesPerSecond = frameRate }
-        idleFrames = changed ? 0 : idleFrames + 1
+        let pace = lanternMoved ? max(frameRate, min(60, fastest)) : frameRate
+        if view.preferredFramesPerSecond != pace { view.preferredFramesPerSecond = pace }
+        idleFrames = changed || lanternMoved ? 0 : idleFrames + 1
         // A still pile only needs a slow refresh for its glints.
-        guard changed || (simulation.hasSnow && idleFrames % 2 == 0) else { return }
+        guard changed || lanternMoved || (simulation.hasSnow && idleFrames % 2 == 0) else { return }
 
         semaphore.wait()
         guard let pass = view.currentRenderPassDescriptor,
@@ -151,7 +159,8 @@ final class Renderer: NSObject, MTKViewDelegate {
             columnWidth: simulation.columnWidth,
             light: SIMD4(ambient.light, 1),
             shadowTint: ambient.shadowTint,
-            rim: ambient.rim
+            rim: ambient.rim,
+            lantern: SIMD4(lowHalf: lanternAt, highHalf: SIMD2(130, ambient.lantern))
         )
         let uniformsLength = MemoryLayout<Uniforms>.stride
 

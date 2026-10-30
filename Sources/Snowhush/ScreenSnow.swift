@@ -56,7 +56,7 @@ final class ScreenSnow {
         }
         renderer.sceneLight = { [unowned self] now in
             light.update(screen: self.screen, now: now)
-            return (light.light, light.shadowTint, light.rim)
+            return (light.light, light.shadowTint, light.rim, light.lantern)
         }
         renderer.interactiveFrameRate = Self.interactiveFrameRate(of: screen)
         measure()
