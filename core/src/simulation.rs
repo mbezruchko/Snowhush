@@ -7,6 +7,10 @@ use std::ops::Range;
 use crate::geometry::{Rect, V2, smoothstep};
 use crate::layer::SnowLayer;
 
+mod ghosts;
+
+use ghosts::Haunting;
+
 pub type WindowId = isize;
 
 pub const COLUMN_WIDTH: f32 = 2.0;
@@ -103,6 +107,25 @@ pub struct Sprite {
     pub tint: [f32; 3],
     /// Gives a lump of snow its ragged outline and tumble; zero for a round flake.
     pub lump: f32,
+    /// Draws a Halloween ghost instead, when the first is above zero: its seed (one and up), the height of the drift's
+    /// surface it rises out of (in the same points as `position`), how far its eyes are open, and how far it has taken
+    /// shape out of a heap of snow. Packed four to a vector for the graphics card, as are `pose` and `mood`.
+    pub ghost: [f32; 4],
+    /// A ghost's paws: how far up saying boo, how far its right one is held out at the angle that follows (radians,
+    /// zero pointing right, up positive), and how far both are spread for a wave.
+    pub pose: [f32; 4],
+    /// How far a ghost is into a dab, and how cross it is.
+    pub mood: [f32; 2],
+}
+
+/// A Halloween sign a ghost holds up, or lets fall: the picture of `SIGN_CAPTIONS[caption]`, its stick's foot at
+/// `anchor`, turned `angle` radians counterclockwise about it, nothing of it showing below `ground`.
+#[derive(Clone, Copy, Debug)]
+pub struct SignSprite {
+    pub caption: usize,
+    pub anchor: V2,
+    pub angle: f32,
+    pub ground: f32,
 }
 
 /// A bit of something that crumbles into snow, such as a window: it keeps its colour for a moment while it falls.
@@ -250,6 +273,7 @@ pub struct SnowSimulation {
     target_flakes: usize,
     strength_target: f32,
     next_shift: f64,
+    haunting: Haunting,
     air: Air,
 }
 
@@ -277,6 +301,7 @@ impl SnowSimulation {
             target_flakes: 0,
             strength_target: 1.0,
             next_shift: 0.0,
+            haunting: Haunting::new(),
             air: Air {
                 flakes: Vec::new(),
                 grains: Vec::new(),
@@ -344,7 +369,7 @@ impl SnowSimulation {
     }
 
     pub fn sprite_count(&self) -> usize {
-        self.air.flakes.len() + self.air.grains.len() + self.air.motes.len()
+        self.air.flakes.len() + self.air.grains.len() + self.air.motes.len() + self.haunting.sprite_count()
     }
 
     /// Floats the renderer needs per frame: each layer's surface and bed.
@@ -381,6 +406,7 @@ impl SnowSimulation {
         self.advance_flakes(dt);
         self.advance_grains(dt);
         self.air.advance_motes(dt);
+        self.haunt(dt);
         self.settle(dt);
         self.spawn_flakes();
         for (area, x) in self.air.overflow.drain(..) {
@@ -393,7 +419,10 @@ impl SnowSimulation {
         }
         let air = &self.air;
         // Only a cursor that actually displaces snow needs the full rate; one passing near it or resting in it changes nothing.
-        let pushed = air.clock - air.last_window_motion < 0.6 || air.clock - air.last_cursor_push < 0.3 || air.gust.is_some();
+        let pushed = air.clock - air.last_window_motion < 0.6
+            || air.clock - air.last_cursor_push < 0.3
+            || air.gust.is_some()
+            || self.haunting.pushing(air.clock);
         // The steady trickle off window corners is a few tiny grains at a time; they read fine at the calm rate.
         let flying = air.grains.len() > 24 || air.clock < self.scattered_until;
         self.pace = if pushed {
@@ -403,7 +432,7 @@ impl SnowSimulation {
         } else {
             Pace::Calm
         };
-        let changed = was_moving || self.sprite_count() > 0 || self.air.heights_changed || self.air.windows_changed;
+        let changed = was_moving || self.sprite_count() > 0 || self.haunting.moving() || self.air.heights_changed || self.air.windows_changed;
         self.air.windows_changed = false;
         changed
     }
@@ -445,7 +474,7 @@ impl SnowSimulation {
             *slot = sprite;
             count += 1;
         }
-        count
+        count + self.write_haunting(&mut buffer[count..])
     }
 
     pub fn write_layers(&self, buffer: &mut [f32]) -> Vec<PileLayer<'_>> {
@@ -858,6 +887,7 @@ impl SnowSimulation {
         let front = gust_front(self.width, age, gust.direction, margin);
         // Whatever the front has long passed is gone by now, however deep it was.
         let finish = age > GUST_SWEEP + if gust.calm { 0.6 } else { 0.8 };
+        self.sweep_haunting(front, gust.direction, gust.calm, finish);
         if !gust.calm {
             let trailing = gust_front(self.width, age - GUST_LAG, gust.direction, margin);
             for flake in self.air.flakes.iter_mut().filter(|flake| flake.blown == 0.0) {

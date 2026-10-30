@@ -370,3 +370,26 @@ fn step_cost() {
     let us = start.elapsed().as_secs_f64() * 1e6 / steps as f64;
     println!("rust: {us:.1} µs per step, {} sprites", simulation.sprite_count());
 }
+
+#[test]
+fn halloween_runs_from_october_31_to_dawn_on_november_1() {
+    use crate::halloween::is_halloween;
+    assert!(!is_halloween(10, 30, 23));
+    assert!(is_halloween(10, 31, 0));
+    assert!(is_halloween(10, 31, 23));
+    assert!(is_halloween(11, 1, 5));
+    assert!(!is_halloween(11, 1, 6));
+    assert!(!is_halloween(12, 31, 22));
+}
+
+#[test]
+fn halloween_moonlight_only_shows_at_night() {
+    use crate::halloween::{moonlit, night};
+    let light = [1.0, 0.98, 0.95];
+    let tint = [0.5, 0.5, 0.5, 0.35];
+    assert_eq!(moonlit(light, tint, night(true, 13.0)), (light, tint));
+    assert_eq!(moonlit(light, tint, night(false, 23.0)), (light, tint));
+    let (moon, violet) = moonlit(light, tint, night(true, 23.0));
+    assert!((moon[2] - 1.0).abs() < 1e-5 && moon[0] < 0.8);
+    assert!((violet[3] - 0.6).abs() < 1e-5);
+}
