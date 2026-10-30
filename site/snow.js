@@ -30,6 +30,33 @@
   const GUST_LAG = 0.3;
   const DENSITY = { off: 0, light: 150, steady: 380, heavy: 800, variable: 380 };
   const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
+  // Halloween, from October 30 until dawn on November 1 as in the app, or with ?halloween: pumpkins glow in the
+  // street's drift and ghosts made of its snow rise out of it under the lamp.
+  const halloween = (() => {
+    if (new URLSearchParams(location.search).has('halloween')) return true;
+    const now = new Date();
+    const month = now.getMonth() + 1;
+    return month === 10 && now.getDate() >= 30 || month === 11 && now.getDate() === 1 && now.getHours() < 6;
+  })();
+  if (halloween) {
+    document.documentElement.classList.add('halloween');
+    const hint = document.querySelector('.hint');
+    if (hint) hint.textContent = 'Try it: scare the ghost.';
+  }
+
+  /// The street's ghost: its size, and its life in seconds: heaping up, waving, holding its sign up and putting it
+  /// back, settling into a heap, and the wait for the next one.
+  const GHOST = { size: 84, rise: 1.4, wave: 1.7, sign: 4.9, settle: 11.8, gone: 13, rest: 5 };
+  /// The app's sign is drawn for its ghosts, a little smaller than the street's.
+  const SIGN_SCALE = GHOST.size / 66;
+  const GHOST_REACH = Math.ceil(GHOST.size * 0.4 / COLUMN);
+
+  /// How high a ghost stands above the drift as a share of its size: the heap's height, then the ghost's half.
+  const ghostHeight = form => {
+    const heap = 0.3 * smoothstep(0, 0.5, form);
+    return heap + (0.425 - heap) * smoothstep(0.4, 1, form);
+  };
+  const ghostBulk = form => GHOST.size * GHOST.size * 0.04 * ghostHeight(form) / 0.425;
 
   const settings = { snowfall: 'steady', accumulate: true, melt: true, windows: true, behind: false, screenshots: false, login: false, quit: false };
   const variation = { strength: 1, target: 1, next: 0, clock: 0 };
@@ -227,6 +254,21 @@
     }
   `;
 
+  // The pumpkins' candles, flickering: warm light on the snow around them.
+  const CANDLES = `
+    uniform vec4 uCandles[2];
+    uniform float uCandleTime;
+    float candleGlow(vec2 p) {
+      float glow = 0.0;
+      for (int k = 0; k < 2; k++) {
+        vec2 d = p - uCandles[k].xy;
+        float flicker = 0.86 + 0.08 * sin(uCandleTime * 11.0 + float(k) * 2.1) + 0.06 * sin(uCandleTime * 29.0 + float(k) * 4.3);
+        glow += uCandles[k].z * flicker * exp(-dot(d, d) / 9000.0);
+      }
+      return glow;
+    }
+  `;
+
   const SPRITE_VERTEX = `#version 300 es
     in vec2 aPosition;
     in vec4 aLook;
@@ -235,14 +277,18 @@
     uniform float uTime;
     uniform int uNight;
     ${LIGHT}
+    ${CANDLES}
     out float vAlpha;
     out float vSoft;
     out float vLight;
+    out float vCandle;
     out float vGrow;
     out float vLump;
     out float vSpin;
     void main() {
-      float light = uNight == 1 && uLamp.z > 0.5 ? lampCone(aPosition) : 0.0;
+      float candle = uNight == 1 ? candleGlow(aPosition) : 0.0;
+      float light = max(uNight == 1 && uLamp.z > 0.5 ? lampCone(aPosition) : 0.0, candle * 0.6);
+      vCandle = candle;
       // A lump's ragged edge reaches past its nominal size.
       float grow = (1.0 + 1.6 * light) * (aLook.w > 0.0 ? 1.3 : 1.0);
       float pixels = aLook.x * uScale;
@@ -263,6 +309,7 @@
     in float vAlpha;
     in float vSoft;
     in float vLight;
+    in float vCandle;
     in float vGrow;
     in float vLump;
     in float vSpin;
@@ -282,7 +329,7 @@
       float a = (1.0 - smoothstep(mix(0.6, 0.0, vSoft), 1.0, d)) * vAlpha;
       vec3 color = mix(vec3(0.965, 0.975, 0.995), vec3(0.62, 0.67, 0.77), clamp(smoothstep(0.35, 1.0, d) * 0.65 + shading, 0.0, 1.0));
       if (uNight == 1) {
-        vec3 warm = vec3(1.0, 0.9, 0.74);
+        vec3 warm = mix(vec3(1.0, 0.9, 0.74), vec3(1.0, 0.6, 0.28), clamp(vCandle * 1.5, 0.0, 1.0));
         float ambient = uLamp.z > 0.5 ? 0.22 : 0.55;
         color = mix(color * vec3(0.82, 0.86, 0.94), warm, vLight * 0.8);
         a *= ambient + (1.0 - ambient) * vLight;
@@ -323,6 +370,7 @@
     uniform float uWidth;
     uniform int uNight;
     ${LIGHT}
+    ${CANDLES}
     out vec4 outColor;
 
     float heightAt(int row, float x) {
@@ -377,8 +425,149 @@
         } else {
           color = color * vec3(0.42, 0.46, 0.54);
         }
+        color += vec3(1.0, 0.56, 0.2) * candleGlow(vPoint) * 0.5 * (0.35 + 0.65 * exp(-depth / 12.0));
       }
       outColor = vec4(min(color, vec3(1.0)) * coverage, coverage);
+    }
+  `;
+
+  // A ghost made of the drift's snow, as the app draws it: the drift heaps up and the heap takes the shape of a sheet
+  // over a round head, with paws that wave or hold up a sign; it stands in the drift, merging into it, and is lit
+  // as the drift is.
+  const GHOST_VERTEX = `#version 300 es
+    uniform vec2 uView;
+    uniform vec2 uCenter;
+    uniform float uSize;
+    out vec2 vP;
+    out vec2 vPoint;
+    void main() {
+      vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
+      vP = corner - 0.5;
+      vPoint = uCenter + vec2(vP.x, -vP.y) * uSize;
+      gl_Position = vec4(vPoint.x / uView.x * 2.0 - 1.0, 1.0 - vPoint.y / uView.y * 2.0, 0.0, 1.0);
+    }
+  `;
+
+  const GHOST_FRAGMENT = `#version 300 es
+    precision highp float;
+    precision highp int;
+    in vec2 vP;
+    in vec2 vPoint;
+    uniform vec2 uCenter;
+    uniform float uSize;
+    uniform float uSeed;
+    uniform float uForm;
+    uniform float uEyes;
+    uniform float uPaws;
+    uniform float uHold;
+    uniform float uWave;
+    uniform float uTime;
+    uniform float uWidth;
+    uniform int uNight;
+    uniform sampler2D uHeights;
+    uniform int uCount;
+    uniform vec2 uOrigin;
+    ${LIGHT}
+    ${CANDLES}
+    out vec4 outColor;
+
+    float heightAt(int row, float x) {
+      float f = x / ${COLUMN.toFixed(1)} - 0.5;
+      float base = floor(f);
+      int i = clamp(int(base), 0, uCount - 1);
+      int j = min(i + 1, uCount - 1);
+      return mix(texelFetch(uHeights, ivec2(i, row), 0).r, texelFetch(uHeights, ivec2(j, row), 0).r, clamp(f - base, 0.0, 1.0));
+    }
+
+    // The drift's surface (row 0) or underside (row 1) under a point of the ghost, in its own coordinates, y up.
+    float driftAt(int row, float x) {
+      return (uCenter.y - uOrigin.y + heightAt(row, uCenter.x + x * uSize - uOrigin.x)) / uSize;
+    }
+
+    float hash(vec2 p) {
+      p = fract(p * vec2(123.34, 456.21));
+      p += dot(p, p + 45.32);
+      return fract(p.x * p.y);
+    }
+
+    void main() {
+      vec2 p = vP;
+      float t = uTime + uSeed * 40.0;
+      float heap = 0.3 * smoothstep(0.0, 0.5, uForm);
+      float shaped = smoothstep(0.4, 1.0, uForm);
+      vec2 q = vec2(p.x - sin(t * 1.2 + p.y * 3.5) * 0.02 * (0.22 - p.y) * shaped, p.y - uWave * 0.025 * sin(t * 6.0));
+      float side = 0.17 + pow(max(0.22 - q.y, 0.0), 1.3) * 0.35;
+      float sheet = q.y > 0.22 ? 0.17 - length(q - vec2(0.0, 0.22)) : side - abs(q.x);
+      float ground = driftAt(0, p.x);
+      float skirt = ground + 0.07 * (1.0 - smoothstep(0.0, 0.45, abs(p.x))) - p.y;
+      float blend = max(0.05 - abs(sheet - skirt), 0.0) / 0.05;
+      float formed = max(sheet, skirt) + blend * blend * 0.05 * 0.25;
+      for (int h = 0; h < 2; h++) {
+        float hand = h == 0 ? -1.0 : 1.0;
+        float up = max(uPaws, uWave);
+        float angle = mix(-1.35, 0.6 + 0.12 * sin(t * 9.0 + hand), uPaws);
+        if (hand > 0.0) {
+          angle = mix(angle, 0.35, uHold);
+          up = max(up, uHold);
+        }
+        vec2 joint = vec2(hand * 0.17, 0.1);
+        for (int k = 1; k <= 3; k++) {
+          vec2 straight = vec2(hand * 0.17, 0.1) + vec2(hand * cos(angle), sin(angle)) * (0.057 * float(k));
+          float x = hand * (0.17 + 0.07 * float(k));
+          vec2 next = mix(straight, vec2(x, 0.12 + 0.045 * sin(t * 6.0 - x * 12.0)), uWave);
+          vec2 bone = next - joint;
+          float along = clamp(dot(q - joint, bone) / max(dot(bone, bone), 1e-5), 0.0, 1.0);
+          float radius = 0.045 * (0.4 + 0.6 * up) * (1.0 - 0.08 * float(k - 1) - 0.08 * along);
+          float paw = radius - length(q - joint - bone * along);
+          float join = max(0.03 - abs(formed - paw), 0.0) / 0.03;
+          formed = max(formed, paw) + join * join * 0.03 * 0.25;
+          joint = next;
+        }
+      }
+      float inside = mix(ground + heap * (1.0 - smoothstep(0.0, 0.34, abs(p.x))) - p.y, formed, shaped);
+      float under = ground - p.y;
+      float sunk = (1.0 - smoothstep(0.13, 0.2, under)) * (1.0 - smoothstep(0.25, 0.45, abs(p.x)))
+        * smoothstep(0.0, 0.01, p.y - driftAt(1, p.x));
+      float a = smoothstep(0.0, 0.02, inside) * max(1.0 - smoothstep(-0.015, 0.0, under), sunk);
+      vec2 slope = vec2(dFdx(inside), dFdy(inside));
+      if (a < 0.002) discard;
+
+      float depth = max(inside, 0.0) * uSize;
+      float lit = length(slope) > 0.0 ? dot(normalize(-slope), normalize(vec2(-0.5, 1.0))) : 1.0;
+      float folds = (0.5 + 0.5 * sin(q.x / side * 7.5 + sin(q.y * 5.0 + t * 0.9) * 0.8)) * (1.0 - smoothstep(-0.2, 0.18, q.y)) * shaped;
+      float shade = (1.0 - exp(-depth / 30.0)) * 0.32 + (1.0 - lit) * 0.6 * exp(-depth / 5.0) + folds * 0.18;
+      vec3 surface = vec3(0.925, 0.94, 0.965);
+      vec3 shadow = vec3(0.72, 0.78, 0.88);
+      vec3 color = mix(surface, shadow, clamp(shade, 0.0, 1.0));
+      color = mix(color, vec3(0.975, 0.982, 0.995), exp(-depth * 0.9) * 0.6);
+      float below = max(under, 0.0) * uSize;
+      vec3 drift = mix(surface, shadow, clamp((1.0 - exp(-below / 30.0)) * 0.32 + 0.064 * exp(-below / 5.0), 0.0, 1.0));
+      color = mix(color, drift, smoothstep(0.0, 0.15 * uSize, below));
+      color += (hash(floor(gl_FragCoord.xy)) - 0.5) * 0.02;
+
+      if (uNight == 1) {
+        vec3 warm = vec3(1.0, 0.86, 0.66);
+        if (uLamp.z > 0.5) {
+          float spread = max(uWidth * 0.28, 300.0);
+          float dx = (vPoint.x - uLamp.x) / spread;
+          float pool = exp(-dx * dx) / (1.0 + max(vPoint.y - uLamp.y, 0.0) / 1400.0);
+          color = color * (vec3(0.16, 0.18, 0.23) + warm * pool * 1.15);
+        } else {
+          color = color * vec3(0.42, 0.46, 0.54);
+        }
+        color += vec3(1.0, 0.56, 0.2) * candleGlow(vPoint) * 0.5 * (0.35 + 0.65 * exp(-depth / 12.0));
+      }
+
+      float blink = step(fract(t * 0.29 + (1.0 + uSeed) * 7.0), 0.035);
+      vec2 eye = vec2(0.03, 0.042 * (1.0 - 0.85 * blink));
+      float eyes = 0.0;
+      for (int k = 0; k < 2; k++) {
+        vec2 e = q - vec2((k == 0 ? -1.0 : 1.0) * 0.065, 0.24);
+        eyes = max(eyes, 1.0 - smoothstep(0.75, 1.0, length(e / eye)));
+      }
+      float mouth = uPaws > 0.05 ? 1.0 - smoothstep(0.75, 1.0, length((q - vec2(0.0, 0.135)) / (vec2(0.026, 0.036) * uPaws))) : 0.0;
+      color = mix(color, vec3(0.04, 0.04, 0.06), max(eyes, mouth) * uEyes);
+      outColor = vec4(min(color, vec3(1.0)) * a, a);
     }
   `;
 
@@ -417,6 +606,11 @@
       this.light = null;
       this.ground = new Layer(GROUND_DEPTH, false);
       this.ledges = [...section.querySelectorAll('[data-ledge]')].map(element => ({ element, layer: new Layer(LEDGE_DEPTH, true) }));
+      this.haunted = halloween && section.classList.contains('street');
+      this.boo = this.haunted ? section.querySelector('.boo') : null;
+      this.candles = [];
+      this.ghost = null;
+      this.falling = null;
       this.flakes = [];
       this.grains = [];
       this.motes = [];
@@ -424,6 +618,7 @@
       this.cursorVelocity = [0, 0];
       this.gust = null;
       this.time = rand(0, 100);
+      this.nextGhost = this.time + 2;
       this.visible = false;
       this.width = 0;
       this.height = 0;
@@ -439,6 +634,7 @@
       try {
         this.sprite = program(gl, SPRITE_VERTEX, SPRITE_FRAGMENT);
         this.pile = program(gl, PILE_VERTEX, PILE_FRAGMENT);
+        if (this.haunted) this.ghostProgram = program(gl, GHOST_VERTEX, GHOST_FRAGMENT);
       } catch (error) {
         console.warn('Snowhush: snow disabled,', error);
         this.canvas.hidden = true;
@@ -494,6 +690,12 @@
         const lamp = this.lamp.getBoundingClientRect();
         this.light = { x: lamp.left + lamp.width / 2 - rect.left, y: lamp.top + lamp.height * 0.66 - rect.top };
         if (this.lightCanvas) this.paintLight();
+      }
+      if (this.haunted) {
+        this.candles = [...this.section.querySelectorAll('.pumpkin')].map(element => {
+          const box = element.getBoundingClientRect();
+          return { x: box.left + box.width / 2 - rect.left, y: box.top + box.height * 0.6 - rect.top };
+        });
       }
       this.draw();
     }
@@ -571,6 +773,7 @@
       this.advanceFlakes(dt);
       this.advanceGrains(dt);
       this.advanceMotes(dt);
+      if (this.haunted) this.haunt();
       this.settle(dt);
       // No new snow falls until the gust has carried off the last flake, then the snowfall starts again from the top.
       const target = this.blowing ? 0 : this.target();
@@ -1055,6 +1258,8 @@
       gl.clear(gl.COLOR_BUFFER_BIT);
       if (settings.quit) return;
       const lamp = this.light ? [this.light.x, this.light.y, 1] : [0, 0, 0];
+      const candles = new Float32Array(8);
+      this.candles.slice(0, 2).forEach((candle, k) => candles.set([candle.x, candle.y, 1, 0], k * 4));
 
       gl.useProgram(this.pile.program);
       gl.bindVertexArray(this.pileVAO);
@@ -1065,6 +1270,8 @@
       gl.uniform1f(u.uWidth, this.width);
       gl.uniform1i(u.uNight, this.night ? 1 : 0);
       gl.uniform3f(u.uLamp, ...lamp);
+      gl.uniform4fv(u['uCandles[0]'], candles);
+      gl.uniform1f(u.uCandleTime, this.time % 1000);
       gl.uniform1i(u.uHeights, 0);
       gl.activeTexture(gl.TEXTURE0);
       for (const layer of this.layers) {
@@ -1084,6 +1291,8 @@
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       }
 
+      if (this.ghost) this.drawGhost(lamp, candles);
+      if (this.haunted) this.placeSign();
       const total = this.flakes.length + this.grains.length + this.motes.length;
       if (!total) return;
       if (this.spriteData.length < total * 6) this.spriteData = new Float32Array(Math.ceil(total * 1.5) * 6);
@@ -1108,6 +1317,8 @@
       gl.uniform1f(s.uTime, this.time % 1000);
       gl.uniform1i(s.uNight, this.night ? 1 : 0);
       gl.uniform3f(s.uLamp, ...lamp);
+      gl.uniform4fv(s['uCandles[0]'], candles);
+      gl.uniform1f(s.uCandleTime, this.time % 1000);
       gl.bindVertexArray(this.spriteVAO);
       gl.bindBuffer(gl.ARRAY_BUFFER, this.spriteBuffer);
       gl.bufferData(gl.ARRAY_BUFFER, data.subarray(0, k), gl.DYNAMIC_DRAW);
@@ -1115,6 +1326,233 @@
       gl.bindVertexArray(null);
     }
   }
+
+  // MARK: - Halloween
+
+  Object.assign(Scene.prototype, {
+    /// The ghost at this moment: how far it has taken shape out of its heap, its eyes, its paws up saying boo, its
+    /// right paw holding its sign, the wave along its paws, and how far its sign is up out of the snow.
+    ghostLook(ghost) {
+      const age = this.time - ghost.born;
+      const pulse = (from, up, hold, down) =>
+        age < from || age >= from + down ? 0 : age < from + hold ? smoothstep(from, from + up, age) : 1 - smoothstep(from + hold, from + down, age);
+      const form = Math.min(smoothstep(0, GHOST.rise, age), 1 - smoothstep(GHOST.settle, GHOST.settle + 1.2, age));
+      const since = this.time - ghost.booAt;
+      return {
+        form,
+        eyes: smoothstep(0.85, 1, form),
+        paws: since < 0 || since >= 1.3 ? 0 : since < 0.9 ? smoothstep(0, 0.2, since) : 1 - smoothstep(0.9, 1.3, since),
+        hold: pulse(GHOST.sign, 0.25, 6.2, 6.7),
+        wave: pulse(GHOST.wave, 0.3, 2.4, 2.8),
+        signUp: pulse(GHOST.sign, 0.45, 6.1, 6.5),
+      };
+    },
+
+    ghostPlace(ghost) {
+      const ground = this.ground.surface(this.ground.clamped(ghost.x));
+      return { ground, center: { x: ghost.x, y: ground - GHOST.size * 0.035 } };
+    },
+
+    ghostPaw(ghost, angle) {
+      const { center } = this.ghostPlace(ghost);
+      return { x: center.x + (0.17 + 0.17 * Math.cos(angle)) * GHOST.size, y: center.y - (0.1 + 0.17 * Math.sin(angle)) * GHOST.size };
+    },
+
+    /// Under the lamp a ghost heaps up out of the drift now and then; it says boo as the cursor comes near and
+    /// crumbles back into snow at its touch.
+    haunt() {
+      // Blown away with the rest of the snow, or gone with the app.
+      if (this.ghost && (this.blowing || settings.quit)) {
+        this.ghost = null;
+        this.nextGhost = this.time + 6;
+      }
+      const ghost = this.ghost;
+      if (!ghost) {
+        if (this.time >= this.nextGhost && !this.blowing && this.light) this.raiseGhost();
+        return;
+      }
+      const look = this.ghostLook(ghost);
+      const { ground, center } = this.ghostPlace(ghost);
+      const tall = ghostHeight(look.form) * GHOST.size;
+      const cursor = this.cursor;
+      if (cursor && look.form > 0.3 && Math.abs(cursor.x - center.x) < GHOST.size * 0.3 && cursor.y < ground && cursor.y > ground - tall) {
+        if (look.signUp > 0) this.falling = { from: this.ghostPaw(ghost, 0.35), at: this.time };
+        this.crumbleGhost(ghost, ground, center, tall);
+        this.ghost = null;
+        this.nextGhost = this.time + 4;
+        return;
+      }
+      if (cursor && look.form >= 1 && this.time - ghost.booAt > 2.5 && Math.hypot(cursor.x - center.x, cursor.y - center.y) < GHOST.size * 1.6) {
+        ghost.booAt = this.time;
+      }
+      if (this.time - ghost.born >= GHOST.gone) {
+        this.pourGhost(ghost, 0);
+        this.ghost = null;
+        this.nextGhost = this.time + GHOST.rest;
+        return;
+      }
+      const bulk = ghostBulk(look.form);
+      if (this.time - ghost.born > GHOST.settle) this.pourGhost(ghost, bulk);
+      else this.gatherGhost(ghost, bulk);
+    },
+
+    /// A little left of the lamp, between the pumpkins, where its pool of light falls; the drift there is evened out first.
+    raiseGhost() {
+      const x = Math.min(Math.max(this.light.x - 120, GHOST.size), this.width - GHOST.size);
+      const layer = this.ground;
+      const column = layer.clamped(x);
+      if (layer.h[column] < 6) {
+        this.nextGhost = this.time + 2;
+        return;
+      }
+      let total = 0, sum = 0;
+      const weights = [];
+      for (let j = Math.max(0, column - GHOST_REACH); j <= Math.min(layer.count - 1, column + GHOST_REACH); j++) {
+        const weight = 1 - smoothstep(0.5, 1, Math.abs(j - column) / GHOST_REACH);
+        weights.push([j, weight]);
+        total += weight;
+        sum += layer.h[j] * weight;
+      }
+      for (const [j, weight] of weights) layer.h[j] += (sum / total - layer.h[j]) * weight;
+      this.ghost = { x, born: this.time, taken: 0, booAt: -10, seed: Math.random() };
+    },
+
+    /// Draws snow from the drift either side of the ghost into it, most from the middle of each stretch, so the drift
+    /// dips without steps.
+    gatherGhost(ghost, target) {
+      const delta = target - ghost.taken;
+      if (Math.abs(delta) <= 0.01) return;
+      const layer = this.ground;
+      const column = layer.clamped(ghost.x);
+      const ring = [];
+      for (let j = column - GHOST_REACH * 3; j <= column + GHOST_REACH * 3; j++) {
+        const off = Math.abs(j - column);
+        if (j >= 0 && j < layer.count && off > GHOST_REACH) ring.push([j, Math.sin((off - GHOST_REACH) / (GHOST_REACH * 2) * Math.PI)]);
+      }
+      const total = ring.reduce((sum, [, weight]) => sum + weight, 0) * COLUMN;
+      for (const [j, weight] of ring) {
+        const each = delta * weight / total;
+        const change = delta > 0 ? Math.min(each, layer.h[j] * 0.5) : each;
+        layer.h[j] -= change;
+        ghost.taken += change * COLUMN;
+      }
+    },
+
+    /// Lets the snow it holds beyond `keeping` down onto the drift where it stands, heaped up in the middle.
+    pourGhost(ghost, keeping) {
+      const amount = ghost.taken - keeping;
+      if (amount <= 0.01) return;
+      const layer = this.ground;
+      const column = layer.clamped(ghost.x);
+      const under = [];
+      for (let j = Math.max(0, column - GHOST_REACH); j <= Math.min(layer.count - 1, column + GHOST_REACH); j++) {
+        const off = (j - column) / GHOST_REACH;
+        under.push([j, Math.max(0, 1 - off * off)]);
+      }
+      const total = under.reduce((sum, [, weight]) => sum + weight, 0) * COLUMN;
+      for (const [j, weight] of under) layer.h[j] += amount * weight / total;
+      ghost.taken = keeping;
+    },
+
+    /// The ghost bursts into the snow it was made of, which hops a little and falls back onto the drift, as the app's do.
+    crumbleGhost(ghost, ground, center, tall) {
+      const scale = GHOST.size / 66;
+      let left = ghost.taken;
+      while (left > 0.3 && this.grains.length < MAX_GRAINS) {
+        const area = Math.min(left, rand(0.6, 1.6) * scale * scale);
+        left -= area;
+        const up = Math.random();
+        const half = GHOST.size * (0.12 + 0.18 * (1 - up));
+        this.grains.push({
+          x: center.x + rand(-half, half),
+          y: ground - up * tall,
+          vx: rand(-40, 40) * scale,
+          vy: rand(-90, 20) * scale,
+          area,
+          size: rand(1.2, 2.6) * scale,
+          lump: 0,
+        });
+      }
+      for (let n = 0; n < 10 && this.motes.length < MAX_MOTES; n++) {
+        this.motes.push({
+          x: center.x + rand(-0.25, 0.25) * GHOST.size,
+          y: ground - Math.random() * tall,
+          vx: rand(-60, 60) * scale,
+          vy: rand(-60, 10) * scale,
+          size: rand(8, 16) * scale,
+          alpha: rand(0.08, 0.15),
+          age: 0,
+          life: rand(0.6, 1.3),
+        });
+      }
+      ghost.taken = 0;
+    },
+
+    drawGhost(lamp, candles) {
+      const gl = this.gl;
+      const look = this.ghostLook(this.ghost);
+      const texture = this.textures.get(this.ground);
+      if (look.form <= 0 || !texture || !this.ghostProgram) return;
+      const { center } = this.ghostPlace(this.ghost);
+      const u = this.ghostProgram.uniforms;
+      gl.useProgram(this.ghostProgram.program);
+      gl.bindVertexArray(this.pileVAO);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.uniform1i(u.uHeights, 0);
+      gl.uniform1i(u.uCount, this.ground.count);
+      gl.uniform2f(u.uOrigin, this.ground.x, this.ground.y);
+      gl.uniform2f(u.uView, this.width, this.height);
+      gl.uniform2f(u.uCenter, center.x, center.y);
+      gl.uniform1f(u.uSize, GHOST.size);
+      gl.uniform1f(u.uSeed, this.ghost.seed);
+      gl.uniform1f(u.uForm, look.form);
+      gl.uniform1f(u.uEyes, look.eyes);
+      gl.uniform1f(u.uPaws, look.paws);
+      gl.uniform1f(u.uHold, look.hold);
+      gl.uniform1f(u.uWave, look.wave);
+      gl.uniform1f(u.uTime, this.time % 1000);
+      gl.uniform1f(u.uWidth, this.width);
+      gl.uniform1i(u.uNight, this.night ? 1 : 0);
+      gl.uniform3f(u.uLamp, ...lamp);
+      gl.uniform4fv(u['uCandles[0]'], candles);
+      gl.uniform1f(u.uCandleTime, this.time % 1000);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      gl.bindVertexArray(null);
+    },
+
+    /// The ghost's sign, behind the snow so it comes up out of the drift: held up in its raised paw, or tumbling back
+    /// into the drift after the ghost crumbles.
+    placeSign() {
+      let foot = null;
+      let angle = 0;
+      if (this.ghost) {
+        const look = this.ghostLook(this.ghost);
+        if (look.signUp > 0) {
+          const paw = this.ghostPaw(this.ghost, 0.35);
+          foot = { x: paw.x, y: paw.y + (1 - look.signUp) * 100 * SIGN_SCALE };
+          angle = -0.1 + 0.05 * Math.sin(this.time * 2.3 + this.ghost.seed * 5);
+        }
+      } else if (this.falling) {
+        const since = this.time - this.falling.at;
+        if (since < 1.5) {
+          foot = { x: this.falling.from.x - 26 * since, y: this.falling.from.y - 70 * since + 450 * since * since };
+          angle = -0.1 - 2.2 * since;
+        } else {
+          this.falling = null;
+        }
+      }
+      if (!foot) {
+        this.boo.style.visibility = 'hidden';
+        return;
+      }
+      const w = 45 * SIGN_SCALE;
+      const h = 52 * SIGN_SCALE;
+      this.boo.style.width = `${w}px`;
+      this.boo.style.visibility = 'visible';
+      this.boo.style.transform = `translate(${foot.x - w / 2}px, ${foot.y - h}px) rotate(${-angle}rad)`;
+    },
+  });
 
   function ledgesActive() {
     return settings.windows && !settings.behind;

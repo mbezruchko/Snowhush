@@ -198,6 +198,46 @@ body.snow-behind canvas.snow { z-index: 1; }
 @media (hover: none) { .hint { display: none; } }
 @media (max-width: 720px) { .lamp-right { top: 70px; left: 74%; } }
 
+/* Halloween: pumpkins glowing in the street's drift, and a ghost's sign held up out of it (snow.js) */
+
+.halloween-only { display: none; }
+.halloween .halloween-only { display: contents; }
+.defs { position: absolute; }
+.pumpkin {
+  position: absolute;
+  bottom: 4px;
+  z-index: 2;
+  aspect-ratio: 100 / 82;
+  filter: drop-shadow(0 0 16px oklch(0.72 0.16 55 / 0.4));
+  pointer-events: none;
+}
+.pumpkin-near { left: calc(72% + 46px); width: 64px; }
+.pumpkin-far { left: calc(72% - 300px); width: 46px; }
+.pumpkin-face { animation: candle 2.6s linear infinite; }
+.pumpkin-far .pumpkin-face { animation-delay: -1.1s; }
+@keyframes candle {
+  0%, 100% { opacity: 1; }
+  18% { opacity: 0.84; }
+  34% { opacity: 0.97; }
+  58% { opacity: 0.8; }
+  77% { opacity: 0.94; }
+}
+.boo {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 2;
+  height: auto;
+  transform-origin: 50% 100%;
+  visibility: hidden;
+  pointer-events: none;
+}
+@media (max-width: 720px) {
+  .pumpkin-near { left: calc(74% + 20px); width: 48px; }
+  .pumpkin-far { left: calc(74% - 170px); width: 36px; }
+}
+@media (prefers-reduced-motion: reduce) { .pumpkin-face { animation: none; } }
+
 /* Windows */
 
 .windows {
@@ -451,6 +491,38 @@ body.snow-behind canvas.snow { z-index: 1; }
   </div>
 
   <p class="hint">Try it: sweep the snow.</p>
+  <div class="halloween-only" aria-hidden="true">
+    <svg width="0" height="0" class="defs">
+      <defs>
+        <radialGradient id="pumpkin-skin" cx="42%" cy="34%" r="72%">
+          <stop offset="0" stop-color="#8c3d14"/>
+          <stop offset="1" stop-color="#2e1207"/>
+        </radialGradient>
+        <radialGradient id="pumpkin-fire" cx="50%" cy="55%" r="60%">
+          <stop offset="0" stop-color="#ffe3a0"/>
+          <stop offset="0.55" stop-color="#ffb04a"/>
+          <stop offset="1" stop-color="#e2681a"/>
+        </radialGradient>
+      </defs>
+      <symbol id="pumpkin" viewBox="0 0 100 82">
+        <path d="M47 18c-1-7 3-13 10-15l1 4c-4 2-6 6-5 11z" fill="#2a2416"/>
+        <g fill="url(#pumpkin-skin)">
+          <ellipse cx="33" cy="50" rx="25" ry="30"/>
+          <ellipse cx="67" cy="50" rx="25" ry="30"/>
+          <ellipse cx="50" cy="49" rx="23" ry="32"/>
+        </g>
+        <path d="M38 22c-8 12-8 44 0 56M62 22c8 12 8 44 0 56" fill="none" stroke="#1f0b04" stroke-opacity="0.55" stroke-width="1.6"/>
+        <g class="pumpkin-face" fill="url(#pumpkin-fire)">
+          <path d="M29 42l12-1-6-10z"/>
+          <path d="M59 41l12 1-6-11z"/>
+          <path d="M22 50c8 6 16 8 20 8l3-4 4 5 4-5 4 4 3-4c4 0 9-1 14-4-3 9-12 15-26 15s-23-6-26-15z"/>
+        </g>
+      </symbol>
+    </svg>
+    <svg class="pumpkin pumpkin-near"><use href="#pumpkin"/></svg>
+    <svg class="pumpkin pumpkin-far"><use href="#pumpkin"/></svg>
+    <img class="boo" src="assets/halloween/boo.png" alt="" width="45" height="52">
+  </div>
   <canvas class="snow" aria-hidden="true"></canvas>
 </header>
 
