@@ -1,13 +1,14 @@
 import AppKit
 
-/// Halloween: from the start of October 31 until dawn on November 1 the snow takes on a spooky mood.
+/// Halloween: from October 30, when the update bringing it comes, until dawn on November 1 the snow takes on a
+/// spooky mood.
 enum Halloween {
     /// Whether it is Halloween, wanted or not.
     /// Lets it be previewed on any day: defaults write com.mbezruchko.Snowhush previewHalloween -bool true
     static func isSeason(at date: Date = Date()) -> Bool {
         if UserDefaults.standard.bool(forKey: "previewHalloween") { return true }
         let parts = Calendar.current.dateComponents([.month, .day, .hour], from: date)
-        return parts.month == 10 && parts.day == 31 || parts.month == 11 && parts.day == 1 && (parts.hour ?? 0) < 6
+        return parts.month == 10 && (parts.day ?? 0) >= 30 || parts.month == 11 && parts.day == 1 && (parts.hour ?? 0) < 6
     }
 
     static var isOn: Bool { isSeason() && Preferences.halloween }

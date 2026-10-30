@@ -1,4 +1,5 @@
-//! Halloween: from the start of October 31 until dawn on November 1 the snow takes on a spooky mood.
+//! Halloween: from October 30, when the update bringing it comes, until dawn on November 1 the snow takes on a
+//! spooky mood.
 //! The Mac app has the same in Swift, with more to it.
 
 use crate::geometry::smoothstep;
@@ -31,7 +32,7 @@ pub fn previewed_hour() -> Option<f32> {
 
 /// Whether it is Halloween at this local date and hour, months counted from 1, or it is being previewed.
 pub fn is_halloween(month: u32, day: u32, hour: u32) -> bool {
-    month == 10 && day == 31 || month == 11 && day == 1 && hour < 6 || previewed()
+    month == 10 && day >= 30 || month == 11 && day == 1 && hour < 6 || previewed()
 }
 
 /// How much of full daylight there is at this local hour: none at night, all of it from mid-morning to late afternoon.

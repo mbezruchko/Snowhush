@@ -372,9 +372,10 @@ fn step_cost() {
 }
 
 #[test]
-fn halloween_runs_from_october_31_to_dawn_on_november_1() {
+fn halloween_runs_from_october_30_to_dawn_on_november_1() {
     use crate::halloween::is_halloween;
-    assert!(!is_halloween(10, 30, 23));
+    assert!(!is_halloween(10, 29, 23));
+    assert!(is_halloween(10, 30, 0));
     assert!(is_halloween(10, 31, 0));
     assert!(is_halloween(10, 31, 23));
     assert!(is_halloween(11, 1, 5));
