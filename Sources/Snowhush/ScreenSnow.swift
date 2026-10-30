@@ -12,6 +12,7 @@ final class ScreenSnow {
     private let tracker = WindowTracker()
     private let light = SceneLight()
     private(set) var screen: NSScreen
+    var halloween = false
 
     init?(screen: NSScreen, device: MTLDevice, snowOnWindows: @escaping () -> Bool) {
         guard let displayID = screen.displayID else { return nil }

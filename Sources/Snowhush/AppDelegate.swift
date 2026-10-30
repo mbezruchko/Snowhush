@@ -12,12 +12,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var snowOnWindows = true
     private var behindWindows = false
     private var snowfallHeld = false
+    private var halloween = false
     private var statusItem: NSStatusItem!
     private let snowfallSlider = SnowfallSlider()
     private var accumulateItem: NSMenuItem!
     private var meltItem: NSMenuItem!
     private var snowOnWindowsItem: NSMenuItem!
     private var clearItem: NSMenuItem!
+    private var halloweenItem: NSMenuItem!
     private var behindWindowsItem: NSMenuItem!
     private var screenshotsItem: NSMenuItem!
     private var loginItem: NSMenuItem!
@@ -28,6 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var updater: SPUStandardUpdaterController!
     private var welcome: WelcomeController?
     private let power = PowerMonitor()
+    private var halloweenTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if AppMover.moveIfNeeded() {
@@ -55,6 +58,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         updater = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: self)
         statusItem = makeStatusItem()
         updateStatusIcon()
+        refreshHalloween()
+        halloweenTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in self?.refreshHalloween() }
         observeSystem()
         if snowfallHeld {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in self?.showWelcome() }
@@ -79,6 +84,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
             } else if let snow = ScreenSnow(screen: screen, device: device, snowOnWindows: { [unowned self] in snowOnWindows }) {
                 snow.simulation.snowfallHeld = snowfallHeld
                 snow.simulation.snowfallReleased = { [weak self] in self?.releaseSnowfall() }
+                snow.halloween = halloween
                 snow.apply(power.budget)
                 screens.append(snow)
             }
@@ -133,6 +139,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         meltItem = add("Melt Snow", #selector(toggleMeltSnow), to: menu)
         snowOnWindowsItem = add("Snow on Windows", #selector(toggleSnowOnWindows), to: menu)
         clearItem = add("Clear Snow", #selector(clearSnow), to: menu)
+        halloweenItem = add("Halloween", #selector(toggleHalloween), to: menu)
         menu.addItem(.separator())
         behindWindowsItem = add("Behind Windows", #selector(toggleBehindWindows), to: menu)
         screenshotsItem = add("Show in Screenshots", #selector(toggleScreenshots), to: menu)
@@ -161,6 +168,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         snowOnWindowsItem.state = snowOnWindows ? .on : .off
         snowOnWindowsItem.isEnabled = !behindWindows
         clearItem.isEnabled = screens.contains { $0.simulation.hasSnow || $0.simulation.spriteCount > 0 }
+        halloweenItem.isHidden = !Halloween.isSeason()
+        halloweenItem.state = Preferences.halloween ? .on : .off
         behindWindowsItem.state = behindWindows ? .on : .off
         screenshotsItem.state = Preferences.showInScreenshots ? .on : .off
         loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
@@ -227,8 +236,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         }
     }
 
+    @objc private func toggleHalloween() {
+        Preferences.halloween.toggle()
+        refreshHalloween()
+    }
+
     private func updateStatusIcon() {
         statusItem.button?.appearsDisabled = snowfall == .off
+    }
+
+    private func refreshHalloween() {
+        guard Halloween.isOn != halloween else { return }
+        halloween.toggle()
+        statusItem.button?.image = halloween ? Halloween.icon : NSImage(systemSymbolName: "snowflake", accessibilityDescription: "Snowhush")
+        for snow in screens { snow.halloween = halloween }
     }
 
     // MARK: - System
