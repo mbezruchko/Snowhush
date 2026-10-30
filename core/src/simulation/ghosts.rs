@@ -309,6 +309,11 @@ impl SnowSimulation {
             ghost.age += dt;
             let gone = match self.layer_of(&ghost) {
                 None => true,
+                // A window come in front of it: it ducks back into the drift, as the drift itself goes behind the window.
+                Some(li) if self.covered(&ghost, li) => {
+                    self.pour(&mut ghost, li, 0.0);
+                    true
+                }
                 Some(li) if (ghost.threw || !ghost.avenges) && self.air.cursor.is_some_and(|cursor| self.touches(&ghost, li, cursor)) => {
                     if let Some(sign) = self.sign_of(&ghost, li) {
                         let random = &mut self.air.random;
@@ -521,6 +526,9 @@ impl SnowSimulation {
             let avenges = self.haunting.revenge_due;
             let returns = !avenges && self.air.random.next() < 0.5;
             let ghost = Ghost::new(id, x, size, self.air.random.next(), returns, avenges);
+            if self.covered(&ghost, li) {
+                continue;
+            }
             self.haunting.revenge_due = false;
             self.level(&ghost, li);
             self.haunting.ghosts.push(ghost);
@@ -639,6 +647,17 @@ impl SnowSimulation {
         let ground = layer.surface(ghost.column(layer));
         // Its head's top lies 0.39 of its size above the middle, and stands 0.425 above the drift once formed.
         (ground, V2::new(layer.base().x + ghost.x, ground + ghost.size * 0.035))
+    }
+
+    /// Whether a window in front of its drift reaches over where the ghost stands, its paws spread or its sign held up.
+    fn covered(&self, ghost: &Ghost, li: usize) -> bool {
+        let (ground, center) = self.placement(ghost, li);
+        let mut area = [center.x - ghost.size * 0.4, ground - 2.0, center.x + ghost.size * 0.4, ground + ghost.size * 0.45];
+        if ghost.sign.is_some() && ghost.holding() > 0.0 {
+            let paw = self.paw(ghost, li, 0.35);
+            area = [area[0].min(paw.x - 30.0), area[1], area[2].max(paw.x + 30.0), area[3].max(paw.y + 60.0)];
+        }
+        self.layers[li].occluders.iter().any(|o| o[0] < area[2] && o[2] > area[0] && o[1] < area[3] && o[3] > area[1])
     }
 
     /// The tip of its right paw, held out at `angle`.
@@ -949,6 +968,22 @@ mod tests {
         assert!(simulation.haunting.ghosts.is_empty());
         assert_eq!(simulation.haunting.scares, 1);
         assert!(!simulation.air.grains.is_empty());
+    }
+
+    #[test]
+    fn a_window_in_front_sends_a_ghost_back_into_the_drift() {
+        let mut simulation = haunted();
+        let before = ground_snow(&simulation);
+        for _ in 0..(4.0 / DT) as usize {
+            simulation.step(DT, AWAY);
+        }
+        let ghost = simulation.haunting.ghosts[0];
+        let (ground, center) = simulation.placement(&ghost, 0);
+        simulation.layers[0].occluders = vec![[center.x - 10.0, ground + 5.0, center.x + 200.0, ground + 300.0]];
+        simulation.step(DT, AWAY);
+        assert!(simulation.haunting.ghosts.is_empty());
+        let after = ground_snow(&simulation);
+        assert!((after - before).abs() < before * 0.01, "its snow went back: {before} then {after}");
     }
 
     #[test]

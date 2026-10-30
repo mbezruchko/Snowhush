@@ -1257,7 +1257,11 @@ final class SnowSimulation {
             var ghost = ghosts[i]
             ghost.age += dt
             var gone = !layers.contains { $0 === ghost.layer }
-            if !gone, !(ghost.avenges && !ghost.threw), let cursor, touches(ghost, cursor) {
+            if !gone, covered(ghost) {
+                // A window come in front of it: it ducks back into the drift, as the drift itself goes behind the window.
+                pour(&ghost, keeping: 0)
+                gone = true
+            } else if !gone, !(ghost.avenges && !ghost.threw), let cursor, touches(ghost, cursor) {
                 if let sign = sign(of: ghost) {
                     fallingSigns.append((sign, SIMD2(random.range(-30, 30), 60), random.range(-2.5, 2.5), 0))
                 }
@@ -1437,6 +1441,7 @@ final class SnowSimulation {
                 returns: !revengeDue && random.next() < 0.5,
                 avenges: revengeDue
             )
+            guard !covered(ghost) else { continue }
             revengeDue = false
             level(under: ghost)
             ghosts.append(ghost)
@@ -1481,6 +1486,17 @@ final class SnowSimulation {
         let ground = ghost.layer.surface(ghost.column)
         // Its head's top lies 0.39 of its size above the middle, and stands 0.425 above the drift once formed.
         return (ground, SIMD2(ghost.layer.base.x + ghost.x, ground + ghost.size * 0.035))
+    }
+
+    /// Whether a window in front of its drift reaches over where the ghost stands, its paws spread or its sign held up.
+    private func covered(_ ghost: Ghost) -> Bool {
+        let (ground, center) = placement(of: ghost)
+        var area = SIMD4(center.x - ghost.size * 0.4, ground - 2, center.x + ghost.size * 0.4, ground + ghost.size * 0.45)
+        if ghost.sign != nil, ghost.holding > 0 {
+            let paw = paw(of: ghost, at: 0.35)
+            area = SIMD4(min(area.x, paw.x - 30), area.y, max(area.z, paw.x + 30), max(area.w, paw.y + 60))
+        }
+        return ghost.layer.occluders.contains { $0.x < area.z && $0.z > area.x && $0.y < area.w && $0.w > area.y }
     }
 
     /// The tip of its right paw, held out at `angle`.
