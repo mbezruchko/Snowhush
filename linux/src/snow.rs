@@ -18,11 +18,12 @@ use wayland_client::protocol::{wl_output, wl_surface};
 use wayland_client::{Connection, QueueHandle};
 use zbus::blocking::Connection as Bus;
 
+use snowhush_core::geometry::V2;
 use snowhush_core::simulation::{SnowSimulation, Snowfall};
 
 use crate::chores;
 use crate::kwin;
-use crate::light::{Shade, daylight};
+use crate::light::{self, Shade, daylight};
 use crate::log;
 use crate::prefs::Settings;
 use crate::render::{Ambient, Gpu};
@@ -38,6 +39,8 @@ pub enum Command {
     SnowOnWindows(bool),
     BehindWindows(bool),
     ShowInScreenshots(bool),
+    /// Halloween wanted or not, while it is Halloween.
+    Halloween(bool),
     /// The screen locked or unlocked.
     Locked(bool),
     /// Blows all the snow away; when calm, for less motion, melts it where it lies instead.
@@ -66,6 +69,13 @@ pub struct App {
     report: (u64, Option<Arc<Report>>),
     budget: PowerBudget,
     light: [f32; 3],
+    /// Whether it is Halloween, wanted or not.
+    season: bool,
+    /// Whether the snow has Halloween's ghosts: in season and wanted.
+    halloween: bool,
+    /// How far into Halloween night it is.
+    night: f32,
+    tray: Option<ksni::blocking::Handle<Tray>>,
     started: Instant,
     chores_at: Instant,
     light_at: Instant,
@@ -131,6 +141,10 @@ pub fn run() -> Result<(), String> {
         report: (0, None),
         budget: PowerBudget::Full,
         light: daylight(),
+        season: false,
+        halloween: false,
+        night: 0.0,
+        tray: None,
         started: now,
         chores_at: now,
         light_at: now,
@@ -143,7 +157,7 @@ pub fn run() -> Result<(), String> {
     WaylandSource::new(connection, queue).insert(event_loop.handle()).map_err(|error| error.to_string())?;
 
     use ksni::blocking::TrayMethods;
-    let tray = Tray::new(settings, commands.clone()).spawn().inspect_err(|error| log!("tray: {error}")).ok();
+    app.tray = Tray::new(settings, commands.clone()).spawn().inspect_err(|error| log!("tray: {error}")).ok();
     watch_lock(&bus, commands);
 
     while !app.quit {
@@ -153,7 +167,7 @@ pub fn run() -> Result<(), String> {
     }
 
     app.source.stop(&app.bus);
-    if let Some(tray) = tray {
+    if let Some(tray) = app.tray.take() {
         tray.shutdown().wait();
     }
     for screen in app.screens.drain(..) {
@@ -235,6 +249,10 @@ impl App {
                 self.settings.show_in_screenshots = on;
                 self.source.show_in_screenshots(&self.bus, on);
             }
+            Command::Halloween(on) => {
+                self.settings.halloween = on;
+                self.update_light();
+            }
             Command::ClearSnow(calm) => {
                 let direction = self.screens.first().map_or(-1.0, |screen| screen.simulation.breeze_direction());
                 self.screens.iter_mut().for_each(|screen| screen.simulation.blow_away(direction, calm));
@@ -297,7 +315,7 @@ impl App {
             self.chores_at = now + Duration::from_secs(1);
             if now >= self.light_at {
                 self.light_at = now + Duration::from_secs(60);
-                self.light = daylight();
+                self.update_light();
             }
         }
 
@@ -311,7 +329,7 @@ impl App {
         }
         let cursor = self.shared.cursor();
         let time = (now - self.started).as_secs_f32() % 1000.0;
-        let ambient = Ambient { light: self.light, shadow_tint: [0.0; 4] };
+        let ambient = Ambient { light: self.light, shadow_tint: [0.0; 4], night: self.night, lantern: V2::ZERO };
         let report = self.report.1.clone();
         let windows = report.as_deref().map(|report| (report, self.report.0, report.moving));
         let mut released = false;
@@ -341,6 +359,25 @@ impl App {
         Ok(())
     }
 
+    /// The light of the hour, and Halloween with it: its ghosts, its night and the tray's pumpkin.
+    fn update_light(&mut self) {
+        let season = light::is_halloween();
+        if season != self.season {
+            self.season = season;
+            if let Some(tray) = &self.tray {
+                tray.update(|tray| tray.season = season);
+            }
+        }
+        let halloween = season && self.settings.halloween;
+        if halloween != self.halloween {
+            self.halloween = halloween;
+            log!("halloween: {halloween}");
+            self.screens.iter_mut().for_each(|screen| screen.simulation.set_halloween(halloween));
+        }
+        self.light = daylight();
+        self.night = light::night(halloween);
+    }
+
     /// One overlay per display: new displays get snow, removed ones lose theirs.
     fn sync_screens(&mut self) {
         let mut current = std::mem::take(&mut self.screens);
@@ -356,7 +393,8 @@ impl App {
             }
             let refresh = info.modes.iter().find(|mode| mode.current).map_or(60, |mode| (mode.refresh_rate as f32 / 1000.0).round() as u32);
             log!("display {name}: {bounds:?}, scale {}, {refresh} Hz", info.scale_factor);
-            let simulation = new_simulation(&bounds, &self.settings, self.budget);
+            let mut simulation = new_simulation(&bounds, &self.settings, self.budget);
+            simulation.set_halloween(self.halloween);
             let screen = Screen::new(
                 (&self.compositor, &self.layer_shell, &self.qh),
                 output.clone(),

@@ -11,16 +11,25 @@ use crate::prefs::{self, Settings};
 use crate::snow::Command;
 
 const ICON: &[u8] = include_bytes!("../../windows/assets/icon-256.png");
+/// A jack-o'-lantern in place of the snowflake while Halloween is on.
+const PUMPKIN: &[u8] = include_bytes!("../../windows/assets/pumpkin-256.png");
 
 pub struct Tray {
     settings: Settings,
     commands: Sender<Command>,
     icon: Vec<ksni::Icon>,
+    pumpkin: Vec<ksni::Icon>,
+    /// Whether it is Halloween, wanted or not: the snow loop keeps it up to date.
+    pub season: bool,
 }
 
 impl Tray {
     pub fn new(settings: Settings, commands: Sender<Command>) -> Tray {
-        Tray { settings, commands, icon: icons() }
+        Tray { settings, commands, icon: icons(ICON), pumpkin: icons(PUMPKIN), season: false }
+    }
+
+    fn halloween(&self) -> bool {
+        self.season && self.settings.halloween
     }
 
     fn change(&mut self, change: impl FnOnce(&mut Settings) -> Command) {
@@ -45,12 +54,13 @@ impl ksni::Tray for Tray {
         ksni::Category::ApplicationStatus
     }
 
+    /// Empty for the pumpkin, which has only a picture: a tray shows a named icon instead of the picture when it finds one.
     fn icon_name(&self) -> String {
-        "snowhush".into()
+        if self.halloween() { String::new() } else { "snowhush".into() }
     }
 
     fn icon_pixmap(&self) -> Vec<ksni::Icon> {
-        self.icon.clone()
+        if self.halloween() { self.pumpkin.clone() } else { self.icon.clone() }
     }
 
     fn tool_tip(&self) -> ksni::ToolTip {
@@ -127,6 +137,19 @@ impl ksni::Tray for Tray {
                 ..Default::default()
             }
             .into(),
+            CheckmarkItem {
+                label: "Halloween".into(),
+                checked: settings.halloween,
+                visible: self.season,
+                activate: Box::new(|tray: &mut Tray| {
+                    tray.change(|settings| {
+                        settings.halloween = !settings.halloween;
+                        Command::Halloween(settings.halloween)
+                    })
+                }),
+                ..Default::default()
+            }
+            .into(),
             MenuItem::Separator,
             CheckmarkItem {
                 label: "Behind Windows".into(),
@@ -177,9 +200,9 @@ impl ksni::Tray for Tray {
     }
 }
 
-/// The app icon in the sizes a tray picks from, as ARGB in network byte order.
-fn icons() -> Vec<ksni::Icon> {
-    let Ok(picture) = image::load_from_memory(ICON) else { return Vec::new() };
+/// An icon in the sizes a tray picks from, as ARGB in network byte order.
+fn icons(png: &[u8]) -> Vec<ksni::Icon> {
+    let Ok(picture) = image::load_from_memory(png) else { return Vec::new() };
     [22u32, 32, 48, 64]
         .iter()
         .map(|&size| {

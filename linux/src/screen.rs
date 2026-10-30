@@ -14,7 +14,7 @@ use snowhush_core::simulation::{Pace, SnowSimulation, WindowId, WindowSurface};
 
 use crate::light::{self, Backdrop, Shade};
 use crate::log;
-use crate::render::{Ambient, Gpu, Surface};
+use crate::render::{Ambient, Gpu, LANTERN_REACH, Surface};
 use crate::snow::App;
 use crate::source::Report;
 use crate::windows::{self, Area, Shelf};
@@ -57,6 +57,8 @@ pub struct Screen {
     shown_pending: Option<Instant>,
     backdrop: Option<Backdrop>,
     shadow_tint: [f32; 4],
+    /// Where the cursor's candle was last drawn, in overlay coordinates.
+    lantern: V2,
 }
 
 impl Screen {
@@ -104,6 +106,7 @@ impl Screen {
             shown_pending: None,
             backdrop: None,
             shadow_tint: [0.0; 4],
+            lantern: V2::new(-1e6, -1e6),
         }
     }
 
@@ -190,6 +193,10 @@ impl Screen {
             self.follow(report, generation, moving, snow_on_windows, now);
         }
         let changed = self.simulation.step(dt, self.pointer(cursor));
+        // The candle follows the cursor even over snow that lies still.
+        let lantern = self.local(cursor.0, cursor.1);
+        let lantern_moved = ambient.night > 0.0 && (lantern - self.lantern).length() > 0.5 && (self.lit_by(lantern) || self.lit_by(self.lantern));
+        self.lantern = lantern;
 
         let fastest = if budget == PowerBudget::Full { self.interactive_rate } else { self.interactive_rate.min(60) };
         // 24 only where it divides the display's rate evenly; elsewhere it would judder.
@@ -199,10 +206,11 @@ impl Screen {
             Pace::Lively => fastest.min(60),
             Pace::Interactive => fastest,
         };
+        let rate = if lantern_moved { rate.max(fastest.min(60)) } else { rate };
         self.next_due = now + Duration::from_secs_f64(1.0 / rate as f64);
-        self.idle_frames = if changed { 0 } else { self.idle_frames + 1 };
+        self.idle_frames = if changed || lantern_moved { 0 } else { self.idle_frames + 1 };
         // A still pile only needs a slow refresh for its glints.
-        if !(changed || (self.simulation.has_snow() && self.idle_frames % 2 == 0)) {
+        if !(changed || lantern_moved || (self.simulation.has_snow() && self.idle_frames % 2 == 0)) {
             return Ok(false);
         }
         // The compositor hasn't shown the last frame yet: drawing another would only be thrown away.
@@ -222,8 +230,14 @@ impl Screen {
             let r = windows::local_rect(&shelf.rect, &self.area());
             [r.min_x(), r.min_y(), r.max_x(), r.max_y() - shelf.radius]
         });
-        gpu.draw(surface, &self.simulation, Ambient { shadow_tint: self.shadow_tint, ..ambient }, panel, time)?;
+        gpu.draw(surface, &self.simulation, Ambient { shadow_tint: self.shadow_tint, lantern, ..ambient }, panel, time)?;
         Ok(true)
+    }
+
+    /// Whether a candle at this point, in overlay coordinates, lights anything on this display.
+    fn lit_by(&self, at: V2) -> bool {
+        let reach = LANTERN_REACH * 3.0;
+        at.x > -reach && at.y > -reach && at.x < self.simulation.width() + reach && at.y < self.simulation.height() + reach
     }
 
     /// The compositor showed the last frame.

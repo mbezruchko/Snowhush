@@ -13,6 +13,10 @@ uniform vec2 origin;
 uniform int heightOffset;
 uniform vec4 light;
 uniform vec4 shadowTint;
+// The colour the snow's surface glows, and how much.
+uniform vec4 rim;
+// The cursor's candle: where it is, how far it reaches and how bright it is.
+uniform vec4 lantern;
 uniform vec4 occluders[16];
 uniform sampler2D heights;
 // The panel's rectangle, left, bottom, right, top: the snow lying behind it doesn't show.
@@ -21,6 +25,8 @@ uniform vec4 panel;
 in vec2 vLocal;
 
 out vec4 fragment;
+
+const vec3 candle = vec3(1.0, 0.62, 0.26);
 
 float fetch(int i) {
     return texelFetch(heights, ivec2(i % 4096, i / 4096), 0).r;
@@ -38,6 +44,13 @@ float hash(vec2 p) {
     p = fract(p * vec2(123.34, 456.21));
     p += dot(p, p + 45.32);
     return fract(p.x * p.y);
+}
+
+/// How much of the cursor's candlelight reaches a point.
+float candlelight(vec2 point) {
+    vec2 d = point - lantern.xy;
+    float flicker = 0.86 + 0.08 * sin(time * 11.0) + 0.06 * sin(time * 29.0 + 1.3);
+    return lantern.w * flicker * exp(-dot(d, d) / (lantern.z * lantern.z));
 }
 
 void main() {
@@ -75,5 +88,7 @@ void main() {
     }
 
     color *= light.rgb;
+    color = mix(color, rim.rgb, rim.a * exp(-depth / 2.5));
+    color = mix(color, candle, candlelight(world) * (0.35 + 0.65 * exp(-depth / 14.0)) * 0.55);
     fragment = vec4(color * coverage, coverage);
 }

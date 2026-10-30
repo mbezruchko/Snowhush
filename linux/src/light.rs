@@ -7,12 +7,13 @@ use std::time::SystemTime;
 use zbus::blocking::Connection;
 
 use snowhush_core::geometry::smoothstep;
+use snowhush_core::halloween;
 
 use crate::windows::Area;
 
 /// Clock-based rather than solar: close enough for mood, and needs no location.
 pub fn daylight() -> [f32; 3] {
-    let hour = local_hour();
+    let hour = hour();
     let day = smoothstep(6.0, 8.5, hour) * (1.0 - smoothstep(17.5, 20.5, hour));
     let golden = ((-((hour - 7.6) / 1.1).powi(2)).exp() + (-((hour - 18.6) / 1.2).powi(2)).exp()).min(1.0);
     let night = [0.86, 0.89, 0.97];
@@ -23,14 +24,31 @@ pub fn daylight() -> [f32; 3] {
     })
 }
 
-fn local_hour() -> f32 {
+/// Whether it is Halloween, wanted or not.
+pub fn is_halloween() -> bool {
+    let (month, day, hour) = local_time().unwrap_or((1, 1, 12.0));
+    halloween::is_halloween(month, day, hour as u32)
+}
+
+/// How far into Halloween night it is while Halloween is on.
+pub fn night(on: bool) -> f32 {
+    halloween::night(on, hour())
+}
+
+/// The hour the light follows: the clock's, or one being previewed.
+fn hour() -> f32 {
+    halloween::previewed_hour().unwrap_or_else(|| local_time().map_or(12.0, |(_, _, hour)| hour))
+}
+
+/// The local month, counted from 1, the day of the month and the hour.
+fn local_time() -> Option<(u32, u32, f32)> {
     unsafe {
         let now = libc::time(std::ptr::null_mut());
         let mut local: libc::tm = std::mem::zeroed();
         if libc::localtime_r(&now, &mut local).is_null() {
-            return 12.0;
+            return None;
         }
-        local.tm_hour as f32 + local.tm_min as f32 / 60.0
+        Some((local.tm_mon as u32 + 1, local.tm_mday as u32, local.tm_hour as f32 + local.tm_min as f32 / 60.0))
     }
 }
 

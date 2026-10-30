@@ -1,5 +1,5 @@
-//! Draws the snow with OpenGL ES 3 through EGL, the same two passes as the Windows renderer: the piles,
-//! read from a height texture, then every flake, grain and puff as an instanced quad.
+//! Draws the snow with OpenGL ES 3 through EGL, the same passes as the Windows renderer: the piles, read from
+//! a height texture, Halloween's signs, then every flake, grain, puff and ghost as an instanced quad.
 
 use std::ffi::c_void;
 use std::mem::size_of;
@@ -10,12 +10,33 @@ use wayland_client::Proxy;
 use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_egl::WlEglSurface;
 
+use snowhush_core::geometry::V2;
+use snowhush_core::halloween::{self, SIGN_CAPTIONS};
 use snowhush_core::simulation::{COLUMN_WIDTH, SnowSimulation, Sprite};
 
 const SPRITE_VERTEX: &str = include_str!("shaders/sprite.vert");
 const SPRITE_FRAGMENT: &str = include_str!("shaders/sprite.frag");
 const PILE_VERTEX: &str = include_str!("shaders/pile.vert");
 const PILE_FRAGMENT: &str = include_str!("shaders/pile.frag");
+const SIGN_VERTEX: &str = include_str!("shaders/sign.vert");
+const SIGN_FRAGMENT: &str = include_str!("shaders/sign.frag");
+/// The ghosts' signs, one picture per caption at two pixels per point, the stick's foot at the middle of the bottom edge.
+const SIGNS: [&[u8]; SIGN_CAPTIONS.len()] = [
+    include_bytes!("../../windows/assets/signs/sign-00.png"),
+    include_bytes!("../../windows/assets/signs/sign-01.png"),
+    include_bytes!("../../windows/assets/signs/sign-02.png"),
+    include_bytes!("../../windows/assets/signs/sign-03.png"),
+    include_bytes!("../../windows/assets/signs/sign-04.png"),
+    include_bytes!("../../windows/assets/signs/sign-05.png"),
+    include_bytes!("../../windows/assets/signs/sign-06.png"),
+    include_bytes!("../../windows/assets/signs/sign-07.png"),
+    include_bytes!("../../windows/assets/signs/sign-08.png"),
+    include_bytes!("../../windows/assets/signs/sign-09.png"),
+    include_bytes!("../../windows/assets/signs/sign-10.png"),
+    include_bytes!("../../windows/assets/signs/sign-11.png"),
+];
+/// How far the cursor's candle reaches, in points.
+pub const LANTERN_REACH: f32 = 130.0;
 /// The height texture's width; the pile shader wraps its index at the same width.
 const ROW: usize = 4096;
 const OCCLUDERS: usize = 16;
@@ -25,6 +46,10 @@ const OCCLUDERS: usize = 16;
 pub struct Ambient {
     pub light: [f32; 3],
     pub shadow_tint: [f32; 4],
+    /// How far into Halloween night it is: moonlit snow, a candle's glow along the drifts' edges and one at the cursor.
+    pub night: f32,
+    /// Where the cursor's candle is, in the simulation's points.
+    pub lantern: V2,
 }
 
 struct Program {
@@ -46,14 +71,18 @@ pub struct Gpu {
     gl: glow::Context,
     sprite: Program,
     pile: Program,
+    sign: Program,
     sprite_array: glow::VertexArray,
     sprite_buffer: glow::Buffer,
-    pile_array: glow::VertexArray,
+    /// Holds no attributes: the piles' and signs' corners come from the vertex index alone.
+    empty_array: glow::VertexArray,
     heights: glow::Texture,
     /// Rows the height texture has room for; it is only made again when that changes.
     height_rows: usize,
     sprites: Vec<Sprite>,
     columns: Vec<f32>,
+    /// Each caption's sign, made the first time a ghost holds it up, and its size in points.
+    signs: Vec<Option<(glow::Texture, [f32; 2])>>,
     pub adapter: String,
 }
 
@@ -97,7 +126,12 @@ impl Gpu {
         };
         unsafe {
             let adapter = gl.get_parameter_string(glow::RENDERER);
-            let sprite = program(&gl, SPRITE_VERTEX, SPRITE_FRAGMENT, &["viewSize", "scale", "time", "light", "panel"])?;
+            let sprite = program(
+                &gl,
+                SPRITE_VERTEX,
+                SPRITE_FRAGMENT,
+                &["viewSize", "scale", "time", "light", "shadowTint", "rim", "lantern", "shake", "panel"],
+            )?;
             let pile = program(
                 &gl,
                 PILE_VERTEX,
@@ -115,10 +149,19 @@ impl Gpu {
                     "heightOffset",
                     "light",
                     "shadowTint",
+                    "rim",
+                    "lantern",
+                    "shake",
                     "occluders",
                     "heights",
                     "panel",
                 ],
+            )?;
+            let sign = program(
+                &gl,
+                SIGN_VERTEX,
+                SIGN_FRAGMENT,
+                &["viewSize", "shake", "anchor", "size", "angle", "time", "ground", "light", "lantern", "panel", "picture"],
             )?;
 
             let sprite_array = gl.create_vertex_array()?;
@@ -126,13 +169,15 @@ impl Gpu {
             gl.bind_vertex_array(Some(sprite_array));
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(sprite_buffer));
             let stride = size_of::<Sprite>() as i32;
-            // Position, velocity, size, alpha, soft, tint amount, tint, lump: see `Sprite`.
-            for (location, components, offset) in [(0, 2, 0), (1, 2, 8), (2, 1, 16), (3, 1, 20), (4, 1, 24), (5, 1, 28), (6, 3, 32), (7, 1, 44)] {
+            // Position, velocity, size, alpha, soft, tint amount, tint, lump, ghost, pose, mood: see `Sprite`.
+            for (location, components, offset) in
+                [(0, 2, 0), (1, 2, 8), (2, 1, 16), (3, 1, 20), (4, 1, 24), (5, 1, 28), (6, 3, 32), (7, 1, 44), (8, 4, 48), (9, 4, 64), (10, 2, 80)]
+            {
                 gl.enable_vertex_attrib_array(location);
                 gl.vertex_attrib_pointer_f32(location, components, glow::FLOAT, false, stride, offset);
                 gl.vertex_attrib_divisor(location, 1);
             }
-            let pile_array = gl.create_vertex_array()?;
+            let empty_array = gl.create_vertex_array()?;
             gl.bind_vertex_array(None);
 
             let heights = gl.create_texture()?;
@@ -154,13 +199,15 @@ impl Gpu {
                 gl,
                 sprite,
                 pile,
+                sign,
                 sprite_array,
                 sprite_buffer,
-                pile_array,
+                empty_array,
                 heights,
                 height_rows: 0,
                 sprites: Vec::new(),
                 columns: Vec::new(),
+                signs: vec![None; SIGNS.len()],
                 adapter,
             })
         }
@@ -215,10 +262,19 @@ impl Gpu {
         let rows = columns.div_ceil(ROW).max(1);
         self.columns.resize(rows * ROW, 0.0);
         let piles = simulation.write_layers(&mut self.columns[..columns]);
+        let signs = simulation.signs();
+        for sign in &signs {
+            self.load_sign(sign.caption);
+        }
 
         let gl = &self.gl;
         let view = [simulation.width(), simulation.height()];
-        let light = [ambient.light[0], ambient.light[1], ambient.light[2], 1.0];
+        let (light, shadow_tint) = halloween::moonlit(ambient.light, ambient.shadow_tint, ambient.night);
+        let light = [light[0], light[1], light[2], 1.0];
+        let rim = [1.0, 0.56, 0.2, 0.3 * ambient.night];
+        let lantern = [ambient.lantern.x, ambient.lantern.y, LANTERN_REACH, ambient.night];
+        let shake = simulation.shake();
+        let shake = [shake.x, shake.y];
         // An empty rectangle hides nothing.
         let panel = panel.unwrap_or([0.0; 4]);
         unsafe {
@@ -240,13 +296,16 @@ impl Gpu {
                 }
                 let pile = &self.pile;
                 gl.use_program(Some(pile.program));
-                gl.bind_vertex_array(Some(self.pile_array));
+                gl.bind_vertex_array(Some(self.empty_array));
                 gl.uniform_2_f32_slice(pile.location("viewSize"), &view);
                 gl.uniform_1_f32(pile.location("scale"), 1.0);
                 gl.uniform_1_f32(pile.location("time"), time);
                 gl.uniform_1_f32(pile.location("columnWidth"), COLUMN_WIDTH);
                 gl.uniform_4_f32_slice(pile.location("light"), &light);
-                gl.uniform_4_f32_slice(pile.location("shadowTint"), &ambient.shadow_tint);
+                gl.uniform_4_f32_slice(pile.location("shadowTint"), &shadow_tint);
+                gl.uniform_4_f32_slice(pile.location("rim"), &rim);
+                gl.uniform_4_f32_slice(pile.location("lantern"), &lantern);
+                gl.uniform_2_f32_slice(pile.location("shake"), &shake);
                 gl.uniform_1_i32(pile.location("heights"), 0);
                 gl.uniform_4_f32_slice(pile.location("panel"), &panel);
                 for layer in &piles {
@@ -264,6 +323,28 @@ impl Gpu {
                     gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
                 }
             }
+            if !signs.is_empty() {
+                let sign = &self.sign;
+                gl.use_program(Some(sign.program));
+                gl.bind_vertex_array(Some(self.empty_array));
+                gl.active_texture(glow::TEXTURE0);
+                gl.uniform_2_f32_slice(sign.location("viewSize"), &view);
+                gl.uniform_2_f32_slice(sign.location("shake"), &shake);
+                gl.uniform_1_f32(sign.location("time"), time);
+                gl.uniform_4_f32_slice(sign.location("light"), &light);
+                gl.uniform_4_f32_slice(sign.location("lantern"), &lantern);
+                gl.uniform_4_f32_slice(sign.location("panel"), &panel);
+                gl.uniform_1_i32(sign.location("picture"), 0);
+                for held in &signs {
+                    let Some(&Some((texture, size))) = self.signs.get(held.caption) else { continue };
+                    gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+                    gl.uniform_2_f32(sign.location("anchor"), held.anchor.x, held.anchor.y);
+                    gl.uniform_2_f32_slice(sign.location("size"), &size);
+                    gl.uniform_1_f32(sign.location("angle"), held.angle);
+                    gl.uniform_1_f32(sign.location("ground"), held.ground);
+                    gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
+                }
+            }
             if sprites > 0 {
                 let sprite = &self.sprite;
                 gl.use_program(Some(sprite.program));
@@ -274,12 +355,60 @@ impl Gpu {
                 gl.uniform_1_f32(sprite.location("scale"), 1.0);
                 gl.uniform_1_f32(sprite.location("time"), time);
                 gl.uniform_4_f32_slice(sprite.location("light"), &light);
+                gl.uniform_4_f32_slice(sprite.location("shadowTint"), &shadow_tint);
+                gl.uniform_4_f32_slice(sprite.location("rim"), &rim);
+                gl.uniform_4_f32_slice(sprite.location("lantern"), &lantern);
+                gl.uniform_2_f32_slice(sprite.location("shake"), &shake);
                 gl.uniform_4_f32_slice(sprite.location("panel"), &panel);
                 gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, 4, sprites as i32);
             }
             gl.bind_vertex_array(None);
         }
         self.egl.swap_buffers(self.display, surface.surface).map_err(|error| error.to_string())
+    }
+
+    /// Makes a caption's sign the first time a ghost holds it up, with its colours premultiplied as the blending wants.
+    fn load_sign(&mut self, caption: usize) {
+        if self.signs.get(caption).is_none_or(Option::is_some) {
+            return;
+        }
+        let Ok(picture) = image::load_from_memory(SIGNS[caption]) else { return };
+        let picture = picture.to_rgba8();
+        let (width, height) = picture.dimensions();
+        let mut pixels = picture.into_raw();
+        for pixel in pixels.chunks_exact_mut(4) {
+            let alpha = pixel[3] as u32;
+            for channel in &mut pixel[..3] {
+                *channel = ((*channel as u32 * alpha + 127) / 255) as u8;
+            }
+        }
+        let gl = &self.gl;
+        let texture = unsafe {
+            let Ok(texture) = gl.create_texture() else { return };
+            gl.active_texture(glow::TEXTURE0);
+            gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+            for (parameter, value) in [
+                (glow::TEXTURE_MIN_FILTER, glow::LINEAR),
+                (glow::TEXTURE_MAG_FILTER, glow::LINEAR),
+                (glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE),
+                (glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE),
+            ] {
+                gl.tex_parameter_i32(glow::TEXTURE_2D, parameter, value as i32);
+            }
+            gl.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                glow::RGBA8 as i32,
+                width as i32,
+                height as i32,
+                0,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelUnpackData::Slice(Some(&pixels)),
+            );
+            texture
+        };
+        self.signs[caption] = Some((texture, [width as f32 / 2.0, height as f32 / 2.0]));
     }
 }
 
