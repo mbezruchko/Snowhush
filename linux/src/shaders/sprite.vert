@@ -8,6 +8,8 @@ uniform float scale;
 uniform float time;
 // The cursor's candle: where it is, how far it reaches and how bright it is.
 uniform vec4 lantern;
+// The pumpkins' candles: where each burns, how far its light reaches and how bright it is.
+uniform vec4 pumpkins[3];
 // How far everything is jolted, in points.
 uniform vec2 shake;
 
@@ -39,11 +41,21 @@ flat out vec4 vPose;
 // Its dab, its anger and its size in points.
 flat out vec4 vMood;
 
-/// How much of the cursor's candlelight reaches a point.
+float flicker(float t, float seed) {
+    return 0.86 + 0.08 * sin(t * 11.0 + seed * 2.1) + 0.06 * sin(t * 29.0 + 1.3 + seed * 4.3);
+}
+
+/// How much candlelight reaches a point: the cursor's, and the pumpkins' in the snow.
 float candlelight(vec2 point) {
     vec2 d = point - lantern.xy;
-    float flicker = 0.86 + 0.08 * sin(time * 11.0) + 0.06 * sin(time * 29.0 + 1.3);
-    return lantern.w * flicker * exp(-dot(d, d) / (lantern.z * lantern.z));
+    float glow = lantern.w * flicker(time, 0.0) * exp(-dot(d, d) / (lantern.z * lantern.z));
+    for (int k = 0; k < 3; k++) {
+        vec4 pumpkin = pumpkins[k];
+        if (pumpkin.w <= 0.0) continue;
+        vec2 e = point - pumpkin.xy;
+        glow += pumpkin.w * flicker(time, float(k + 1)) * exp(-dot(e, e) / (pumpkin.z * pumpkin.z));
+    }
+    return min(glow, 1.0);
 }
 
 void main() {

@@ -32,7 +32,7 @@ pub fn is_halloween() -> bool {
 
 /// How far into Halloween night it is while Halloween is on.
 pub fn night(on: bool) -> f32 {
-    halloween::night(on, hour())
+    halloween::night(on)
 }
 
 /// The hour the light follows: the clock's, or one being previewed.

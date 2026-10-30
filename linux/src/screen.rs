@@ -59,6 +59,8 @@ pub struct Screen {
     shadow_tint: [f32; 4],
     /// Where the cursor's candle was last drawn, in overlay coordinates.
     lantern: V2,
+    /// Whether the last frame drawn showed Halloween's pumpkins.
+    pumpkins_shown: bool,
 }
 
 impl Screen {
@@ -107,6 +109,7 @@ impl Screen {
             backdrop: None,
             shadow_tint: [0.0; 4],
             lantern: V2::new(-1e6, -1e6),
+            pumpkins_shown: false,
         }
     }
 
@@ -143,6 +146,7 @@ impl Screen {
         if shelf != self.shelf {
             log!("{}: panel {shelf:?}", self.name);
             self.shelf = shelf;
+            self.simulation.shelf = shelf.map(|shelf| shelf.id);
             self.windows_seen = 0;
         }
         let margins = (
@@ -209,8 +213,11 @@ impl Screen {
         let rate = if lantern_moved { rate.max(fastest.min(60)) } else { rate };
         self.next_due = now + Duration::from_secs_f64(1.0 / rate as f64);
         self.idle_frames = if changed || lantern_moved { 0 } else { self.idle_frames + 1 };
-        // A still pile only needs a slow refresh for its glints.
-        if !(changed || lantern_moved || (self.simulation.has_snow() && self.idle_frames % 2 == 0)) {
+        // A still pile only needs a slow refresh for its glints, and the pumpkins for their candles' flicker; once
+        // they are gone, until a frame without them is shown.
+        let pumpkins = !self.simulation.pumpkins().is_empty();
+        let slow_refresh = self.simulation.has_snow() || pumpkins || self.pumpkins_shown;
+        if !(changed || lantern_moved || (slow_refresh && self.idle_frames % 2 == 0)) {
             return Ok(false);
         }
         // The compositor hasn't shown the last frame yet: drawing another would only be thrown away.
@@ -231,6 +238,7 @@ impl Screen {
             [r.min_x(), r.min_y(), r.max_x(), r.max_y() - shelf.radius]
         });
         gpu.draw(surface, &self.simulation, Ambient { shadow_tint: self.shadow_tint, lantern, ..ambient }, panel, time)?;
+        self.pumpkins_shown = pumpkins;
         Ok(true)
     }
 
@@ -264,11 +272,9 @@ impl Screen {
         }
         self.windows_seen = generation;
         let area = self.area();
-        let surfaces = if snow_on_windows {
-            windows::surfaces(report, &area, self.shelf.as_ref())
-        } else {
-            windows::surfaces(&Report::default(), &area, self.shelf.as_ref())
-        };
+        let listed = if snow_on_windows { report } else { &Report::default() };
+        let surfaces = windows::surfaces(listed, &area, self.shelf.as_ref());
+        self.simulation.covers = windows::covers(listed, &area);
         if surfaces == self.surfaces {
             return;
         }
@@ -292,6 +298,7 @@ impl Screen {
     pub fn drop_window_snow(&mut self) {
         let surfaces = windows::surfaces(&Report::default(), &self.area(), self.shelf.as_ref());
         self.simulation.update_windows(&surfaces, 0.1, &HashSet::new(), &HashSet::new(), false);
+        self.simulation.covers.clear();
         self.surfaces = surfaces;
         self.windows_seen = 0;
     }

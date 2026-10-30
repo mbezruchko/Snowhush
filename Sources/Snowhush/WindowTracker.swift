@@ -79,6 +79,9 @@ final class WindowTracker {
     private var exposing = false
     /// When each floating panel carrying snow (Spotlight and the like) first showed.
     private var panelsShownAt: [CGWindowID: CFTimeInterval] = [:]
+    /// Every app window on the screen at the last poll, in overlay coordinates, those filling it or too tall to
+    /// carry snow too.
+    private(set) var covers: [CGRect] = []
 
     /// Returns the windows when they changed since the last poll.
     /// `eager` polls every frame, e.g. while a mouse button is down and a drag may be starting.
@@ -228,6 +231,7 @@ final class WindowTracker {
     func reset() {
         previous = []
         watched = nil
+        covers = []
     }
 
     /// Whether the watched window left the place the last poll found it, by a look at it alone: a fraction of the
@@ -360,11 +364,13 @@ final class WindowTracker {
         var dockOut = false
         var fresh: [CGWindowID: Double] = [:]
         var panels: [CGWindowID: CFTimeInterval] = [:]
+        var windows: [CGRect] = []
         exposing = false
         sinkingDock = nil
         defer {
             alphas = fresh
             panelsShownAt = panels
+            covers = exposing ? [] : windows
         }
 
         for entry in list {
@@ -406,6 +412,7 @@ final class WindowTracker {
             let onScreen = frame.maxX > 0 && frame.minX < screen.width && frame.maxY > 0
             let fills = fillsScreen(bounds)
 
+            if layer < dockLevel && !fading { windows.append(frame) }
             let coverOnly = coverOnlyOwners.contains(owner) && !shelf
             if roomAbove && onScreen && !fills && !coverOnly && !fading && bounds.width >= 80 && bounds.height >= 40, id != 0 {
                 // Search bars like Spotlight are capsules: low and wide, with fully rounded ends.

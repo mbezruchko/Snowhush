@@ -33,12 +33,11 @@ final class SceneLight {
         rim = .zero
         lantern = 0
         guard halloween else { return }
-        // Halloween night: cold moonlight, violet shadows and a candle's glow along the drifts' edges.
-        let night = 1 - Self.day(at: hour)
-        light += (SIMD3(0.76, 0.84, 1) - light) * night
-        shadowTint += (SIMD4(0.42, 0.3, 0.68, 0.6) - shadowTint) * night
-        rim = SIMD4(1, 0.56, 0.2, 0.3 * night)
-        lantern = night
+        // Halloween night, by day too: cold moonlight, violet shadows and a candle's glow along the drifts' edges.
+        light = SIMD3(0.76, 0.84, 1)
+        shadowTint = SIMD4(0.42, 0.3, 0.68, 0.6)
+        rim = SIMD4(1, 0.56, 0.2, 0.3)
+        lantern = 1
     }
 
     private func updateWallpaper(screen: NSScreen?) {

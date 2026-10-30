@@ -1,5 +1,5 @@
-//! Draws the snow with OpenGL ES 3 through EGL, the same passes as the Windows renderer: the piles, read from
-//! a height texture, Halloween's signs, then every flake, grain, puff and ghost as an instanced quad.
+//! Draws the snow with OpenGL ES 3 through EGL, the same passes as the Windows renderer: Halloween's pumpkins, the
+//! piles, read from a height texture, the ghosts' signs, then every flake, grain, puff and ghost as an instanced quad.
 
 use std::ffi::c_void;
 use std::mem::size_of;
@@ -11,8 +11,8 @@ use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_egl::WlEglSurface;
 
 use snowhush_core::geometry::V2;
-use snowhush_core::halloween::{self, SIGN_CAPTIONS};
-use snowhush_core::simulation::{COLUMN_WIDTH, SnowSimulation, Sprite};
+use snowhush_core::halloween::{self, PUMPKIN_ASPECT, PUMPKIN_CANDLE, SIGN_CAPTIONS};
+use snowhush_core::simulation::{COLUMN_WIDTH, PumpkinSprite, SnowSimulation, Sprite};
 
 const SPRITE_VERTEX: &str = include_str!("shaders/sprite.vert");
 const SPRITE_FRAGMENT: &str = include_str!("shaders/sprite.frag");
@@ -20,6 +20,8 @@ const PILE_VERTEX: &str = include_str!("shaders/pile.vert");
 const PILE_FRAGMENT: &str = include_str!("shaders/pile.frag");
 const SIGN_VERTEX: &str = include_str!("shaders/sign.vert");
 const SIGN_FRAGMENT: &str = include_str!("shaders/sign.frag");
+const PUMPKIN_VERTEX: &str = include_str!("shaders/pumpkin.vert");
+const PUMPKIN_FRAGMENT: &str = include_str!("shaders/pumpkin.frag");
 /// The ghosts' signs, one picture per caption at two pixels per point, the stick's foot at the middle of the bottom edge.
 const SIGNS: [&[u8]; SIGN_CAPTIONS.len()] = [
     include_bytes!("../../windows/assets/signs/sign-00.png"),
@@ -35,6 +37,9 @@ const SIGNS: [&[u8]; SIGN_CAPTIONS.len()] = [
     include_bytes!("../../windows/assets/signs/sign-10.png"),
     include_bytes!("../../windows/assets/signs/sign-11.png"),
 ];
+/// The jack-o'-lantern's shell and its carved face, apart so the candle flickers in the face alone, at two pixels per
+/// unit of a drawing 100 units wide.
+const PUMPKIN: [&[u8]; 2] = [include_bytes!("../../windows/assets/lanterns/shell.png"), include_bytes!("../../windows/assets/lanterns/face.png")];
 /// How far the cursor's candle reaches, in points.
 pub const LANTERN_REACH: f32 = 130.0;
 /// The height texture's width; the pile shader wraps its index at the same width.
@@ -72,9 +77,10 @@ pub struct Gpu {
     sprite: Program,
     pile: Program,
     sign: Program,
+    pumpkin: Program,
     sprite_array: glow::VertexArray,
     sprite_buffer: glow::Buffer,
-    /// Holds no attributes: the piles' and signs' corners come from the vertex index alone.
+    /// Holds no attributes: the corners of the piles, the signs and the pumpkins come from the vertex index alone.
     empty_array: glow::VertexArray,
     heights: glow::Texture,
     /// Rows the height texture has room for; it is only made again when that changes.
@@ -83,6 +89,8 @@ pub struct Gpu {
     columns: Vec<f32>,
     /// Each caption's sign, made the first time a ghost holds it up, and its size in points.
     signs: Vec<Option<(glow::Texture, [f32; 2])>>,
+    /// The pumpkin's shell and face, made the first time one is drawn.
+    pumpkin_pictures: [Option<glow::Texture>; 2],
     pub adapter: String,
 }
 
@@ -130,7 +138,7 @@ impl Gpu {
                 &gl,
                 SPRITE_VERTEX,
                 SPRITE_FRAGMENT,
-                &["viewSize", "scale", "time", "light", "shadowTint", "rim", "lantern", "shake", "panel"],
+                &["viewSize", "scale", "time", "light", "shadowTint", "rim", "lantern", "pumpkins", "shake", "panel"],
             )?;
             let pile = program(
                 &gl,
@@ -151,6 +159,7 @@ impl Gpu {
                     "shadowTint",
                     "rim",
                     "lantern",
+                    "pumpkins",
                     "shake",
                     "occluders",
                     "heights",
@@ -161,7 +170,13 @@ impl Gpu {
                 &gl,
                 SIGN_VERTEX,
                 SIGN_FRAGMENT,
-                &["viewSize", "shake", "anchor", "size", "angle", "time", "ground", "light", "lantern", "panel", "picture"],
+                &["viewSize", "shake", "anchor", "size", "angle", "time", "ground", "light", "lantern", "pumpkins", "panel", "picture"],
+            )?;
+            let pumpkin = program(
+                &gl,
+                PUMPKIN_VERTEX,
+                PUMPKIN_FRAGMENT,
+                &["viewSize", "shake", "anchor", "size", "wick", "seed", "time", "light", "night", "panel", "shell", "face"],
             )?;
 
             let sprite_array = gl.create_vertex_array()?;
@@ -200,6 +215,7 @@ impl Gpu {
                 sprite,
                 pile,
                 sign,
+                pumpkin,
                 sprite_array,
                 sprite_buffer,
                 empty_array,
@@ -208,6 +224,7 @@ impl Gpu {
                 sprites: Vec::new(),
                 columns: Vec::new(),
                 signs: vec![None; SIGNS.len()],
+                pumpkin_pictures: [None; 2],
                 adapter,
             })
         }
@@ -266,6 +283,10 @@ impl Gpu {
         for sign in &signs {
             self.load_sign(sign.caption);
         }
+        let pumpkins = simulation.pumpkins();
+        if !pumpkins.is_empty() {
+            self.load_pumpkin();
+        }
 
         let gl = &self.gl;
         let view = [simulation.width(), simulation.height()];
@@ -273,6 +294,13 @@ impl Gpu {
         let light = [light[0], light[1], light[2], 1.0];
         let rim = [1.0, 0.56, 0.2, 0.3 * ambient.night];
         let lantern = [ambient.lantern.x, ambient.lantern.y, LANTERN_REACH, ambient.night];
+        // The pumpkins' candles light the snow as the cursor's does, a little even by day; a missing one is dark.
+        let mut candles = [[0.0; 4]; 3];
+        for (candle, pumpkin) in candles.iter_mut().zip(&pumpkins) {
+            let wick = wick(pumpkin);
+            *candle = [wick.x, wick.y, pumpkin.width * 1.6, 0.4 + 0.6 * ambient.night];
+        }
+        let candles = candles.as_flattened();
         let shake = simulation.shake();
         let shake = [shake.x, shake.y];
         // An empty rectangle hides nothing.
@@ -284,6 +312,34 @@ impl Gpu {
             gl.enable(glow::BLEND);
             gl.blend_func_separate(glow::ONE, glow::ONE_MINUS_SRC_ALPHA, glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
 
+            // The pumpkins go down before the snow, so the drift they sit in covers their bottoms.
+            if !pumpkins.is_empty()
+                && let [Some(shell), Some(face)] = self.pumpkin_pictures
+            {
+                let pumpkin = &self.pumpkin;
+                gl.use_program(Some(pumpkin.program));
+                gl.bind_vertex_array(Some(self.empty_array));
+                gl.active_texture(glow::TEXTURE1);
+                gl.bind_texture(glow::TEXTURE_2D, Some(face));
+                gl.active_texture(glow::TEXTURE0);
+                gl.bind_texture(glow::TEXTURE_2D, Some(shell));
+                gl.uniform_2_f32_slice(pumpkin.location("viewSize"), &view);
+                gl.uniform_2_f32_slice(pumpkin.location("shake"), &shake);
+                gl.uniform_1_f32(pumpkin.location("time"), time);
+                gl.uniform_4_f32_slice(pumpkin.location("light"), &light);
+                gl.uniform_1_f32(pumpkin.location("night"), ambient.night);
+                gl.uniform_4_f32_slice(pumpkin.location("panel"), &panel);
+                gl.uniform_1_i32(pumpkin.location("shell"), 0);
+                gl.uniform_1_i32(pumpkin.location("face"), 1);
+                for sitting in &pumpkins {
+                    let wick = wick(sitting);
+                    gl.uniform_2_f32(pumpkin.location("anchor"), sitting.anchor.x, sitting.anchor.y);
+                    gl.uniform_2_f32(pumpkin.location("size"), sitting.width, sitting.width * PUMPKIN_ASPECT);
+                    gl.uniform_2_f32(pumpkin.location("wick"), wick.x, wick.y);
+                    gl.uniform_1_f32(pumpkin.location("seed"), sitting.seed);
+                    gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
+                }
+            }
             if !piles.is_empty() {
                 gl.active_texture(glow::TEXTURE0);
                 gl.bind_texture(glow::TEXTURE_2D, Some(self.heights));
@@ -305,6 +361,7 @@ impl Gpu {
                 gl.uniform_4_f32_slice(pile.location("shadowTint"), &shadow_tint);
                 gl.uniform_4_f32_slice(pile.location("rim"), &rim);
                 gl.uniform_4_f32_slice(pile.location("lantern"), &lantern);
+                gl.uniform_4_f32_slice(pile.location("pumpkins"), candles);
                 gl.uniform_2_f32_slice(pile.location("shake"), &shake);
                 gl.uniform_1_i32(pile.location("heights"), 0);
                 gl.uniform_4_f32_slice(pile.location("panel"), &panel);
@@ -333,6 +390,7 @@ impl Gpu {
                 gl.uniform_1_f32(sign.location("time"), time);
                 gl.uniform_4_f32_slice(sign.location("light"), &light);
                 gl.uniform_4_f32_slice(sign.location("lantern"), &lantern);
+                gl.uniform_4_f32_slice(sign.location("pumpkins"), candles);
                 gl.uniform_4_f32_slice(sign.location("panel"), &panel);
                 gl.uniform_1_i32(sign.location("picture"), 0);
                 for held in &signs {
@@ -358,6 +416,7 @@ impl Gpu {
                 gl.uniform_4_f32_slice(sprite.location("shadowTint"), &shadow_tint);
                 gl.uniform_4_f32_slice(sprite.location("rim"), &rim);
                 gl.uniform_4_f32_slice(sprite.location("lantern"), &lantern);
+                gl.uniform_4_f32_slice(sprite.location("pumpkins"), candles);
                 gl.uniform_2_f32_slice(sprite.location("shake"), &shake);
                 gl.uniform_4_f32_slice(sprite.location("panel"), &panel);
                 gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, 4, sprites as i32);
@@ -367,13 +426,28 @@ impl Gpu {
         self.egl.swap_buffers(self.display, surface.surface).map_err(|error| error.to_string())
     }
 
-    /// Makes a caption's sign the first time a ghost holds it up, with its colours premultiplied as the blending wants.
+    /// Makes a caption's sign the first time a ghost holds it up.
     fn load_sign(&mut self, caption: usize) {
         if self.signs.get(caption).is_none_or(Option::is_some) {
             return;
         }
-        let Ok(picture) = image::load_from_memory(SIGNS[caption]) else { return };
-        let picture = picture.to_rgba8();
+        let Some((texture, [width, height])) = self.picture(SIGNS[caption], false) else { return };
+        self.signs[caption] = Some((texture, [width as f32 / 2.0, height as f32 / 2.0]));
+    }
+
+    /// Makes the pumpkin's pictures the first time one is drawn. They are mipmapped: the pumpkins are shown at a
+    /// fraction of their size, and would shimmer otherwise.
+    fn load_pumpkin(&mut self) {
+        for (part, png) in PUMPKIN.iter().enumerate() {
+            if self.pumpkin_pictures[part].is_none() {
+                self.pumpkin_pictures[part] = self.picture(png, true).map(|(texture, _)| texture);
+            }
+        }
+    }
+
+    /// A PNG as a texture, with its colours premultiplied as the blending wants, and its size in pixels.
+    fn picture(&self, png: &[u8], mipmapped: bool) -> Option<(glow::Texture, [u32; 2])> {
+        let picture = image::load_from_memory(png).ok()?.to_rgba8();
         let (width, height) = picture.dimensions();
         let mut pixels = picture.into_raw();
         for pixel in pixels.chunks_exact_mut(4) {
@@ -383,12 +457,12 @@ impl Gpu {
             }
         }
         let gl = &self.gl;
-        let texture = unsafe {
-            let Ok(texture) = gl.create_texture() else { return };
+        unsafe {
+            let texture = gl.create_texture().ok()?;
             gl.active_texture(glow::TEXTURE0);
             gl.bind_texture(glow::TEXTURE_2D, Some(texture));
             for (parameter, value) in [
-                (glow::TEXTURE_MIN_FILTER, glow::LINEAR),
+                (glow::TEXTURE_MIN_FILTER, if mipmapped { glow::LINEAR_MIPMAP_LINEAR } else { glow::LINEAR }),
                 (glow::TEXTURE_MAG_FILTER, glow::LINEAR),
                 (glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE),
                 (glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE),
@@ -406,10 +480,18 @@ impl Gpu {
                 glow::UNSIGNED_BYTE,
                 glow::PixelUnpackData::Slice(Some(&pixels)),
             );
-            texture
-        };
-        self.signs[caption] = Some((texture, [width as f32 / 2.0, height as f32 / 2.0]));
+            if mipmapped {
+                gl.generate_mipmap(glow::TEXTURE_2D);
+            }
+            Some((texture, [width, height]))
+        }
     }
+}
+
+/// Where a pumpkin's candle burns, in the simulation's points.
+fn wick(pumpkin: &PumpkinSprite) -> V2 {
+    let [across, up] = PUMPKIN_CANDLE;
+    pumpkin.anchor + V2::new((across - 0.5) * pumpkin.width, up * pumpkin.width * PUMPKIN_ASPECT)
 }
 
 /// Plain numbers as the bytes OpenGL takes.

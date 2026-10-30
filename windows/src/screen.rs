@@ -304,7 +304,7 @@ impl Screen {
         self.next_due = clock.schedule(now, rate);
         self.idle_frames = if changed || lantern_moved { 0 } else { self.idle_frames + 1 };
         // A still pile only needs a slow refresh for its glints.
-        if !(changed || lantern_moved || (self.simulation.has_snow() && self.idle_frames % 2 == 0)) {
+        if !(changed || lantern_moved || ((self.simulation.has_snow() || !self.simulation.pumpkins().is_empty()) && self.idle_frames % 2 == 0)) {
             return Ok(false);
         }
         // Halloween night: cold moonlight, violet shadows and a candle's glow along the drifts' edges.
@@ -320,6 +320,7 @@ impl Screen {
             return;
         }
         self.windows_seen = tracker.generation;
+        self.simulation.covers = tracker.covers(&self.monitor.rect, self.size);
         let surfaces = tracker.surfaces(&self.monitor.rect, self.size);
         if surfaces == self.surfaces {
             return;
@@ -342,6 +343,7 @@ impl Screen {
 
     pub fn drop_window_snow(&mut self) {
         self.simulation.update_windows(&[], 0.1, &HashSet::new(), &HashSet::new(), false);
+        self.simulation.covers.clear();
         self.surfaces.clear();
         self.windows_seen = 0;
     }

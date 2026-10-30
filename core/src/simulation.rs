@@ -8,8 +8,10 @@ use crate::geometry::{Rect, V2, smoothstep};
 use crate::layer::SnowLayer;
 
 mod ghosts;
+mod pumpkins;
 
 use ghosts::Haunting;
+use pumpkins::Pumpkins;
 
 pub type WindowId = isize;
 
@@ -126,6 +128,15 @@ pub struct SignSprite {
     pub anchor: V2,
     pub angle: f32,
     pub ground: f32,
+}
+
+/// A Halloween jack-o'-lantern sitting in the snow at the bottom of the screen: the middle of its bottom at `anchor`,
+/// `width` points wide, its candle's flicker set apart from the other's by `seed`.
+#[derive(Clone, Copy, Debug)]
+pub struct PumpkinSprite {
+    pub anchor: V2,
+    pub width: f32,
+    pub seed: f32,
 }
 
 /// A bit of something that crumbles into snow, such as a window: it keeps its colour for a moment while it falls.
@@ -273,7 +284,13 @@ pub struct SnowSimulation {
     target_flakes: usize,
     strength_target: f32,
     next_shift: f64,
+    /// Every app window on the screen, maximized and full-screen ones too, left, bottom, right, top in points:
+    /// a pumpkin hides from any that covers it.
+    pub covers: Vec<[f32; 4]>,
+    /// The window that is a panel's shelf along the bottom of the screen, if any: pumpkins over it sit in its snow.
+    pub shelf: Option<WindowId>,
     haunting: Haunting,
+    lanterns: Pumpkins,
     air: Air,
 }
 
@@ -301,7 +318,10 @@ impl SnowSimulation {
             target_flakes: 0,
             strength_target: 1.0,
             next_shift: 0.0,
+            covers: Vec::new(),
+            shelf: None,
             haunting: Haunting::new(),
+            lanterns: Pumpkins::default(),
             air: Air {
                 flakes: Vec::new(),
                 grains: Vec::new(),
@@ -409,6 +429,9 @@ impl SnowSimulation {
         self.haunt(dt);
         self.settle(dt);
         self.spawn_flakes();
+        if self.haunting.on {
+            self.settle_pumpkins(dt);
+        }
         for (area, x) in self.air.overflow.drain(..) {
             self.layers[0].deposit(area, x, true);
         }
@@ -432,8 +455,14 @@ impl SnowSimulation {
         } else {
             Pace::Calm
         };
-        let changed = was_moving || self.sprite_count() > 0 || self.haunting.moving() || self.air.heights_changed || self.air.windows_changed;
+        let changed = was_moving
+            || self.sprite_count() > 0
+            || self.haunting.moving()
+            || self.air.heights_changed
+            || self.air.windows_changed
+            || self.lanterns.moved;
         self.air.windows_changed = false;
+        self.lanterns.moved = false;
         changed
     }
 

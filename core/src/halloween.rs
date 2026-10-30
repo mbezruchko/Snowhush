@@ -4,6 +4,13 @@
 
 use crate::geometry::smoothstep;
 
+/// A jack-o'-lantern's height as a share of its width, and where its candle burns: a share of its width across and
+/// of its height up from its bottom. Its shell and its carved face are drawn once, on the Mac, into
+/// `windows/assets/lanterns`, at two pixels per unit of a drawing 100 units wide, apart so the candle can flicker
+/// in the face alone.
+pub const PUMPKIN_ASPECT: f32 = 0.82;
+pub const PUMPKIN_CANDLE: [f32; 2] = [0.5, 0.45];
+
 /// What the ghosts' signs say. The signs themselves are drawn once, on the Mac, into `windows/assets/signs`,
 /// one picture per caption in this order, at two pixels per point with the stick's foot at the middle of the bottom edge.
 pub const SIGN_CAPTIONS: [&str; 12] = [
@@ -21,7 +28,7 @@ pub const SIGN_CAPTIONS: [&str; 12] = [
     "TRICK OR TREAT",
 ];
 
-/// Lets Halloween be tried out on any day and at any hour: SNOWHUSH_HALLOWEEN=1, and SNOWHUSH_HOUR=22 for its night.
+/// Lets Halloween be tried out on any day: SNOWHUSH_HALLOWEEN=1, and the daylight under it at any hour: SNOWHUSH_HOUR=22.
 pub fn previewed() -> bool {
     std::env::var("SNOWHUSH_HALLOWEEN").is_ok_and(|value| value == "1")
 }
@@ -40,9 +47,10 @@ pub fn daylight_share(hour: f32) -> f32 {
     smoothstep(6.0, 8.5, hour) * (1.0 - smoothstep(17.5, 20.5, hour))
 }
 
-/// How far into Halloween night it is: none by day, and none on any other day.
-pub fn night(halloween: bool, hour: f32) -> f32 {
-    if halloween { 1.0 - daylight_share(hour) } else { 0.0 }
+/// How far into Halloween night it is: all the way, by day too, from the moment Halloween comes, and none on any
+/// other day.
+pub fn night(halloween: bool) -> f32 {
+    if halloween { 1.0 } else { 0.0 }
 }
 
 /// The light and shadow tint `night` of the way into Halloween night: moonlit blue snow with violet shadows.

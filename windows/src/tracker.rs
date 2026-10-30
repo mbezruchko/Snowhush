@@ -160,21 +160,12 @@ impl Tracker {
     /// `area` is the display's work area in physical pixels, `size` the overlay's size in DIPs.
     pub fn surfaces(&self, area: &RECT, size: (u32, u32)) -> Vec<WindowSurface> {
         let (width, height) = (size.0 as f32, size.1 as f32);
-        let sx = width / (area.right - area.left).max(1) as f32;
         let sy = height / (area.bottom - area.top).max(1) as f32;
         let mut blockers: Vec<Rect> = Vec::new();
         let mut surfaces = Vec::new();
         for window in &self.windows {
+            let Some(frame) = local_frame(&window.rect, area, size) else { continue };
             let r = &window.rect;
-            if r.right <= area.left || r.left >= area.right || r.bottom <= area.top || r.top >= area.bottom {
-                continue;
-            }
-            let frame = Rect {
-                x: (r.left - area.left) as f32 * sx,
-                y: (area.bottom - r.bottom) as f32 * sy,
-                width: (r.right - r.left) as f32 * sx,
-                height: (r.bottom - r.top) as f32 * sy,
-            };
             let room_above = (r.top - area.top) as f32 * sy >= 6.0 && frame.max_y() < height;
             let on_screen = frame.max_x() > 0.0 && frame.min_x() < width && frame.max_y() > 0.0;
             let fills_screen = frame.width * frame.height >= width * height * 0.9;
@@ -195,6 +186,17 @@ impl Tracker {
             }
         }
         surfaces
+    }
+
+    /// Every app window on one display, maximized and full-screen ones too, left, bottom, right, top in its overlay
+    /// coordinates: a pumpkin hides from any that covers it. Open menus and the shell's switchers and flyouts don't count.
+    pub fn covers(&self, area: &RECT, size: (u32, u32)) -> Vec<[f32; 4]> {
+        self.windows
+            .iter()
+            .filter(|window| !window.cover_only && window.class != "#32768")
+            .filter_map(|window| local_frame(&window.rect, area, size))
+            .map(|frame| [frame.min_x(), frame.min_y(), frame.max_x(), frame.max_y()])
+            .collect()
     }
 
     /// The full-screen window covering the display with these bounds, if any: the frontmost window on it,
@@ -439,6 +441,22 @@ fn windows_build() -> u32 {
     }
     let length = buffer.iter().position(|&c| c == 0).unwrap_or(0);
     String::from_utf16_lossy(&buffer[..length]).parse().unwrap_or(0)
+}
+
+/// A window's frame in the overlay coordinates of the display with work area `area` and an overlay `size` DIPs across,
+/// if any of it is on that display.
+fn local_frame(r: &RECT, area: &RECT, size: (u32, u32)) -> Option<Rect> {
+    if r.right <= area.left || r.left >= area.right || r.bottom <= area.top || r.top >= area.bottom {
+        return None;
+    }
+    let sx = size.0 as f32 / (area.right - area.left).max(1) as f32;
+    let sy = size.1 as f32 / (area.bottom - area.top).max(1) as f32;
+    Some(Rect {
+        x: (r.left - area.left) as f32 * sx,
+        y: (area.bottom - r.bottom) as f32 * sy,
+        width: (r.right - r.left) as f32 * sx,
+        height: (r.bottom - r.top) as f32 * sy,
+    })
 }
 
 fn intersects(a: &Rect, b: &Rect) -> bool {

@@ -1,6 +1,6 @@
 //! Halloween's ghosts, made of the drifts' snow: a drift heaps up and the heap takes a ghost's shape. It says boo,
 //! holds up a sign, waves or dabs, sometimes creeps along under the snow to come up again, and in the end settles
-//! back into a heap. Scared off by the cursor five times in a row, the next one throws a snowball at the screen.
+//! back into a heap. Every third one scared off by the cursor, the next one throws a snowball at the screen.
 //! The same as the Mac app's.
 
 use std::f32::consts::{PI, TAU};
@@ -37,7 +37,7 @@ struct Ghost {
     seed: f32,
     /// Whether it comes up once more somewhere else before it settles.
     returns: bool,
-    /// Scared off too often in a row, it throws a snowball at the screen.
+    /// After a third ghost is scared off, it throws a snowball at the screen.
     avenges: bool,
     stage: Stage,
     surfaced: u32,
@@ -188,10 +188,11 @@ pub(super) struct Haunting {
     next_ghost: f64,
     falling_signs: Vec<FallingSign>,
     last_caption: Option<usize>,
-    /// Ghosts crumbled by the cursor in a row; the fifth brings one out for revenge.
+    /// Ghosts crumbled by the cursor since the last revenge, whether or not others left on their own between; the
+    /// third brings one out for revenge.
     scares: u32,
     revenge_due: bool,
-    /// Where the fifth scared ghost crumbled: the avenger comes up out of its snow.
+    /// Where the third scared ghost crumbled: the avenger comes up out of its snow.
     revenge_at: Option<(WindowId, f32)>,
     snowballs: Vec<Snowball>,
     hit_at: f64,
@@ -232,10 +233,13 @@ impl Haunting {
 }
 
 impl SnowSimulation {
-    /// Turns Halloween's ghosts on or off; the first comes soon after, so it is seen before Halloween gets forgotten.
+    /// Turns Halloween's ghosts and pumpkins on or off; the first comes soon after, so it is seen before Halloween gets forgotten.
     pub fn set_halloween(&mut self, on: bool) {
         if on && !self.haunting.on {
             self.haunting.next_ghost = self.air.clock + self.air.random.range(3.0, 8.0) as f64;
+        }
+        if on != self.haunting.on {
+            self.lanterns.reset();
         }
         self.haunting.on = on;
     }
@@ -323,7 +327,7 @@ impl SnowSimulation {
                     }
                     self.crumble(&ghost, li, true);
                     self.haunting.scares += 1;
-                    if self.haunting.scares >= 5 {
+                    if self.haunting.scares >= 3 {
                         self.haunting.scares = 0;
                         self.haunting.revenge_due = true;
                         self.haunting.revenge_at = Some((ghost.layer, ghost.x));
@@ -474,7 +478,6 @@ impl SnowSimulation {
                 }
             }
             Stage::Settling => {
-                self.haunting.scares = 0;
                 ghost.form = (ghost.form - dt / 2.0).max(0.0);
                 let keeping = if ghost.form > 0.0 { ghost.bulk() } else { 0.0 };
                 self.pour(ghost, li, keeping);
@@ -987,9 +990,20 @@ mod tests {
     }
 
     #[test]
-    fn five_scares_in_a_row_bring_a_snowball() {
+    fn every_third_scare_brings_a_snowball() {
         let mut simulation = haunted();
-        for _ in 0..5 {
+        for scare in 0..3 {
+            if scare == 1 {
+                // One left alone in between goes back into the drift on its own, and the count carries on.
+                simulation.haunting.next_ghost = 0.0;
+                for _ in 0..(60.0 / DT) as usize {
+                    simulation.step(DT, AWAY);
+                    if simulation.haunting.ghosts.is_empty() {
+                        break;
+                    }
+                }
+                assert!(simulation.haunting.ghosts.is_empty() && !simulation.haunting.revenge_due);
+            }
             simulation.haunting.next_ghost = 0.0;
             for _ in 0..(3.5 / DT) as usize {
                 simulation.step(DT, AWAY);
@@ -1017,12 +1031,10 @@ mod tests {
             simulation.layers[0].set(i, 25.0);
         }
         simulation.set_halloween(true);
-        let mut signs = 0;
         for frame in 0..(240.0 / DT) as usize {
             let t = frame as f32 * DT;
             let cursor = if ((t / 20.0) as usize).is_multiple_of(2) { AWAY } else { V2::new(600.0 + (t * 0.7).sin() * 500.0, 30.0) };
             simulation.step(DT, cursor);
-            signs += simulation.signs().len();
             if frame == (200.0 / DT) as usize {
                 simulation.blow_away(1.0, false);
             }
@@ -1031,6 +1043,22 @@ mod tests {
         let count = simulation.write_sprites(&mut buffer);
         assert!(buffer[..count].iter().all(|sprite| sprite.position.x.is_finite() && sprite.position.y.is_finite()));
         assert!(simulation.layers[0].heights.iter().all(|height| height.is_finite()));
-        assert!(signs > 0, "a ghost held up a sign at some point");
+    }
+
+    #[test]
+    fn ghosts_hold_up_signs() {
+        let mut simulation = haunted();
+        let mut held = false;
+        for _ in 0..(400.0 / DT) as usize {
+            if simulation.haunting.ghosts.is_empty() {
+                simulation.haunting.next_ghost = 0.0;
+            }
+            simulation.step(DT, AWAY);
+            held = !simulation.signs().is_empty();
+            if held {
+                break;
+            }
+        }
+        assert!(held, "a ghost held up a sign");
     }
 }

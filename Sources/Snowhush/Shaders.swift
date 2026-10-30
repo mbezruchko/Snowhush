@@ -18,6 +18,7 @@ struct Uniforms {
     float4 rim;
     float4 lantern;
     float4 shake;
+    float4 pumpkins[3];
 };
 
 struct Sprite {
@@ -76,11 +77,21 @@ static float hash(float2 p) {
     return fract(p.x * p.y);
 }
 
-/// How much of the cursor's candlelight reaches a point.
+static float flicker(float time, float seed) {
+    return 0.86 + 0.08 * sin(time * 11.0 + seed * 2.1) + 0.06 * sin(time * 29.0 + 1.3 + seed * 4.3);
+}
+
+/// How much candlelight reaches a point: the cursor's, and the pumpkins' in the snow.
 static float candlelight(constant Uniforms &u, float2 point) {
     float2 d = point - u.lantern.xy;
-    float flicker = 0.86 + 0.08 * sin(u.time * 11.0) + 0.06 * sin(u.time * 29.0 + 1.3);
-    return u.lantern.w * flicker * exp(-dot(d, d) / (u.lantern.z * u.lantern.z));
+    float glow = u.lantern.w * flicker(u.time, 0.0) * exp(-dot(d, d) / (u.lantern.z * u.lantern.z));
+    for (int k = 0; k < 3; k++) {
+        float4 pumpkin = u.pumpkins[k];
+        if (pumpkin.w <= 0.0) continue;
+        float2 e = point - pumpkin.xy;
+        glow += pumpkin.w * flicker(u.time, float(k + 1)) * exp(-dot(e, e) / (pumpkin.z * pumpkin.z));
+    }
+    return min(glow, 1.0);
 }
 
 vertex SpriteOut spriteVertex(uint vid [[vertex_id]],
@@ -357,5 +368,47 @@ fragment float4 signFragment(SignOut in [[stage_in]], texture2d<float> picture [
     color.rgb *= mix(float3(1.0), u.light.rgb, 0.5);
     color.rgb = mix(color.rgb, candle * color.a, candlelight(u, in.world) * 0.3);
     return color;
+}
+
+struct PumpkinUniforms {
+    float2 anchor;
+    float width;
+    float seed;
+};
+
+struct PumpkinOut {
+    float4 position [[position]];
+    float2 uv;
+    float2 world;
+};
+
+constant float2 pumpkinShape = float2(1.0, 0.82);
+constant float2 pumpkinCandle = float2(0.5, 0.45);
+
+/// A quad reaching past the pumpkin on every side but the bottom, for its glow.
+vertex PumpkinOut pumpkinVertex(uint vid [[vertex_id]], constant PumpkinUniforms &p [[buffer(0)]], constant Uniforms &u [[buffer(1)]]) {
+    float2 corner = float2(float(vid & 1), float(vid >> 1));
+    float2 uv = float2(mix(-0.6, 1.6, corner.x), mix(0.0, 1.8, corner.y));
+    float2 world = p.anchor + (uv - float2(0.5, 0.0)) * pumpkinShape * p.width;
+    PumpkinOut out;
+    out.position = float4((world + u.shake.xy) / u.viewSize * 2.0 - 1.0, 0.0, 1.0);
+    out.uv = float2(uv.x, 1.0 - uv.y);
+    out.world = world;
+    return out;
+}
+
+fragment float4 pumpkinFragment(PumpkinOut in [[stage_in]], texture2d<float> shell [[texture(0)]], texture2d<float> face [[texture(1)]],
+                                constant PumpkinUniforms &p [[buffer(0)]], constant Uniforms &u [[buffer(1)]]) {
+    constexpr sampler smooth(filter::linear, mip_filter::linear, address::clamp_to_zero);
+    float flame = flicker(u.time, p.seed + 1.0);
+    float4 body = shell.sample(smooth, in.uv);
+    float4 fire = face.sample(smooth, in.uv);
+    body.rgb *= mix(float3(1.0), u.light.rgb, 0.5);
+    fire.rgb *= 0.8 + 0.25 * flame;
+    float4 color = fire + body * (1.0 - fire.a);
+    // At night it glows into the dark around it.
+    float2 d = (in.world - (p.anchor + (pumpkinCandle - float2(0.5, 0.0)) * pumpkinShape * p.width)) / (p.width * 0.45);
+    float halo = u.lantern.w * 0.3 * flame * exp(-dot(d, d));
+    return color + float4(candle * halo, halo) * (1.0 - color.a);
 }
 """

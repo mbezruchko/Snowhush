@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{OnceCell, RefCell};
 use std::collections::HashMap;
 use std::mem::{offset_of, size_of};
 
@@ -24,7 +24,8 @@ use windows::core::{Error, Interface, PCSTR, Result, s};
 use windows_numerics::Matrix3x2;
 
 use snowhush_core::geometry::V2;
-use snowhush_core::simulation::{COLUMN_WIDTH, SnowSimulation, Sprite};
+use snowhush_core::halloween::{PUMPKIN_ASPECT, PUMPKIN_CANDLE};
+use snowhush_core::simulation::{COLUMN_WIDTH, PumpkinSprite, SnowSimulation, Sprite};
 
 use crate::halloween::{self, SIGN_SCALE};
 use crate::log;
@@ -57,6 +58,8 @@ struct Uniforms {
     lantern: [f32; 4],
     /// How far everything is jolted: x and y.
     shake: [f32; 4],
+    /// The pumpkins' candles: where each burns, how far its light reaches and how bright it is.
+    pumpkins: [[f32; 4]; 3],
     occluders: [[f32; 4]; 16],
 }
 
@@ -69,6 +72,31 @@ struct Placement {
     angle: f32,
     ground: f32,
     padding: [f32; 2],
+}
+
+/// Where a pumpkin sits: the middle of its bottom, its size in points, where its candle burns and what sets its
+/// flicker apart from the others'.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct PumpkinPlacement {
+    anchor: [f32; 2],
+    size: [f32; 2],
+    candle: [f32; 2],
+    seed: f32,
+    padding: f32,
+}
+
+impl PumpkinPlacement {
+    fn new(pumpkin: &PumpkinSprite) -> PumpkinPlacement {
+        let size = [pumpkin.width, pumpkin.width * PUMPKIN_ASPECT];
+        let candle = [pumpkin.anchor.x + (PUMPKIN_CANDLE[0] - 0.5) * size[0], pumpkin.anchor.y + PUMPKIN_CANDLE[1] * size[1]];
+        PumpkinPlacement { anchor: [pumpkin.anchor.x, pumpkin.anchor.y], size, candle, seed: pumpkin.seed, padding: 0.0 }
+    }
+
+    /// Its candle's light on the snow: where it burns, how far it reaches and how bright it is, brighter at `night`.
+    fn light(&self, night: f32) -> [f32; 4] {
+        [self.candle[0], self.candle[1], self.size[0] * 1.6, 0.4 + 0.6 * night]
+    }
 }
 
 /// The light the snow is drawn in.
@@ -97,13 +125,20 @@ pub struct Gpu {
     pile_fragment: ID3D11PixelShader,
     sign_vertex: ID3D11VertexShader,
     sign_fragment: ID3D11PixelShader,
+    pumpkin_vertex: ID3D11VertexShader,
+    pumpkin_fragment: ID3D11PixelShader,
     sampler: ID3D11SamplerState,
+    /// Clear past the picture's edges, for the pumpkins' glow around them.
+    bordered: ID3D11SamplerState,
     blend: ID3D11BlendState,
     raster: ID3D11RasterizerState,
     uniforms: ID3D11Buffer,
     placement: ID3D11Buffer,
+    pumpkin: ID3D11Buffer,
     /// Each caption's sign, made the first time a ghost holds it up; none if it couldn't be.
     signs: RefCell<HashMap<usize, Option<Picture>>>,
+    /// The pumpkin's shell and its face, made the first time one is drawn; none if they couldn't be.
+    pumpkin_pictures: OnceCell<Option<[ID3D11ShaderResourceView; 2]>>,
     pub adapter: String,
 }
 
@@ -140,6 +175,8 @@ impl Gpu {
             let pile_fragment = pixel_shader(&device, &compile(s!("pileFragment"), s!("ps_4_0"))?)?;
             let sign_vertex = vertex_shader(&device, &compile(s!("signVertex"), s!("vs_4_0"))?)?;
             let sign_fragment = pixel_shader(&device, &compile(s!("signFragment"), s!("ps_4_0"))?)?;
+            let pumpkin_vertex = vertex_shader(&device, &compile(s!("pumpkinVertex"), s!("vs_4_0"))?)?;
+            let pumpkin_fragment = pixel_shader(&device, &compile(s!("pumpkinFragment"), s!("ps_4_0"))?)?;
 
             let element = |name: PCSTR, format: DXGI_FORMAT, offset: u32| D3D11_INPUT_ELEMENT_DESC {
                 SemanticName: name,
@@ -197,9 +234,19 @@ impl Gpu {
             };
             let mut sampler = None;
             device.CreateSamplerState(&sampler_desc, Some(&mut sampler))?;
+            let bordered_desc = D3D11_SAMPLER_DESC {
+                AddressU: D3D11_TEXTURE_ADDRESS_BORDER,
+                AddressV: D3D11_TEXTURE_ADDRESS_BORDER,
+                AddressW: D3D11_TEXTURE_ADDRESS_BORDER,
+                BorderColor: [0.0; 4],
+                ..sampler_desc
+            };
+            let mut bordered = None;
+            device.CreateSamplerState(&bordered_desc, Some(&mut bordered))?;
 
             let uniforms = dynamic_buffer(&device, size_of::<Uniforms>(), D3D11_BIND_CONSTANT_BUFFER)?;
             let placement = dynamic_buffer(&device, size_of::<Placement>(), D3D11_BIND_CONSTANT_BUFFER)?;
+            let pumpkin = dynamic_buffer(&device, size_of::<PumpkinPlacement>(), D3D11_BIND_CONSTANT_BUFFER)?;
 
             Ok(Gpu {
                 device,
@@ -213,12 +260,17 @@ impl Gpu {
                 pile_fragment,
                 sign_vertex,
                 sign_fragment,
+                pumpkin_vertex,
+                pumpkin_fragment,
                 sampler: sampler.ok_or_else(Error::empty)?,
+                bordered: bordered.ok_or_else(Error::empty)?,
                 blend: blend.ok_or_else(Error::empty)?,
                 raster: raster.ok_or_else(Error::empty)?,
                 uniforms,
                 placement,
+                pumpkin,
                 signs: RefCell::new(HashMap::new()),
+                pumpkin_pictures: OnceCell::new(),
                 adapter: String::from_utf16_lossy(&description.Description[..name_length]),
             })
         }
@@ -263,6 +315,43 @@ impl Gpu {
             self.device.CreateShaderResourceView(&texture.ok_or_else(Error::empty)?, None, Some(&mut view))?;
         }
         Ok((view.ok_or_else(Error::empty)?, [picture.width as f32 / SIGN_SCALE, picture.height as f32 / SIGN_SCALE]))
+    }
+
+    fn pumpkin_pictures(&self) -> Option<&[ID3D11ShaderResourceView; 2]> {
+        self.pumpkin_pictures.get_or_init(|| self.make_pumpkin_pictures().inspect_err(|error| log!("pumpkins failed: {error}")).ok()).as_ref()
+    }
+
+    fn make_pumpkin_pictures(&self) -> Result<[ID3D11ShaderResourceView; 2]> {
+        let [shell, face] = halloween::pumpkin_pictures()?;
+        Ok([self.mipmapped(&shell)?, self.mipmapped(&face)?])
+    }
+
+    /// A picture with its smaller copies, made on the graphics card: the pumpkins are shown at a fraction of their
+    /// pictures' size, and would shimmer without them.
+    fn mipmapped(&self, picture: &halloween::Picture) -> Result<ID3D11ShaderResourceView> {
+        let desc = D3D11_TEXTURE2D_DESC {
+            Width: picture.width,
+            Height: picture.height,
+            MipLevels: 0,
+            ArraySize: 1,
+            Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            Usage: D3D11_USAGE_DEFAULT,
+            BindFlags: (D3D11_BIND_SHADER_RESOURCE.0 | D3D11_BIND_RENDER_TARGET.0) as u32,
+            CPUAccessFlags: 0,
+            MiscFlags: D3D11_RESOURCE_MISC_GENERATE_MIPS.0 as u32,
+        };
+        let mut texture = None;
+        let mut view = None;
+        unsafe {
+            self.device.CreateTexture2D(&desc, None, Some(&mut texture))?;
+            let texture = texture.ok_or_else(Error::empty)?;
+            self.device.CreateShaderResourceView(&texture, None, Some(&mut view))?;
+            let view = view.ok_or_else(Error::empty)?;
+            self.context.UpdateSubresource(&texture, 0, None, picture.pixels.as_ptr().cast(), picture.width * 4, 0);
+            self.context.GenerateMips(&view);
+            Ok(view)
+        }
     }
 }
 
@@ -340,6 +429,7 @@ impl Surface {
             context.Map(height_buffer, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped))?;
             let piles = simulation.write_layers(std::slice::from_raw_parts_mut(mapped.pData.cast::<f32>(), self.height_capacity));
             context.Unmap(height_buffer, 0);
+            let pumpkins: Vec<PumpkinPlacement> = simulation.pumpkins().iter().map(PumpkinPlacement::new).collect();
 
             context.OMSetRenderTargets(Some(&[Some(self.target_view.clone())]), None);
             context.ClearRenderTargetView(&self.target_view, &[0.0; 4]);
@@ -354,7 +444,7 @@ impl Surface {
             context.RSSetState(&gpu.raster);
             context.OMSetBlendState(&gpu.blend, None, u32::MAX);
             context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
-            let constants = [Some(gpu.uniforms.clone()), Some(gpu.placement.clone())];
+            let constants = [Some(gpu.uniforms.clone()), Some(gpu.placement.clone()), Some(gpu.pumpkin.clone())];
             context.VSSetConstantBuffers(0, Some(&constants));
             context.PSSetConstantBuffers(0, Some(&constants));
 
@@ -376,9 +466,25 @@ impl Surface {
                 rim: ambient.rim,
                 lantern: [cursor.x, cursor.y, LANTERN_REACH, glow],
                 shake: [shake.x, shake.y, 0.0, 0.0],
+                pumpkins: std::array::from_fn(|k| pumpkins.get(k).map_or([0.0; 4], |pumpkin| pumpkin.light(glow))),
                 occluders: [[0.0; 4]; 16],
             };
 
+            // The pumpkins go down before the snow, so the drift they sit in covers their bottoms.
+            if !pumpkins.is_empty()
+                && let Some([shell, face]) = gpu.pumpkin_pictures()
+            {
+                gpu.write(&gpu.uniforms, &uniforms)?;
+                context.IASetInputLayout(None);
+                context.VSSetShader(&gpu.pumpkin_vertex, None);
+                context.PSSetShader(&gpu.pumpkin_fragment, None);
+                context.PSSetSamplers(1, Some(&[Some(gpu.bordered.clone())]));
+                context.PSSetShaderResources(2, Some(&[Some(shell.clone()), Some(face.clone())]));
+                for pumpkin in &pumpkins {
+                    gpu.write(&gpu.pumpkin, pumpkin)?;
+                    context.Draw(4, 0);
+                }
+            }
             if !piles.is_empty() {
                 context.IASetInputLayout(None);
                 context.VSSetShader(&gpu.pile_vertex, None);

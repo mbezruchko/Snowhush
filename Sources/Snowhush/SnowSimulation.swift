@@ -47,6 +47,15 @@ struct SignSprite {
     var ground: Float
 }
 
+/// A Halloween jack-o'-lantern sitting in the snow at the bottom of the screen.
+struct PumpkinSprite {
+    /// The middle of its bottom.
+    var anchor: SIMD2<Float>
+    var width: Float
+    /// Sets its candle's flicker apart from the others'.
+    var seed: Float
+}
+
 /// A bit of something that crumbles into snow, such as a window: it keeps its colour for a moment while it falls.
 struct ScatterPiece {
     var position: SIMD2<Float>
@@ -143,7 +152,7 @@ private struct Ghost {
     var signAt: Float = -10
     var waveAt: Float = -10
     var dabAt: Float = -10
-    /// Scared off too often in a row, it comes out of the drift altogether and throws a snowball at the screen.
+    /// After a third ghost is scared off, it comes out of the drift altogether and throws a snowball at the screen.
     var avenges = false
     var standAt: Float = 0
     var threw = false
@@ -337,10 +346,11 @@ final class SnowSimulation {
     private var ghosts: [Ghost] = []
     private var fallingSigns: [(sign: SignSprite, velocity: SIMD2<Float>, spin: Float, age: Float)] = []
     private var lastCaption = -1
-    /// Ghosts crumbled by the cursor in a row; the fifth brings one out for revenge.
+    /// Ghosts crumbled by the cursor since the last revenge, whether or not others left on their own between; the
+    /// third brings one out for revenge.
     private var scares = 0
     private var revengeDue = false
-    /// Where the fifth scared ghost crumbled: the avenger comes up out of its snow.
+    /// Where the third scared ghost crumbled: the avenger comes up out of its snow.
     private var revengeAt: (layer: SnowLayer, x: Float)?
     private var snowballs: [(from: SIMD2<Float>, to: SIMD2<Float>, age: Float)] = []
     private var hitAt: Double = -10
@@ -355,8 +365,20 @@ final class SnowSimulation {
     private var nextGhost: Double = 0
     var halloween = false {
         // The first ghost comes soon, so it is seen before Halloween gets forgotten.
-        didSet { nextGhost = clock + Double(random.range(3, 8)) }
+        didSet {
+            nextGhost = clock + Double(random.range(3, 8))
+            pumpkinBottoms = []
+            pumpkinsMoved = true
+        }
     }
+    /// Jack-o'-lanterns along the bottom of the screen, a pair on the right and one on the left: how far each sits
+    /// from the right edge, or from the left one when the inset is negative, and its width.
+    private let pumpkinSpots: [(inset: Float, width: Float)] = [(120, 52), (190, 37), (-150, 42)]
+    /// Where each pumpkin's bottom rests, easing after the drift under it.
+    private var pumpkinBottoms: [Float] = []
+    private var pumpkinsMoved = false
+    /// The app windows on the screen, left, bottom, right, top: a pumpkin hides from any that covers it.
+    var windowFrames: [SIMD4<Float>] = []
 
     init(width: Float, height: Float, snowfall: Snowfall) {
         self.width = width
@@ -409,6 +431,7 @@ final class SnowSimulation {
         haunt(dt: dt)
         settle(dt: dt)
         spawnFlakes()
+        if halloween { settlePumpkins(dt: dt) }
 
         for layer in layers {
             layer.refreshTop()
@@ -425,8 +448,9 @@ final class SnowSimulation {
         } else {
             pace = .calm
         }
-        let changed = wasMoving || !flakes.isEmpty || !grains.isEmpty || !motes.isEmpty || !ghosts.isEmpty || !fallingSigns.isEmpty || !snowballs.isEmpty || heightsChanged || windowsChanged
+        let changed = wasMoving || !flakes.isEmpty || !grains.isEmpty || !motes.isEmpty || !ghosts.isEmpty || !fallingSigns.isEmpty || !snowballs.isEmpty || heightsChanged || windowsChanged || pumpkinsMoved
         windowsChanged = false
+        pumpkinsMoved = false
         return changed
     }
 
@@ -500,6 +524,17 @@ final class SnowSimulation {
         ghosts.compactMap(sign(of:)) + fallingSigns.map(\.sign)
     }
 
+    var pumpkins: [PumpkinSprite] {
+        guard halloween else { return [] }
+        return zip(pumpkinSpots, pumpkinBottoms).enumerated().map { k, pair in
+            PumpkinSprite(anchor: SIMD2(pumpkinX(pair.0.inset), pair.1), width: pair.0.width, seed: Float(k))
+        }
+    }
+
+    private func pumpkinX(_ inset: Float) -> Float {
+        inset < 0 ? -inset : width - inset
+    }
+
     func writeLayers(into buffer: UnsafeMutablePointer<Float>, capacity: Int) -> [PileLayer] {
         var result: [PileLayer] = []
         var offset = 0
@@ -517,6 +552,30 @@ final class SnowSimulation {
             offset += 2 * layer.count
         }
         return result
+    }
+
+    // MARK: - Pumpkins
+
+    /// Each pumpkin sits on the drift under it, sunk into it a little under half its height, or on the bottom of the
+    /// screen while the snow there is shallower than that; it eases up and down as the drift grows and is swept.
+    /// They belong to the desktop: one a window or the Dock covers sinks below the screen's edge until it moves off it.
+    private func settlePumpkins(dt: Float) {
+        let reach: Float = 24
+        let dock = layers.first(where: \.isDock).map { SIMD4($0.base.x - reach, 0, $0.base.x + $0.width + reach, $0.base.y + reach) }
+        let covers = windowFrames + (dock.map { [$0] } ?? [])
+        let settled = pumpkinBottoms.isEmpty
+        if settled { pumpkinBottoms = Array(repeating: 0, count: pumpkinSpots.count) }
+        for (k, spot) in pumpkinSpots.enumerated() {
+            let x = pumpkinX(spot.inset)
+            let from = ground.clampedIndex(at: x - spot.width * 0.3), to = ground.clampedIndex(at: x + spot.width * 0.3)
+            let surface = (from...to).reduce(Float(0)) { $0 + ground.surface($1) } / Float(to - from + 1)
+            let height = spot.width * HalloweenPumpkin.aspect
+            let covered = covers.contains { $0.x < x + spot.width / 2 && $0.z > x - spot.width / 2 && $0.y < height && $0.w > 0 }
+            let target = covered ? -height - 6 : max(0, surface - height * 0.42)
+            let bottom = settled ? target : pumpkinBottoms[k] + (target - pumpkinBottoms[k]) * min(1, dt * 5)
+            if abs(bottom - pumpkinBottoms[k]) > 0.01 { pumpkinsMoved = true }
+            pumpkinBottoms[k] = bottom
+        }
     }
 
     // MARK: - Windows
@@ -1268,7 +1327,7 @@ final class SnowSimulation {
                 crumble(ghost, scared: true)
                 gone = true
                 scares += 1
-                if scares >= 5 {
+                if scares >= 3 {
                     scares = 0
                     revengeDue = true
                     revengeAt = (ghost.layer, ghost.x)
@@ -1346,7 +1405,6 @@ final class SnowSimulation {
                 ghost.stage = .rising
             }
         case .settling:
-            scares = 0
             ghost.form = max(0, ghost.form - dt / 2)
             pour(&ghost, keeping: ghost.form > 0 ? ghost.size * ghost.size * 0.04 * ghost.height / 0.425 : 0)
             if ghost.form > 0, random.next() < dt * 6 { stir(ghost) }

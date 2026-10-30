@@ -53,7 +53,10 @@ final class ScreenSnow {
             return SIMD2(Float(mouse.x - window.frame.minX), Float(mouse.y - window.frame.minY))
         }
         renderer.windowSurfaces = { [unowned self] now in
-            snowOnWindows() && !window.behindWindows ? tracker.poll(now: now, eager: NSEvent.pressedMouseButtons != 0) : nil
+            guard snowOnWindows() && !window.behindWindows else { return nil }
+            let update = tracker.poll(now: now, eager: NSEvent.pressedMouseButtons != 0)
+            simulation.windowFrames = tracker.covers.map { SIMD4(Float($0.minX), Float($0.minY), Float($0.maxX), Float($0.maxY)) }
+            return update
         }
         renderer.sceneLight = { [unowned self] now in
             light.update(screen: self.screen, now: now)
@@ -94,6 +97,7 @@ final class ScreenSnow {
 
     func dropWindowSnow() {
         simulation.updateWindows([], interval: 0.1)
+        simulation.windowFrames = []
         tracker.reset()
     }
 

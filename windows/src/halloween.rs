@@ -1,4 +1,5 @@
-//! Halloween: from the start of October 31 until dawn on November 1 the snow takes on a spooky mood.
+//! Halloween: from October 30, when the update bringing it comes, until dawn on November 1 the snow takes on a
+//! spooky mood.
 
 use windows::Win32::Graphics::Imaging::{
     CLSID_WICImagingFactory, GUID_WICPixelFormat32bppRGBA, IWICImagingFactory, WICBitmapDitherTypeNone, WICBitmapPaletteTypeCustom,
@@ -43,6 +44,10 @@ const SIGNS: [&[u8]; SIGN_CAPTIONS.len()] = [
 /// Pixels to a point in the signs' pictures.
 pub const SIGN_SCALE: f32 = 2.0;
 
+/// The jack-o'-lantern sitting in the snow, drawn on the Mac: its shell and its carved face, apart so the candle
+/// flickers in the face alone.
+const LANTERN: [&[u8]; 2] = [include_bytes!("../assets/lanterns/shell.png"), include_bytes!("../assets/lanterns/face.png")];
+
 /// Whether it is Halloween, wanted or not.
 pub fn season() -> bool {
     let now = unsafe { GetLocalTime() };
@@ -56,16 +61,24 @@ pub fn pumpkin(size: i32) -> Option<HICON> {
     unsafe { CreateIconFromResourceEx(picture, true, 0x0003_0000, size, size, LR_DEFAULTCOLOR) }.ok()
 }
 
-/// A sign's picture: rows of premultiplied RGBA from the top, `SIGN_SCALE` pixels to a point, the stick's foot at
-/// the middle of the bottom edge.
-pub struct SignPicture {
+/// A picture drawn on the Mac: rows of premultiplied RGBA from the top.
+pub struct Picture {
     pub pixels: Vec<u8>,
     pub width: u32,
     pub height: u32,
 }
 
-pub fn sign_picture(caption: usize) -> Result<SignPicture> {
-    let data = SIGNS.get(caption).ok_or_else(Error::empty)?;
+/// A sign's picture, `SIGN_SCALE` pixels to a point, the stick's foot at the middle of the bottom edge.
+pub fn sign_picture(caption: usize) -> Result<Picture> {
+    decode(SIGNS.get(caption).ok_or_else(Error::empty)?)
+}
+
+/// The jack-o'-lantern's shell and its face, the same size and laid over each other.
+pub fn pumpkin_pictures() -> Result<[Picture; 2]> {
+    Ok([decode(LANTERN[0])?, decode(LANTERN[1])?])
+}
+
+fn decode(data: &[u8]) -> Result<Picture> {
     unsafe {
         let imaging: IWICImagingFactory = CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?;
         let stream = SHCreateMemStream(Some(data)).ok_or_else(Error::empty)?;
@@ -82,6 +95,6 @@ pub fn sign_picture(caption: usize) -> Result<SignPicture> {
                 *channel = ((*channel as u32 * alpha + 127) / 255) as u8;
             }
         }
-        Ok(SignPicture { pixels, width, height })
+        Ok(Picture { pixels, width, height })
     }
 }

@@ -16,6 +16,8 @@ cbuffer Uniforms : register(b0) {
     float4 lantern;
     // How far everything is jolted: x and y.
     float4 shake;
+    // The pumpkins' candles: where each burns, how far its light reaches and how bright it is.
+    float4 pumpkins[3];
     float4 occluders[16];
 };
 
@@ -29,11 +31,21 @@ float hash(float2 p) {
     return frac(p.x * p.y);
 }
 
-// How much of the cursor's candlelight reaches a point.
+float flicker(float seed) {
+    return 0.86 + 0.08 * sin(time * 11.0 + seed * 2.1) + 0.06 * sin(time * 29.0 + 1.3 + seed * 4.3);
+}
+
+// How much candlelight reaches a point: the cursor's, and the pumpkins' in the snow.
 float candlelight(float2 at) {
     float2 d = at - lantern.xy;
-    float flicker = 0.86 + 0.08 * sin(time * 11.0) + 0.06 * sin(time * 29.0 + 1.3);
-    return lantern.w * flicker * exp(-dot(d, d) / (lantern.z * lantern.z));
+    float glow = lantern.w * flicker(0.0) * exp(-dot(d, d) / (lantern.z * lantern.z));
+    for (int k = 0; k < 3; k++) {
+        float4 pumpkin = pumpkins[k];
+        if (pumpkin.w <= 0.0) continue;
+        float2 e = at - pumpkin.xy;
+        glow += pumpkin.w * flicker(float(k + 1)) * exp(-dot(e, e) / (pumpkin.z * pumpkin.z));
+    }
+    return min(glow, 1.0);
 }
 
 struct SpriteIn {
@@ -364,4 +376,48 @@ float4 signFragment(SignOut i) : SV_Target {
     color.rgb *= lerp(float3(1.0, 1.0, 1.0), light.rgb, 0.5);
     color.rgb = lerp(color.rgb, candle * color.a, candlelight(i.world) * 0.3);
     return color;
+}
+
+// The pumpkin being drawn: the middle of its bottom, its size in points, where its candle burns and what sets its
+// flicker apart from the others'.
+cbuffer Pumpkin : register(b2) {
+    float2 pumpkinAnchor;
+    float2 pumpkinSize;
+    float2 pumpkinCandle;
+    float pumpkinSeed;
+};
+
+Texture2D<float4> shell : register(t2);
+Texture2D<float4> face : register(t3);
+SamplerState bordered : register(s1);
+
+struct PumpkinOut {
+    float4 position : SV_Position;
+    float2 uv : TEXCOORD0;
+    float2 world : TEXCOORD1;
+};
+
+// A quad reaching past the pumpkin on every side but the bottom, for its glow.
+PumpkinOut pumpkinVertex(uint vid : SV_VertexID) {
+    float2 corner = float2(float(vid & 1), float(vid >> 1));
+    float2 uv = float2(lerp(-0.6, 1.6, corner.x), lerp(0.0, 1.8, corner.y));
+    float2 world = pumpkinAnchor + (uv - float2(0.5, 0.0)) * pumpkinSize;
+    PumpkinOut o;
+    o.position = float4((world + shake.xy) / viewSize * 2.0 - 1.0, 0.0, 1.0);
+    o.uv = float2(uv.x, 1.0 - uv.y);
+    o.world = world;
+    return o;
+}
+
+float4 pumpkinFragment(PumpkinOut i) : SV_Target {
+    float flame = flicker(pumpkinSeed + 1.0);
+    float4 body = shell.Sample(bordered, i.uv);
+    float4 fire = face.Sample(bordered, i.uv);
+    body.rgb *= lerp(float3(1.0, 1.0, 1.0), light.rgb, 0.5);
+    fire.rgb *= 0.8 + 0.25 * flame;
+    float4 color = fire + body * (1.0 - fire.a);
+    // At night it glows into the dark around it.
+    float2 d = (i.world - pumpkinCandle) / (pumpkinSize.x * 0.45);
+    float halo = lantern.w * 0.3 * flame * exp(-dot(d, d));
+    return color + float4(candle * halo, halo) * (1.0 - color.a);
 }

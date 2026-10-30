@@ -127,6 +127,22 @@ pub fn surfaces(report: &Report, area: &Area, shelf: Option<&Shelf>) -> Vec<Wind
     surfaces
 }
 
+/// Every app window on one display, maximized and full-screen ones too, in its overlay coordinates as left, bottom,
+/// right, top: a pumpkin hides from any over it.
+pub fn covers(report: &Report, area: &Area) -> Vec<[f32; 4]> {
+    report
+        .windows
+        .iter()
+        .filter(|window| window.solid)
+        .map(|window| Area { x: window.x, y: window.y, w: window.w, h: window.h })
+        .filter(|rect| rect.right() > area.x && rect.x < area.right() && rect.bottom() > area.y && rect.y < area.bottom())
+        .map(|rect| {
+            let frame = local_rect(&rect, area);
+            [frame.min_x(), frame.min_y(), frame.max_x(), frame.max_y()]
+        })
+        .collect()
+}
+
 /// The full-screen window covering the display with these bounds, if any: the frontmost window on it, looking past
 /// ones kept above the rest, is full screen and fills it.
 pub fn covering<'a>(report: &'a Report, bounds: &Area) -> Option<&'a str> {

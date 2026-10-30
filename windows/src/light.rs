@@ -24,8 +24,7 @@ pub struct Sky {
 impl Sky {
     /// The sky now; `halloween` while it is Halloween and wanted.
     pub fn now(halloween: bool) -> Sky {
-        let hour = hour();
-        Sky { daylight: daylight(hour), night: halloween::night(halloween, hour) }
+        Sky { daylight: daylight(hour()), night: halloween::night(halloween) }
     }
 }
 
