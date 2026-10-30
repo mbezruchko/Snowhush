@@ -30,6 +30,7 @@ struct Sprite {
     float tintGreen;
     float tintBlue;
     float lump;
+    float ghost;
 };
 
 struct SpriteOut {
@@ -44,6 +45,7 @@ struct SpriteOut {
     float lump;
     float spin;
     float warm;
+    float ghost;
 };
 
 constant float3 candle = float3(1.0, 0.62, 0.26);
@@ -80,12 +82,26 @@ vertex SpriteOut spriteVertex(uint vid [[vertex_id]],
     out.lump = s.lump;
     out.spin = s.lump > 0.0 ? u.time * (s.lump - 0.5) * 9.0 + s.lump * 40.0 : 0.0;
     out.warm = candlelight(u, s.position);
+    out.ghost = s.ghost;
+    if (s.ghost > 0.0) out.spin = u.time + s.ghost * 40.0;
     return out;
 }
 
 fragment float4 spriteFragment(SpriteOut in [[stage_in]], float2 coord [[point_coord]]) {
     // Point coordinates run down the screen; velocities run up.
     float2 p = float2(coord.x - 0.5, 0.5 - coord.y);
+    if (in.ghost > 0.0) {
+        // A sheet over a round head, flaring to a scalloped hem; the lower it hangs, the further it billows.
+        float2 q = float2(p.x - sin(in.spin * 1.3 + p.y * 4.0) * 0.05 * (0.12 - p.y), p.y);
+        float side = 0.27 + max(0.12 - q.y, 0.0) * 0.12;
+        float hem = -0.36 + 0.05 * cos(q.x * 34.0 + in.spin * 3.0);
+        float inside = q.y > 0.12 ? 0.27 - length(q - float2(0.0, 0.12)) : min(side - abs(q.x), q.y - hem);
+        float a = smoothstep(0.0, 0.035, inside) * in.alpha * mix(0.5, 1.0, smoothstep(-0.36, 0.12, q.y));
+        if (a < 0.002) discard_fragment();
+        float3 color = mix(float3(0.62, 0.67, 0.79), float3(0.96, 0.97, 1.0), smoothstep(0.0, 0.12, inside)) * in.light;
+        color = mix(color, candle, in.warm * 0.35);
+        return float4(color * a, a);
+    }
     float2 half_ = in.streak * 0.5;
     float span = dot(half_, half_);
     float t = span > 0.0 ? clamp(dot(p, half_) / span, -1.0, 1.0) : 0.0;

@@ -16,6 +16,7 @@ final class ScreenSnow {
         didSet {
             light.halloween = halloween
             light.invalidate()
+            simulation.halloween = halloween
         }
     }
 

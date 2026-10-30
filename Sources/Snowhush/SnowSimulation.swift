@@ -16,6 +16,8 @@ struct Sprite {
     var tintBlue: Float = 1
     /// Gives a lump of snow its ragged outline and tumble; zero for a round flake.
     var lump: Float = 0
+    /// Draws a ghost instead, its waving tail timed by the value; zero for snow.
+    var ghost: Float = 0
 }
 
 /// A bit of something that crumbles into snow, such as a window: it keeps its colour for a moment while it falls.
@@ -72,6 +74,16 @@ private struct Mote {
     var velocity: SIMD2<Float>
     var size: Float
     var alpha: Float
+    var age: Float = 0
+    var life: Float
+}
+
+/// A wisp that rises off a drift on Halloween, sways up and away and fades.
+private struct Ghost {
+    var position: SIMD2<Float>
+    var velocity: SIMD2<Float>
+    var size: Float
+    var seed: Float
     var age: Float = 0
     var life: Float
 }
@@ -201,6 +213,12 @@ final class SnowSimulation {
     /// A gust clearing the snow: its front sweeps across from the windward side, lifting the drifts behind it.
     private var gust: (start: Double, direction: Float, calm: Bool)?
     private var slideWind: Float = 0
+    private var ghosts: [Ghost] = []
+    private var nextGhost: Double = 0
+    var halloween = false {
+        // The first ghost comes soon, so it is seen before Halloween gets forgotten.
+        didSet { nextGhost = clock + Double(random.range(3, 8)) }
+    }
 
     init(width: Float, height: Float, snowfall: Snowfall) {
         self.width = width
@@ -221,7 +239,7 @@ final class SnowSimulation {
 
     var pileTop: Float { ground.top }
     var hasSnow: Bool { layers.contains { $0.top > 0.5 } }
-    var spriteCount: Int { flakes.count + grains.count + motes.count }
+    var spriteCount: Int { flakes.count + grains.count + motes.count + ghosts.count }
     /// Floats the renderer needs per frame: each layer's surface and bed.
     var columnCount: Int { layers.reduce(0) { $0 + 2 * $1.count } }
 
@@ -236,7 +254,7 @@ final class SnowSimulation {
     /// Returns whether anything visible changed.
     func step(dt: Float, cursor point: SIMD2<Float>) -> Bool {
         clock += Double(dt)
-        let wasMoving = !flakes.isEmpty || !grains.isEmpty || !motes.isEmpty
+        let wasMoving = !flakes.isEmpty || !grains.isEmpty || !motes.isEmpty || !ghosts.isEmpty
         heightsChanged = false
 
         vary(dt: dt)
@@ -250,6 +268,7 @@ final class SnowSimulation {
         advanceFlakes(dt: dt)
         advanceGrains(dt: dt)
         advanceMotes(dt: dt)
+        haunt(dt: dt)
         settle(dt: dt)
         spawnFlakes()
 
@@ -268,7 +287,7 @@ final class SnowSimulation {
         } else {
             pace = .calm
         }
-        let changed = wasMoving || !flakes.isEmpty || !grains.isEmpty || !motes.isEmpty || heightsChanged || windowsChanged
+        let changed = wasMoving || !flakes.isEmpty || !grains.isEmpty || !motes.isEmpty || !ghosts.isEmpty || heightsChanged || windowsChanged
         windowsChanged = false
         return changed
     }
@@ -304,6 +323,11 @@ final class SnowSimulation {
             let t = mote.age / mote.life
             let fade = min(1, mote.age / 0.06) * pow(1 - t, 1.5)
             buffer[count] = Sprite(position: mote.position, size: mote.size * (1 + t), alpha: mote.alpha * fade, soft: 1)
+            count += 1
+        }
+        for ghost in ghosts where count < capacity {
+            let fade = min(1, ghost.age / 1.2) * min(1, (ghost.life - ghost.age) / 2.5)
+            buffer[count] = Sprite(position: ghost.position, size: ghost.size, alpha: 0.5 * fade, soft: 1, ghost: 1 + ghost.seed)
             count += 1
         }
         return count
@@ -1045,6 +1069,57 @@ final class SnowSimulation {
             }
             i -= 1
         }
+    }
+
+    /// On Halloween a ghost rises off a drift now and then and sways up and away, shying from the cursor.
+    private func haunt(dt: Float) {
+        if halloween, clock >= nextGhost {
+            nextGhost = clock + Double(random.range(20, 40))
+            if ghosts.count < 3 { raiseGhost() }
+        }
+        var i = ghosts.count - 1
+        while i >= 0 {
+            var ghost = ghosts[i]
+            ghost.age += dt
+            var target = SIMD2(sin(ghost.age * 1.1 + ghost.seed * 6) * 18 + windSpeed() * 0.15, 30)
+            if let cursor {
+                let away = ghost.position - cursor
+                let distance = simd_length(away)
+                if distance > 0.01, distance < 160 { target += away / distance * (1 - distance / 160) * 260 }
+            }
+            ghost.velocity += (target - ghost.velocity) * min(1, dt * 2)
+            ghost.position += ghost.velocity * dt
+            if ghost.age >= ghost.life || ghost.position.y > height + ghost.size {
+                ghosts.swapAt(i, ghosts.count - 1)
+                ghosts.removeLast()
+            } else {
+                ghosts[i] = ghost
+            }
+            i -= 1
+        }
+    }
+
+    /// Out of a drift, with a puff of its powder, or from below the screen when there is none to rise from.
+    private func raiseGhost() {
+        var start = SIMD2(random.range(width * 0.1, width * 0.9), -10)
+        for _ in 0..<12 {
+            let layer = layers[min(Int(random.next() * Float(layers.count)), layers.count - 1)]
+            guard layer.count > 0 else { continue }
+            let i = min(Int(random.next() * Float(layer.count)), layer.count - 1)
+            guard layer.visible[i], layer.heights[i] > 3 else { continue }
+            start = SIMD2(layer.centerX(i), layer.surface(i))
+            for _ in 0..<6 where motes.count < maxMotes {
+                motes.append(Mote(
+                    position: start + SIMD2(random.range(-8, 8), 0),
+                    velocity: SIMD2(random.range(-30, 30), random.range(20, 70)),
+                    size: random.range(6, 12),
+                    alpha: random.range(0.08, 0.14),
+                    life: random.range(0.6, 1.2)
+                ))
+            }
+            break
+        }
+        ghosts.append(Ghost(position: start, velocity: SIMD2(0, 20), size: random.range(40, 56), seed: random.next(), life: random.range(7, 10)))
     }
 
     /// Turns the pieces into snowflakes that drift down and fade to white; together they leave a small drift.
