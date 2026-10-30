@@ -26,6 +26,23 @@ struct Sprite {
     var form: Float = 0
     /// For a ghost, how far its paws are up, saying boo.
     var paws: Float = 0
+    /// For a ghost, how far its right paw is held at `armAngle`, for a sign or a throw.
+    var hold: Float = 0
+    var armAngle: Float = 0
+    /// For a ghost, how far its paws are spread to send a wave along them.
+    var wave: Float = 0
+    /// For a ghost, how far it is into a dab.
+    var dab: Float = 0
+}
+
+/// A Halloween sign a ghost holds up, or lets fall into the snow.
+struct SignSprite {
+    var caption: Int
+    /// The foot of its stick.
+    var anchor: SIMD2<Float>
+    var angle: Float
+    /// The drift's surface: nothing of the sign shows below.
+    var ground: Float
 }
 
 /// A bit of something that crumbles into snow, such as a window: it keeps its colour for a moment while it falls.
@@ -86,9 +103,9 @@ private struct Mote {
     var life: Float
 }
 
-/// A ghost made of a drift's snow on Halloween: the drift heaps up and the heap takes its shape. After a while it
-/// falls apart into a heap of snow, sometimes after first slumping back and creeping along under the snow to come
-/// up once more somewhere else.
+/// A ghost made of a drift's snow on Halloween: the drift heaps up and the heap takes its shape. It says boo or
+/// holds up a sign, and after a while settles back into a heap of snow, sometimes after first slumping back and
+/// creeping along under the snow to come up once more somewhere else.
 private struct Ghost {
     enum Stage {
         case rising
@@ -97,6 +114,8 @@ private struct Ghost {
         case sinking(toward: Float)
         /// Creeping along under the snow toward `x`, a bulge running through the drift.
         case creeping(to: Float)
+        /// Going for good: it slumps into a heap that its snow is left as.
+        case settling
     }
 
     let layer: SnowLayer
@@ -116,6 +135,14 @@ private struct Ghost {
     var booAt: Float = -10
     /// When it says boo unprompted, if the cursor hasn't come near enough first.
     var nextBoo: Float = .infinity
+    var sign: Int?
+    var signAt: Float = -10
+    var waveAt: Float = -10
+    var dabAt: Float = -10
+    /// Scared off too often in a row, it comes out of the drift altogether and throws a snowball at the screen.
+    var avenges = false
+    var standAt: Float = 0
+    var threw = false
 
     var column: Int { layer.clampedIndex(at: layer.base.x + x) }
 
@@ -124,6 +151,49 @@ private struct Ghost {
         let since = age - booAt
         guard since >= 0, since < 1.3 else { return 0 }
         return since < 0.9 ? smoothstep(0, 0.2, since) : 1 - smoothstep(0.9, 1.3, since)
+    }
+
+    /// How far its sign is up out of the snow: pulled up, held a few seconds, put back.
+    var signUp: Float {
+        let since = age - signAt
+        guard sign != nil, since >= 0, since < 4.2 else { return 0 }
+        return since < 3.8 ? smoothstep(0, 0.45, since) : 1 - smoothstep(3.8, 4.2, since)
+    }
+
+    /// How far its paw is up holding the sign; it reaches up a moment before the sign shows and lets go after.
+    var holding: Float {
+        let since = age - signAt
+        guard sign != nil, since >= 0, since < 4.4 else { return 0 }
+        return since < 3.9 ? smoothstep(0, 0.25, since) : 1 - smoothstep(3.9, 4.4, since)
+    }
+
+    /// How far its paws are spread for the wave, which runs along them for a few seconds.
+    var waving: Float {
+        let since = age - waveAt
+        guard since >= 0, since < 2.8 else { return 0 }
+        return since < 2.4 ? smoothstep(0, 0.3, since) : 1 - smoothstep(2.4, 2.8, since)
+    }
+
+    /// How far into a dab it is: snapped into, held a moment, let go.
+    var dabbing: Float {
+        let since = age - dabAt
+        guard since >= 0, since < 1.6 else { return 0 }
+        return since < 1.25 ? smoothstep(0, 0.15, since) : 1 - smoothstep(1.25, 1.6, since)
+    }
+
+    /// Its right paw winding back over its head and flinging forward, while it avenges itself.
+    var fling: (angle: Float, weight: Float)? {
+        guard avenges else { return nil }
+        let since = age - standAt
+        guard since > 1, since < 2.6 else { return nil }
+        if since < 1.55 { return (-1.35 + 3.75 * smoothstep(1, 1.55, since), smoothstep(1, 1.2, since)) }
+        if since < 1.75 { return (2.4 - 2.3 * smoothstep(1.55, 1.75, since), 1) }
+        return (0.1, 1 - smoothstep(2.1, 2.6, since))
+    }
+
+    var settling: Bool {
+        if case .settling = stage { return true }
+        return false
     }
 
     /// How high it stands above the drift, as a share of its size: the heap's height, then the ghost's half.
@@ -261,6 +331,12 @@ final class SnowSimulation {
     private var gust: (start: Double, direction: Float, calm: Bool)?
     private var slideWind: Float = 0
     private var ghosts: [Ghost] = []
+    private var fallingSigns: [(sign: SignSprite, velocity: SIMD2<Float>, spin: Float, age: Float)] = []
+    private var lastCaption = -1
+    /// Ghosts crumbled by the cursor in a row; the fifth brings one out for revenge.
+    private var scares = 0
+    private var revengeDue = false
+    private var snowballs: [(from: SIMD2<Float>, to: SIMD2<Float>, age: Float)] = []
     private var nextGhost: Double = 0
     var halloween = false {
         // The first ghost comes soon, so it is seen before Halloween gets forgotten.
@@ -286,7 +362,7 @@ final class SnowSimulation {
 
     var pileTop: Float { ground.top }
     var hasSnow: Bool { layers.contains { $0.top > 0.5 } }
-    var spriteCount: Int { flakes.count + grains.count + motes.count + ghosts.count }
+    var spriteCount: Int { flakes.count + grains.count + motes.count + ghosts.count * 2 + snowballs.count }
     /// Floats the renderer needs per frame: each layer's surface and bed.
     var columnCount: Int { layers.reduce(0) { $0 + 2 * $1.count } }
 
@@ -301,7 +377,7 @@ final class SnowSimulation {
     /// Returns whether anything visible changed.
     func step(dt: Float, cursor point: SIMD2<Float>) -> Bool {
         clock += Double(dt)
-        let wasMoving = !flakes.isEmpty || !grains.isEmpty || !motes.isEmpty || !ghosts.isEmpty
+        let wasMoving = !flakes.isEmpty || !grains.isEmpty || !motes.isEmpty || !ghosts.isEmpty || !fallingSigns.isEmpty || !snowballs.isEmpty
         heightsChanged = false
 
         vary(dt: dt)
@@ -334,7 +410,7 @@ final class SnowSimulation {
         } else {
             pace = .calm
         }
-        let changed = wasMoving || !flakes.isEmpty || !grains.isEmpty || !motes.isEmpty || !ghosts.isEmpty || heightsChanged || windowsChanged
+        let changed = wasMoving || !flakes.isEmpty || !grains.isEmpty || !motes.isEmpty || !ghosts.isEmpty || !fallingSigns.isEmpty || !snowballs.isEmpty || heightsChanged || windowsChanged
         windowsChanged = false
         return changed
     }
@@ -383,11 +459,29 @@ final class SnowSimulation {
                 ground: ground,
                 eyes: smoothstep(0.85, 1, ghost.form),
                 form: ghost.form,
-                paws: ghost.paws
+                paws: ghost.paws,
+                hold: ghost.fling?.weight ?? ghost.holding,
+                armAngle: ghost.fling?.angle ?? 0.35,
+                wave: ghost.waving,
+                dab: ghost.dabbing
             )
+            count += 1
+            if ghost.avenges, !ghost.threw, let fling = ghost.fling, count < capacity {
+                buffer[count] = Sprite(position: paw(of: ghost, at: fling.angle), size: 7, alpha: 1, soft: 0.15)
+                count += 1
+            }
+        }
+        for ball in snowballs where count < capacity {
+            let t = min(ball.age / 0.45, 1)
+            let position = ball.from + (ball.to - ball.from) * (1 - pow(1 - t, 2)) + SIMD2(0, sin(t * .pi) * 50)
+            buffer[count] = Sprite(position: position, size: 7 + 100 * t * t, alpha: 1, soft: 0.15)
             count += 1
         }
         return count
+    }
+
+    var signs: [SignSprite] {
+        ghosts.compactMap(sign(of:)) + fallingSigns.map(\.sign)
     }
 
     func writeLayers(into buffer: UnsafeMutablePointer<Float>, capacity: Int) -> [PileLayer] {
@@ -1130,6 +1224,8 @@ final class SnowSimulation {
 
     /// On Halloween a ghost grows out of a drift now and then; the cursor's touch crumbles it back into snow.
     private func haunt(dt: Float) {
+        dropSigns(dt: dt)
+        throwSnowballs(dt: dt)
         if halloween, clock >= nextGhost {
             nextGhost = clock + Double(ghosts.count >= 3 || raiseGhost() ? random.range(20, 40) : 5)
         }
@@ -1138,12 +1234,21 @@ final class SnowSimulation {
             var ghost = ghosts[i]
             ghost.age += dt
             var gone = !layers.contains { $0 === ghost.layer }
-            if !gone, let cursor, touches(ghost, cursor) {
+            if !gone, !(ghost.avenges && !ghost.threw), let cursor, touches(ghost, cursor) {
+                if let sign = sign(of: ghost) {
+                    fallingSigns.append((sign, SIMD2(random.range(-30, 30), 60), random.range(-2.5, 2.5), 0))
+                }
                 crumble(ghost, scared: true)
                 gone = true
+                scares += 1
+                if scares >= 5 {
+                    scares = 0
+                    revengeDue = true
+                    nextGhost = min(nextGhost, clock + Double(random.range(1.5, 3)))
+                }
             } else if !gone {
                 gone = !advance(&ghost, dt: dt)
-                if !gone { gather(&ghost, to: ghost.size * ghost.size * 0.04 * ghost.height / 0.425) }
+                if !gone, !ghost.settling { gather(&ghost, to: ghost.size * ghost.size * 0.04 * ghost.height / 0.425) }
             }
             if gone {
                 ghosts.swapAt(i, ghosts.count - 1)
@@ -1165,14 +1270,32 @@ final class SnowSimulation {
             if ghost.form >= 1 {
                 ghost.surfaced += 1
                 let first = ghost.surfaced == 1
-                ghost.stage = .standing(until: ghost.age + (first ? random.range(4, 6.5) : random.range(2.5, 3.5)))
+                ghost.standAt = ghost.age
+                ghost.stage = .standing(until: ghost.age + (ghost.avenges ? 3.8 : first ? random.range(4, 6.5) : random.range(2.5, 3.5)))
                 ghost.nextBoo = ghost.age + (first ? random.range(0.6, 2) : 0.3)
             }
         case .standing(let until):
-            if ghost.age - ghost.booAt > 2.5 {
+            if ghost.avenges {
+                avenge(&ghost)
+            } else if ghost.age - ghost.booAt > 2.5, ghost.holding == 0, ghost.waving == 0 {
                 let near = cursor.map { simd_distance($0, placement(of: ghost).center) < ghost.size * 1.6 } ?? false
-                if near || ghost.age >= ghost.nextBoo {
+                if near {
                     ghost.booAt = ghost.age
+                } else if ghost.age >= ghost.nextBoo {
+                    let pick = random.next()
+                    if ghost.sign == nil, pick < 0.3 {
+                        ghost.sign = nextCaption()
+                        ghost.signAt = ghost.age
+                        ghost.stage = .standing(until: max(until, ghost.age + 4.8))
+                    } else if pick < 0.55 {
+                        ghost.waveAt = ghost.age
+                        ghost.stage = .standing(until: max(until, ghost.age + 3.2))
+                    } else if pick < 0.75 {
+                        ghost.dabAt = ghost.age
+                        ghost.stage = .standing(until: max(until, ghost.age + 2))
+                    } else {
+                        ghost.booAt = ghost.age
+                    }
                     ghost.nextBoo = ghost.age + random.range(3, 6)
                 }
             }
@@ -1181,8 +1304,7 @@ final class SnowSimulation {
                 ghost.returns = false
                 ghost.stage = .sinking(toward: target)
             } else {
-                crumble(ghost, scared: false)
-                return false
+                ghost.stage = .settling
             }
         case .sinking(let target):
             ghost.form = max(0.22, ghost.form - dt / 2.5)
@@ -1195,8 +1317,65 @@ final class SnowSimulation {
                 level(under: ghost)
                 ghost.stage = .rising
             }
+        case .settling:
+            scares = 0
+            ghost.form = max(0, ghost.form - dt / 2)
+            pour(&ghost, keeping: ghost.form > 0 ? ghost.size * ghost.size * 0.04 * ghost.height / 0.425 : 0)
+            if ghost.form > 0, random.next() < dt * 6 { stir(ghost) }
+            return ghost.form > 0
         }
         return true
+    }
+
+    /// Lets the snow it holds beyond `keeping` down onto the drift where it stands, heaped up in the middle.
+    private func pour(_ ghost: inout Ghost, keeping: Float) {
+        let amount = ghost.taken - keeping
+        guard amount > 0.01 else { return }
+        let layer = ghost.layer
+        let reach = ghost.reach
+        let under = max(ghost.column - reach, 0)...min(ghost.column + reach, layer.count - 1)
+        let weights = under.map { j -> Float in
+            let off = Float(j - ghost.column) / Float(reach)
+            return max(0, 1 - off * off)
+        }
+        let total = weights.reduce(0, +) * layer.columnWidth
+        guard total > 0 else { return }
+        for (j, weight) in zip(under, weights) { layer.set(j, layer.heights[j] + amount * weight / total) }
+        ghost.taken = keeping
+        heightsChanged = true
+    }
+
+    private func nextCaption() -> Int {
+        var caption = Int(random.next() * Float(HalloweenSign.captions.count - 1))
+        if caption >= lastCaption, lastCaption >= 0 { caption += 1 }
+        lastCaption = min(caption, HalloweenSign.captions.count - 1)
+        return lastCaption
+    }
+
+    /// The sign the ghost holds up, its stick in the raised paw, rising out of the snow beside it as it is pulled up.
+    private func sign(of ghost: Ghost) -> SignSprite? {
+        guard let caption = ghost.sign, ghost.signUp > 0 else { return nil }
+        let (ground, center) = placement(of: ghost)
+        // The paw's tip when raised to hold it, in the ghost's own coordinates.
+        let paw = paw(of: ghost, at: 0.35)
+        return SignSprite(
+            caption: caption,
+            anchor: paw - SIMD2(0, (1 - ghost.signUp) * 100),
+            angle: -0.1 + 0.05 * sin(ghost.age * 2.3 + ghost.seed * 5),
+            ground: ground
+        )
+    }
+
+    private func dropSigns(dt: Float) {
+        var i = fallingSigns.count - 1
+        while i >= 0 {
+            fallingSigns[i].age += dt
+            fallingSigns[i].velocity.y -= 900 * dt
+            fallingSigns[i].sign.anchor += fallingSigns[i].velocity * dt
+            fallingSigns[i].sign.angle += fallingSigns[i].spin * dt
+            if fallingSigns[i].age > 1.5 { fallingSigns.remove(at: i) }
+            i -= 1
+        }
     }
 
     /// Picks a deep enough stretch of drift clear of other ghosts and levels the snow it will rise out of.
@@ -1218,8 +1397,10 @@ final class SnowSimulation {
                 x: (Float(column) + 0.5) * layer.columnWidth,
                 size: size,
                 seed: random.next(),
-                returns: random.next() < 0.5
+                returns: !revengeDue && random.next() < 0.5,
+                avenges: revengeDue
             )
+            revengeDue = false
             level(under: ghost)
             ghosts.append(ghost)
             return true
@@ -1227,12 +1408,16 @@ final class SnowSimulation {
         return false
     }
 
-    /// Evens out the snow the ghost will rise out of, so it comes up out of a flat surface.
+    /// Evens out the snow the ghost will rise out of, flat under its middle and easing into the drift either side.
     private func level(under ghost: Ghost) {
         let layer = ghost.layer
         let under = max(ghost.column - ghost.reach, 0)...min(ghost.column + ghost.reach, layer.count - 1)
-        let level = under.reduce(0) { $0 + layer.heights[$1] } / Float(under.count)
-        for j in under { layer.set(j, level) }
+        let weights = under.map { 1 - smoothstep(0.5, 1, Float(abs($0 - ghost.column)) / Float(ghost.reach)) }
+        let total = weights.reduce(0, +)
+        guard total > 0 else { return }
+        // Their weighted mean, so evening them out neither adds snow nor takes it.
+        let level = zip(under, weights).reduce(0) { $0 + layer.heights[$1.0] * $1.1 } / total
+        for (j, weight) in zip(under, weights) { layer.set(j, layer.heights[j] + (level - layer.heights[j]) * weight) }
         heightsChanged = true
     }
 
@@ -1259,6 +1444,64 @@ final class SnowSimulation {
         let ground = ghost.layer.surface(ghost.column)
         // Its head's top lies 0.39 of its size above the middle, and stands 0.425 above the drift once formed.
         return (ground, SIMD2(ghost.layer.base.x + ghost.x, ground + ghost.size * 0.035))
+    }
+
+    /// The tip of its right paw, held out at `angle`.
+    private func paw(of ghost: Ghost, at angle: Float) -> SIMD2<Float> {
+        placement(of: ghost).center + SIMD2(0.17 + 0.17 * cos(angle), 0.1 + 0.17 * sin(angle)) * ghost.size
+    }
+
+    /// Winds up and throws a snowball at the cursor, or the middle of the screen, then says boo.
+    private func avenge(_ ghost: inout Ghost) {
+        let since = ghost.age - ghost.standAt
+        if !ghost.threw, since >= 1.6 {
+            ghost.threw = true
+            let target = cursor.flatMap { $0.x > 0 && $0.x < width && $0.y > 0 && $0.y < height ? $0 : nil } ?? SIMD2(width / 2, height / 2)
+            snowballs.append((paw(of: ghost, at: 0.6), target, 0))
+        }
+        if ghost.threw, ghost.booAt < ghost.standAt, since >= 2.6 { ghost.booAt = ghost.age }
+    }
+
+    /// Snowballs fly at the screen and burst against it.
+    private func throwSnowballs(dt: Float) {
+        var i = snowballs.count - 1
+        while i >= 0 {
+            snowballs[i].age += dt
+            if snowballs[i].age >= 0.45 {
+                shatter(at: snowballs[i].to)
+                snowballs.remove(at: i)
+            }
+            i -= 1
+        }
+    }
+
+    /// A snowball bursting against the screen: its snow flies apart in powder and lumps, and falls onto the drifts.
+    private func shatter(at point: SIMD2<Float>) {
+        for _ in 0..<70 where grains.count < maxGrains {
+            let angle = random.range(0, 2 * .pi)
+            let direction = SIMD2(cos(angle), sin(angle))
+            grains.append(Grain(
+                position: point + direction * random.range(0, 30),
+                velocity: direction * random.range(80, 420) + SIMD2(0, 120),
+                area: random.range(0.6, 1.4),
+                size: random.range(1.4, 3.2)
+            ))
+        }
+        for _ in 0..<4 {
+            let angle = random.range(0, 2 * .pi)
+            throwLump(random.range(6, 12), at: point, velocity: SIMD2(cos(angle), sin(angle)) * random.range(120, 300) + SIMD2(0, 150))
+        }
+        for _ in 0..<14 where motes.count < maxMotes {
+            let angle = random.range(0, 2 * .pi)
+            let direction = SIMD2(cos(angle), sin(angle))
+            motes.append(Mote(
+                position: point + direction * random.range(0, 20),
+                velocity: direction * random.range(40, 160),
+                size: random.range(14, 30),
+                alpha: random.range(0.12, 0.22),
+                life: random.range(0.8, 1.6)
+            ))
+        }
     }
 
     private func touches(_ ghost: Ghost, _ point: SIMD2<Float>) -> Bool {

@@ -35,6 +35,10 @@ struct Sprite {
     float eyes;
     float form;
     float paws;
+    float hold;
+    float armAngle;
+    float wave;
+    float dab;
 };
 
 struct SpriteOut {
@@ -55,6 +59,10 @@ struct SpriteOut {
     float form;
     float size;
     float paws;
+    float hold;
+    float armAngle;
+    float wave;
+    float dab;
 };
 
 constant float3 candle = float3(1.0, 0.62, 0.26);
@@ -105,6 +113,10 @@ vertex SpriteOut spriteVertex(uint vid [[vertex_id]],
         out.form = s.form;
         out.size = s.size;
         out.paws = s.paws;
+        out.hold = s.hold;
+        out.armAngle = s.armAngle;
+        out.wave = s.wave;
+        out.dab = s.dab;
     }
     return out;
 }
@@ -118,25 +130,48 @@ fragment float4 spriteFragment(SpriteOut in [[stage_in]], float2 coord [[point_c
         float t = in.spin;
         float heap = 0.3 * smoothstep(0.0, 0.5, in.form);
         float shaped = smoothstep(0.4, 1.0, in.form);
-        float2 q = float2(p.x - sin(t * 1.2 + p.y * 3.5) * 0.02 * (0.22 - p.y) * shaped, p.y);
+        // A wave passing through its middle bobs it up and down; a dab ducks it a little.
+        float2 q = float2(p.x - sin(t * 1.2 + p.y * 3.5) * 0.02 * (0.22 - p.y) * shaped, p.y - in.wave * 0.025 * sin(t * 6.0));
+        q += in.dab * float2(0.015, 0.02);
         float side = 0.17 + pow(max(0.22 - q.y, 0.0), 1.3) * 0.35;
         float sheet = q.y > 0.22 ? 0.17 - length(q - float2(0.0, 0.22)) : side - abs(q.x);
-        float skirt = in.ground + 0.07 * smoothstep(0.45, 0.0, abs(q.x)) - q.y;
+        float skirt = in.ground + 0.07 * smoothstep(0.45, 0.0, abs(p.x)) - p.y;
         float blend = max(0.05 - abs(sheet - skirt), 0.0) / 0.05;
         float formed = max(sheet, skirt) + blend * blend * 0.05 * 0.25;
-        // Paws hang tucked into its sides until it throws them up to say boo.
+        // Paws hang tucked into its sides until it throws them up to say boo, holds one out for a sign or a throw,
+        // spreads both for a wave that runs in at one paw, through its shoulders and out at the other, or dabs:
+        // one paw flung up and out, the other bent across its face.
+        float cover = 0.0;
         for (float hand = -1.0; hand <= 1.0; hand += 2.0) {
+            float up = max(max(in.paws, in.wave), in.dab);
             float angle = mix(-1.35, 0.6 + 0.12 * sin(t * 9.0 + hand), in.paws);
-            float2 shoulder = float2(hand * 0.17, 0.1);
-            float2 reach = float2(hand * cos(angle), sin(angle)) * 0.17;
-            float along = saturate(dot(q - shoulder, reach) / dot(reach, reach));
-            float paw = 0.045 * (0.4 + 0.6 * in.paws) * (1.0 - 0.25 * along) - length(q - shoulder - reach * along);
-            float join = max(0.03 - abs(formed - paw), 0.0) / 0.03;
-            formed = max(formed, paw) + join * join * 0.03 * 0.25;
+            if (hand > 0.0) {
+                angle = mix(angle, in.armAngle, in.hold);
+                up = max(up, in.hold);
+            }
+            float2 joint = float2(hand * 0.17, 0.1);
+            for (int k = 1; k <= 3; k++) {
+                float2 straight = float2(hand * 0.17, 0.1) + float2(hand * cos(angle), sin(angle)) * (0.057 * float(k));
+                float x = hand * (0.17 + 0.07 * float(k));
+                float2 next = mix(straight, float2(x, 0.12 + 0.045 * sin(t * 6.0 - x * 12.0)), in.wave);
+                float2 dabbed = hand > 0.0 ? float2(0.17, 0.1) + float2(cos(0.75), sin(0.75)) * (0.06 * float(k))
+                    : k == 1 ? float2(-0.1, 0.17) : k == 2 ? float2(-0.02, 0.24) : float2(0.07, 0.3);
+                next = mix(next, dabbed, in.dab);
+                float2 bone = next - joint;
+                float along = saturate(dot(q - joint, bone) / max(dot(bone, bone), 1e-5));
+                float radius = 0.045 * (0.4 + 0.6 * up) * (1.0 - 0.08 * float(k - 1) - 0.08 * along);
+                float paw = radius - length(q - joint - bone * along);
+                if (hand < 0.0) cover = max(cover, smoothstep(-0.005, 0.005, paw) * in.dab);
+                float join = max(0.03 - abs(formed - paw), 0.0) / 0.03;
+                formed = max(formed, paw) + join * join * 0.03 * 0.25;
+                joint = next;
+            }
         }
-        float inside = mix(in.ground + heap * smoothstep(0.34, 0.0, abs(q.x)) - q.y, formed, shaped);
-        // It reaches a little way down into the drift and fades there, so the two join without a seam.
-        float a = smoothstep(0.0, 0.02, inside) * smoothstep(in.ground - 0.08, in.ground - 0.04, p.y);
+        float inside = mix(in.ground + heap * smoothstep(0.34, 0.0, abs(p.x)) - p.y, formed, shaped);
+        // Its middle reaches a little way down into the drift, fading out downward and sideways, so the two join
+        // without a seam or an edge.
+        float sunk = smoothstep(in.ground - 0.1, in.ground - 0.03, p.y) * smoothstep(0.45, 0.2, abs(q.x));
+        float a = smoothstep(0.0, 0.02, inside) * max(smoothstep(in.ground - 0.01, in.ground + 0.015, p.y), sunk);
         if (a < 0.002) discard_fragment();
 
         // Lit as the drifts are: bright at its surface, shaded deeper in and on the sides turned from the light.
@@ -163,7 +198,7 @@ fragment float4 spriteFragment(SpriteOut in [[stage_in]], float2 coord [[point_c
         float blink = step(fract(t * 0.29 + in.ghost * 7.0), 0.035);
         float2 eye = float2(0.03, 0.042 * (1.0 - 0.85 * blink));
         float eyes = max(1.0 - smoothstep(0.75, 1.0, length((q - float2(-0.065, 0.24)) / eye)),
-                         1.0 - smoothstep(0.75, 1.0, length((q - float2(0.065, 0.24)) / eye))) * in.eyes;
+                         1.0 - smoothstep(0.75, 1.0, length((q - float2(0.065, 0.24)) / eye))) * in.eyes * (1.0 - cover);
         float mouth = in.paws > 0.05 ? 1.0 - smoothstep(0.75, 1.0, length((q - float2(0.0, 0.135)) / (float2(0.026, 0.036) * in.paws))) : 0.0;
         color = mix(color, float3(0.06, 0.06, 0.09), max(eyes, mouth * in.eyes));
         return float4(color * a, a);
@@ -253,5 +288,41 @@ fragment float4 pileFragment(PileOut in [[stage_in]],
     color = mix(color, u.rim.rgb, u.rim.a * exp(-depth / 2.5));
     color = mix(color, candle, candlelight(u, world) * (0.35 + 0.65 * exp(-depth / 14.0)) * 0.55);
     return float4(color * coverage, coverage);
+}
+
+struct SignUniforms {
+    float2 anchor;
+    float2 size;
+    float angle;
+    float ground;
+};
+
+struct SignOut {
+    float4 position [[position]];
+    float2 uv;
+    float2 world;
+};
+
+vertex SignOut signVertex(uint vid [[vertex_id]], constant SignUniforms &s [[buffer(0)]], constant Uniforms &u [[buffer(1)]]) {
+    float2 corner = float2(float(vid & 1), float(vid >> 1));
+    float2 local = float2((corner.x - 0.5) * s.size.x, corner.y * s.size.y);
+    float2 world = s.anchor + float2(local.x * cos(s.angle) - local.y * sin(s.angle), local.x * sin(s.angle) + local.y * cos(s.angle));
+    SignOut out;
+    out.position = float4(world / u.viewSize * 2.0 - 1.0, 0.0, 1.0);
+    out.uv = float2(corner.x, 1.0 - corner.y);
+    out.world = world;
+    return out;
+}
+
+fragment float4 signFragment(SignOut in [[stage_in]], texture2d<float> picture [[texture(0)]],
+                             constant SignUniforms &s [[buffer(0)]], constant Uniforms &u [[buffer(1)]]) {
+    constexpr sampler linear(filter::linear, address::clamp_to_edge);
+    float4 color = picture.sample(linear, in.uv);
+    // It comes up out of the snow: nothing shows below the drift's surface.
+    color *= smoothstep(s.ground - 1.0, s.ground + 1.0, in.world.y);
+    // The moonlight only half dims it, so it stays orange.
+    color.rgb *= mix(float3(1.0), u.light.rgb, 0.5);
+    color.rgb = mix(color.rgb, candle * color.a, candlelight(u, in.world) * 0.3);
+    return color;
 }
 """

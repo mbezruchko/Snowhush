@@ -19,6 +19,13 @@ struct Uniforms {
     var lantern = SIMD4<Float>(0, 0, 0, 0)
 }
 
+struct SignUniforms {
+    var anchor: SIMD2<Float>
+    var size: SIMD2<Float>
+    var angle: Float
+    var ground: Float
+}
+
 enum RendererError: Error {
     case unavailable
 }
@@ -40,6 +47,9 @@ final class Renderer: NSObject, MTKViewDelegate {
     private let queue: MTLCommandQueue
     private let spritePipeline: MTLRenderPipelineState
     private let pilePipeline: MTLRenderPipelineState
+    private let signPipeline: MTLRenderPipelineState
+    /// Each caption's sign, drawn the first time a ghost holds it up, and its size in points.
+    private var signPictures: [Int: (texture: MTLTexture, size: SIMD2<Float>)] = [:]
     private let framesInFlight = 3
     private let semaphore: DispatchSemaphore
     private var spriteBuffers: [MTLBuffer] = []
@@ -77,6 +87,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         self.semaphore = DispatchSemaphore(value: framesInFlight)
         self.spritePipeline = try pipeline("spriteVertex", "spriteFragment")
         self.pilePipeline = try pipeline("pileVertex", "pileFragment")
+        self.signPipeline = try pipeline("signVertex", "signFragment")
         super.init()
     }
 
@@ -165,6 +176,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         let uniformsLength = MemoryLayout<Uniforms>.stride
 
         drawPiles(piles.filter { !$0.isDock }, with: encoder, uniforms: uniforms, heights: heightBuffer)
+        drawSigns(simulation.signs, with: encoder, uniforms: uniforms)
         if sprites > 0 {
             encoder.setRenderPipelineState(spritePipeline)
             encoder.setVertexBuffer(spriteBuffer, offset: 0, index: 0)
@@ -208,6 +220,34 @@ final class Renderer: NSObject, MTKViewDelegate {
             encoder.setFragmentBytes(&occluders, length: occluders.count * MemoryLayout<SIMD4<Float>>.stride, index: 2)
             encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         }
+    }
+
+    private func drawSigns(_ signs: [SignSprite], with encoder: MTLRenderCommandEncoder, uniforms: Uniforms) {
+        guard !signs.isEmpty else { return }
+        var uniforms = uniforms
+        encoder.setRenderPipelineState(signPipeline)
+        for sign in signs {
+            guard let picture = signPicture(sign.caption) else { continue }
+            var shape = SignUniforms(anchor: sign.anchor, size: picture.size, angle: sign.angle, ground: sign.ground)
+            encoder.setVertexBytes(&shape, length: MemoryLayout<SignUniforms>.stride, index: 0)
+            encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+            encoder.setFragmentBytes(&shape, length: MemoryLayout<SignUniforms>.stride, index: 0)
+            encoder.setFragmentBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+            encoder.setFragmentTexture(picture.texture, index: 0)
+            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        }
+    }
+
+    private func signPicture(_ caption: Int) -> (texture: MTLTexture, size: SIMD2<Float>)? {
+        if let picture = signPictures[caption] { return picture }
+        guard let context = HalloweenSign.draw(HalloweenSign.captions[caption]), let data = context.data else { return nil }
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: context.width, height: context.height, mipmapped: false)
+        descriptor.usage = .shaderRead
+        guard let texture = device.makeTexture(descriptor: descriptor) else { return nil }
+        texture.replace(region: MTLRegionMake2D(0, 0, context.width, context.height), mipmapLevel: 0, withBytes: data, bytesPerRow: context.bytesPerRow)
+        let picture = (texture: texture, size: SIMD2(Float(context.width), Float(context.height)) / Float(HalloweenSign.scale))
+        signPictures[caption] = picture
+        return picture
     }
 
     private func reserve(sprites: Int, columns: Int) {
