@@ -17,6 +17,8 @@ struct Uniforms {
     var rim = SIMD4<Float>(0, 0, 0, 0)
     /// The cursor's glow: where it is, how far it reaches and how bright it is.
     var lantern = SIMD4<Float>(0, 0, 0, 0)
+    /// How far everything is jolted: x and y.
+    var shake = SIMD4<Float>(0, 0, 0, 0)
 }
 
 struct SignUniforms {
@@ -171,7 +173,8 @@ final class Renderer: NSObject, MTKViewDelegate {
             light: SIMD4(ambient.light, 1),
             shadowTint: ambient.shadowTint,
             rim: ambient.rim,
-            lantern: SIMD4(lowHalf: lanternAt, highHalf: SIMD2(130, ambient.lantern))
+            lantern: SIMD4(lowHalf: lanternAt, highHalf: SIMD2(130, ambient.lantern)),
+            shake: SIMD4(lowHalf: simulation.shake, highHalf: .zero)
         )
         let uniformsLength = MemoryLayout<Uniforms>.stride
 

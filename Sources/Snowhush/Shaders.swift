@@ -17,6 +17,7 @@ struct Uniforms {
     float4 shadowTint;
     float4 rim;
     float4 lantern;
+    float4 shake;
 };
 
 struct Sprite {
@@ -39,6 +40,7 @@ struct Sprite {
     float armAngle;
     float wave;
     float dab;
+    float anger;
 };
 
 struct SpriteOut {
@@ -63,6 +65,7 @@ struct SpriteOut {
     float armAngle;
     float wave;
     float dab;
+    float anger;
 };
 
 constant float3 candle = float3(1.0, 0.62, 0.26);
@@ -93,7 +96,7 @@ vertex SpriteOut spriteVertex(uint vid [[vertex_id]],
     float reach = s.lump > 0.0 ? 1.3 : 1.0;
     float extent = max(pixels * reach + length(streak), 2.0);
     SpriteOut out;
-    out.position = float4(s.position / u.viewSize * 2.0 - 1.0, 0.0, 1.0);
+    out.position = float4((s.position + u.shake.xy) / u.viewSize * 2.0 - 1.0, 0.0, 1.0);
     out.pointSize = extent;
     out.streak = streak / extent;
     out.radius = pixels / extent * 0.5;
@@ -117,6 +120,7 @@ vertex SpriteOut spriteVertex(uint vid [[vertex_id]],
         out.armAngle = s.armAngle;
         out.wave = s.wave;
         out.dab = s.dab;
+        out.anger = s.anger;
     }
     return out;
 }
@@ -133,6 +137,10 @@ fragment float4 spriteFragment(SpriteOut in [[stage_in]], float2 coord [[point_c
         // A wave passing through its middle bobs it up and down; a dab ducks it a little.
         float2 q = float2(p.x - sin(t * 1.2 + p.y * 3.5) * 0.02 * (0.22 - p.y) * shaped, p.y - in.wave * 0.025 * sin(t * 6.0));
         q += in.dab * float2(0.015, 0.02);
+        // A cross one shakes with rage, and throws its whole body into a throw: back as it winds up, forward as it lets go.
+        q.x += in.anger * shaped * 0.01 * sin(t * 57.0);
+        float lean = in.anger * in.hold * clamp((in.armAngle - 0.5) / 1.25, -0.6, 1.0);
+        q.x += lean * 0.14 * max(q.y - in.ground, 0.0);
         float side = 0.17 + pow(max(0.22 - q.y, 0.0), 1.3) * 0.35;
         float sheet = q.y > 0.22 ? 0.17 - length(q - float2(0.0, 0.22)) : side - abs(q.x);
         float skirt = in.ground + 0.07 * smoothstep(0.45, 0.0, abs(p.x)) - p.y;
@@ -168,10 +176,11 @@ fragment float4 spriteFragment(SpriteOut in [[stage_in]], float2 coord [[point_c
             }
         }
         float inside = mix(in.ground + heap * smoothstep(0.34, 0.0, abs(p.x)) - p.y, formed, shaped);
-        // Its middle reaches a little way down into the drift, fading out downward and sideways, so the two join
-        // without a seam or an edge.
-        float sunk = smoothstep(in.ground - 0.1, in.ground - 0.03, p.y) * smoothstep(0.45, 0.2, abs(q.x));
-        float a = smoothstep(0.0, 0.02, inside) * max(smoothstep(in.ground - 0.01, in.ground + 0.015, p.y), sunk);
+        // Its middle reaches down into the drift, hiding the drift's bright edge where the two meet, and fades out
+        // lower down and to the sides.
+        float under = in.ground - p.y;
+        float sunk = (1.0 - smoothstep(0.05, 0.11, under)) * smoothstep(0.45, 0.25, abs(p.x));
+        float a = smoothstep(0.0, 0.02, inside) * max(1.0 - smoothstep(-0.015, 0.0, under), sunk);
         if (a < 0.002) discard_fragment();
 
         // Lit as the drifts are: bright at its surface, shaded deeper in and on the sides turned from the light.
@@ -184,6 +193,10 @@ fragment float4 spriteFragment(SpriteOut in [[stage_in]], float2 coord [[point_c
         float3 surface = mix(float3(0.925, 0.94, 0.965), min(u.shadowTint.rgb * 1.18, float3(1.0)), u.shadowTint.a * 0.2);
         float3 color = mix(surface, shadow, saturate(shade));
         color = mix(color, float3(0.975, 0.982, 0.995), exp(-depth * 0.9) * 0.6);
+        // Down in the drift it takes on the drift's own colour at that depth, so no seam shows where it fades.
+        float below = max(under, 0.0) * in.size;
+        float3 drift = mix(surface, shadow, saturate((1.0 - exp(-below / 30.0)) * 0.32 + 0.064 * exp(-below / 5.0)));
+        color = mix(color, mix(drift, float3(0.975, 0.982, 0.995), exp(-below * 0.9) * 0.6), smoothstep(1.0, 4.0, below));
         color += (hash(floor(in.position.xy)) - 0.5) * 0.02;
         float glint = hash(floor(in.position.xy * 0.5) + 31.7);
         if (glint > 0.992) {
@@ -194,13 +207,33 @@ fragment float4 spriteFragment(SpriteOut in [[stage_in]], float2 coord [[point_c
         color = mix(color, u.rim.rgb, u.rim.a * exp(-depth / 2.5));
         color = mix(color, candle, in.warm * (0.35 + 0.65 * exp(-depth / 14.0)) * 0.55);
 
-        // Two dark hollows for eyes, blinking now and then.
-        float blink = step(fract(t * 0.29 + in.ghost * 7.0), 0.035);
+        // Two dark hollows for eyes, blinking now and then; a cross one glares under brows slanting down inward.
+        float blink = step(fract(t * 0.29 + in.ghost * 7.0), 0.035) * (1.0 - in.anger);
         float2 eye = float2(0.03, 0.042 * (1.0 - 0.85 * blink));
-        float eyes = max(1.0 - smoothstep(0.75, 1.0, length((q - float2(-0.065, 0.24)) / eye)),
-                         1.0 - smoothstep(0.75, 1.0, length((q - float2(0.065, 0.24)) / eye))) * in.eyes * (1.0 - cover);
+        float eyes = 0.0;
+        for (float s = -1.0; s <= 1.0; s += 2.0) {
+            float2 e = q - float2(s * 0.065, 0.24);
+            float glare = mix(1.0, smoothstep(0.004, -0.004, e.y - (0.006 + 0.7 * s * e.x)), in.anger);
+            eyes = max(eyes, (1.0 - smoothstep(0.75, 1.0, length(e / eye))) * glare);
+            float2 from = float2(s * 0.02, 0.266), to = float2(s * 0.105, 0.302);
+            float2 brow = to - from;
+            float along = saturate(dot(q - from, brow) / dot(brow, brow));
+            eyes = max(eyes, (1.0 - smoothstep(0.008, 0.013, length(q - from - brow * along))) * in.anger);
+        }
+        // Embers glowing in its eyes, and a toothy scowl.
+        float embers = 0.0;
+        for (float s = -1.0; s <= 1.0; s += 2.0) {
+            embers = max(embers, 1.0 - smoothstep(0.008, 0.016, length(q - float2(s * 0.062, 0.232))));
+        }
+        float2 m = q - float2(0.0, 0.152);
+        float scowl = (1.0 - smoothstep(0.0, 0.006, max(abs(m.x) - 0.05, abs(m.y) - 0.016 - 0.006 * cos(m.x * 20.0)))) * in.anger;
+        float teeth = step(0.016 - 0.016 * abs(fract(m.x * 25.0) * 2.0 - 1.0), m.y + 0.004) + step(m.y - 0.004, -0.016 + 0.016 * abs(fract(m.x * 25.0 + 0.5) * 2.0 - 1.0));
+        eyes = max(eyes, scowl * (1.0 - saturate(teeth)));
+        eyes *= in.eyes * (1.0 - cover);
+        embers *= in.anger * in.eyes;
         float mouth = in.paws > 0.05 ? 1.0 - smoothstep(0.75, 1.0, length((q - float2(0.0, 0.135)) / (float2(0.026, 0.036) * in.paws))) : 0.0;
         color = mix(color, float3(0.06, 0.06, 0.09), max(eyes, mouth * in.eyes));
+        color = mix(color, float3(1.0, 0.38, 0.1) * (0.85 + 0.15 * sin(t * 13.0)), embers);
         return float4(color * a, a);
     }
     float2 half_ = in.streak * 0.5;
@@ -236,7 +269,7 @@ vertex PileOut pileVertex(uint vid [[vertex_id]], constant Uniforms &u [[buffer(
     float2 corner = float2(float(vid & 1), float(vid >> 1));
     float2 p = float2(corner.x * float(u.columnCount) * u.columnWidth, mix(u.pileBottom, u.pileTop, corner.y));
     PileOut out;
-    out.position = float4((p + u.origin) / u.viewSize * 2.0 - 1.0, 0.0, 1.0);
+    out.position = float4((p + u.origin + u.shake.xy) / u.viewSize * 2.0 - 1.0, 0.0, 1.0);
     out.point = p;
     return out;
 }
@@ -308,7 +341,7 @@ vertex SignOut signVertex(uint vid [[vertex_id]], constant SignUniforms &s [[buf
     float2 local = float2((corner.x - 0.5) * s.size.x, corner.y * s.size.y);
     float2 world = s.anchor + float2(local.x * cos(s.angle) - local.y * sin(s.angle), local.x * sin(s.angle) + local.y * cos(s.angle));
     SignOut out;
-    out.position = float4(world / u.viewSize * 2.0 - 1.0, 0.0, 1.0);
+    out.position = float4((world + u.shake.xy) / u.viewSize * 2.0 - 1.0, 0.0, 1.0);
     out.uv = float2(corner.x, 1.0 - corner.y);
     out.world = world;
     return out;
