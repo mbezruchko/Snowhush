@@ -20,10 +20,11 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{BOOL, Error, PCWSTR, Result, w};
 
 use snowhush_core::geometry::V2;
+use snowhush_core::halloween::moonlit;
 use snowhush_core::simulation::{Pace, SnowSimulation, WindowId, WindowSurface};
 
 use crate::desktop::DesktopLayer;
-use crate::light::{Backdrop, Wallpapers};
+use crate::light::{Backdrop, Sky, Wallpapers};
 use crate::log;
 use crate::render::{Ambient, Gpu, Surface};
 use crate::tracker::{COVER_ONLY, Tracker, class_name, cloaked, process_name};
@@ -220,6 +221,8 @@ pub struct Screen {
     backdrop: Option<Backdrop>,
     shadow_tint: [f32; 4],
     layer: Option<DesktopLayer>,
+    /// Where the cursor's candlelight was last drawn.
+    lantern_at: V2,
 }
 
 impl Screen {
@@ -254,6 +257,7 @@ impl Screen {
             backdrop: None,
             shadow_tint: [0.0; 4],
             layer,
+            lantern_at: V2::new(-10_000.0, -10_000.0),
         })
     }
 
@@ -276,22 +280,17 @@ impl Screen {
 
     /// Steps the snow and draws it if anything visible changed; returns whether it drew.
     /// `windows` is left out while snow on windows is off.
-    pub fn frame(
-        &mut self,
-        gpu: &Gpu,
-        clock: &Clock,
-        now: i64,
-        budget: PowerBudget,
-        light: [f32; 3],
-        time: f32,
-        windows: Option<&Tracker>,
-    ) -> Result<bool> {
+    pub fn frame(&mut self, gpu: &Gpu, clock: &Clock, now: i64, budget: PowerBudget, sky: Sky, time: f32, windows: Option<&Tracker>) -> Result<bool> {
         let dt = if self.last_step == 0 { 1.0 / 60.0 } else { clock.seconds(now - self.last_step).min(0.05) as f32 };
         self.last_step = now;
         if let Some(tracker) = windows {
             self.follow(tracker, clock, now);
         }
-        let changed = self.simulation.step(dt, self.cursor());
+        let cursor = self.cursor();
+        let changed = self.simulation.step(dt, cursor);
+        // The lantern follows the cursor even over snow that lies still.
+        let lantern_moved = sky.night > 0.0 && (cursor - self.lantern_at).length() > 0.5;
+        self.lantern_at = cursor;
 
         let fastest = if budget == PowerBudget::Full { self.interactive_rate } else { self.interactive_rate.min(60) };
         // 24 only where it divides the display's rate evenly; elsewhere it would judder.
@@ -301,13 +300,17 @@ impl Screen {
             Pace::Lively => fastest.min(60),
             Pace::Interactive => fastest,
         };
+        let rate = if lantern_moved { rate.max(fastest.min(60)) } else { rate };
         self.next_due = clock.schedule(now, rate);
-        self.idle_frames = if changed { 0 } else { self.idle_frames + 1 };
+        self.idle_frames = if changed || lantern_moved { 0 } else { self.idle_frames + 1 };
         // A still pile only needs a slow refresh for its glints.
-        if !(changed || (self.simulation.has_snow() && self.idle_frames % 2 == 0)) {
+        if !(changed || lantern_moved || (self.simulation.has_snow() && self.idle_frames % 2 == 0)) {
             return Ok(false);
         }
-        self.surface.draw(gpu, &self.simulation, Ambient { light, shadow_tint: self.shadow_tint }, time)?;
+        // Halloween night: cold moonlight, violet shadows and a candle's glow along the drifts' edges.
+        let (light, shadow_tint) = moonlit(sky.daylight, self.shadow_tint, sky.night);
+        let ambient = Ambient { light, shadow_tint, rim: [1.0, 0.56, 0.2, 0.3 * sky.night], lantern: (cursor, sky.night) };
+        self.surface.draw(gpu, &self.simulation, ambient, time)?;
         Ok(true)
     }
 

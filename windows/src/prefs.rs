@@ -22,6 +22,8 @@ pub struct Settings {
     pub behind_windows: bool,
     pub show_in_screenshots: bool,
     pub welcomed: bool,
+    /// Whether the snow turns spooky on Halloween.
+    pub halloween: bool,
 }
 
 impl Settings {
@@ -36,6 +38,7 @@ impl Settings {
             behind_windows: read(w!("behindWindows")).is_some_and(|v| v != 0),
             show_in_screenshots: read(w!("showInScreenshots")).is_some_and(|v| v != 0),
             welcomed: read(w!("welcomed")).is_some_and(|v| v != 0),
+            halloween: read(w!("halloween")).is_none_or(|v| v != 0),
         }
     }
 
@@ -48,6 +51,7 @@ impl Settings {
         write(w!("behindWindows"), self.behind_windows as u32);
         write(w!("showInScreenshots"), self.show_in_screenshots as u32);
         write(w!("welcomed"), self.welcomed as u32);
+        write(w!("halloween"), self.halloween as u32);
     }
 }
 

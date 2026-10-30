@@ -1,4 +1,6 @@
-use std::mem::size_of;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::mem::{offset_of, size_of};
 
 use windows::Win32::Foundation::{HMODULE, HWND};
 use windows::Win32::Graphics::Direct3D::Fxc::{D3DCOMPILE_OPTIMIZATION_LEVEL3, D3DCompile};
@@ -11,8 +13,8 @@ use windows::Win32::Graphics::DirectComposition::{
     DCOMPOSITION_BITMAP_INTERPOLATION_MODE_LINEAR, DCompositionCreateDevice, IDCompositionDevice, IDCompositionTarget, IDCompositionVisual,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R32_FLOAT, DXGI_FORMAT_R32G32_FLOAT,
-    DXGI_FORMAT_R32G32B32_FLOAT, DXGI_SAMPLE_DESC,
+    DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R32_FLOAT,
+    DXGI_FORMAT_R32G32_FLOAT, DXGI_FORMAT_R32G32B32_FLOAT, DXGI_FORMAT_R32G32B32A32_FLOAT, DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::{
     DXGI_PRESENT, DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIAdapter,
@@ -21,9 +23,19 @@ use windows::Win32::Graphics::Dxgi::{
 use windows::core::{Error, Interface, PCSTR, Result, s};
 use windows_numerics::Matrix3x2;
 
+use snowhush_core::geometry::V2;
 use snowhush_core::simulation::{COLUMN_WIDTH, SnowSimulation, Sprite};
 
+use crate::halloween::{self, SIGN_SCALE};
+use crate::log;
+
 const SHADERS: &str = include_str!("shaders.hlsl");
+/// How far the cursor's candlelight reaches, in points.
+const LANTERN_REACH: f32 = 130.0;
+
+// The sprites' input layout reads a ghost's parts at these offsets.
+const _: () =
+    assert!(offset_of!(Sprite, ghost) == 48 && offset_of!(Sprite, pose) == 64 && offset_of!(Sprite, mood) == 80 && size_of::<Sprite>() == 88);
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -40,7 +52,23 @@ struct Uniforms {
     height_offset: i32,
     light: [f32; 4],
     shadow_tint: [f32; 4],
+    rim: [f32; 4],
+    /// The cursor's glow: where it is, how far it reaches and how bright it is.
+    lantern: [f32; 4],
+    /// How far everything is jolted: x and y.
+    shake: [f32; 4],
     occluders: [[f32; 4]; 16],
+}
+
+/// Where a sign stands: its stick's foot, its size in points, how far it is turned and the drift's surface it comes up out of.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Placement {
+    anchor: [f32; 2],
+    size: [f32; 2],
+    angle: f32,
+    ground: f32,
+    padding: [f32; 2],
 }
 
 /// The light the snow is drawn in.
@@ -48,7 +76,14 @@ struct Uniforms {
 pub struct Ambient {
     pub light: [f32; 3],
     pub shadow_tint: [f32; 4],
+    /// The colour the snow's surface glows, and how much.
+    pub rim: [f32; 4],
+    /// The cursor, in points, glowing like a candle in a jack-o'-lantern, and how brightly.
+    pub lantern: (V2, f32),
 }
+
+/// A sign's picture on the graphics card, and its size in points.
+type Picture = (ID3D11ShaderResourceView, [f32; 2]);
 
 pub struct Gpu {
     device: ID3D11Device,
@@ -60,9 +95,15 @@ pub struct Gpu {
     sprite_layout: ID3D11InputLayout,
     pile_vertex: ID3D11VertexShader,
     pile_fragment: ID3D11PixelShader,
+    sign_vertex: ID3D11VertexShader,
+    sign_fragment: ID3D11PixelShader,
+    sampler: ID3D11SamplerState,
     blend: ID3D11BlendState,
     raster: ID3D11RasterizerState,
     uniforms: ID3D11Buffer,
+    placement: ID3D11Buffer,
+    /// Each caption's sign, made the first time a ghost holds it up; none if it couldn't be.
+    signs: RefCell<HashMap<usize, Option<Picture>>>,
     pub adapter: String,
 }
 
@@ -97,6 +138,8 @@ impl Gpu {
             let pile_vertex = vertex_shader(&device, &pile_code)?;
             let sprite_fragment = pixel_shader(&device, &compile(s!("spriteFragment"), s!("ps_4_0"))?)?;
             let pile_fragment = pixel_shader(&device, &compile(s!("pileFragment"), s!("ps_4_0"))?)?;
+            let sign_vertex = vertex_shader(&device, &compile(s!("signVertex"), s!("vs_4_0"))?)?;
+            let sign_fragment = pixel_shader(&device, &compile(s!("signFragment"), s!("ps_4_0"))?)?;
 
             let element = |name: PCSTR, format: DXGI_FORMAT, offset: u32| D3D11_INPUT_ELEMENT_DESC {
                 SemanticName: name,
@@ -116,6 +159,9 @@ impl Gpu {
                 element(s!("TINTAMOUNT"), DXGI_FORMAT_R32_FLOAT, 28),
                 element(s!("TINTCOLOR"), DXGI_FORMAT_R32G32B32_FLOAT, 32),
                 element(s!("LUMP"), DXGI_FORMAT_R32_FLOAT, 44),
+                element(s!("GHOST"), DXGI_FORMAT_R32G32B32A32_FLOAT, 48),
+                element(s!("POSE"), DXGI_FORMAT_R32G32B32A32_FLOAT, 64),
+                element(s!("MOOD"), DXGI_FORMAT_R32G32_FLOAT, 80),
             ];
             let mut sprite_layout = None;
             device.CreateInputLayout(&elements, blob_bytes(&sprite_code), Some(&mut sprite_layout))?;
@@ -139,7 +185,21 @@ impl Gpu {
             let mut raster = None;
             device.CreateRasterizerState(&raster_desc, Some(&mut raster))?;
 
+            let sampler_desc = D3D11_SAMPLER_DESC {
+                Filter: D3D11_FILTER_MIN_MAG_MIP_LINEAR,
+                AddressU: D3D11_TEXTURE_ADDRESS_CLAMP,
+                AddressV: D3D11_TEXTURE_ADDRESS_CLAMP,
+                AddressW: D3D11_TEXTURE_ADDRESS_CLAMP,
+                MaxAnisotropy: 1,
+                ComparisonFunc: D3D11_COMPARISON_NEVER,
+                MaxLOD: f32::MAX,
+                ..Default::default()
+            };
+            let mut sampler = None;
+            device.CreateSamplerState(&sampler_desc, Some(&mut sampler))?;
+
             let uniforms = dynamic_buffer(&device, size_of::<Uniforms>(), D3D11_BIND_CONSTANT_BUFFER)?;
+            let placement = dynamic_buffer(&device, size_of::<Placement>(), D3D11_BIND_CONSTANT_BUFFER)?;
 
             Ok(Gpu {
                 device,
@@ -151,22 +211,58 @@ impl Gpu {
                 sprite_layout: sprite_layout.ok_or_else(Error::empty)?,
                 pile_vertex,
                 pile_fragment,
+                sign_vertex,
+                sign_fragment,
+                sampler: sampler.ok_or_else(Error::empty)?,
                 blend: blend.ok_or_else(Error::empty)?,
                 raster: raster.ok_or_else(Error::empty)?,
                 uniforms,
+                placement,
+                signs: RefCell::new(HashMap::new()),
                 adapter: String::from_utf16_lossy(&description.Description[..name_length]),
             })
         }
     }
 
-    fn write_uniforms(&self, uniforms: &Uniforms) -> Result<()> {
+    fn write<T: Copy>(&self, buffer: &ID3D11Buffer, value: &T) -> Result<()> {
         unsafe {
             let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
-            self.context.Map(&self.uniforms, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped))?;
-            mapped.pData.cast::<Uniforms>().write(*uniforms);
-            self.context.Unmap(&self.uniforms, 0);
+            self.context.Map(buffer, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped))?;
+            mapped.pData.cast::<T>().write(*value);
+            self.context.Unmap(buffer, 0);
         }
         Ok(())
+    }
+
+    fn sign(&self, caption: usize) -> Option<Picture> {
+        let mut signs = self.signs.borrow_mut();
+        let picture =
+            signs.entry(caption).or_insert_with(|| self.make_sign(caption).inspect_err(|error| log!("sign {caption} failed: {error}")).ok());
+        picture.clone()
+    }
+
+    fn make_sign(&self, caption: usize) -> Result<Picture> {
+        let picture = halloween::sign_picture(caption)?;
+        let desc = D3D11_TEXTURE2D_DESC {
+            Width: picture.width,
+            Height: picture.height,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            Usage: D3D11_USAGE_IMMUTABLE,
+            BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+            CPUAccessFlags: 0,
+            MiscFlags: 0,
+        };
+        let data = D3D11_SUBRESOURCE_DATA { pSysMem: picture.pixels.as_ptr().cast(), SysMemPitch: picture.width * 4, SysMemSlicePitch: 0 };
+        let mut texture = None;
+        let mut view = None;
+        unsafe {
+            self.device.CreateTexture2D(&desc, Some(&data), Some(&mut texture))?;
+            self.device.CreateShaderResourceView(&texture.ok_or_else(Error::empty)?, None, Some(&mut view))?;
+        }
+        Ok((view.ok_or_else(Error::empty)?, [picture.width as f32 / SIGN_SCALE, picture.height as f32 / SIGN_SCALE]))
     }
 }
 
@@ -258,10 +354,12 @@ impl Surface {
             context.RSSetState(&gpu.raster);
             context.OMSetBlendState(&gpu.blend, None, u32::MAX);
             context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
-            let constants = Some(gpu.uniforms.clone());
-            context.VSSetConstantBuffers(0, Some(&[constants.clone()]));
-            context.PSSetConstantBuffers(0, Some(&[constants]));
+            let constants = [Some(gpu.uniforms.clone()), Some(gpu.placement.clone())];
+            context.VSSetConstantBuffers(0, Some(&constants));
+            context.PSSetConstantBuffers(0, Some(&constants));
 
+            let (cursor, glow) = ambient.lantern;
+            let shake = simulation.shake();
             let mut uniforms = Uniforms {
                 view_size: [simulation.width(), simulation.height()],
                 scale: 1.0,
@@ -275,6 +373,9 @@ impl Surface {
                 height_offset: 0,
                 light: [ambient.light[0], ambient.light[1], ambient.light[2], 1.0],
                 shadow_tint: ambient.shadow_tint,
+                rim: ambient.rim,
+                lantern: [cursor.x, cursor.y, LANTERN_REACH, glow],
+                shake: [shake.x, shake.y, 0.0, 0.0],
                 occluders: [[0.0; 4]; 16],
             };
 
@@ -291,13 +392,29 @@ impl Surface {
                     uniforms.height_offset = pile.offset as i32;
                     uniforms.occluder_count = pile.occluders.len().min(16) as i32;
                     uniforms.occluders[..pile.occluders.len().min(16)].copy_from_slice(&pile.occluders[..pile.occluders.len().min(16)]);
-                    gpu.write_uniforms(&uniforms)?;
+                    gpu.write(&gpu.uniforms, &uniforms)?;
+                    context.Draw(4, 0);
+                }
+            }
+            uniforms.occluder_count = 0;
+            let signs = simulation.signs();
+            if !signs.is_empty() {
+                gpu.write(&gpu.uniforms, &uniforms)?;
+                context.IASetInputLayout(None);
+                context.VSSetShader(&gpu.sign_vertex, None);
+                context.PSSetShader(&gpu.sign_fragment, None);
+                context.PSSetSamplers(0, Some(&[Some(gpu.sampler.clone())]));
+                for sign in &signs {
+                    let Some((picture, size)) = gpu.sign(sign.caption) else { continue };
+                    let placement =
+                        Placement { anchor: [sign.anchor.x, sign.anchor.y], size, angle: sign.angle, ground: sign.ground, padding: [0.0; 2] };
+                    gpu.write(&gpu.placement, &placement)?;
+                    context.PSSetShaderResources(1, Some(&[Some(picture)]));
                     context.Draw(4, 0);
                 }
             }
             if sprites > 0 {
-                uniforms.occluder_count = 0;
-                gpu.write_uniforms(&uniforms)?;
+                gpu.write(&gpu.uniforms, &uniforms)?;
                 let stride = size_of::<Sprite>() as u32;
                 let offset = 0;
                 context.IASetInputLayout(&gpu.sprite_layout);

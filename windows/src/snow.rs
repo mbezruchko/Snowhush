@@ -17,7 +17,8 @@ use snowhush_core::geometry::V2;
 use snowhush_core::simulation::{ScatterPiece, SnowSimulation, Snowfall};
 
 use crate::desktop::{self, DesktopLayer};
-use crate::light::{Wallpapers, daylight};
+use crate::halloween::season;
+use crate::light::{Sky, Wallpapers};
 use crate::log;
 use crate::prefs::Settings;
 use crate::render::Gpu;
@@ -48,6 +49,8 @@ pub enum Command {
     ReleaseSnowfall,
     /// Blows all the snow away; when calm, for less motion, melts it where it lies instead.
     ClearSnow(bool),
+    /// Whether Halloween is wanted when it comes.
+    Halloween(bool),
     Quit,
 }
 
@@ -84,7 +87,8 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
     let started = Clock::now();
     let mut active = true;
     let mut budget = PowerBudget::Full;
-    let mut light = daylight();
+    let mut halloween = settings.halloween && season();
+    let mut sky = Sky::now(halloween);
     let wallpapers = Wallpapers::new().inspect_err(|error| log!("wallpapers unavailable: {error}")).ok();
     let mut chores_at = 0;
     let mut light_at = 0;
@@ -152,6 +156,11 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                 Command::ClearSnow(calm) => {
                     let direction = screens.first().map_or(-1.0, |screen| screen.simulation.breeze_direction());
                     screens.iter_mut().for_each(|screen| screen.simulation.blow_away(direction, calm));
+                }
+                Command::Halloween(on) => {
+                    settings.halloween = on;
+                    chores_at = 0;
+                    light_at = 0;
                 }
                 Command::Active(on) => {
                     if on && !active {
@@ -226,7 +235,13 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
             }
             if now >= light_at {
                 light_at = now + clock.frequency * 60;
-                light = daylight();
+                let on = settings.halloween && season();
+                if on != halloween {
+                    halloween = on;
+                    log!("halloween: {on}");
+                    screens.iter_mut().for_each(|screen| screen.simulation.set_halloween(on));
+                }
+                sky = Sky::now(halloween);
                 if let Some(wallpapers) = &wallpapers {
                     screens.iter_mut().for_each(|screen| screen.update_backdrop(wallpapers));
                 }
@@ -256,7 +271,7 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                     continue;
                 }
                 let began = Clock::now();
-                match screen.frame(&gpu, &clock, now, budget, light, time, windows) {
+                match screen.frame(&gpu, &clock, now, budget, sky, time, windows) {
                     Ok(drew) => {
                         stats.frame(drew, Clock::now() - began, screen.simulation.sprite_count());
                         released |= screen.simulation.take_snowfall_released();
@@ -349,6 +364,7 @@ fn new_simulation(monitor: &Monitor, settings: &Settings) -> SnowSimulation {
     simulation.thaws = settings.melt;
     simulation.accumulates = settings.accumulate;
     simulation.set_snowfall_held(!settings.welcomed);
+    simulation.set_halloween(settings.halloween && season());
     simulation
 }
 

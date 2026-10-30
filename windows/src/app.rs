@@ -19,6 +19,7 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{PCWSTR, Result, w};
 
+use crate::halloween;
 use crate::log;
 use crate::prefs::{self, Settings};
 use crate::snow::{self, Command, Links};
@@ -39,8 +40,10 @@ const ID_BEHIND: u32 = 205;
 const ID_QUIT: u32 = 299;
 const ID_UPDATES: u32 = 206;
 const ID_CLEAR: u32 = 207;
+const ID_HALLOWEEN: u32 = 208;
 const TIMER_WELCOME: usize = 1;
 const TIMER_UPDATES: usize = 2;
+const TIMER_HALLOWEEN: usize = 3;
 const WM_UPDATE: u32 = WM_APP + 2;
 /// The shell's message for a click on the tray notification.
 const NIN_BALLOONUSERCLICK: u32 = WM_USER + 5;
@@ -54,6 +57,8 @@ struct App {
     wake: HANDLE,
     snow: Option<JoinHandle<()>>,
     icon: HICON,
+    /// Whether the tray shows the jack-o'-lantern.
+    halloween: bool,
     locked: bool,
     display_off: bool,
     away: bool,
@@ -87,7 +92,8 @@ pub fn run() -> Result<()> {
         let wake = CreateEventW(None, false, false, None)?;
         let links = Links { wake: wake.0 as isize, controller: window.0 as isize };
         let snow = thread::Builder::new().name("snow".into()).spawn(move || snow::run(receiver, links, settings)).ok();
-        let icon = tray_icon();
+        let halloween = settings.halloween && halloween::season();
+        let icon = tray_icon(halloween);
         add_tray_icon(window, icon);
         let _ = WTSRegisterSessionNotification(window, NOTIFY_FOR_THIS_SESSION);
         let _ = RegisterPowerSettingNotification(HANDLE(window.0), &GUID_CONSOLE_DISPLAY_STATE, DEVICE_NOTIFY_WINDOW_HANDLE);
@@ -95,7 +101,8 @@ pub fn run() -> Result<()> {
             SetTimer(Some(window), TIMER_WELCOME, 1200, None);
         }
         SetTimer(Some(window), TIMER_UPDATES, 30_000, None);
-        APP.set(Some(App { settings, commands, wake, snow, icon, locked: false, display_off: false, away: false, update: None }));
+        SetTimer(Some(window), TIMER_HALLOWEEN, 60_000, None);
+        APP.set(Some(App { settings, commands, wake, snow, icon, halloween, locked: false, display_off: false, away: false, update: None }));
 
         let mut message = MSG::default();
         while GetMessageW(&mut message, None, 0, 0).as_bool() {
@@ -146,6 +153,10 @@ unsafe extern "system" fn procedure(window: HWND, message: u32, wparam: WPARAM, 
         WM_TIMER if wparam.0 == TIMER_UPDATES => {
             unsafe { SetTimer(Some(window), TIMER_UPDATES, DAY, None) };
             check_for_updates(window, false);
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == TIMER_HALLOWEEN => {
+            refresh_halloween(window);
             LRESULT(0)
         }
         WM_UPDATE => {
@@ -233,6 +244,9 @@ fn show_menu(window: HWND, x: i32, y: i32) {
         let windows = MF_STRING | checked(settings.snow_on_windows) | if settings.behind_windows { MF_GRAYED } else { MF_ENABLED };
         let _ = AppendMenuW(menu, windows, ID_WINDOWS as usize, w!("Snow on Windows"));
         let _ = AppendMenuW(menu, MF_STRING, ID_CLEAR as usize, w!("Clear Snow"));
+        if halloween::season() {
+            let _ = AppendMenuW(menu, MF_STRING | checked(settings.halloween), ID_HALLOWEEN as usize, w!("Halloween"));
+        }
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
         let _ = AppendMenuW(menu, MF_STRING | checked(settings.behind_windows), ID_BEHIND as usize, w!("Behind Windows"));
         let _ = AppendMenuW(menu, MF_STRING | checked(settings.show_in_screenshots), ID_SCREENSHOTS as usize, w!("Show in Screenshots"));
@@ -264,6 +278,15 @@ fn choose(window: HWND, chosen: u32, login: bool) {
         ID_LOGIN => {
             let status = prefs::set_opens_at_login(!login);
             log!("open at login {}: {status:?}", !login);
+        }
+        ID_HALLOWEEN => {
+            APP.with_borrow_mut(|app| {
+                let Some(app) = app else { return };
+                app.settings.halloween = !app.settings.halloween;
+                app.settings.save();
+                send(app, Command::Halloween(app.settings.halloween));
+            });
+            refresh_halloween(window);
         }
         _ => APP.with_borrow_mut(|app| {
             let Some(app) = app else { return };
@@ -384,10 +407,40 @@ fn quit(window: HWND) {
     unsafe { PostQuitMessage(0) };
 }
 
-/// The app icon from the executable's resources, at the tray's size for the display's scale.
-fn tray_icon() -> HICON {
+/// Puts a jack-o'-lantern in the tray while it is Halloween and wanted, and the app icon back after.
+fn refresh_halloween(window: HWND) {
+    APP.with_borrow_mut(|app| {
+        let Some(app) = app else { return };
+        let on = app.settings.halloween && halloween::season();
+        if on == app.halloween {
+            return;
+        }
+        app.halloween = on;
+        let icon = tray_icon(on);
+        let data = NOTIFYICONDATAW {
+            cbSize: size_of::<NOTIFYICONDATAW>() as u32,
+            hWnd: window,
+            uID: 1,
+            uFlags: NIF_ICON,
+            hIcon: icon,
+            ..Default::default()
+        };
+        unsafe {
+            let _ = Shell_NotifyIconW(NIM_MODIFY, &data);
+            let _ = DestroyIcon(app.icon);
+        }
+        app.icon = icon;
+    });
+}
+
+/// The tray's icon at its size for the display's scale: the jack-o'-lantern with `pumpkin`, or when it can't be had,
+/// the app icon from the executable's resources.
+fn tray_icon(pumpkin: bool) -> HICON {
     unsafe {
         let size = GetSystemMetricsForDpi(SM_CXSMICON, GetDpiForSystem());
+        if pumpkin && let Some(icon) = halloween::pumpkin(size) {
+            return icon;
+        }
         let Ok(instance) = GetModuleHandleW(None) else { return HICON::default() };
         LoadImageW(Some(instance.into()), PCWSTR(1 as *const u16), IMAGE_ICON, size, size, LR_DEFAULTCOLOR)
             .map_or(HICON::default(), |icon| HICON(icon.0))

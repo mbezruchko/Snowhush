@@ -12,14 +12,35 @@ use windows::Win32::System::SystemInformation::GetLocalTime;
 use windows::Win32::UI::Shell::{DesktopWallpaper, IDesktopWallpaper};
 use windows::core::{PCWSTR, PWSTR, Result};
 
-use snowhush_core::geometry::smoothstep;
+use snowhush_core::halloween;
+
+/// What the hour brings to the snow's light: daylight, and how far into Halloween night it is.
+#[derive(Clone, Copy)]
+pub struct Sky {
+    pub daylight: [f32; 3],
+    pub night: f32,
+}
+
+impl Sky {
+    /// The sky now; `halloween` while it is Halloween and wanted.
+    pub fn now(halloween: bool) -> Sky {
+        let hour = hour();
+        Sky { daylight: daylight(hour), night: halloween::night(halloween, hour) }
+    }
+}
+
+/// The local time of day in hours, or the hour being previewed.
+fn hour() -> f32 {
+    halloween::previewed_hour().unwrap_or_else(|| {
+        let now = unsafe { GetLocalTime() };
+        now.wHour as f32 + now.wMinute as f32 / 60.0
+    })
+}
 
 /// The scene turns warmer at dawn and dusk, cooler and dimmer at night.
 /// Clock-based rather than solar: close enough for mood, and needs no location.
-pub fn daylight() -> [f32; 3] {
-    let now = unsafe { GetLocalTime() };
-    let hour = now.wHour as f32 + now.wMinute as f32 / 60.0;
-    let day = smoothstep(6.0, 8.5, hour) * (1.0 - smoothstep(17.5, 20.5, hour));
+fn daylight(hour: f32) -> [f32; 3] {
+    let day = halloween::daylight_share(hour);
     let golden = ((-((hour - 7.6) / 1.1).powi(2)).exp() + (-((hour - 18.6) / 1.2).powi(2)).exp()).min(1.0);
     let night = [0.86, 0.89, 0.97];
     let warm = [1.0, 0.965, 0.915];
