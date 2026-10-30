@@ -31,6 +31,8 @@ struct Sprite {
     float tintBlue;
     float lump;
     float ghost;
+    float ground;
+    float eyes;
 };
 
 struct SpriteOut {
@@ -46,6 +48,8 @@ struct SpriteOut {
     float spin;
     float warm;
     float ghost;
+    float ground;
+    float eyes;
 };
 
 constant float3 candle = float3(1.0, 0.62, 0.26);
@@ -83,7 +87,11 @@ vertex SpriteOut spriteVertex(uint vid [[vertex_id]],
     out.spin = s.lump > 0.0 ? u.time * (s.lump - 0.5) * 9.0 + s.lump * 40.0 : 0.0;
     out.warm = candlelight(u, s.position);
     out.ghost = s.ghost;
-    if (s.ghost > 0.0) out.spin = u.time + s.ghost * 40.0;
+    if (s.ghost > 0.0) {
+        out.spin = u.time + s.ghost * 40.0;
+        out.ground = (s.ground - s.position.y) / max(s.size, 0.001);
+        out.eyes = s.eyes;
+    }
     return out;
 }
 
@@ -91,15 +99,28 @@ fragment float4 spriteFragment(SpriteOut in [[stage_in]], float2 coord [[point_c
     // Point coordinates run down the screen; velocities run up.
     float2 p = float2(coord.x - 0.5, 0.5 - coord.y);
     if (in.ghost > 0.0) {
-        // A sheet over a round head, flaring to a scalloped hem; the lower it hangs, the further it billows.
-        float2 q = float2(p.x - sin(in.spin * 1.3 + p.y * 4.0) * 0.05 * (0.12 - p.y), p.y);
-        float side = 0.27 + max(0.12 - q.y, 0.0) * 0.12;
-        float hem = -0.36 + 0.05 * cos(q.x * 34.0 + in.spin * 3.0);
-        float inside = q.y > 0.12 ? 0.27 - length(q - float2(0.0, 0.12)) : min(side - abs(q.x), q.y - hem);
-        float a = smoothstep(0.0, 0.035, inside) * in.alpha * mix(0.5, 1.0, smoothstep(-0.36, 0.12, q.y));
+        // A sheet over a tall round head, flaring into folds; the lower it hangs, the further it billows.
+        float t = in.spin;
+        float2 q = float2(p.x - sin(t * 1.2 + p.y * 3.5) * 0.03 * (0.22 - p.y), p.y);
+        float side = 0.17 + pow(max(0.22 - q.y, 0.0), 1.3) * 0.35;
+        float hem = -0.46 + 0.03 * sin(q.x * 20.0 + t * 2.5) + 0.015 * sin(q.x * 43.0 - t * 3.1);
+        float inside = q.y > 0.22 ? 0.17 - length(q - float2(0.0, 0.22)) : min(side - abs(q.x), q.y - hem);
+        // Nothing of it shows below the drift's surface, and it is snow-white where it comes out.
+        float above = smoothstep(in.ground - 0.01, in.ground + 0.025, p.y);
+        float a = smoothstep(0.0, 0.025, inside) * above * in.alpha;
         if (a < 0.002) discard_fragment();
-        float3 color = mix(float3(0.62, 0.67, 0.79), float3(0.96, 0.97, 1.0), smoothstep(0.0, 0.12, inside)) * in.light;
-        color = mix(color, candle, in.warm * 0.35);
+        float folds = (0.5 + 0.5 * sin(q.x / side * 7.5 + sin(q.y * 5.0 + t * 0.9) * 0.8)) * smoothstep(0.18, -0.25, q.y);
+        float3 color = mix(float3(0.93, 0.95, 0.98), float3(0.6, 0.65, 0.76), folds * 0.35 + (1.0 - smoothstep(0.0, 0.1, inside)) * 0.4);
+        color += smoothstep(0.1, 0.0, length(q - float2(-0.05, 0.3))) * 0.06;
+        color = mix(color, float3(0.97, 0.98, 1.0), smoothstep(in.ground + 0.1, in.ground, p.y) * 0.7);
+        color = mix(color * in.light, candle, in.warm * 0.35);
+        // Two dark eyes that blink now and then.
+        float blink = step(fract(t * 0.29 + in.ghost * 7.0), 0.035);
+        float2 eye = float2(0.03, 0.042 * (1.0 - 0.85 * blink));
+        float eyes = max(1.0 - smoothstep(0.75, 1.0, length((q - float2(-0.065, 0.24)) / eye)),
+                         1.0 - smoothstep(0.75, 1.0, length((q - float2(0.065, 0.24)) / eye))) * in.eyes;
+        color = mix(color, float3(0.06, 0.06, 0.09), eyes);
+        a = mix(a, 0.95 * above, eyes);
         return float4(color * a, a);
     }
     float2 half_ = in.streak * 0.5;

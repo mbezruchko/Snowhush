@@ -16,8 +16,12 @@ struct Sprite {
     var tintBlue: Float = 1
     /// Gives a lump of snow its ragged outline and tumble; zero for a round flake.
     var lump: Float = 0
-    /// Draws a ghost instead, its waving tail timed by the value; zero for snow.
+    /// Draws a ghost instead, its billowing timed by the value; zero for snow.
     var ghost: Float = 0
+    /// For a ghost, the drift's surface it rises out of: nothing of it shows below.
+    var ground: Float = 0
+    /// For a ghost, how far its eyes are open.
+    var eyes: Float = 0
 }
 
 /// A bit of something that crumbles into snow, such as a window: it keeps its colour for a moment while it falls.
@@ -78,14 +82,24 @@ private struct Mote {
     var life: Float
 }
 
-/// A wisp that rises off a drift on Halloween, sways up and away and fades.
+/// A ghost made of a drift's snow on Halloween: it grows part way out of the drift, sways a while and sinks back.
 private struct Ghost {
-    var position: SIMD2<Float>
-    var velocity: SIMD2<Float>
-    var size: Float
-    var seed: Float
+    let layer: SnowLayer
+    let column: Int
+    let size: Float
+    let seed: Float
+    /// When it starts sinking back.
+    let stay: Float
     var age: Float = 0
-    var life: Float
+    /// How far it has risen, from still under the snow at 0 to as far out as it comes at 1.
+    var risen: Float = 0
+    /// Snow it has drawn out of the drift around it, which goes back when it sinks or crumbles.
+    var taken: Float = 0
+
+    /// The share of its height out of the snow.
+    var out: Float { 0.5 * (1 - pow(1 - risen, 2)) }
+    /// Its reach either side, in columns: its widest, which stays in the snow.
+    var reach: Int { Int((size * 0.4 / layer.columnWidth).rounded(.up)) }
 }
 
 private struct RandomSource {
@@ -326,8 +340,16 @@ final class SnowSimulation {
             count += 1
         }
         for ghost in ghosts where count < capacity {
-            let fade = min(1, ghost.age / 1.2) * min(1, (ghost.life - ghost.age) / 2.5)
-            buffer[count] = Sprite(position: ghost.position, size: ghost.size, alpha: 0.5 * fade, soft: 1, ghost: 1 + ghost.seed)
+            let (ground, center) = placement(of: ghost)
+            buffer[count] = Sprite(
+                position: center,
+                size: ghost.size,
+                alpha: 0.9,
+                soft: 1,
+                ghost: 1 + ghost.seed,
+                ground: ground,
+                eyes: smoothstep(0.55, 0.85, ghost.risen)
+            )
             count += 1
         }
         return count
@@ -1071,25 +1093,27 @@ final class SnowSimulation {
         }
     }
 
-    /// On Halloween a ghost rises off a drift now and then and sways up and away, shying from the cursor.
+    /// On Halloween a ghost grows out of a drift now and then; the cursor's touch crumbles it back into snow.
     private func haunt(dt: Float) {
         if halloween, clock >= nextGhost {
-            nextGhost = clock + Double(random.range(20, 40))
-            if ghosts.count < 3 { raiseGhost() }
+            nextGhost = clock + Double(ghosts.count >= 3 || raiseGhost() ? random.range(20, 40) : 5)
         }
         var i = ghosts.count - 1
         while i >= 0 {
             var ghost = ghosts[i]
             ghost.age += dt
-            var target = SIMD2(sin(ghost.age * 1.1 + ghost.seed * 6) * 18 + windSpeed() * 0.15, 30)
-            if let cursor {
-                let away = ghost.position - cursor
-                let distance = simd_length(away)
-                if distance > 0.01, distance < 160 { target += away / distance * (1 - distance / 160) * 260 }
+            var gone = !layers.contains { $0 === ghost.layer }
+            if !gone, let cursor, touches(ghost, cursor) {
+                crumble(ghost)
+                gone = true
+            } else if !gone {
+                let rising = ghost.age < ghost.stay
+                ghost.risen = rising ? min(1, ghost.risen + dt / 2.5) : max(0, ghost.risen - dt / 2)
+                gather(&ghost, to: ghost.size * ghost.size * 0.08 * ghost.out)
+                if rising, ghost.risen < 1, random.next() < dt * 8 { stir(ghost) }
+                gone = !rising && ghost.risen <= 0
             }
-            ghost.velocity += (target - ghost.velocity) * min(1, dt * 2)
-            ghost.position += ghost.velocity * dt
-            if ghost.age >= ghost.life || ghost.position.y > height + ghost.size {
+            if gone {
                 ghosts.swapAt(i, ghosts.count - 1)
                 ghosts.removeLast()
             } else {
@@ -1099,27 +1123,106 @@ final class SnowSimulation {
         }
     }
 
-    /// Out of a drift, with a puff of its powder, or from below the screen when there is none to rise from.
-    private func raiseGhost() {
-        var start = SIMD2(random.range(width * 0.1, width * 0.9), -10)
-        for _ in 0..<12 {
-            let layer = layers[min(Int(random.next() * Float(layers.count)), layers.count - 1)]
-            guard layer.count > 0 else { continue }
-            let i = min(Int(random.next() * Float(layer.count)), layer.count - 1)
-            guard layer.visible[i], layer.heights[i] > 3 else { continue }
-            start = SIMD2(layer.centerX(i), layer.surface(i))
-            for _ in 0..<6 where motes.count < maxMotes {
-                motes.append(Mote(
-                    position: start + SIMD2(random.range(-8, 8), 0),
-                    velocity: SIMD2(random.range(-30, 30), random.range(20, 70)),
-                    size: random.range(6, 12),
-                    alpha: random.range(0.08, 0.14),
-                    life: random.range(0.6, 1.2)
-                ))
-            }
-            break
+    /// Picks a deep enough stretch of drift clear of other ghosts and levels the snow it will rise out of.
+    private func raiseGhost() -> Bool {
+        let size = random.range(56, 76)
+        let candidates = layers.filter { !$0.isDock }
+        guard !candidates.isEmpty else { return false }
+        for _ in 0..<16 {
+            let layer = candidates[min(Int(random.next() * Float(candidates.count)), candidates.count - 1)]
+            let reach = Int((size * 0.4 / layer.columnWidth).rounded(.up))
+            let room = layer.count - reach * 6
+            guard room > 1 else { continue }
+            let column = reach * 3 + min(Int(random.next() * Float(room)), room - 1)
+            let under = (column - reach)...(column + reach)
+            guard layer.heights[column] > 6, under.allSatisfy({ layer.visible[$0] }),
+                  !ghosts.contains(where: { $0.layer === layer && abs($0.column - column) < reach * 4 })
+            else { continue }
+            let level = under.reduce(0) { $0 + layer.heights[$1] } / Float(under.count)
+            for j in under { layer.set(j, level) }
+            heightsChanged = true
+            ghosts.append(Ghost(layer: layer, column: column, size: size, seed: random.next(), stay: random.range(6.5, 9)))
+            return true
         }
-        ghosts.append(Ghost(position: start, velocity: SIMD2(0, 20), size: random.range(40, 56), seed: random.next(), life: random.range(7, 10)))
+        return false
+    }
+
+    /// Where a ghost stands: the drift's surface below it, and the middle of its sprite.
+    private func placement(of ghost: Ghost) -> (ground: Float, center: SIMD2<Float>) {
+        let ground = ghost.layer.surface(ghost.column)
+        // Its head's top lies 0.39 of its size above the middle, its hem 0.46 below.
+        return (ground, SIMD2(ghost.layer.centerX(ghost.column), ground + ghost.size * (ghost.out * 0.85 - 0.39)))
+    }
+
+    private func touches(_ ghost: Ghost, _ point: SIMD2<Float>) -> Bool {
+        let (ground, center) = placement(of: ghost)
+        let top = ground + ghost.out * 0.85 * ghost.size
+        return ghost.out > 0.15 && abs(point.x - center.x) < ghost.size * 0.3 && point.y > ground && point.y < top
+    }
+
+    /// Draws snow out of the drift around the ghost, leaving what it stands in, or gives it back, until it holds `target`.
+    private func gather(_ ghost: inout Ghost, to target: Float) {
+        let delta = target - ghost.taken
+        guard abs(delta) > 0.01 else { return }
+        let layer = ghost.layer
+        let reach = ghost.reach
+        let ring = Array(max(ghost.column - reach * 3, 0)..<max(ghost.column - reach, 0))
+            + Array(min(ghost.column + reach + 1, layer.count)..<min(ghost.column + reach * 3 + 1, layer.count))
+        guard !ring.isEmpty else { return }
+        let each = delta / (Float(ring.count) * layer.columnWidth)
+        var moved: Float = 0
+        for j in ring {
+            let height = layer.heights[j]
+            let change = delta > 0 ? min(each, height * 0.5) : each
+            layer.set(j, height - change)
+            moved += change * layer.columnWidth
+        }
+        ghost.taken += moved
+        heightsChanged = true
+    }
+
+    /// A little powder kicked up where the ghost breaks the drift's surface.
+    private func stir(_ ghost: Ghost) {
+        guard motes.count < maxMotes else { return }
+        let (ground, center) = placement(of: ghost)
+        let side: Float = random.next() < 0.5 ? -1 : 1
+        motes.append(Mote(
+            position: SIMD2(center.x + side * ghost.size * random.range(0.15, 0.3), ground),
+            velocity: SIMD2(side * random.range(10, 50), random.range(15, 60)),
+            size: random.range(6, 12),
+            alpha: random.range(0.08, 0.14),
+            life: random.range(0.6, 1.2)
+        ))
+    }
+
+    /// The ghost falls apart into the snow it was made of, which tumbles back onto the drift.
+    private func crumble(_ ghost: Ghost) {
+        let (ground, center) = placement(of: ghost)
+        let height = ghost.out * 0.85 * ghost.size
+        var left = ghost.taken
+        while left > 0.3, grains.count < maxGrains {
+            let area = min(left, random.range(0.6, 1.6))
+            left -= area
+            let up = random.next()
+            let half = ghost.size * (0.12 + 0.18 * (1 - up))
+            grains.append(Grain(
+                position: SIMD2(center.x + random.range(-half, half), ground + up * height),
+                velocity: SIMD2(random.range(-70, 70), random.range(-20, 90)),
+                area: area,
+                size: random.range(1.2, 2.6)
+            ))
+        }
+        if left > 0 { _ = ghost.layer.deposit(left, at: center.x, wide: true) }
+        for _ in 0..<10 where motes.count < maxMotes {
+            motes.append(Mote(
+                position: SIMD2(center.x + random.range(-0.25, 0.25) * ghost.size, ground + random.next() * height),
+                velocity: SIMD2(random.range(-60, 60), random.range(-10, 60)),
+                size: random.range(8, 16),
+                alpha: random.range(0.08, 0.15),
+                life: random.range(0.6, 1.3)
+            ))
+        }
+        heightsChanged = true
     }
 
     /// Turns the pieces into snowflakes that drift down and fade to white; together they leave a small drift.
