@@ -22,6 +22,10 @@ struct Sprite {
     var ground: Float = 0
     /// For a ghost, how far its eyes are open.
     var eyes: Float = 0
+    /// For a ghost, how far it has taken shape out of a heap of snow.
+    var form: Float = 0
+    /// For a ghost, how far its paws are up, saying boo.
+    var paws: Float = 0
 }
 
 /// A bit of something that crumbles into snow, such as a window: it keeps its colour for a moment while it falls.
@@ -82,22 +86,51 @@ private struct Mote {
     var life: Float
 }
 
-/// A ghost made of a drift's snow on Halloween: it grows part way out of the drift, sways a while and sinks back.
+/// A ghost made of a drift's snow on Halloween: the drift heaps up and the heap takes its shape. After a while it
+/// falls apart into a heap of snow, sometimes after first slumping back and creeping along under the snow to come
+/// up once more somewhere else.
 private struct Ghost {
+    enum Stage {
+        case rising
+        case standing(until: Float)
+        /// Slumping back into the drift, to creep under the snow toward `x`.
+        case sinking(toward: Float)
+        /// Creeping along under the snow toward `x`, a bulge running through the drift.
+        case creeping(to: Float)
+    }
+
     let layer: SnowLayer
-    let column: Int
+    /// Where it is along the layer, from the layer's left end.
+    var x: Float
     let size: Float
     let seed: Float
-    /// When it starts sinking back.
-    let stay: Float
+    /// Whether it comes up once more somewhere else before it falls apart.
+    var returns: Bool
+    var stage = Stage.rising
+    var surfaced = 0
     var age: Float = 0
-    /// How far it has risen, from still under the snow at 0 to as far out as it comes at 1.
-    var risen: Float = 0
-    /// Snow it has drawn out of the drift around it, which goes back when it sinks or crumbles.
+    /// How far it has taken shape: the heap rises up to 0.5, and turns into the ghost from 0.4 to 1.
+    var form: Float = 0
+    /// Snow it has drawn out of the drift around it, which goes back when it slumps or crumbles.
     var taken: Float = 0
+    var booAt: Float = -10
+    /// When it says boo unprompted, if the cursor hasn't come near enough first.
+    var nextBoo: Float = .infinity
 
-    /// The share of its height out of the snow.
-    var out: Float { 0.5 * (1 - pow(1 - risen, 2)) }
+    var column: Int { layer.clampedIndex(at: layer.base.x + x) }
+
+    /// How far its paws are up: thrown up quickly, held a moment, lowered.
+    var paws: Float {
+        let since = age - booAt
+        guard since >= 0, since < 1.3 else { return 0 }
+        return since < 0.9 ? smoothstep(0, 0.2, since) : 1 - smoothstep(0.9, 1.3, since)
+    }
+
+    /// How high it stands above the drift, as a share of its size: the heap's height, then the ghost's half.
+    var height: Float {
+        let heap = 0.3 * smoothstep(0, 0.5, form)
+        return heap + (0.425 - heap) * smoothstep(0.4, 1, form)
+    }
     /// Its reach either side, in columns: its widest, which stays in the snow.
     var reach: Int { Int((size * 0.4 / layer.columnWidth).rounded(.up)) }
 }
@@ -344,11 +377,13 @@ final class SnowSimulation {
             buffer[count] = Sprite(
                 position: center,
                 size: ghost.size,
-                alpha: 0.9,
+                alpha: 1,
                 soft: 1,
                 ghost: 1 + ghost.seed,
                 ground: ground,
-                eyes: smoothstep(0.55, 0.85, ghost.risen)
+                eyes: smoothstep(0.85, 1, ghost.form),
+                form: ghost.form,
+                paws: ghost.paws
             )
             count += 1
         }
@@ -1104,14 +1139,11 @@ final class SnowSimulation {
             ghost.age += dt
             var gone = !layers.contains { $0 === ghost.layer }
             if !gone, let cursor, touches(ghost, cursor) {
-                crumble(ghost)
+                crumble(ghost, scared: true)
                 gone = true
             } else if !gone {
-                let rising = ghost.age < ghost.stay
-                ghost.risen = rising ? min(1, ghost.risen + dt / 2.5) : max(0, ghost.risen - dt / 2)
-                gather(&ghost, to: ghost.size * ghost.size * 0.08 * ghost.out)
-                if rising, ghost.risen < 1, random.next() < dt * 8 { stir(ghost) }
-                gone = !rising && ghost.risen <= 0
+                gone = !advance(&ghost, dt: dt)
+                if !gone { gather(&ghost, to: ghost.size * ghost.size * 0.04 * ghost.height / 0.425) }
             }
             if gone {
                 ghosts.swapAt(i, ghosts.count - 1)
@@ -1121,6 +1153,50 @@ final class SnowSimulation {
             }
             i -= 1
         }
+    }
+
+    /// Moves the ghost on through its stages; returns false once it has fallen apart.
+    private func advance(_ ghost: inout Ghost, dt: Float) -> Bool {
+        switch ghost.stage {
+        case .rising:
+            // Coming up again it is quicker, and says boo straight away.
+            ghost.form = min(1, ghost.form + dt / (ghost.surfaced == 0 ? 3 : 2))
+            if ghost.form > 0, ghost.form < 1, random.next() < dt * 12 { stir(ghost) }
+            if ghost.form >= 1 {
+                ghost.surfaced += 1
+                let first = ghost.surfaced == 1
+                ghost.stage = .standing(until: ghost.age + (first ? random.range(4, 6.5) : random.range(2.5, 3.5)))
+                ghost.nextBoo = ghost.age + (first ? random.range(0.6, 2) : 0.3)
+            }
+        case .standing(let until):
+            if ghost.age - ghost.booAt > 2.5 {
+                let near = cursor.map { simd_distance($0, placement(of: ghost).center) < ghost.size * 1.6 } ?? false
+                if near || ghost.age >= ghost.nextBoo {
+                    ghost.booAt = ghost.age
+                    ghost.nextBoo = ghost.age + random.range(3, 6)
+                }
+            }
+            guard ghost.age >= until else { break }
+            if ghost.returns, let target = creepTarget(for: ghost) {
+                ghost.returns = false
+                ghost.stage = .sinking(toward: target)
+            } else {
+                crumble(ghost, scared: false)
+                return false
+            }
+        case .sinking(let target):
+            ghost.form = max(0.22, ghost.form - dt / 2.5)
+            if ghost.form <= 0.22 { ghost.stage = .creeping(to: target) }
+        case .creeping(let target):
+            let left = target - ghost.x
+            ghost.x += min(abs(left), 70 * dt) * (left < 0 ? -1 : 1)
+            if random.next() < dt * 14 { stir(ghost) }
+            if abs(target - ghost.x) < 0.01 {
+                level(under: ghost)
+                ghost.stage = .rising
+            }
+        }
+        return true
     }
 
     /// Picks a deep enough stretch of drift clear of other ghosts and levels the snow it will rise out of.
@@ -1134,30 +1210,61 @@ final class SnowSimulation {
             let room = layer.count - reach * 6
             guard room > 1 else { continue }
             let column = reach * 3 + min(Int(random.next() * Float(room)), room - 1)
-            let under = (column - reach)...(column + reach)
-            guard layer.heights[column] > 6, under.allSatisfy({ layer.visible[$0] }),
+            guard layer.heights[column] > 6, ((column - reach)...(column + reach)).allSatisfy({ layer.visible[$0] }),
                   !ghosts.contains(where: { $0.layer === layer && abs($0.column - column) < reach * 4 })
             else { continue }
-            let level = under.reduce(0) { $0 + layer.heights[$1] } / Float(under.count)
-            for j in under { layer.set(j, level) }
-            heightsChanged = true
-            ghosts.append(Ghost(layer: layer, column: column, size: size, seed: random.next(), stay: random.range(6.5, 9)))
+            let ghost = Ghost(
+                layer: layer,
+                x: (Float(column) + 0.5) * layer.columnWidth,
+                size: size,
+                seed: random.next(),
+                returns: random.next() < 0.5
+            )
+            level(under: ghost)
+            ghosts.append(ghost)
             return true
         }
         return false
     }
 
+    /// Evens out the snow the ghost will rise out of, so it comes up out of a flat surface.
+    private func level(under ghost: Ghost) {
+        let layer = ghost.layer
+        let under = max(ghost.column - ghost.reach, 0)...min(ghost.column + ghost.reach, layer.count - 1)
+        let level = under.reduce(0) { $0 + layer.heights[$1] } / Float(under.count)
+        for j in under { layer.set(j, level) }
+        heightsChanged = true
+    }
+
+    /// Somewhere a little way along the drift to come up again, through snow deep enough to creep under all the way.
+    private func creepTarget(for ghost: Ghost) -> Float? {
+        let layer = ghost.layer
+        let reach = ghost.reach
+        let distance = random.range(60, 160)
+        let first: Float = random.next() < 0.5 ? -1 : 1
+        for direction in [first, -first] {
+            let target = ghost.x + direction * distance
+            let to = Int(target / layer.columnWidth)
+            guard to >= reach * 3, to < layer.count - reach * 3,
+                  (min(ghost.column, to)...max(ghost.column, to)).allSatisfy({ layer.visible[$0] && layer.heights[$0] > 4 }),
+                  !ghosts.contains(where: { $0.layer === layer && $0.x != ghost.x && abs($0.column - to) < reach * 4 })
+            else { continue }
+            return (Float(to) + 0.5) * layer.columnWidth
+        }
+        return nil
+    }
+
     /// Where a ghost stands: the drift's surface below it, and the middle of its sprite.
     private func placement(of ghost: Ghost) -> (ground: Float, center: SIMD2<Float>) {
         let ground = ghost.layer.surface(ghost.column)
-        // Its head's top lies 0.39 of its size above the middle, its hem 0.46 below.
-        return (ground, SIMD2(ghost.layer.centerX(ghost.column), ground + ghost.size * (ghost.out * 0.85 - 0.39)))
+        // Its head's top lies 0.39 of its size above the middle, and stands 0.425 above the drift once formed.
+        return (ground, SIMD2(ghost.layer.base.x + ghost.x, ground + ghost.size * 0.035))
     }
 
     private func touches(_ ghost: Ghost, _ point: SIMD2<Float>) -> Bool {
         let (ground, center) = placement(of: ghost)
-        let top = ground + ghost.out * 0.85 * ghost.size
-        return ghost.out > 0.15 && abs(point.x - center.x) < ghost.size * 0.3 && point.y > ground && point.y < top
+        let top = ground + ghost.height * ghost.size
+        return ghost.form > 0.3 && abs(point.x - center.x) < ghost.size * 0.3 && point.y > ground && point.y < top
     }
 
     /// Draws snow out of the drift around the ghost, leaving what it stands in, or gives it back, until it holds `target`.
@@ -1169,10 +1276,14 @@ final class SnowSimulation {
         let ring = Array(max(ghost.column - reach * 3, 0)..<max(ghost.column - reach, 0))
             + Array(min(ghost.column + reach + 1, layer.count)..<min(ghost.column + reach * 3 + 1, layer.count))
         guard !ring.isEmpty else { return }
-        let each = delta / (Float(ring.count) * layer.columnWidth)
+        // Most from the middle of the stretch either side, none at its ends, so the drift dips without steps.
+        let weights = ring.map { sin(Float(abs($0 - ghost.column) - reach) / Float(reach * 2) * .pi) }
+        let total = weights.reduce(0, +) * layer.columnWidth
+        guard total > 0 else { return }
         var moved: Float = 0
-        for j in ring {
+        for (j, weight) in zip(ring, weights) {
             let height = layer.heights[j]
+            let each = delta * weight / total
             let change = delta > 0 ? min(each, height * 0.5) : each
             layer.set(j, height - change)
             moved += change * layer.columnWidth
@@ -1195,10 +1306,11 @@ final class SnowSimulation {
         ))
     }
 
-    /// The ghost falls apart into the snow it was made of, which tumbles back onto the drift.
-    private func crumble(_ ghost: Ghost) {
+    /// The ghost falls apart into the snow it was made of, which heaps up on the drift where it stood:
+    /// it slumps straight down when it goes of itself, and bursts a little when scared.
+    private func crumble(_ ghost: Ghost, scared: Bool) {
         let (ground, center) = placement(of: ghost)
-        let height = ghost.out * 0.85 * ghost.size
+        let height = ghost.height * ghost.size
         var left = ghost.taken
         while left > 0.3, grains.count < maxGrains {
             let area = min(left, random.range(0.6, 1.6))
@@ -1207,13 +1319,13 @@ final class SnowSimulation {
             let half = ghost.size * (0.12 + 0.18 * (1 - up))
             grains.append(Grain(
                 position: SIMD2(center.x + random.range(-half, half), ground + up * height),
-                velocity: SIMD2(random.range(-70, 70), random.range(-20, 90)),
+                velocity: scared ? SIMD2(random.range(-40, 40), random.range(-20, 90)) : SIMD2(random.range(-12, 12), random.range(-30, 10)),
                 area: area,
                 size: random.range(1.2, 2.6)
             ))
         }
         if left > 0 { _ = ghost.layer.deposit(left, at: center.x, wide: true) }
-        for _ in 0..<10 where motes.count < maxMotes {
+        for _ in 0..<(scared ? 10 : 5) where motes.count < maxMotes {
             motes.append(Mote(
                 position: SIMD2(center.x + random.range(-0.25, 0.25) * ghost.size, ground + random.next() * height),
                 velocity: SIMD2(random.range(-60, 60), random.range(-10, 60)),
