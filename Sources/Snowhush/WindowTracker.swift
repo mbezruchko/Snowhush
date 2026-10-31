@@ -86,6 +86,7 @@ final class WindowTracker {
     /// Every app window on the screen at the last poll, in overlay coordinates, those filling it or too tall to
     /// carry snow too.
     private(set) var covers: [CGRect] = []
+    private var cards: [CGWindowID: (bounds: CGRect, card: Bool)] = [:]
 
     /// Returns the windows when they changed since the last poll.
     /// `eager` polls every frame, e.g. while a mouse button is down and a drag may be starting.
@@ -353,12 +354,14 @@ final class WindowTracker {
         var fresh: [CGWindowID: Double] = [:]
         var panels: [CGWindowID: CFTimeInterval] = [:]
         var windows: [CGRect] = []
+        var checked: [CGWindowID: (bounds: CGRect, card: Bool)] = [:]
         exposing = false
         sinkingDock = nil
         defer {
             alphas = fresh
             panelsShownAt = panels
             covers = exposing ? [] : windows
+            cards = checked
         }
 
         for entry in list {
@@ -401,7 +404,8 @@ final class WindowTracker {
 
             if layer < dockLevel && !fading { windows.append(frame) }
             let coverOnly = coverOnlyOwners.contains(owner) && !shelf
-            if roomAbove && onScreen && !fills && !coverOnly && !fading && bounds.width >= 80 && bounds.height >= 40, id != 0 {
+            if roomAbove && onScreen && !fills && !coverOnly && !fading && bounds.width >= 80 && bounds.height >= 40, id != 0,
+               shelf || !isCard(id, bounds, into: &checked) {
                 // Search bars like Spotlight are capsules: low and wide, with fully rounded ends.
                 let capsule = !shelf && (owner.lowercased().contains("spotlight") || (bounds.height <= 90 && bounds.width >= bounds.height * 3))
                 let corner = shelf ? Dock.cornerRadius(height: bounds.height) : capsule ? min(bounds.height / 2, 32) : 18
@@ -421,6 +425,21 @@ final class WindowTracker {
         }
         if !dockOut { dockShownAt = nil }
         return exposing ? [] : surfaces
+    }
+
+    /// Stage Manager shows the windows of other stages as small tilted cards: the list gives the box around a card,
+    /// while the window keeps its real size.
+    private func isCard(_ id: CGWindowID, _ bounds: CGRect, into checked: inout [CGWindowID: (bounds: CGRect, card: Bool)]) -> Bool {
+        let card: Bool
+        if let known = cards[id], known.bounds == bounds {
+            card = known.card
+        } else if let real = SkyLight.bounds(of: id) {
+            card = bounds.width < real.width * 0.6 && bounds.height < real.height * 0.6
+        } else {
+            card = false
+        }
+        checked[id] = (bounds, card)
+        return card
     }
 }
 
