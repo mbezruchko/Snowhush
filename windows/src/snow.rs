@@ -23,7 +23,7 @@ use crate::log;
 use crate::prefs::Settings;
 use crate::render::Gpu;
 use crate::screen::{BACKDROP_CHANGED, Clock, DISPLAYS_CHANGED, Monitor, PowerBudget, Screen, dip_size, listen, monitors, walls, watch_taskbar};
-use crate::tracker::Tracker;
+use crate::tracker::{self, Tracker};
 
 /// A piece of the welcome window crumbling into snow, in physical screen pixels.
 pub struct Piece {
@@ -106,7 +106,11 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                 Command::Quit => return Ok(()),
                 Command::Snowfall(snowfall) => {
                     settings.snowfall = snowfall;
-                    screens.iter_mut().for_each(|screen| screen.simulation.set_snowfall(snowfall));
+                    let now = Clock::now();
+                    screens.iter_mut().for_each(|screen| {
+                        screen.simulation.set_snowfall(snowfall);
+                        screen.wake(now);
+                    });
                 }
                 Command::Accumulate(on) => {
                     settings.accumulate = on;
@@ -153,6 +157,7 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                         .map(|piece| ScatterPiece { position: screen.local(piece.x, piece.y), velocity: piece.velocity, color: piece.color })
                         .collect();
                     screen.simulation.scatter(&local);
+                    screen.wake(Clock::now());
                 }
                 Command::ReleaseSnowfall => {
                     settings.welcomed = true;
@@ -171,6 +176,7 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                     if on && !active {
                         screens.iter_mut().for_each(Screen::resume);
                     }
+                    tracker::watch_shell_state(on);
                     active = on;
                     log!("active: {on}");
                 }
@@ -244,7 +250,10 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                 if on != halloween {
                     halloween = on;
                     log!("halloween: {on}");
-                    screens.iter_mut().for_each(|screen| screen.simulation.set_halloween(on));
+                    screens.iter_mut().for_each(|screen| {
+                        screen.simulation.set_halloween(on);
+                        screen.wake(now);
+                    });
                 }
                 sky = Sky::now(halloween);
                 if let Some(wallpapers) = &wallpapers {

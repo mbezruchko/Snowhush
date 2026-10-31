@@ -2,8 +2,8 @@ use std::cell::Cell;
 use std::collections::HashSet;
 use std::ffi::c_void;
 use std::mem::size_of;
-use std::sync::Once;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Once, OnceLock};
 use std::time::Duration;
 
 use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, RECT};
@@ -359,21 +359,37 @@ fn is_top_level(window: HWND, event: u32) -> bool {
     }
 }
 
+static SHELL_WATCHED: AtomicBool = AtomicBool::new(true);
+static SHELL_WATCHER: OnceLock<std::thread::Thread> = OnceLock::new();
+
 /// Asking the shell can stall for a fifth of a second while it is busy, sliding a hidden taskbar in or out for one,
 /// so it is asked on a thread of its own rather than between frames.
 fn watch_shell() {
     static START: Once = Once::new();
     START.call_once(|| {
         let _ = std::thread::Builder::new().name("shell state".into()).spawn(|| {
+            let _ = SHELL_WATCHER.set(std::thread::current());
             let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
             loop {
+                if !SHELL_WATCHED.load(Ordering::Relaxed) {
+                    std::thread::park();
+                    continue;
+                }
                 let busy = unsafe { SHQueryUserNotificationState() }
                     .is_ok_and(|state| matches!(state, QUNS_BUSY | QUNS_RUNNING_D3D_FULL_SCREEN | QUNS_PRESENTATION_MODE));
                 SHELL_BUSY.store(busy, Ordering::Relaxed);
-                std::thread::sleep(Duration::from_millis(250));
+                std::thread::park_timeout(Duration::from_millis(250));
             }
         });
     });
+}
+
+/// Keeps asking the shell only while the snow is drawn: locked or asleep, there is no full-screen app to keep out of.
+pub fn watch_shell_state(on: bool) {
+    SHELL_WATCHED.store(on, Ordering::Relaxed);
+    if on && let Some(watcher) = SHELL_WATCHER.get() {
+        watcher.unpark();
+    }
 }
 
 pub fn cloaked(window: HWND) -> bool {
