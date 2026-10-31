@@ -396,6 +396,20 @@ impl SnowSimulation {
         self.layers.iter().any(|layer| layer.top > 0.5)
     }
 
+    /// Nothing falls, lies, waits for its window or haunts, and nothing will until the snowfall or Halloween is
+    /// turned on: the screen can rest.
+    pub fn is_empty(&self) -> bool {
+        self.snowfall == Snowfall::Off
+            && !self.haunting.on
+            && self.sprite_count() == 0
+            && !self.haunting.moving()
+            && self.air.gust.is_none()
+            && self.air.overflow.is_empty()
+            && self.dormant.is_empty()
+            && self.parking.is_empty()
+            && self.layers.iter().all(|layer| layer.top <= 0.0)
+    }
+
     pub fn sprite_count(&self) -> usize {
         self.air.flakes.len() + self.air.grains.len() + self.air.motes.len() + self.haunting.sprite_count()
     }
