@@ -19,12 +19,15 @@ socket() {
     done
 }
 
-# Sway without a display, which the other compositors can run inside, and grim can photograph.
+# Sway without a display, which the other compositors can run inside, and grim can photograph. `$second`, if set,
+# is where a second display goes.
 headless_sway() {
     export WLR_BACKENDS=headless WLR_RENDERER=pixman WLR_LIBINPUT_NO_DEVICES=1
+    [[ -n ${second:-} ]] && export WLR_HEADLESS_OUTPUTS=2
     mkdir -p ~/.config/sway
-    cat > ~/.config/sway/config <<'CONFIG'
+    cat > ~/.config/sway/config <<CONFIG
 output HEADLESS-1 resolution 1280x800 position 0 0 bg #1d2b44 solid_color
+${second:+output HEADLESS-2 resolution 1280x800 position $second bg #24344f solid_color}
 default_border pixel 2
 for_window [app_id="niri"] border none, fullscreen enable
 for_window [app_id="foot"] floating enable, move position 200 300
@@ -68,6 +71,53 @@ snowfall() {
     trace "$(grep -E 'adapter|display|windows from|frames' "$log")"
 }
 
+# Two displays, side by side or one under the other as `$1` says: a window's snow left lying across the edge between
+# them, shaken off over the other display, and carried over to it as the window is dragged across.
+displays() {
+    shot() { grim "/out/$1.png"; }
+    drag() { for _ in $(seq "$2"); do swaymsg "[app_id=foot] move $1 8 px" > /dev/null; sleep 0.05; done; }
+    foot -o tweak.font-monospace-warn=no -W 70x16 -e sleep 600 2>/dev/null &
+    sleep 3
+    if [[ $1 == side ]]; then
+        swaymsg "[app_id=foot] move absolute position 200 300" > /dev/null
+    else
+        swaymsg "[app_id=foot] move absolute position 300 160" > /dev/null
+    fi
+    "$app" > /out/app.out 2>&1 &
+    sleep 25
+    shot 1-snow
+    if [[ $1 == side ]]; then
+        drag right 100
+    else
+        drag down 70
+    fi
+    sleep 1
+    shot 2-across
+    sleep 30
+    shot 3-settled
+    local way=left back=right
+    [[ $1 == stacked ]] && way=up back=down
+    for _ in $(seq 8); do
+        swaymsg "[app_id=foot] move $way 60 px" > /dev/null
+        sleep 0.04
+        swaymsg "[app_id=foot] move $back 60 px" > /dev/null
+        sleep 0.04
+    done
+    sleep 3
+    shot 4-shaken
+    sleep 15
+    if [[ $1 == side ]]; then
+        drag right 110
+    else
+        drag down 30
+    fi
+    sleep 1
+    shot 5-over
+    sleep 15
+    shot 6-later
+    trace "$(grep -E 'display|windows from|window snow from' "$log")"
+}
+
 sway_move() { swaymsg "[app_id=foot] move right $1 px" > /dev/null; }
 sway_workspace() { swaymsg workspace "$1" > /dev/null; }
 sway_close() { swaymsg "[app_id=foot] kill" > /dev/null; }
@@ -94,6 +144,14 @@ niri)
     NIRI_SOCKET=$(ls "$XDG_RUNTIME_DIR"/niri.*.sock)
     export NIRI_SOCKET
     snowfall niri
+    ;;
+side | stacked)
+    second=$([[ $1 == side ]] && echo "1280 0" || echo "0 800")
+    headless_sway
+    export WAYLAND_DISPLAY=$sway_display
+    SWAYSOCK=$(ls "$XDG_RUNTIME_DIR"/sway-ipc.*)
+    export SWAYSOCK
+    displays "$1"
     ;;
 kwin)
     # Screenshots aren't to be had from the virtual backend, so the scene reads the logs instead: KWin's

@@ -8,9 +8,11 @@ use crate::geometry::{Rect, V2, smoothstep};
 use crate::layer::SnowLayer;
 
 mod ghosts;
+mod neighbours;
 mod pumpkins;
 
 use ghosts::Haunting;
+pub use neighbours::{Borrowed, Carried, Caught, Stray};
 use pumpkins::Pumpkins;
 
 pub type WindowId = isize;
@@ -275,6 +277,9 @@ pub struct SnowSimulation {
     pub accumulates: bool,
     /// Side edges, left and right, with no display past them: a window slid past one leaves its snow heaped against the edge.
     pub walls: (bool, bool),
+    /// Side edges, left and right, past which lies a display with a simulation of its own: snow on a window reaching
+    /// over there is seen there, and snow thrown across goes on there, through `take_strays`.
+    pub neighbours: (bool, bool),
     /// Keeps the snowfall from starting until a scattered window's snow first reaches the bottom of the screen.
     snowfall_held: bool,
     /// Set when the held snowfall starts by itself, so the other displays can start theirs.
@@ -298,6 +303,11 @@ pub struct SnowSimulation {
     pub shelf: Option<WindowId>,
     haunting: Haunting,
     lanterns: Pumpkins,
+    /// Snow on windows that reach over here from a neighbouring display, which keeps it.
+    borrowed: Vec<Borrowed>,
+    borrowed_changed: bool,
+    caught: Vec<Caught>,
+    strays: Vec<Stray>,
     air: Air,
 }
 
@@ -314,6 +324,7 @@ impl SnowSimulation {
             thaws: false,
             accumulates: true,
             walls: (false, false),
+            neighbours: (false, false),
             snowfall_held: false,
             snowfall_released: false,
             scattered_until: -10.0,
@@ -329,6 +340,10 @@ impl SnowSimulation {
             shelf: None,
             haunting: Haunting::new(),
             lanterns: Pumpkins::default(),
+            borrowed: Vec::new(),
+            borrowed_changed: false,
+            caught: Vec::new(),
+            strays: Vec::new(),
             air: Air {
                 flakes: Vec::new(),
                 grains: Vec::new(),
@@ -402,7 +417,7 @@ impl SnowSimulation {
 
     /// Floats the renderer needs per frame: each layer's surface and bed.
     pub fn column_count(&self) -> usize {
-        self.layers.iter().map(|layer| 2 * layer.count()).sum()
+        self.layers.iter().map(|layer| 2 * layer.count()).sum::<usize>() + self.borrowed.iter().map(Borrowed::span).sum::<usize>()
     }
 
     pub fn resize(&mut self, width: f32, height: f32) {
@@ -471,8 +486,10 @@ impl SnowSimulation {
             || self.haunting.moving()
             || self.air.heights_changed
             || self.air.windows_changed
-            || self.lanterns.moved;
+            || self.lanterns.moved
+            || self.borrowed_changed;
         self.air.windows_changed = false;
+        self.borrowed_changed = false;
         self.lanterns.moved = false;
         changed
     }
@@ -525,14 +542,7 @@ impl SnowSimulation {
             if layer.top <= 0.05 || offset + span > buffer.len() {
                 continue;
             }
-            layer.write_smoothed(&mut buffer[offset..offset + span]);
-            let grown = smoothstep(0.0, REGROWTH, (self.air.clock - layer.returned_at) as f32);
-            if grown < 1.0 {
-                let (surface, bed) = buffer[offset..offset + span].split_at_mut(layer.count());
-                for (level, bed) in surface.iter_mut().zip(bed.iter()) {
-                    *level = bed + (*level - bed) * grown;
-                }
-            }
+            self.write_layer(layer, &mut buffer[offset..offset + span]);
             result.push(PileLayer {
                 offset,
                 count: layer.count(),
@@ -543,7 +553,29 @@ impl SnowSimulation {
             });
             offset += span;
         }
+        for borrowed in &self.borrowed {
+            let span = borrowed.span();
+            if offset + span > buffer.len() {
+                continue;
+            }
+            if let Some(pile) = borrowed.write(&mut buffer[offset..offset + span], offset) {
+                result.push(pile);
+                offset += span;
+            }
+        }
         result
+    }
+
+    /// A layer's smoothed surface, then its bed, as drawn: snow coming back with a window grows in again.
+    fn write_layer(&self, layer: &SnowLayer, buffer: &mut [f32]) {
+        layer.write_smoothed(buffer);
+        let grown = smoothstep(0.0, REGROWTH, (self.air.clock - layer.returned_at) as f32);
+        if grown < 1.0 {
+            let (surface, bed) = buffer.split_at_mut(layer.count());
+            for (level, bed) in surface.iter_mut().zip(bed.iter()) {
+                *level = bed + (*level - bed) * grown;
+            }
+        }
     }
 
     /// Turns the pieces into snowflakes that drift down and fade to white; together they leave a small drift.
@@ -615,6 +647,7 @@ impl SnowSimulation {
             let columns = columns as usize;
             seen.insert(surface.id);
 
+            let seen = self.seen_span();
             let li = if let Some(&li) = known.get(&surface.id) {
                 let ledge = &mut self.layers[li];
                 if sliding && columns == ledge.count() {
@@ -643,7 +676,7 @@ impl SnowSimulation {
             ledge.shape_corners(surface.corner_radius, surface.corner_exponent);
             let blockers: Vec<[f32; 4]> = surface.blockers.iter().map(|b| [b.min_x(), b.min_y(), b.max_x(), b.max_y()]).collect();
             ledge.occluders = blockers.iter().take(16).copied().collect();
-            ledge.update_visibility(self.width, &blockers);
+            ledge.update_visibility(seen, &blockers);
         }
 
         let layers = std::mem::take(&mut self.layers);
@@ -788,6 +821,11 @@ impl SnowSimulation {
             flake.position.x += (flake.velocity.x + sway) * dt;
             flake.position.y += flake.velocity.y * flutter * dt;
 
+            if flake.blown != 0.0 && self.crossed(flake.position) {
+                self.strays.push(Stray::flake(flake));
+                self.air.flakes.swap_remove(i);
+                continue;
+            }
             if flake.blown != 0.0 && (flake.position.x < -30.0 || flake.position.x > self.width + 30.0) {
                 self.air.flakes.swap_remove(i);
                 continue;
@@ -799,7 +837,12 @@ impl SnowSimulation {
             }
 
             if flake.settles && self.accumulates && flake.blown == 0.0 {
-                if let Some((li, column)) = landing(&self.layers, flake.position.x, previous_y, flake.position.y) {
+                let hit = landing(&self.layers, flake.position.x, previous_y, flake.position.y, !self.crossed(flake.position));
+                if self.lands_on_borrowed(hit, flake.position.x, previous_y, flake.position.y, flake.size * flake.size * DEPOSITION * flake.mass) {
+                    self.recycle(i);
+                    continue;
+                }
+                if let Some((li, column)) = hit {
                     if self.snowfall_held && flake.mass < 1.0 && li == 0 {
                         self.snowfall_held = false;
                         self.snowfall_released = true;
@@ -841,13 +884,23 @@ impl SnowSimulation {
                 grain.velocity *= damping;
             }
             grain.position += grain.velocity * dt;
+            let hit = if grain.blown || grain.velocity.y > 0.0 {
+                None
+            } else {
+                landing(&self.layers, grain.position.x, previous_y, grain.position.y, !self.crossed(grain.position))
+            };
 
-            if grain.position.x < -10.0 || grain.position.x > self.width + 10.0 || grain.position.y < -10.0 {
+            if grain.position.y >= -10.0 && self.crossed(grain.position) {
+                self.strays.push(Stray::grain(grain));
+                self.air.grains.swap_remove(i);
+            } else if grain.position.x < -10.0 || grain.position.x > self.width + 10.0 || grain.position.y < -10.0 {
                 self.air.grains.swap_remove(i);
             } else if !grain.blown
                 && grain.velocity.y <= 0.0
-                && let Some((li, _)) = landing(&self.layers, grain.position.x, previous_y, grain.position.y)
+                && self.lands_on_borrowed(hit, grain.position.x, previous_y, grain.position.y, grain.area)
             {
+                self.air.grains.swap_remove(i);
+            } else if let Some((li, _)) = hit {
                 let layer = &mut self.layers[li];
                 if grain.lump > 0.0 {
                     self.air.burst(&grain, layer);
@@ -1651,10 +1704,11 @@ fn restore(ledge: &mut SnowLayer, left: f32, top: f32, columns: usize) {
 }
 
 /// The highest visible snow surface crossed while falling from `from` to `to` at `x`, allowing for the surface moving meanwhile.
-fn landing(layers: &[SnowLayer], x: f32, from: f32, to: f32) -> Option<(usize, usize)> {
+/// Past an edge shared with another display only the ground counts: snow there is the other display's to land.
+fn landing(layers: &[SnowLayer], x: f32, from: f32, to: f32, here: bool) -> Option<(usize, usize)> {
     let mut hit = None;
     let mut highest = -f32::MAX;
-    for (li, ledge) in layers.iter().enumerate().skip(1) {
+    for (li, ledge) in layers.iter().enumerate().skip(1).filter(|_| here) {
         let Some(i) = ledge.index(x) else { continue };
         if !ledge.visible[i] {
             continue;
