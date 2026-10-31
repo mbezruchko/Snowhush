@@ -43,6 +43,10 @@ enum RendererError: Error {
 final class Renderer: NSObject, MTKViewDelegate {
     var cursorLocation: () -> SIMD2<Float> = { SIMD2(-10_000, -10_000) }
     var windowSurfaces: (CFTimeInterval) -> WindowUpdate? = { _ in nil }
+    /// Snow on windows reaching over from other displays, which keep it.
+    var borrowedSnow: () -> [BorrowedSnow] = { [] }
+    /// Called after each step, for what the step sent on to other displays.
+    var stepped: () -> Void = {}
     /// Frames per second while the snow is being disturbed: the display's highest rate, up to 120 on ProMotion screens.
     var interactiveFrameRate = 60
     var budget = PowerBudget.full
@@ -126,8 +130,10 @@ final class Renderer: NSObject, MTKViewDelegate {
             simulation.updateWindows(update.surfaces, interval: update.interval, parked: update.parked, elsewhere: update.elsewhere, sliding: update.sliding)
             if update.slideVelocity != 0 { simulation.spaceSlid(velocity: update.slideVelocity) }
         }
+        simulation.setBorrowed(borrowedSnow())
         let cursor = cursorLocation()
         let changed = simulation.step(dt: dt, cursor: cursor)
+        stepped()
         // The lantern follows the cursor even over snow that lies still.
         let lanternMoved = ambient.lantern > 0 && simd_distance(cursor, lanternAt) > 0.5
         lanternAt = cursor
