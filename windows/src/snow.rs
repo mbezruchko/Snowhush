@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::mpsc::Receiver;
 
 use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, WPARAM};
@@ -14,7 +15,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{HSTRING, PCWSTR, Result, w};
 
 use snowhush_core::geometry::V2;
-use snowhush_core::simulation::{ScatterPiece, SnowSimulation, Snowfall};
+use snowhush_core::simulation::{Borrowed, Mapping, ScatterPiece, SnowSimulation, Snowfall, Stray};
 
 use crate::desktop::{self, DesktopLayer};
 use crate::halloween::season;
@@ -97,6 +98,8 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
     let mut desktop_logged = String::new();
     let mut stats = Stats::new(started);
     let mut tracker = Tracker::new();
+    // The display each window's snow lies on, as of the last window list.
+    let mut owners = HashMap::new();
     watch_taskbar(links.wake);
 
     loop {
@@ -258,10 +261,13 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
             if tracker.take_started_moving() && settings.snow_on_windows {
                 screens.iter_mut().for_each(|screen| screen.wake(now));
             }
-            if screens.iter().any(|screen| screen.next_due <= now + clock.tolerance()) {
-                tracker.refresh(&clock, now);
+            let on_windows = settings.snow_on_windows && !settings.behind_windows;
+            tracker.set_displays(screens.iter().map(|screen| (screen.monitor.name.as_str(), screen.monitor.rect, screen.monitor.bounds)));
+            if screens.iter().any(|screen| screen.next_due <= now + clock.tolerance()) && tracker.refresh(&clock, now) && on_windows {
+                hand_over(&mut screens, &mut owners, &tracker, now);
             }
-            let windows = (settings.snow_on_windows && !settings.behind_windows).then_some(&tracker);
+            let windows = on_windows.then_some(&tracker);
+            lend(&mut screens, windows, now + clock.tolerance());
             let time = (clock.seconds(now - started) % 1000.0) as f32;
             let mut lost = false;
             let mut released = false;
@@ -287,6 +293,7 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                     }
                 }
             }
+            pass_snow(&mut screens, &tracker);
             // The first display the welcome window's snow reaches starts the snowfall on all of them.
             if released {
                 settings.welcomed = true;
@@ -352,9 +359,115 @@ fn sync_screens(gpu: &Gpu, settings: &Settings, mut current: Vec<Screen>, layer:
         }
     }
     for screen in &mut result {
-        screen.simulation.walls = walls(&screen.monitor, &displays);
+        let walls = walls(&screen.monitor, &displays);
+        screen.simulation.walls = walls;
+        screen.simulation.neighbours = (!walls.0, !walls.1);
     }
     result
+}
+
+/// Takes overlay coordinates on `from`'s display to `to`'s, through the physical pixels both lie on: displays can
+/// differ in how many pixels make a DIP.
+fn mapping(from: &Screen, to: &Screen) -> Mapping {
+    let (a, b) = (from.pixels_per_point(), to.pixels_per_point());
+    let (here, there) = (&from.monitor.rect, &to.monitor.rect);
+    Mapping { scale: a / b, shift: V2::new((here.left - there.left) as f32 / b, (there.bottom - here.bottom) as f32 / b) }
+}
+
+/// Moves windows' snow to the display it now lies on, as when a window is dragged across: each display has a
+/// simulation of its own, and the snow would otherwise fall off the old one's edge and be lost.
+fn hand_over(screens: &mut [Screen], owners: &mut HashMap<isize, String>, tracker: &Tracker, now: i64) {
+    for (&id, owner) in &tracker.owners {
+        let Some(previous) = owners.get(&id).filter(|previous| *previous != owner) else { continue };
+        let (Some(a), Some(b)) =
+            (screens.iter().position(|screen| screen.monitor.name == *previous), screens.iter().position(|screen| screen.monitor.name == *owner))
+        else {
+            continue;
+        };
+        let Some(snow) = screens[a].simulation.take_window(id) else { continue };
+        let mapping = mapping(&screens[a], &screens[b]);
+        screens[b].simulation.adopt_window(id, snow, mapping);
+        screens[a].rewatch();
+        screens[b].rewatch();
+        screens[b].wake(now);
+        log!("window snow from {previous} to {owner}");
+    }
+    owners.clone_from(&tracker.owners);
+}
+
+/// Gives each display about to draw the snow of windows reaching over it that another display keeps.
+fn lend(screens: &mut [Screen], tracker: Option<&Tracker>, due: i64) {
+    for index in 0..screens.len() {
+        if screens[index].next_due > due {
+            continue;
+        }
+        let borrowed = tracker.map_or_else(Vec::new, |tracker| borrowed(screens, index, tracker));
+        screens[index].simulation.set_borrowed(borrowed);
+    }
+}
+
+/// The snow of windows kept by other displays, where it reaches over display `index`, in its coordinates: a window
+/// lying across two displays keeps its drift in one piece instead of ending at the edge.
+fn borrowed(screens: &[Screen], index: usize, tracker: &Tracker) -> Vec<Borrowed> {
+    let screen = &screens[index];
+    let here = &screen.monitor.rect;
+    let (width, height) = screen.size();
+    // The drift stands above the window's top edge, never as high as this.
+    let reach = (300.0 * screen.pixels_per_point()) as i32;
+    let mut borrowed = Vec::new();
+    for (&id, owner) in &tracker.owners {
+        if *owner == screen.monitor.name {
+            continue;
+        }
+        let Some(r) = tracker.rect(id) else { continue };
+        let near = r.left < here.right && r.right > here.left && r.top - reach < here.bottom && r.top + 20 > here.top;
+        let Some(home) = screens.iter().find(|other| other.monitor.name == *owner).filter(|_| near) else { continue };
+        let Some(lent) = home.simulation.lend(id) else { continue };
+        let lent = lent.mapped(mapping(home, screen));
+        let [left, bottom, right, top] = lent.bounds();
+        if right > 0.0 && left < width as f32 && top > 0.0 && bottom < height as f32 {
+            borrowed.push(lent);
+        }
+    }
+    borrowed
+}
+
+/// Passes on the snow that went from one display to another this frame: snow that fell on a window's drift lent by
+/// another display goes to that one, and snow thrown past an edge two displays share goes on falling on the other side.
+fn pass_snow(screens: &mut [Screen], tracker: &Tracker) {
+    for index in 0..screens.len() {
+        for caught in screens[index].simulation.take_caught() {
+            let Some(home) = tracker.owners.get(&caught.id).and_then(|owner| screens.iter().position(|screen| screen.monitor.name == *owner)) else {
+                continue;
+            };
+            let mapping = mapping(&screens[index], &screens[home]);
+            screens[home].simulation.catch(&caught, mapping);
+        }
+        let strays = screens[index].simulation.take_strays();
+        if strays.is_empty() {
+            continue;
+        }
+        let (here, scale) = (screens[index].monitor.rect, screens[index].pixels_per_point());
+        let mut passed: Vec<(usize, Vec<Stray>)> = Vec::new();
+        for stray in strays {
+            let point = stray.position();
+            let (x, y) = (here.left as f32 + point.x * scale, here.bottom as f32 - point.y * scale);
+            let Some(next) = screens.iter().enumerate().position(|(other, screen)| {
+                let r = &screen.monitor.rect;
+                other != index && !screen.covered() && x >= r.left as f32 && x < r.right as f32 && y < r.bottom as f32
+            }) else {
+                continue;
+            };
+            match passed.iter_mut().find(|(other, _)| *other == next) {
+                Some((_, strays)) => strays.push(stray),
+                None => passed.push((next, vec![stray])),
+            }
+        }
+        for (next, strays) in passed {
+            let mapping = mapping(&screens[index], &screens[next]);
+            screens[next].simulation.adopt_strays(strays, mapping);
+        }
+    }
 }
 
 fn find_layer() -> Option<DesktopLayer> {

@@ -171,7 +171,7 @@ impl Screen {
     }
 
     /// The overlay's place on the shared desktop: where the margins put it, as big as the compositor made it.
-    fn area(&self) -> Area {
+    pub fn area(&self) -> Area {
         Area { x: self.bounds.x + self.margins.3 as f64, y: self.bounds.y + self.margins.0 as f64, w: self.size.0 as f64, h: self.size.1 as f64 }
     }
 
@@ -276,7 +276,7 @@ impl Screen {
         self.windows_seen = generation;
         let area = self.area();
         let listed = if snow_on_windows { report } else { &Report::default() };
-        let mut surfaces = windows::surfaces(listed, &area, self.shelf.as_ref());
+        let mut surfaces = windows::surfaces(listed, &area, self.shelf.as_ref(), &self.name);
         if report.switching {
             // Windows that came with the new desktop get their snow back once they have slid in; windows on every
             // desktop keep theirs throughout.
@@ -304,7 +304,7 @@ impl Screen {
 
     /// Lets the snow on windows fall, keeping what lies on the panel.
     pub fn drop_window_snow(&mut self) {
-        let surfaces = windows::surfaces(&Report::default(), &self.area(), self.shelf.as_ref());
+        let surfaces = windows::surfaces(&Report::default(), &self.area(), self.shelf.as_ref(), &self.name);
         self.simulation.update_windows(&surfaces, 0.1, &HashSet::new(), &HashSet::new(), false);
         self.simulation.covers.clear();
         self.surfaces = surfaces;

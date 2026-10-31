@@ -174,11 +174,12 @@ impl SnowLayer {
         self.replace(fresh);
     }
 
-    pub fn update_visibility(&mut self, screen_width: f32, blockers: &[[f32; 4]]) {
+    /// `seen` is where a column can be seen from, left to right: the screen, and the displays beside it.
+    pub fn update_visibility(&mut self, seen: (f32, f32), blockers: &[[f32; 4]]) {
         for i in 0..self.heights.len() {
             let x = self.center_x(i);
             let y = self.origin.y + self.bed[i] + 1.0;
-            self.visible[i] = x >= 0.0 && x <= screen_width && !blockers.iter().any(|b| x >= b[0] && x < b[2] && y >= b[1] && y < b[3]);
+            self.visible[i] = x >= seen.0 && x <= seen.1 && !blockers.iter().any(|b| x >= b[0] && x < b[2] && y >= b[1] && y < b[3]);
         }
     }
 

@@ -6,11 +6,13 @@
 #   linux/bench/run.sh sway    snowfall and the drift on the ground
 #   linux/bench/run.sh niri    the same, in niri
 #   linux/bench/run.sh kwin    the KWin script reports windows, and goes quiet once the app is killed
+#   linux/bench/run.sh side    window snow across two displays side by side, in Sway
+#   linux/bench/run.sh stacked the same with one display under the other
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
-scene=${1:?usage: run.sh sway|niri|kwin}
+scene=${1:?usage: run.sh sway|niri|kwin|side|stacked}
 out=$here/out/$scene
 rm -rf "$out"
 mkdir -p "$out"
