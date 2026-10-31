@@ -21,6 +21,7 @@ use windows::core::{PCWSTR, Result, w};
 
 use crate::halloween;
 use crate::log;
+use crate::menu::{self, Entry};
 use crate::prefs::{self, Settings};
 use crate::snow::{self, Command, Links};
 use crate::update::{self, Release};
@@ -227,44 +228,82 @@ fn send(app: &App, command: Command) {
 fn show_menu(window: HWND, x: i32, y: i32) {
     let Some(settings) = APP.with_borrow(|app| app.as_ref().map(|app| app.settings)) else { return };
     let login = prefs::opens_at_login();
-    let chosen = unsafe {
-        let Ok(menu) = CreatePopupMenu() else { return };
-        let Ok(snowfall) = CreatePopupMenu() else { return };
-        for (i, option) in Snowfall::ALL.iter().enumerate() {
-            let title: Vec<u16> = option.title().encode_utf16().chain([0]).collect();
-            let _ = AppendMenuW(snowfall, MF_STRING, (ID_SNOWFALL + i as u32) as usize, PCWSTR(title.as_ptr()));
+    let entries = entries(&settings, login);
+    let chosen = match menu::track(x, y, entries.clone()) {
+        Ok(chosen) => chosen,
+        Err(error) => {
+            log!("menu failed, using the plain one: {error}");
+            native_menu(window, x, y, &entries)
         }
-        let current = Snowfall::ALL.iter().position(|&s| s == settings.snowfall).unwrap_or(0) as u32;
-        let _ = CheckMenuRadioItem(snowfall, ID_SNOWFALL, ID_SNOWFALL + 4, ID_SNOWFALL + current, MF_BYCOMMAND.0);
-        let checked = |on: bool| if on { MF_CHECKED } else { MF_UNCHECKED };
-        let _ = AppendMenuW(menu, MF_POPUP, snowfall.0 as usize, w!("Snowfall"));
-        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-        let _ = AppendMenuW(menu, MF_STRING | checked(settings.accumulate), ID_ACCUMULATE as usize, w!("Accumulate"));
-        let melt = MF_STRING | checked(settings.melt) | if settings.accumulate { MF_ENABLED } else { MF_GRAYED };
-        let _ = AppendMenuW(menu, melt, ID_MELT as usize, w!("Melt Snow"));
-        let windows = MF_STRING | checked(settings.snow_on_windows) | if settings.behind_windows { MF_GRAYED } else { MF_ENABLED };
-        let _ = AppendMenuW(menu, windows, ID_WINDOWS as usize, w!("Snow on Windows"));
-        let _ = AppendMenuW(menu, MF_STRING, ID_CLEAR as usize, w!("Clear Snow"));
-        if halloween::season() {
-            let _ = AppendMenuW(menu, MF_STRING | checked(settings.halloween), ID_HALLOWEEN as usize, w!("Halloween"));
-        }
-        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-        let _ = AppendMenuW(menu, MF_STRING | checked(settings.behind_windows), ID_BEHIND as usize, w!("Behind Windows"));
-        let _ = AppendMenuW(menu, MF_STRING | checked(settings.behind_taskbar), ID_TASKBAR as usize, w!("Behind Taskbar"));
-        let _ = AppendMenuW(menu, MF_STRING | checked(settings.show_in_screenshots), ID_SCREENSHOTS as usize, w!("Show in Screenshots"));
-        let _ = AppendMenuW(menu, MF_STRING | checked(login), ID_LOGIN as usize, w!("Open at Login"));
-        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-        let _ = AppendMenuW(menu, MF_STRING, ID_UPDATES as usize, w!("Check for Updates…"));
-        let _ = AppendMenuW(menu, MF_STRING, ID_QUIT as usize, w!("Quit"));
+    };
+    choose(window, chosen, login);
+}
 
+/// What the tray menu lists, with what is on or off.
+fn entries(settings: &Settings, login: bool) -> Vec<Entry> {
+    let snowfall = Snowfall::ALL
+        .iter()
+        .enumerate()
+        .map(|(i, &option)| Entry::item(ID_SNOWFALL + i as u32, option.title(), option == settings.snowfall, true))
+        .collect();
+    let mut entries = vec![
+        Entry::Submenu { label: "Snowfall".to_string(), entries: snowfall },
+        Entry::Separator,
+        Entry::item(ID_ACCUMULATE, "Accumulate", settings.accumulate, true),
+        Entry::item(ID_MELT, "Melt Snow", settings.melt, settings.accumulate),
+        Entry::item(ID_WINDOWS, "Snow on Windows", settings.snow_on_windows, !settings.behind_windows),
+        Entry::item(ID_CLEAR, "Clear Snow", false, true),
+    ];
+    if halloween::season() {
+        entries.push(Entry::item(ID_HALLOWEEN, "Halloween", settings.halloween, true));
+    }
+    entries.extend([
+        Entry::Separator,
+        Entry::item(ID_BEHIND, "Behind Windows", settings.behind_windows, true),
+        Entry::item(ID_TASKBAR, "Behind Taskbar", settings.behind_taskbar, true),
+        Entry::item(ID_SCREENSHOTS, "Show in Screenshots", settings.show_in_screenshots, true),
+        Entry::item(ID_LOGIN, "Open at Login", login, true),
+        Entry::Separator,
+        Entry::item(ID_UPDATES, "Check for Updates\u{2026}", false, true),
+        Entry::item(ID_QUIT, "Quit", false, true),
+    ]);
+    entries
+}
+
+/// The system's own menu, for when the drawn one can't be shown.
+fn native_menu(window: HWND, x: i32, y: i32, entries: &[Entry]) -> u32 {
+    unsafe {
+        let Ok(menu) = CreatePopupMenu() else { return 0 };
+        append(menu, entries);
         // A tray menu only closes on an outside click while its owner is in the foreground.
         let _ = SetForegroundWindow(window);
         let chosen = TrackPopupMenuEx(menu, (TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY).0, x, y, window, None).0 as u32;
         let _ = PostMessageW(Some(window), WM_NULL, WPARAM(0), LPARAM(0));
         let _ = DestroyMenu(menu);
         chosen
-    };
-    choose(window, chosen, login);
+    }
+}
+
+unsafe fn append(menu: HMENU, entries: &[Entry]) {
+    let text = |label: &str| -> Vec<u16> { label.encode_utf16().chain([0]).collect() };
+    for entry in entries {
+        unsafe {
+            match entry {
+                Entry::Separator => {
+                    let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+                }
+                Entry::Item { id, label, checked, enabled } => {
+                    let flags = MF_STRING | if *checked { MF_CHECKED } else { MF_UNCHECKED } | if *enabled { MF_ENABLED } else { MF_GRAYED };
+                    let _ = AppendMenuW(menu, flags, *id as usize, PCWSTR(text(label).as_ptr()));
+                }
+                Entry::Submenu { label, entries } => {
+                    let Ok(submenu) = CreatePopupMenu() else { continue };
+                    append(submenu, entries);
+                    let _ = AppendMenuW(menu, MF_POPUP, submenu.0 as usize, PCWSTR(text(label).as_ptr()));
+                }
+            }
+        }
+    }
 }
 
 fn choose(window: HWND, chosen: u32, login: bool) {

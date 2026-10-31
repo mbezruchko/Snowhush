@@ -540,6 +540,7 @@ fn lowest_open_popup() -> Option<HWND> {
             unsafe { GetWindowThreadProcessId(window, Some(&mut process)) };
             let popup = class == "#32768"
                 || class == "tooltips_class32"
+                || class == "SnowhushMenu"
                 || COVER_ONLY.contains(&class.as_str())
                 || (process == shell && class != "Shell_TrayWnd" && class != "Shell_SecondaryTrayWnd");
             top.push((class, process));
