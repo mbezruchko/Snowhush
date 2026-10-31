@@ -7,6 +7,30 @@ use super::{COLUMN_WIDTH, Flake, Grain, MAX_GRAINS, PileLayer, SnowSimulation, W
 use crate::geometry::V2;
 use crate::layer::SnowLayer;
 
+/// Takes a point in one display's overlay coordinates to another's: scaled, as displays can differ in how many pixels
+/// make a point, then shifted.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Mapping {
+    pub scale: f32,
+    pub shift: V2,
+}
+
+impl Mapping {
+    /// Between displays that make a point of the same number of pixels.
+    pub const fn shift(shift: V2) -> Mapping {
+        Mapping { scale: 1.0, shift }
+    }
+
+    pub fn point(&self, point: V2) -> V2 {
+        point * self.scale + self.shift
+    }
+
+    fn rect(&self, rect: [f32; 4]) -> [f32; 4] {
+        let (low, high) = (self.point(V2::new(rect[0], rect[1])), self.point(V2::new(rect[2], rect[3])));
+        [low.x, low.y, high.x, high.y]
+    }
+}
+
 /// A window's snow taken off one display to lie on another. Its times are kept as ages, since each simulation
 /// keeps its own clock.
 pub struct Carried {
@@ -28,12 +52,32 @@ pub struct Borrowed {
 }
 
 impl Borrowed {
-    /// Moved into another display's coordinates.
-    pub fn shifted(mut self, shift: V2) -> Borrowed {
-        self.origin += shift;
-        for occluder in &mut self.occluders {
-            *occluder = [occluder[0] + shift.x, occluder[1] + shift.y, occluder[2] + shift.x, occluder[3] + shift.y];
+    /// Taken into another display's coordinates. Where that display makes a point of other pixels, the drift is
+    /// laid out again on its columns and scaled with them, so it meets the part drawn here at the edge between them.
+    pub fn mapped(mut self, mapping: Mapping) -> Borrowed {
+        self.occluders = self.occluders.iter().map(|&occluder| mapping.rect(occluder)).collect();
+        let origin = mapping.point(self.origin);
+        if mapping.scale != 1.0 {
+            let count = ((self.count as f32 * mapping.scale).round() as usize).max(1);
+            let mut columns = vec![0.0; 2 * count];
+            let mut visible = vec![false; count];
+            for j in 0..count {
+                let at = ((j as f32 + 0.5) / mapping.scale - 0.5).clamp(0.0, (self.count - 1) as f32);
+                let (i, t) = (at.floor() as usize, at.fract());
+                let next = (i + 1).min(self.count - 1);
+                for half in [0, 1] {
+                    let (a, b) = (self.columns[half * self.count + i], self.columns[half * self.count + next]);
+                    columns[half * count + j] = (a + (b - a) * t) * mapping.scale;
+                }
+                visible[j] = self.visible[(at.round() as usize).min(self.count - 1)];
+            }
+            self.count = count;
+            self.columns = columns;
+            self.visible = visible;
+            self.top *= mapping.scale;
+            self.bottom *= mapping.scale;
         }
+        self.origin = origin;
         self
     }
 
@@ -113,9 +157,10 @@ impl SnowSimulation {
         Some(Carried { layer })
     }
 
-    /// Puts snow taken from another simulation onto its window here. `shift` takes the other simulation's
-    /// coordinates to these; the snow keeps its motion, so a drag across displays goes on as one.
-    pub fn adopt_window(&mut self, id: WindowId, carried: Carried, shift: V2) {
+    /// Puts snow taken from another simulation onto its window here. `mapping` takes the other simulation's
+    /// coordinates to these; the snow keeps its motion, so a drag across displays goes on as one. It keeps its depth
+    /// in points, as the window keeps its size in points on a display of other pixels.
+    pub fn adopt_window(&mut self, id: WindowId, carried: Carried, mapping: Mapping) {
         if let Some(li) = self.layer_index(id) {
             self.release_held();
             self.ids.remove(li);
@@ -126,12 +171,11 @@ impl SnowSimulation {
         let mut layer = carried.layer;
         layer.moved_at += self.air.clock;
         layer.returned_at += self.air.clock;
-        layer.origin += shift;
-        layer.track += shift;
-        layer.previous_base_y += shift.y;
-        for occluder in &mut layer.occluders {
-            *occluder = [occluder[0] + shift.x, occluder[1] + shift.y, occluder[2] + shift.x, occluder[3] + shift.y];
-        }
+        layer.origin = mapping.point(layer.origin);
+        layer.track = mapping.point(layer.track);
+        layer.track_velocity *= mapping.scale;
+        layer.previous_base_y = mapping.point(V2::new(0.0, layer.previous_base_y)).y;
+        layer.occluders = layer.occluders.iter().map(|&occluder| mapping.rect(occluder)).collect();
         self.layers.push(layer);
         self.ids.push(id);
         self.air.windows_changed = true;
@@ -172,13 +216,14 @@ impl SnowSimulation {
         std::mem::take(&mut self.caught)
     }
 
-    /// Lays snow caught on a neighbouring display onto the window it fell on; `shift` takes that display's `x` to this one's.
-    pub fn catch(&mut self, caught: &Caught, shift: f32) {
+    /// Lays snow caught on a neighbouring display onto the window it fell on; `mapping` takes that display's
+    /// coordinates to these.
+    pub fn catch(&mut self, caught: &Caught, mapping: Mapping) {
         let Some(li) = self.layer_index(caught.id) else { return };
         let layer = &mut self.layers[li];
-        let x = caught.x + shift;
+        let x = caught.x * mapping.scale + mapping.shift.x;
         let fill = layer.index(x).map_or(1.0, |i| layer.fill(i));
-        layer.deposit(caught.area * fill, x, true);
+        layer.deposit(caught.area * mapping.scale * mapping.scale * fill, x, true);
         self.air.heights_changed = true;
     }
 
@@ -187,16 +232,24 @@ impl SnowSimulation {
         std::mem::take(&mut self.strays)
     }
 
-    /// Goes on with snow thrown in from a neighbouring display; `shift` takes its coordinates to these.
-    pub fn adopt_strays(&mut self, strays: Vec<Stray>, shift: V2) {
+    /// Goes on with snow thrown in from a neighbouring display; `mapping` takes its coordinates to these.
+    pub fn adopt_strays(&mut self, strays: Vec<Stray>, mapping: Mapping) {
+        let scale = mapping.scale;
         for stray in strays {
             match stray.0 {
                 Piece::Flake(mut flake) => {
-                    flake.position += shift;
+                    flake.position = mapping.point(flake.position);
+                    flake.velocity *= scale;
+                    flake.fall_speed *= scale;
+                    flake.size *= scale;
+                    flake.sway_amount *= scale;
                     self.air.flakes.push(flake);
                 }
                 Piece::Grain(mut grain) if self.air.grains.len() < MAX_GRAINS => {
-                    grain.position += shift;
+                    grain.position = mapping.point(grain.position);
+                    grain.velocity *= scale;
+                    grain.size *= scale;
+                    grain.area *= scale * scale;
                     self.air.grains.push(grain);
                 }
                 Piece::Grain(_) => {}

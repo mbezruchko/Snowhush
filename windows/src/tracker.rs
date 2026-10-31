@@ -1,5 +1,5 @@
 use std::cell::Cell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
 use std::mem::size_of;
 use std::sync::Once;
@@ -90,6 +90,10 @@ pub struct Tracker {
     /// The shell's own sense that a full-screen app or presentation is in front.
     busy: bool,
     pub generation: u64,
+    /// The displays by name, with their work areas and bounds in physical pixels.
+    displays: Vec<(String, RECT, RECT)>,
+    /// The display each window's snow lies on, by name.
+    pub owners: HashMap<isize, String>,
     seen: HashSet<isize>,
     pub listings: u32,
     pub cost: i64,
@@ -121,6 +125,8 @@ impl Tracker {
             listed_at: 0,
             busy: false,
             generation: 0,
+            displays: Vec::new(),
+            owners: HashMap::new(),
             seen: HashSet::new(),
             listings: 0,
             cost: 0,
@@ -136,12 +142,57 @@ impl Tracker {
         EVENTS.set(Events { changed: false, ..events });
         let began = Clock::now();
         self.windows = self.list();
+        self.owners = self.windows.iter().filter_map(|window| Some((window.id, self.owner(&window.rect)?.to_string()))).collect();
         self.busy = SHELL_BUSY.load(Ordering::Relaxed);
         self.cost += Clock::now() - began;
         self.listings += 1;
         self.listed_at = now;
         self.generation += 1;
         true
+    }
+
+    /// The displays to tell windows' snow apart by: name, work area and bounds, in physical pixels.
+    pub fn set_displays<'a>(&mut self, displays: impl Iterator<Item = (&'a str, RECT, RECT)> + Clone) {
+        let known = &self.displays;
+        if displays.clone().count() == known.len()
+            && displays.clone().zip(known).all(|(display, (name, area, bounds))| display == (name.as_str(), *area, *bounds))
+        {
+            return;
+        }
+        self.displays = displays.map(|(name, area, bounds)| (name.to_string(), area, bounds)).collect();
+        self.owners = self.windows.iter().filter_map(|window| Some((window.id, self.owner(&window.rect)?.to_string()))).collect();
+    }
+
+    /// The display a window's snow lies on: of those its top edge runs along, the one holding most of the window, as
+    /// the system picks the display whose scale the window takes. Each display has a simulation of its own, and the
+    /// window's snow is handed over as it moves to another.
+    fn owner(&self, r: &RECT) -> Option<&str> {
+        let held = |area: &RECT| {
+            (r.right.min(area.right) - r.left.max(area.left)).max(0) as i64 * (r.bottom.min(area.bottom) - r.top.max(area.top)).max(0) as i64
+        };
+        self.displays
+            .iter()
+            .filter(|(_, area, _)| r.top >= area.top && r.top < area.bottom && r.left < area.right && r.right > area.left)
+            .max_by_key(|(_, _, bounds)| held(bounds))
+            .map(|(name, _, _)| name.as_str())
+    }
+
+    /// Whether the window's top edge lies along the top of display `name`, right under another display, where its
+    /// snow has room to stand.
+    fn below_display(&self, name: &str, r: &RECT, sy: f32) -> bool {
+        let Some((_, area, bounds)) = self.displays.iter().find(|(other, _, _)| other == name) else { return false };
+        area.top == bounds.top
+            && r.top >= area.top
+            && ((r.top - area.top) as f32 * sy) < 6.0
+            && self
+                .displays
+                .iter()
+                .any(|(other, _, above)| other != name && above.bottom == bounds.top && above.left < r.right && above.right > r.left)
+    }
+
+    /// A listed window's frame in physical pixels.
+    pub fn rect(&self, id: isize) -> Option<RECT> {
+        self.windows.iter().find(|window| window.id == id).map(|window| window.rect)
     }
 
     /// Whether a window is being dragged or resized right now.
@@ -156,20 +207,29 @@ impl Tracker {
         events.started_moving
     }
 
-    /// The windows on one display that snow can settle on, in its overlay coordinates.
-    /// `area` is the display's work area in physical pixels, `size` the overlay's size in DIPs.
-    pub fn surfaces(&self, area: &RECT, size: (u32, u32)) -> Vec<WindowSurface> {
+    /// The windows on display `name` that snow can settle on, in its overlay coordinates. `area` is the display's work
+    /// area in physical pixels, `size` the overlay's size in DIPs. Windows whose snow lies on another display only hide
+    /// snow here.
+    pub fn surfaces(&self, name: &str, area: &RECT, size: (u32, u32)) -> Vec<WindowSurface> {
         let (width, height) = (size.0 as f32, size.1 as f32);
         let sy = height / (area.bottom - area.top).max(1) as f32;
         let mut blockers: Vec<Rect> = Vec::new();
         let mut surfaces = Vec::new();
         for window in &self.windows {
-            let Some(frame) = local_frame(&window.rect, area, size) else { continue };
-            let r = &window.rect;
-            let room_above = (r.top - area.top) as f32 * sy >= 6.0 && frame.max_y() < height;
-            let on_screen = frame.max_x() > 0.0 && frame.min_x() < width && frame.max_y() > 0.0;
+            let frame = local_frame(&window.rect, area, size);
             let fills_screen = frame.width * frame.height >= width * height * 0.9;
-            if room_above && on_screen && !fills_screen && !window.cover_only && frame.width >= 80.0 && frame.height >= 40.0 {
+            // One on a neighbouring display still hides the snow of a window here reaching over there.
+            if !overlaps(&window.rect, area) {
+                if !(window.cover_only && fills_screen) {
+                    blockers.push(frame);
+                }
+                continue;
+            }
+            let r = &window.rect;
+            let room_above = ((r.top - area.top) as f32 * sy >= 6.0 && frame.max_y() < height) || self.below_display(name, r, sy);
+            let on_screen = frame.max_x() > 0.0 && frame.min_x() < width && frame.max_y() > 0.0;
+            let here = self.owners.get(&window.id).is_none_or(|owner| owner == name);
+            if here && room_above && on_screen && !fills_screen && !window.cover_only && frame.width >= 80.0 && frame.height >= 40.0 {
                 let radius = window.radius.min(frame.width / 2.0).min(frame.height / 2.0);
                 let region = Rect { x: frame.x, y: frame.max_y() - radius, width: frame.width, height: 40.0 + radius };
                 surfaces.push(WindowSurface {
@@ -193,8 +253,8 @@ impl Tracker {
     pub fn covers(&self, area: &RECT, size: (u32, u32)) -> Vec<[f32; 4]> {
         self.windows
             .iter()
-            .filter(|window| !window.cover_only && window.class != "#32768")
-            .filter_map(|window| local_frame(&window.rect, area, size))
+            .filter(|window| !window.cover_only && window.class != "#32768" && overlaps(&window.rect, area))
+            .map(|window| local_frame(&window.rect, area, size))
             .map(|frame| [frame.min_x(), frame.min_y(), frame.max_x(), frame.max_y()])
             .collect()
     }
@@ -443,20 +503,20 @@ fn windows_build() -> u32 {
     String::from_utf16_lossy(&buffer[..length]).parse().unwrap_or(0)
 }
 
-/// A window's frame in the overlay coordinates of the display with work area `area` and an overlay `size` DIPs across,
-/// if any of it is on that display.
-fn local_frame(r: &RECT, area: &RECT, size: (u32, u32)) -> Option<Rect> {
-    if r.right <= area.left || r.left >= area.right || r.bottom <= area.top || r.top >= area.bottom {
-        return None;
-    }
+/// A window's frame in the overlay coordinates of the display with work area `area` and an overlay `size` DIPs across.
+fn local_frame(r: &RECT, area: &RECT, size: (u32, u32)) -> Rect {
     let sx = size.0 as f32 / (area.right - area.left).max(1) as f32;
     let sy = size.1 as f32 / (area.bottom - area.top).max(1) as f32;
-    Some(Rect {
+    Rect {
         x: (r.left - area.left) as f32 * sx,
         y: (area.bottom - r.bottom) as f32 * sy,
         width: (r.right - r.left) as f32 * sx,
         height: (r.bottom - r.top) as f32 * sy,
-    })
+    }
+}
+
+fn overlaps(r: &RECT, area: &RECT) -> bool {
+    r.right > area.left && r.left < area.right && r.bottom > area.top && r.top < area.bottom
 }
 
 fn intersects(a: &Rect, b: &Rect) -> bool {

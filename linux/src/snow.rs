@@ -20,7 +20,7 @@ use wayland_client::{Connection, QueueHandle};
 use zbus::blocking::Connection as Bus;
 
 use snowhush_core::geometry::V2;
-use snowhush_core::simulation::{Borrowed, SnowSimulation, Snowfall, Stray, WindowId};
+use snowhush_core::simulation::{Borrowed, Mapping, SnowSimulation, Snowfall, Stray, WindowId};
 
 use crate::chores;
 use crate::kwin;
@@ -448,7 +448,7 @@ impl App {
         let (old, new) = (self.screens[a].area(), self.screens[b].area());
         // Overlay coordinates run right and up from each overlay's bottom left.
         let shift = V2::new((old.x - new.x) as f32, (new.bottom() - old.bottom()) as f32);
-        self.screens[b].simulation.adopt_window(id, snow, shift);
+        self.screens[b].simulation.adopt_window(id, snow, Mapping::shift(shift));
         self.screens[a].rewatch();
         self.screens[b].rewatch();
         self.screens[b].wake(now);
@@ -480,7 +480,7 @@ impl App {
             let Some(home) = self.screens.iter().find(|other| other.name == *owner).filter(|_| near) else { continue };
             let Some(lent) = home.simulation.lend(id) else { continue };
             let there = home.area();
-            let lent = lent.shifted(V2::new((there.x - here.x) as f32, (here.bottom() - there.bottom()) as f32));
+            let lent = lent.mapped(Mapping::shift(V2::new((there.x - here.x) as f32, (here.bottom() - there.bottom()) as f32)));
             let [left, bottom, right, top] = lent.bounds();
             if right > 0.0 && left < here.w as f32 && top > 0.0 && bottom < here.h as f32 {
                 borrowed.push(lent);
@@ -498,8 +498,8 @@ impl App {
             for caught in self.screens[index].simulation.take_caught() {
                 let Some(owner) = self.owners.get(&caught.id) else { continue };
                 let Some(home) = self.screens.iter_mut().find(|other| other.name == *owner) else { continue };
-                let shift = (here.x - home.area().x) as f32;
-                home.simulation.catch(&caught, shift);
+                let shift = V2::new((here.x - home.area().x) as f32, 0.0);
+                home.simulation.catch(&caught, Mapping::shift(shift));
             }
             let mut passed: Vec<(usize, Vec<Stray>)> = Vec::new();
             for stray in self.screens[index].simulation.take_strays() {
@@ -519,7 +519,7 @@ impl App {
             for (next, strays) in passed {
                 let there = self.screens[next].area();
                 let shift = V2::new((here.x - there.x) as f32, (there.bottom() - here.bottom()) as f32);
-                self.screens[next].simulation.adopt_strays(strays, shift);
+                self.screens[next].simulation.adopt_strays(strays, Mapping::shift(shift));
             }
         }
     }

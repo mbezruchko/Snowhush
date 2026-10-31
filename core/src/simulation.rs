@@ -12,7 +12,7 @@ mod neighbours;
 mod pumpkins;
 
 use ghosts::Haunting;
-pub use neighbours::{Borrowed, Carried, Caught, Stray};
+pub use neighbours::{Borrowed, Carried, Caught, Mapping, Stray};
 use pumpkins::Pumpkins;
 
 pub type WindowId = isize;

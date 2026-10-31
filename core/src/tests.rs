@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use crate::geometry::{Rect, V2};
-use crate::simulation::{Pace, ScatterPiece, SnowSimulation, Snowfall, Sprite, WindowSurface};
+use crate::simulation::{Mapping, Pace, ScatterPiece, SnowSimulation, Snowfall, Sprite, WindowSurface};
 
 const DT: f32 = 1.0 / 60.0;
 const AWAY: V2 = V2::new(-10_000.0, -10_000.0);
@@ -297,7 +297,7 @@ fn a_window_dragged_to_the_next_display_takes_its_snow_along() {
         if !on_right && x + window / 2.0 > width {
             on_right = true;
             let snow = left.take_window(4).expect("snow on the window");
-            right.adopt_window(4, snow, V2::new(-width, 0.0));
+            right.adopt_window(4, snow, Mapping::shift(V2::new(-width, 0.0)));
         }
         if on_right {
             right.update_windows(&[surface(4, x - width, 600.0, window)], DT, &none, &none, false);
@@ -345,15 +345,15 @@ impl Pair {
     fn step(&mut self) {
         let over = V2::new(-SEAM, 0.0);
         self.left.step(DT, AWAY);
-        self.right.set_borrowed(self.left.lend(4).map(|lent| lent.shifted(over)).into_iter().collect());
+        self.right.set_borrowed(self.left.lend(4).map(|lent| lent.mapped(Mapping::shift(over))).into_iter().collect());
         self.right.step(DT, AWAY);
         for caught in self.right.take_caught() {
-            self.left.catch(&caught, SEAM);
+            self.left.catch(&caught, Mapping::shift(V2::new(SEAM, 0.0)));
         }
         let strays = self.left.take_strays();
-        self.right.adopt_strays(strays, over);
+        self.right.adopt_strays(strays, Mapping::shift(over));
         let strays = self.right.take_strays();
-        self.left.adopt_strays(strays, V2::new(SEAM, 0.0));
+        self.left.adopt_strays(strays, Mapping::shift(V2::new(SEAM, 0.0)));
     }
 
     fn run(&mut self, seconds: f32) {
@@ -438,11 +438,101 @@ fn a_window_handed_to_a_display_with_a_clock_of_its_own_keeps_its_snow_in_sight(
     let resting = ledge(&left);
 
     let snow = left.take_window(4).expect("snow on the window");
-    right.adopt_window(4, snow, V2::new(-SEAM, 0.0));
+    right.adopt_window(4, snow, Mapping::shift(V2::new(-SEAM, 0.0)));
     right.update_windows(&[surface(4, 300.0 - SEAM, 600.0, 500.0)], 0.2, &none, &none, false);
     right.step(DT, AWAY);
     let arrived = ledge(&right);
     assert!(arrived > resting * 0.9, "resting {resting}, arrived {arrived}");
+}
+
+/// A display at 150% beside one at 100%, as Windows lays them out: the left one is 1280 points across on 1920 pixels,
+/// the right one 1920 points, both 1200 pixels tall.
+const LEFT_TO_RIGHT: Mapping = Mapping { scale: 1.5, shift: V2::new(-1920.0, 0.0) };
+const RIGHT_TO_LEFT: Mapping = Mapping { scale: 1.0 / 1.5, shift: V2::new(1280.0, 0.0) };
+
+fn mixed_pair() -> (SnowSimulation, SnowSimulation) {
+    let mut left = SnowSimulation::new(1280.0, 800.0, Snowfall::Heavy);
+    let mut right = SnowSimulation::new(1920.0, 1200.0, Snowfall::Heavy);
+    for (simulation, left_side) in [(&mut left, false), (&mut right, true)] {
+        simulation.thaws = false;
+        simulation.walls = (!left_side, left_side);
+        simulation.neighbours = (left_side, !left_side);
+    }
+    (left, right)
+}
+
+/// The smoothed surface of the window's drift at `x`, from the pile drawn at that height.
+fn surface_at(simulation: &SnowSimulation, x: f32, above: f32) -> f32 {
+    let mut buffer = vec![0.0; simulation.column_count()];
+    let piles = simulation.write_layers(&mut buffer);
+    let pile =
+        piles.iter().find(|pile| pile.origin.y > above && x >= pile.origin.x && x < pile.origin.x + 2.0 * pile.count as f32).expect("a drift there");
+    let i = ((x - pile.origin.x) / 2.0) as usize;
+    pile.origin.y + buffer[pile.offset + i]
+}
+
+#[test]
+fn a_drift_lent_to_a_display_of_other_pixels_meets_the_rest_at_the_edge() {
+    let none = HashSet::new();
+    let (mut left, mut right) = mixed_pair();
+    left.update_windows(&[surface(4, 980.0, 600.0, 600.0)], 0.2, &none, &none, false);
+    run(&mut left, 60.0, AWAY);
+    right.set_borrowed(left.lend(4).map(|lent| lent.mapped(LEFT_TO_RIGHT)).into_iter().collect());
+    right.step(DT, AWAY);
+    // The same spot on the screen either side of the edge, 3 pixels apart.
+    let here = surface_at(&left, 1279.0, 500.0) * 1.5;
+    let there = surface_at(&right, 1.5, 800.0);
+    assert!((here - there).abs() < 3.0, "left side {here}, right side {there} in pixels up from the bottom");
+}
+
+#[test]
+fn snow_settles_on_a_window_across_displays_of_other_pixels() {
+    let none = HashSet::new();
+    let (mut left, mut right) = mixed_pair();
+    left.update_windows(&[surface(4, 980.0, 600.0, 600.0)], 0.2, &none, &none, false);
+    for _ in 0..(60.0 / DT) as usize {
+        left.step(DT, AWAY);
+        right.set_borrowed(left.lend(4).map(|lent| lent.mapped(LEFT_TO_RIGHT)).into_iter().collect());
+        right.step(DT, AWAY);
+        for caught in right.take_caught() {
+            left.catch(&caught, RIGHT_TO_LEFT);
+        }
+    }
+    let mut buffer = vec![0.0; left.column_count()];
+    let piles = left.write_layers(&mut buffer);
+    let pile = piles.iter().find(|pile| pile.origin.y > 500.0).expect("snow on the window");
+    let (mut sums, mut counts) = ([0.0; 2], [0.0; 2]);
+    for i in 0..pile.count {
+        let side = usize::from(pile.origin.x + (i as f32 + 0.5) * 2.0 > 1280.0);
+        sums[side] += buffer[pile.offset + i] - buffer[pile.offset + pile.count + i];
+        counts[side] += 1.0;
+    }
+    let (near, far) = (sums[0] / counts[0], sums[1] / counts[1]);
+    // The right display snows as thickly per point of its own, two thirds as deep in the left one's points.
+    assert!(near > 2.0 && far > near * 0.4, "left half {near}, right half {far}");
+    assert_finite(&left);
+    assert_finite(&right);
+}
+
+#[test]
+fn a_window_dragged_to_a_display_of_other_pixels_keeps_its_snow() {
+    let none = HashSet::new();
+    let (mut left, mut right) = mixed_pair();
+    left.update_windows(&[surface(4, 300.0, 600.0, 500.0)], 0.2, &none, &none, false);
+    run(&mut left, 60.0, AWAY);
+    left.set_snowfall(Snowfall::Off);
+    right.set_snowfall(Snowfall::Off);
+    run(&mut left, 10.0, AWAY);
+    let resting = ledge(&left);
+    let snow = left.take_window(4).expect("snow on the window");
+    right.adopt_window(4, snow, LEFT_TO_RIGHT);
+    // On the new display the window keeps its size in points, as Windows scales it on the way.
+    let top = LEFT_TO_RIGHT.point(V2::new(300.0, 600.0));
+    right.update_windows(&[surface(4, top.x, top.y, 500.0)], DT, &none, &none, false);
+    run(&mut right, 3.0, AWAY);
+    let arrived = piles(&right).iter().find(|(origin, _)| origin.y > 800.0).map_or(0.0, |p| p.1);
+    assert!(arrived > resting * 0.9, "resting {resting}, arrived {arrived}");
+    assert_finite(&right);
 }
 
 fn shake(simulation: &mut SnowSimulation, id: isize) {
