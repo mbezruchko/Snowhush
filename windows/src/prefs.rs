@@ -20,6 +20,8 @@ pub struct Settings {
     pub melt: bool,
     pub snow_on_windows: bool,
     pub behind_windows: bool,
+    /// The snow settles at the bottom of the screen, under the taskbar, for a taskbar made see-through, as by TranslucentTB.
+    pub behind_taskbar: bool,
     pub show_in_screenshots: bool,
     pub welcomed: bool,
     /// Whether the snow turns spooky on Halloween.
@@ -36,6 +38,7 @@ impl Settings {
             melt: read(w!("meltSnow")).is_none_or(|v| v != 0),
             snow_on_windows: read(w!("snowOnWindows")).is_none_or(|v| v != 0),
             behind_windows: read(w!("behindWindows")).is_some_and(|v| v != 0),
+            behind_taskbar: read(w!("behindTaskbar")).is_some_and(|v| v != 0),
             show_in_screenshots: read(w!("showInScreenshots")).is_some_and(|v| v != 0),
             welcomed: read(w!("welcomed")).is_some_and(|v| v != 0),
             halloween: read(w!("halloween")).is_none_or(|v| v != 0),
@@ -49,6 +52,7 @@ impl Settings {
         write(w!("meltSnow"), self.melt as u32);
         write(w!("snowOnWindows"), self.snow_on_windows as u32);
         write(w!("behindWindows"), self.behind_windows as u32);
+        write(w!("behindTaskbar"), self.behind_taskbar as u32);
         write(w!("showInScreenshots"), self.show_in_screenshots as u32);
         write(w!("welcomed"), self.welcomed as u32);
         write(w!("halloween"), self.halloween as u32);

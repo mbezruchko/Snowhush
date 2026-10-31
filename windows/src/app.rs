@@ -41,6 +41,7 @@ const ID_QUIT: u32 = 299;
 const ID_UPDATES: u32 = 206;
 const ID_CLEAR: u32 = 207;
 const ID_HALLOWEEN: u32 = 208;
+const ID_TASKBAR: u32 = 209;
 const TIMER_WELCOME: usize = 1;
 const TIMER_UPDATES: usize = 2;
 const TIMER_HALLOWEEN: usize = 3;
@@ -249,6 +250,7 @@ fn show_menu(window: HWND, x: i32, y: i32) {
         }
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
         let _ = AppendMenuW(menu, MF_STRING | checked(settings.behind_windows), ID_BEHIND as usize, w!("Behind Windows"));
+        let _ = AppendMenuW(menu, MF_STRING | checked(settings.behind_taskbar), ID_TASKBAR as usize, w!("Behind Taskbar"));
         let _ = AppendMenuW(menu, MF_STRING | checked(settings.show_in_screenshots), ID_SCREENSHOTS as usize, w!("Show in Screenshots"));
         let _ = AppendMenuW(menu, MF_STRING | checked(login), ID_LOGIN as usize, w!("Open at Login"));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
@@ -307,6 +309,10 @@ fn choose(window: HWND, chosen: u32, login: bool) {
                 ID_BEHIND => {
                     settings.behind_windows = !settings.behind_windows;
                     Command::BehindWindows(settings.behind_windows)
+                }
+                ID_TASKBAR => {
+                    settings.behind_taskbar = !settings.behind_taskbar;
+                    Command::BehindTaskbar(settings.behind_taskbar)
                 }
                 ID_SCREENSHOTS => {
                     settings.show_in_screenshots = !settings.show_in_screenshots;
