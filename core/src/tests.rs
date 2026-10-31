@@ -108,6 +108,29 @@ fn a_gust_blows_all_the_snow_away() {
 }
 
 #[test]
+fn a_screen_rests_only_once_its_snow_is_gone_and_none_is_coming() {
+    let mut simulation = SnowSimulation::new(1280.0, 800.0, Snowfall::Steady);
+    simulation.thaws = true;
+    let none = HashSet::new();
+    simulation.update_windows(&[surface(7, 300.0, 600.0, 500.0)], 0.2, &none, &none, false);
+    run(&mut simulation, 30.0, AWAY);
+    simulation.set_snowfall(Snowfall::Off);
+    run(&mut simulation, 1.0, AWAY);
+    assert!(!simulation.is_empty(), "snow still falls and lies");
+
+    simulation.blow_away(1.0, false);
+    run(&mut simulation, 30.0, AWAY);
+    assert!(simulation.is_empty(), "sprites {}, snow {}", simulation.sprite_count(), simulation.has_snow());
+    assert!(!simulation.step(DT, AWAY), "a screen at rest has nothing to redraw");
+
+    simulation.set_halloween(true);
+    assert!(!simulation.is_empty(), "Halloween's pumpkins are coming");
+    simulation.set_halloween(false);
+    simulation.set_snowfall(Snowfall::Light);
+    assert!(!simulation.is_empty(), "the snowfall is coming");
+}
+
+#[test]
 fn a_calm_gust_melts_the_drifts_where_they_lie() {
     let mut simulation = SnowSimulation::new(1280.0, 800.0, Snowfall::Heavy);
     run(&mut simulation, 90.0, AWAY);

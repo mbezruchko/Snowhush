@@ -29,8 +29,10 @@ pub enum PowerBudget {
     Saver,
 }
 
-/// How long a frame may go unshown before the display counts as off or hidden; the snow then only ticks over.
+/// How long a frame may go unshown before the display counts as off or hidden; the snow then waits for it.
 const STALLED: Duration = Duration::from_secs(1);
+/// How often a screen with nothing on it and nothing coming looks again, besides being woken.
+const RESTING: Duration = Duration::from_secs(1);
 
 pub struct Screen {
     pub name: String,
@@ -55,6 +57,8 @@ pub struct Screen {
     covered: bool,
     /// When the frame now waiting for the compositor was drawn.
     shown_pending: Option<Instant>,
+    /// Frames went unshown for a while, so the snow is waiting.
+    stalled: bool,
     backdrop: Option<Backdrop>,
     shadow_tint: [f32; 4],
     /// Where the cursor's candle was last drawn, in overlay coordinates.
@@ -106,6 +110,7 @@ impl Screen {
             windows_changed_at: Instant::now(),
             covered: false,
             shown_pending: None,
+            stalled: false,
             backdrop: None,
             shadow_tint: [0.0; 4],
             lantern: V2::new(-1e6, -1e6),
@@ -191,6 +196,16 @@ impl Screen {
         report: Option<(&Report, u64, bool)>,
         snow_on_windows: bool,
     ) -> Result<bool, String> {
+        // The display is off or the overlay hidden, as behind a lock screen: the snow waits there as it does while
+        // locked, and a frame now and then asks to be shown again.
+        if self.shown_pending.is_some_and(|pending| now - pending >= STALLED) {
+            self.stalled = true;
+            self.last_step = None;
+            self.next_due = now + STALLED;
+            let pumpkins = !self.simulation.pumpkins().is_empty();
+            let lantern = self.lantern;
+            return self.present(gpu, qh, now, ambient, lantern, time, pumpkins);
+        }
         let dt = self.last_step.map_or(1.0 / 60.0, |last| (now - last).as_secs_f32().min(0.05));
         self.last_step = Some(now);
         if let Some((report, generation, moving)) = report {
@@ -200,6 +215,12 @@ impl Screen {
             }
         }
         let changed = self.simulation.step(dt, self.pointer(cursor));
+        // Nothing to draw and nothing on its way: the frame shown last stays up, as it would, till the snow is stirred.
+        if !changed && !self.pumpkins_shown && self.simulation.is_empty() {
+            self.last_step = None;
+            self.next_due = now + RESTING;
+            return Ok(false);
+        }
         // The candle follows the cursor even over snow that lies still.
         let lantern = self.local(cursor.0, cursor.1);
         let lantern_moved = ambient.night > 0.0 && (lantern - self.lantern).length() > 0.5 && (self.lit_by(lantern) || self.lit_by(self.lantern));
@@ -224,13 +245,24 @@ impl Screen {
             return Ok(false);
         }
         // The compositor hasn't shown the last frame yet: drawing another would only be thrown away.
-        if let Some(pending) = self.shown_pending {
-            if now - pending < STALLED {
-                return Ok(false);
-            }
-            // The display is off or the surface hidden: tick over slowly until frames are shown again.
-            self.next_due = now + Duration::from_millis(250);
+        if self.shown_pending.is_some() {
+            return Ok(false);
         }
+        self.present(gpu, qh, now, ambient, lantern, time, pumpkins)
+    }
+
+    /// Draws the snow as it is and asks the compositor to say when it shows it.
+    #[allow(clippy::too_many_arguments)]
+    fn present(
+        &mut self,
+        gpu: &mut Gpu,
+        qh: &QueueHandle<App>,
+        now: Instant,
+        ambient: Ambient,
+        lantern: V2,
+        time: f32,
+        pumpkins: bool,
+    ) -> Result<bool, String> {
         let Some(surface) = &self.surface else { return Ok(false) };
         let wl_surface = self.layer.wl_surface();
         wl_surface.frame(qh, FrameCallbackData(wl_surface.clone()));
@@ -254,6 +286,10 @@ impl Screen {
     /// The compositor showed the last frame.
     pub fn shown(&mut self) {
         self.shown_pending = None;
+        // Shown again after a while away: the snow goes on at once from where it waited.
+        if std::mem::take(&mut self.stalled) {
+            self.next_due = Instant::now();
+        }
     }
 
     /// The pointer in overlay coordinates. Down among the panel's icons it is behind the panel, as far as the
@@ -355,6 +391,7 @@ impl Screen {
         self.last_step = None;
         self.next_due = Instant::now();
         self.shown_pending = None;
+        self.stalled = false;
     }
 
     /// A point in logical pixels on the shared desktop in overlay coordinates: up from the bottom left of the overlay.

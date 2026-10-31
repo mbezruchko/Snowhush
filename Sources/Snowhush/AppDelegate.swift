@@ -287,7 +287,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private func updateActivity() {
         let awake = !screensAsleep && !screenLocked && !sessionInactive
         for snow in screens {
-            snow.setActive(awake && snow.window.occlusionState.contains(.visible))
+            snow.setActive(awake && snow.window.occlusionState.contains(.visible), asleep: !awake)
         }
     }
 }

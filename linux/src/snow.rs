@@ -218,7 +218,11 @@ impl App {
             Command::Quit => self.quit = true,
             Command::Snowfall(snowfall) => {
                 self.settings.snowfall = snowfall;
-                self.screens.iter_mut().for_each(|screen| screen.simulation.set_snowfall(snowfall));
+                let now = Instant::now();
+                self.screens.iter_mut().for_each(|screen| {
+                    screen.simulation.set_snowfall(snowfall);
+                    screen.wake(now);
+                });
             }
             Command::Accumulate(on) => {
                 self.settings.accumulate = on;
@@ -372,7 +376,11 @@ impl App {
         if halloween != self.halloween {
             self.halloween = halloween;
             log!("halloween: {halloween}");
-            self.screens.iter_mut().for_each(|screen| screen.simulation.set_halloween(halloween));
+            let now = Instant::now();
+            self.screens.iter_mut().for_each(|screen| {
+                screen.simulation.set_halloween(halloween);
+                screen.wake(now);
+            });
         }
         self.light = daylight();
         self.night = light::night(halloween);

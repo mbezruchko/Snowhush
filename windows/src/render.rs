@@ -32,7 +32,7 @@ use crate::log;
 
 const SHADERS: &str = include_str!("shaders.hlsl");
 /// How far the cursor's candlelight reaches, in points.
-const LANTERN_REACH: f32 = 130.0;
+pub const LANTERN_REACH: f32 = 130.0;
 
 // The sprites' input layout reads a ghost's parts at these offsets.
 const _: () =

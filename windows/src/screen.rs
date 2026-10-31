@@ -27,7 +27,7 @@ use crate::desktop::DesktopLayer;
 use crate::light::{Backdrop, Sky, Wallpapers};
 use crate::log;
 use crate::prefs::Settings;
-use crate::render::{Ambient, Gpu, Surface};
+use crate::render::{Ambient, Gpu, LANTERN_REACH, Surface};
 use crate::tracker::{COVER_ONLY, Tracker, class_name, cloaked, process_name};
 
 const CLASS: PCWSTR = w!("SnowhushOverlay");
@@ -293,8 +293,14 @@ impl Screen {
         }
         let cursor = self.cursor();
         let changed = self.simulation.step(dt, cursor);
-        // The lantern follows the cursor even over snow that lies still.
-        let lantern_moved = sky.night > 0.0 && (cursor - self.lantern_at).length() > 0.5;
+        // Nothing to draw and nothing on its way: the frame shown last stays up, as it would, till the snow is stirred.
+        if !changed && self.simulation.is_empty() {
+            self.last_step = 0;
+            self.next_due = now + clock.frequency;
+            return Ok(false);
+        }
+        // The lantern follows the cursor even over snow that lies still, on the display it lights.
+        let lantern_moved = sky.night > 0.0 && (cursor - self.lantern_at).length() > 0.5 && (self.lit_by(cursor) || self.lit_by(self.lantern_at));
         self.lantern_at = cursor;
 
         let fastest = if budget == PowerBudget::Full { self.interactive_rate } else { self.interactive_rate.min(60) };
@@ -317,6 +323,12 @@ impl Screen {
         let ambient = Ambient { light, shadow_tint, rim: [1.0, 0.56, 0.2, 0.3 * sky.night], lantern: (cursor, sky.night) };
         self.surface.draw(gpu, &self.simulation, ambient, time)?;
         Ok(true)
+    }
+
+    /// Whether a candle at this point, in overlay coordinates, lights anything on this display.
+    fn lit_by(&self, at: V2) -> bool {
+        let reach = LANTERN_REACH * 3.0;
+        at.x > -reach && at.y > -reach && at.x < self.simulation.width() + reach && at.y < self.simulation.height() + reach
     }
 
     /// Hands the simulation the windows on this display when they changed.

@@ -123,6 +123,10 @@ pub fn start(shared: Arc<Shared>, folder: PathBuf) -> Result<(), String> {
         .spawn(move || {
             for line in BufReader::new(events).lines() {
                 let Ok(line) = line else { break };
+                // A window's new title moves nothing, and terminals and browsers retitle themselves all the time.
+                if line.starts_with("windowtitle") {
+                    continue;
+                }
                 if announced.send(line).is_err() {
                     return;
                 }

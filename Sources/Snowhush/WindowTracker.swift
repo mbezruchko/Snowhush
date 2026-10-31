@@ -45,6 +45,8 @@ final class WindowTracker {
     /// The display tracked, in the window list's global coordinates: origin at the top left of the primary display.
     var screen: CGRect = .zero
     var menuBarHeight: CGFloat = 0
+    /// The primary display's height, which turns AppKit's coordinates into the window list's.
+    var primaryHeight: CGFloat = 0
 
     private let ownPID = ProcessInfo.processInfo.processIdentifier
     private let maxLayer = Int(CGWindowLevelForKey(.screenSaverWindow))
@@ -65,6 +67,8 @@ final class WindowTracker {
     private var leaving: [CGWindowID: CFTimeInterval] = [:]
     private var pressedMinimize: CGWindowID?
     private var buttonDown = false
+    /// When a modifier of a window shortcut was last seen held.
+    private var windowKeysAt: CFTimeInterval = -10
     private var slidingUntil: CFTimeInterval = -10
     /// The largest window at the last poll, checked every frame until the next: a Space that starts sliding carries
     /// it off well before the next poll would see. A floating panel might stay on every Space; a window that big won't.
@@ -91,7 +95,7 @@ final class WindowTracker {
         // Panels like Spotlight vanish on a keystroke; once one has stayed a while it's more likely a long-lived floating window.
         let panelOpen = panelsShownAt.values.contains { now - $0 < 20 }
         // Even while windows move, 60 looks a second are plenty: the snow follows a smoothed path of the window anyway.
-        let closely = eager || now - lastChange < 0.6 || dockShownAt != nil || pointerAtBottomEdge || panelOpen || exposing || Self.windowsMayChange
+        let closely = eager || now - lastChange < 0.6 || dockShownAt != nil || pointerAtBottomEdge || panelOpen || exposing || windowsMayChange(now: now)
         // A sliding Space is followed every frame, its snow riding on the windows with no smoothing.
         guard minimizing || now < slidingUntil || interval >= (closely ? 1.0 / 62 : 0.2) || watchedMoved() else { return nil }
         lastQuery = now
@@ -179,15 +183,14 @@ final class WindowTracker {
         buttonDown = down
 
         let flags = CGEventSource.flagsState(.combinedSessionState)
+        if !flags.isDisjoint(with: Self.windowKeys) { windowKeysAt = now }
         // 0x2E is the M key.
         if flags.contains(.maskCommand), CGEventSource.keyState(.combinedSessionState, key: 0x2E),
            let app = NSWorkspace.shared.frontmostApplication?.processIdentifier {
-            let windows = Self.windowList(now: now).filter {
-                $0[kCGWindowOwnerPID as String] as? Int32 == app && $0[kCGWindowLayer as String] as? Int == 0
-            }
+            let windows = Self.windowList(now: now).filter { $0.pid == app && $0.layer == 0 }
             // ⌥⌘M minimizes all of the app's windows.
             for entry in flags.contains(.maskAlternate) ? windows : Array(windows.prefix(1)) {
-                guard let id = entry[kCGWindowNumber as String] as? CGWindowID, leaving[id] == nil else { continue }
+                guard let id = entry.id, leaving[id] == nil else { continue }
                 leaving[id] = now + 1
                 started = true
             }
@@ -199,28 +202,25 @@ final class WindowTracker {
     /// close button as far from the window's left edge as from its top, however tall the title bar.
     private func minimizeButton(at point: CGPoint, now: CFTimeInterval) -> CGWindowID? {
         let front = Self.windowList(now: now).first { entry in
-            guard let layer = entry[kCGWindowLayer as String] as? Int, layer >= 0, layer < maxLayer,
-                  entry[kCGWindowOwnerPID as String] as? Int32 != ownPID,
-                  (entry[kCGWindowAlpha as String] as? Double ?? 0) > 0.3,
-                  let info = entry[kCGWindowBounds as String] as? NSDictionary,
-                  let bounds = CGRect(dictionaryRepresentation: info)
+            guard let layer = entry.layer, layer >= 0, layer < maxLayer, entry.pid != ownPID,
+                  (entry.alpha ?? 0) > 0.3, let bounds = entry.bounds
             else { return false }
             return bounds.contains(point)
         }
-        guard let front, let id = front[kCGWindowNumber as String] as? CGWindowID, previous.contains(where: { $0.id == id }),
-              let info = front[kCGWindowBounds as String] as? NSDictionary,
-              let bounds = CGRect(dictionaryRepresentation: info)
-        else { return nil }
+        guard let front, let id = front.id, previous.contains(where: { $0.id == id }), let bounds = front.bounds else { return nil }
         let dx = point.x - bounds.minX
         let dy = point.y - bounds.minY
         return (9...33).contains(dy) && abs(dx - dy - 23) <= 7 ? id : nil
     }
 
-    /// A click just ended or a modifier key changed: a window may be closing (its close button, ⌘W),
+    /// The modifiers of the shortcuts that close, hide, minimize or zoom windows (⌘W, ⌘H, ⌘M, ⌃⌘F, fn F); Shift and
+    /// Option alone, pressed all along in typing, change none.
+    private static let windowKeys: CGEventFlags = [.maskCommand, .maskControl, .maskSecondaryFn]
+
+    /// A click just ended or a window shortcut's modifier was let go: a window may be closing (its close button, ⌘W),
     /// minimizing or hiding, and its snow should fall the moment it does.
-    private static var windowsMayChange: Bool {
-        CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .leftMouseUp) < 0.5
-            || CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .flagsChanged) < 0.5
+    private func windowsMayChange(now: CFTimeInterval) -> Bool {
+        now - windowKeysAt < 0.5 || CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .leftMouseUp) < 0.5
     }
 
     /// Polls every frame for a moment, for changes the mouse doesn't announce (app switching, Spaces).
@@ -245,11 +245,8 @@ final class WindowTracker {
     private static func listedBounds(of window: CGWindowID) -> CGRect? {
         // CGWindowListCreateDescriptionFromArray takes window numbers stored as raw pointer values.
         var pointer = UnsafeRawPointer(bitPattern: UInt(window))
-        guard let array = CFArrayCreate(nil, &pointer, 1, nil),
-              let entry = (CGWindowListCreateDescriptionFromArray(array) as? [[String: Any]])?.first,
-              let info = entry[kCGWindowBounds as String] as? NSDictionary
-        else { return nil }
-        return CGRect(dictionaryRepresentation: info)
+        guard let array = CFArrayCreate(nil, &pointer, 1, nil) else { return nil }
+        return ListedWindow.all(in: CGWindowListCreateDescriptionFromArray(array)).first?.bounds
     }
 
     /// Sorts windows that left the list: closed ones and ones hidden on the current Space are in neither set.
@@ -257,23 +254,18 @@ final class WindowTracker {
         guard !ids.isEmpty else { return ([], []) }
         // CGWindowListCreateDescriptionFromArray takes window numbers stored as raw pointer values.
         var pointers: [UnsafeRawPointer?] = ids.filter { $0 != 0 }.map { UnsafeRawPointer(bitPattern: UInt($0)) }
-        guard let array = CFArrayCreate(nil, &pointers, pointers.count, nil),
-              let info = CGWindowListCreateDescriptionFromArray(array) as? [[String: Any]]
-        else { return ([], []) }
+        guard let array = CFArrayCreate(nil, &pointers, pointers.count, nil) else { return ([], []) }
         var away: [CGWindowID] = []
         var parked = Set<CGWindowID>()
         var elsewhere = Set<CGWindowID>()
-        for entry in info {
-            guard let id = entry[kCGWindowNumber as String] as? CGWindowID else { continue }
+        for entry in ListedWindow.all(in: CGWindowListCreateDescriptionFromArray(array)) {
+            guard let id = entry.id else { continue }
             // Gone full screen or zoomed to fill it, a window has no room for snow; its snow waits for it to come back to size.
             // Going full screen, it is off screen for the move to its own Space but already has its full-screen size.
             // Only app windows: the Dock's window spans the screen too, and its snow falls when it hides.
-            if entry[kCGWindowLayer as String] as? Int == 0,
-               let boundsInfo = entry[kCGWindowBounds as String] as? NSDictionary,
-               let bounds = CGRect(dictionaryRepresentation: boundsInfo),
-               fillsScreen(bounds) {
+            if entry.layer == 0, let bounds = entry.bounds, fillsScreen(bounds) {
                 elsewhere.insert(id)
-            } else if entry[kCGWindowIsOnscreen as String] as? Bool != true {
+            } else if entry.onScreen != true {
                 away.append(id)
             }
         }
@@ -302,7 +294,7 @@ final class WindowTracker {
     /// The pointer in the window list's coordinates.
     private var pointer: CGPoint {
         let location = NSEvent.mouseLocation
-        return CGPoint(x: location.x, y: (NSScreen.screens.first?.frame.height ?? 0) - location.y)
+        return CGPoint(x: location.x, y: primaryHeight - location.y)
     }
 
     /// The Dock's shelf while it is out, nil while it is away or leaving.
@@ -331,26 +323,22 @@ final class WindowTracker {
 
     /// Whether an app in full screen shows on this display, its window reaching down past the Dock: the Dock sinks away
     /// as soon as the app's Space starts sliding in and stays away there, though the window server still reports it out.
-    private func fullScreenAppHidesDock(in list: [[String: Any]]) -> Bool {
+    private func fullScreenAppHidesDock(in list: [ListedWindow]) -> Bool {
         let band = CGRect(x: screen.minX, y: screen.maxY - Dock.height, width: screen.width, height: Dock.height)
         let candidates = list.compactMap { entry -> CGWindowID? in
-            guard entry[kCGWindowLayer as String] as? Int == 0,
-                  let info = entry[kCGWindowBounds as String] as? NSDictionary,
-                  let bounds = CGRect(dictionaryRepresentation: info),
-                  bounds.intersects(band), fillsScreen(bounds)
-            else { return nil }
-            return entry[kCGWindowNumber as String] as? CGWindowID
+            guard entry.layer == 0, let bounds = entry.bounds, bounds.intersects(band), fillsScreen(bounds) else { return nil }
+            return entry.id
         }
         guard !candidates.isEmpty, let fullScreen = Spaces.fullScreen(), !fullScreen.isEmpty else { return false }
         return candidates.contains { Spaces.of($0).map { !$0.isDisjoint(with: fullScreen) } ?? false }
     }
 
-    private static var shared: (time: CFTimeInterval, list: [[String: Any]])?
+    private static var shared: (time: CFTimeInterval, list: [ListedWindow])?
 
     /// One window list serves every display's tracker that polls within the same frame.
-    private static func windowList(now: CFTimeInterval) -> [[String: Any]] {
+    private static func windowList(now: CFTimeInterval) -> [ListedWindow] {
         if let shared, abs(now - shared.time) < 0.008 { return shared.list }
-        let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+        let list = ListedWindow.all(in: CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID))
         shared = (now, list)
         return list
     }
@@ -374,20 +362,19 @@ final class WindowTracker {
         }
 
         for entry in list {
-            guard let pid = entry[kCGWindowOwnerPID as String] as? Int32, pid != ownPID,
-                  let layer = entry[kCGWindowLayer as String] as? Int, layer >= 0, layer < maxLayer,
-                  let boundsInfo = entry[kCGWindowBounds as String] as? NSDictionary,
-                  var bounds = CGRect(dictionaryRepresentation: boundsInfo),
-                  let alpha = entry[kCGWindowAlpha as String] as? Double, alpha > 0.3,
-                  !ignoredOwners.contains(entry[kCGWindowOwnerName as String] as? String ?? "")
+            guard let pid = entry.pid, pid != ownPID,
+                  let layer = entry.layer, layer >= 0, layer < maxLayer,
+                  var bounds = entry.bounds,
+                  let alpha = entry.alpha, alpha > 0.3,
+                  !ignoredOwners.contains(entry.owner ?? "")
             else { continue }
-            let id = entry[kCGWindowNumber as String] as? CGWindowID ?? 0
+            let id = entry.id ?? 0
             fresh[id] = alpha
             if leaving[id] != nil { continue }
             // A window fading out is closing or hiding: its snow falls as the fade begins.
             let fading = alpha < 0.98 && alpha < (alphas[id] ?? 0) - 0.01
 
-            let owner = entry[kCGWindowOwnerName as String] as? String ?? ""
+            let owner = entry.owner ?? ""
             let shelf = owner == "Dock" && layer == dockLevel
             if shelf {
                 if fullScreenAppHidesDock(in: list) {
@@ -434,6 +421,58 @@ final class WindowTracker {
         }
         if !dockOut { dockShownAt = nil }
         return exposing ? [] : surfaces
+    }
+}
+
+/// An entry of the window list, read straight off Core Foundation: bridging the whole list into Swift dictionaries
+/// at every poll costs more than all the rest of the poll.
+private struct ListedWindow {
+    let id: CGWindowID?
+    let pid: Int32?
+    let layer: Int?
+    let bounds: CGRect?
+    let alpha: Double?
+    let owner: String?
+    let onScreen: Bool?
+
+    static func all(in list: CFArray?) -> [ListedWindow] {
+        guard let list else { return [] }
+        return (0..<CFArrayGetCount(list)).compactMap { i in
+            guard let entry = CFArrayGetValueAtIndex(list, i) else { return nil }
+            return ListedWindow(Unmanaged<CFDictionary>.fromOpaque(entry).takeUnretainedValue())
+        }
+    }
+
+    private init(_ entry: CFDictionary) {
+        let number: Int64? = Self.number(entry, kCGWindowNumber, .sInt64Type)
+        id = number.flatMap { CGWindowID(exactly: $0) }
+        pid = Self.number(entry, kCGWindowOwnerPID, .sInt32Type)
+        layer = Self.number(entry, kCGWindowLayer, .longType)
+        alpha = Self.number(entry, kCGWindowAlpha, .doubleType)
+        bounds = Self.value(entry, kCGWindowBounds, CFDictionaryGetTypeID()).flatMap {
+            CGRect(dictionaryRepresentation: unsafeBitCast($0, to: CFDictionary.self))
+        }
+        owner = Self.value(entry, kCGWindowOwnerName, CFStringGetTypeID()).map { unsafeBitCast($0, to: CFString.self) as String }
+        if let flag = Self.value(entry, kCGWindowIsOnscreen, CFBooleanGetTypeID()) {
+            onScreen = CFBooleanGetValue(unsafeBitCast(flag, to: CFBoolean.self))
+        } else {
+            let flag: Int32? = Self.number(entry, kCGWindowIsOnscreen, .sInt32Type)
+            onScreen = flag == 0 ? false : flag == 1 ? true : nil
+        }
+    }
+
+    private static func value(_ entry: CFDictionary, _ key: CFString, _ type: CFTypeID) -> AnyObject? {
+        guard let raw = CFDictionaryGetValue(entry, Unmanaged.passUnretained(key).toOpaque()) else { return nil }
+        let value = Unmanaged<AnyObject>.fromOpaque(raw).takeUnretainedValue()
+        return CFGetTypeID(value) == type ? value : nil
+    }
+
+    /// Nil unless the number fits `type` exactly, as a cast from NSNumber would be.
+    private static func number<T: Numeric & BitwiseCopyable>(_ entry: CFDictionary, _ key: CFString, _ type: CFNumberType) -> T? {
+        guard let value = value(entry, key, CFNumberGetTypeID()) else { return nil }
+        var result: T = 0
+        let exact = withUnsafeMutableBytes(of: &result) { CFNumberGetValue(unsafeBitCast(value, to: CFNumber.self), type, $0.baseAddress) }
+        return exact ? result : nil
     }
 }
 
