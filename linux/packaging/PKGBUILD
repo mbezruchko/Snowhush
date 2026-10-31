@@ -1,7 +1,7 @@
 # Builds Snowhush from this checkout and installs it: cd linux/packaging && makepkg -si
 # Releases go to the AUR as snowhush-bin instead, from aur/.
 pkgname=snowhush
-pkgver=0.5.13
+pkgver=0.5.14
 pkgrel=1
 pkgdesc="Snow on your Wayland desktop, in KDE Plasma, Hyprland, Sway or niri: it settles on windows and parts around the cursor"
 arch=('x86_64' 'aarch64')
