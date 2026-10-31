@@ -12,6 +12,8 @@ final class ScreenSnow {
     private let tracker = WindowTracker()
     private let light = SceneLight()
     private(set) var screen: NSScreen
+    /// Awake and showing; at rest with nothing to draw, the view may still be paused.
+    private var active = true
     var halloween = false {
         didSet {
             light.halloween = halloween
@@ -62,6 +64,8 @@ final class ScreenSnow {
             light.update(screen: self.screen, now: now)
             return (light.light, light.shadowTint, light.rim, light.lantern)
         }
+        renderer.rest = { [unowned self] in view.isPaused = true }
+        simulation.stirred = { [unowned self] in wake() }
         renderer.interactiveFrameRate = Self.interactiveFrameRate(of: screen)
         measure()
         view.delegate = renderer
@@ -90,9 +94,16 @@ final class ScreenSnow {
     }
 
     func setActive(_ active: Bool) {
+        self.active = active
         guard view.isPaused == active else { return }
         view.isPaused = !active
         if active { renderer.resetClock() }
+    }
+
+    private func wake() {
+        guard active, view.isPaused else { return }
+        view.isPaused = false
+        renderer.resetClock()
     }
 
     func dropWindowSnow() {
@@ -114,6 +125,7 @@ final class ScreenSnow {
     }
 
     func close() {
+        active = false
         view.isPaused = true
         view.delegate = nil
         window.orderOut(nil)
@@ -125,6 +137,7 @@ final class ScreenSnow {
         let primaryHeight = NSScreen.screens.first?.frame.height ?? screen.frame.height
         let frame = screen.frame
         tracker.screen = CGRect(x: frame.minX, y: primaryHeight - frame.maxY, width: frame.width, height: frame.height)
+        tracker.primaryHeight = primaryHeight
         tracker.menuBarHeight = frame.maxY - screen.visibleFrame.maxY
         tracker.reset()
         let others = NSScreen.screens.map(\.frame).filter { $0 != frame && $0.maxY > frame.minY && $0.minY < frame.maxY }

@@ -46,6 +46,9 @@ final class Renderer: NSObject, MTKViewDelegate {
     /// Frames per second while the snow is being disturbed: the display's highest rate, up to 120 on ProMotion screens.
     var interactiveFrameRate = 60
     var budget = PowerBudget.full
+    /// Called when there is nothing to draw and nothing on its way, for the view to stop until the snow is stirred.
+    var rest: () -> Void = {}
+    private static let lanternReach: Float = 130
     /// Where the Dock's snow is drawn; without one it stays in the main overlay.
     var dockOverlay: DockOverlay?
     var sceneLight: (CFTimeInterval) -> (light: SIMD3<Float>, shadowTint: SIMD4<Float>, rim: SIMD4<Float>, lantern: Float) = { _ in (SIMD3(repeating: 1), .zero, .zero, 0) }
@@ -109,6 +112,12 @@ final class Renderer: NSObject, MTKViewDelegate {
         lastTime = 0
     }
 
+    /// Whether the lantern's glow at `point` reaches this screen: three times its reach out it is gone.
+    private func lights(_ point: SIMD2<Float>) -> Bool {
+        let reach: Float = Self.lanternReach * 3
+        return point.x > -reach && point.y > -reach && point.x < simulation.width + reach && point.y < simulation.height + reach
+    }
+
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
 
     /// Snow is soft enough that one pixel per point is indistinguishable from Retina, at a quarter of the fill and memory.
@@ -128,8 +137,13 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
         let cursor = cursorLocation()
         let changed = simulation.step(dt: dt, cursor: cursor)
+        // The frame shown last stays up, as it would anyway with nothing to draw, without ticking over in vain.
+        if !changed && simulation.isEmpty {
+            rest()
+            return
+        }
         // The lantern follows the cursor even over snow that lies still.
-        let lanternMoved = ambient.lantern > 0 && simd_distance(cursor, lanternAt) > 0.5
+        let lanternMoved = ambient.lantern > 0 && simd_distance(cursor, lanternAt) > 0.5 && (lights(cursor) || lights(lanternAt))
         lanternAt = cursor
         let fastest = budget == .full ? interactiveFrameRate : min(60, interactiveFrameRate)
         // 24 only where it divides the display's rate evenly; elsewhere it would judder.
@@ -185,7 +199,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             light: SIMD4(ambient.light, 1),
             shadowTint: ambient.shadowTint,
             rim: ambient.rim,
-            lantern: SIMD4(lowHalf: lanternAt, highHalf: SIMD2(130, ambient.lantern)),
+            lantern: SIMD4(lowHalf: lanternAt, highHalf: SIMD2(Self.lanternReach, ambient.lantern)),
             shake: SIMD4(lowHalf: simulation.shake, highHalf: .zero)
         )
         let pumpkins = simulation.pumpkins

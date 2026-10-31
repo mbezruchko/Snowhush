@@ -257,8 +257,11 @@ final class SnowSimulation {
                 strengthTarget = 1
             }
             updateTarget()
+            stirred()
         }
     }
+    /// Called when the screen may get snow again after it has come to rest.
+    var stirred: () -> Void = {}
     /// Scales the snowfall; flakes come and go through the usual cycle, so a change shows gradually.
     var density: Float = 1 {
         didSet { updateTarget() }
@@ -369,6 +372,7 @@ final class SnowSimulation {
             nextGhost = clock + Double(random.range(3, 8))
             pumpkinBottoms = []
             pumpkinsMoved = true
+            stirred()
         }
     }
     /// Jack-o'-lanterns along the bottom of the screen, a pair on the right and one on the left: how far each sits
@@ -399,6 +403,12 @@ final class SnowSimulation {
 
     var pileTop: Float { ground.top }
     var hasSnow: Bool { layers.contains { $0.top > 0.5 } }
+    /// Nothing falls, lies, waits for its window or haunts, and nothing will until the snow is stirred.
+    var isEmpty: Bool {
+        snowfall == .off && !halloween && flakes.isEmpty && grains.isEmpty && motes.isEmpty && ghosts.isEmpty
+            && fallingSigns.isEmpty && snowballs.isEmpty && gust == nil && dormant.isEmpty && parking.isEmpty
+            && !layers.contains { $0.top > 0 }
+    }
     var spriteCount: Int { flakes.count + grains.count + motes.count + ghosts.count * 2 + snowballs.count }
     /// Floats the renderer needs per frame: each layer's surface and bed.
     var columnCount: Int { layers.reduce(0) { $0 + 2 * $1.count } }
@@ -1713,6 +1723,7 @@ final class SnowSimulation {
 
     /// Turns the pieces into snowflakes that drift down and fade to white; together they leave a small drift.
     func scatter(_ pieces: [ScatterPiece]) {
+        stirred()
         scatteredUntil = clock + 8
         for piece in pieces {
             let depth = pow(random.next(), 0.7)
