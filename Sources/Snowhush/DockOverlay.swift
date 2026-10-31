@@ -35,16 +35,27 @@ final class DockOverlay {
         place()
     }
 
-    /// The next frame to draw into, cleared, with the strip resized first to reach `top` when given.
-    func nextFrame(reaching top: CGFloat?) -> (drawable: CAMetalDrawable, pass: MTLRenderPassDescriptor)? {
-        if let top {
-            // Steps of 64 points keep a growing drift from resizing the window every frame.
-            let needed = min(screenFrame.height, (max(top, 1) / 64).rounded(.up) * 64 + 32)
-            if needed > height || needed < height - 128 {
-                height = needed
-                place()
-            }
+    /// The next frame to draw into, cleared, with the strip resized first to reach `top`.
+    func nextFrame(reaching top: CGFloat) -> (drawable: CAMetalDrawable, pass: MTLRenderPassDescriptor)? {
+        // Steps of 64 points keep a growing drift from resizing the window every frame.
+        let needed = min(screenFrame.height, (max(top, 1) / 64).rounded(.up) * 64 + 32)
+        if needed > height || needed < height - 128 {
+            height = needed
+            place()
         }
+        return frame()
+    }
+
+    /// A cleared frame with no snow to show, the strip shrunk to a line so its larger frames go back.
+    func emptyFrame() -> (drawable: CAMetalDrawable, pass: MTLRenderPassDescriptor)? {
+        if height != 1 {
+            height = 1
+            place()
+        }
+        return frame()
+    }
+
+    private func frame() -> (drawable: CAMetalDrawable, pass: MTLRenderPassDescriptor)? {
         guard let drawable = layer.nextDrawable() else { return nil }
         let pass = MTLRenderPassDescriptor()
         let attachment = pass.colorAttachments[0]!

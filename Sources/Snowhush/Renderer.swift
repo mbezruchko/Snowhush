@@ -122,7 +122,53 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     /// Snow is soft enough that one pixel per point is indistinguishable from Retina, at a quarter of the fill and memory.
     static func fitDrawable(of view: MTKView) {
-        view.drawableSize = view.bounds.size
+        resize(view, to: view.bounds.size)
+    }
+
+    /// The view passes its size on to its layer only as it next draws; the layer gets it at once.
+    private static func resize(_ view: MTKView, to size: CGSize) {
+        view.drawableSize = size
+        (view.layer as? CAMetalLayer)?.drawableSize = size
+    }
+
+    /// Clears the screen and the Dock's strip down to a pixel, so the screen-sized frames held for drawing go back
+    /// until the next drawing fits them again. A layer lets go of frames of an old size only as it hands out new
+    /// ones, once the screen shows them no more, so a second clear frame follows the first.
+    func releaseFrames(of view: MTKView) {
+        guard view.drawableSize != Self.released else { return }
+        Self.resize(view, to: Self.released)
+        clear(view)
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.handBack) { [weak self, weak view] in
+            guard let self, let view, view.drawableSize == Self.released else { return }
+            clear(view)
+        }
+    }
+
+    private static let released = CGSize(width: 1, height: 1)
+    /// Long enough for a clear frame to reach the screen, so the frames it replaced can go.
+    private static let handBack: TimeInterval = 0.25
+
+    private func clear(_ view: MTKView) {
+        guard let commandBuffer = queue.makeCommandBuffer() else { return }
+        // Straight from the layer: the view would keep the pixel-sized drawable for its next frame.
+        if let drawable = (view.layer as? CAMetalLayer)?.nextDrawable() {
+            let pass = MTLRenderPassDescriptor()
+            pass.colorAttachments[0].texture = drawable.texture
+            pass.colorAttachments[0].loadAction = .clear
+            pass.colorAttachments[0].storeAction = .store
+            pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0)
+            commandBuffer.makeRenderCommandEncoder(descriptor: pass)?.endEncoding()
+            commandBuffer.present(drawable)
+        }
+        clearDock(into: commandBuffer)
+        commandBuffer.commit()
+    }
+
+    private func clearDock(into commandBuffer: MTLCommandBuffer) {
+        guard let frame = dockOverlay?.emptyFrame(), let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: frame.pass) else { return }
+        encoder.endEncoding()
+        commandBuffer.present(frame.drawable)
+        dockDrawn = false
     }
 
     func draw(in view: MTKView) {
@@ -231,7 +277,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     private func encodeDock(_ piles: [PileLayer], into commandBuffer: MTLCommandBuffer, uniforms: Uniforms, heights: MTLBuffer) {
         guard let dockOverlay, !piles.isEmpty || dockDrawn else { return }
         let top = piles.map { CGFloat($0.origin.y + $0.top + 2) }.max()
-        guard let frame = dockOverlay.nextFrame(reaching: top),
+        guard let frame = top.map({ dockOverlay.nextFrame(reaching: $0) }) ?? dockOverlay.emptyFrame(),
               let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: frame.pass) else { return }
         var uniforms = uniforms
         uniforms.viewSize = SIMD2(simulation.width, Float(dockOverlay.height))
@@ -239,6 +285,13 @@ final class Renderer: NSObject, MTKViewDelegate {
         encoder.endEncoding()
         commandBuffer.present(frame.drawable)
         dockDrawn = !piles.isEmpty
+        guard piles.isEmpty else { return }
+        // The strip shrank to a line; its larger frames go only once another is handed out.
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.handBack) { [weak self] in
+            guard let self, !dockDrawn, let commandBuffer = queue.makeCommandBuffer() else { return }
+            clearDock(into: commandBuffer)
+            commandBuffer.commit()
+        }
     }
 
     private func drawPiles(_ piles: [PileLayer], with encoder: MTLRenderCommandEncoder, uniforms: Uniforms, heights: MTLBuffer) {

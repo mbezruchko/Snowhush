@@ -64,7 +64,10 @@ final class ScreenSnow {
             light.update(screen: self.screen, now: now)
             return (light.light, light.shadowTint, light.rim, light.lantern)
         }
-        renderer.rest = { [unowned self] in view.isPaused = true }
+        renderer.rest = { [unowned self] in
+            view.isPaused = true
+            renderer.releaseFrames(of: view)
+        }
         simulation.stirred = { [unowned self] in wake() }
         renderer.interactiveFrameRate = Self.interactiveFrameRate(of: screen)
         measure()
@@ -93,15 +96,19 @@ final class ScreenSnow {
         simulation.density = budget == .saver ? 0.75 : 1
     }
 
-    func setActive(_ active: Bool) {
+    /// `asleep` with the screens off, locked or switched away from: nothing is seen, so the frames are given back.
+    func setActive(_ active: Bool, asleep: Bool) {
         self.active = active
+        if asleep { renderer.releaseFrames(of: view) }
         guard view.isPaused == active else { return }
+        if active { Renderer.fitDrawable(of: view) }
         view.isPaused = !active
         if active { renderer.resetClock() }
     }
 
     private func wake() {
         guard active, view.isPaused else { return }
+        Renderer.fitDrawable(of: view)
         view.isPaused = false
         renderer.resetClock()
     }
