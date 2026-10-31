@@ -1,6 +1,6 @@
 pkgbase = snowhush-bin
 	pkgdesc = Snow on your Wayland desktop, in KDE Plasma, Hyprland, Sway or niri: it settles on windows and parts around the cursor
-	pkgver = 0.5.12
+	pkgver = 0.5.13
 	pkgrel = 1
 	url = https://snowhush.pages.dev
 	arch = x86_64
@@ -11,7 +11,7 @@ pkgbase = snowhush-bin
 	depends = glibc
 	provides = snowhush
 	conflicts = snowhush
-	source = snowhush-linux-x86_64-0.5.12.tar.gz::https://github.com/mbezruchko/Snowhush/releases/download/v0.5.12/snowhush-linux-x86_64.tar.gz
-	sha256sums = b288bebd3d8fbde07eae1eb130022fabdc454b43dcc584dd52d52c1456cdd0d1
+	source = snowhush-linux-x86_64-0.5.13.tar.gz::https://github.com/mbezruchko/Snowhush/releases/download/v0.5.13/snowhush-linux-x86_64.tar.gz
+	sha256sums = 0e708ba05ce81799ea0bb26d28a1a4c855fdd24c44e74a0084c57bc5fe852eb9
 
 pkgname = snowhush-bin
