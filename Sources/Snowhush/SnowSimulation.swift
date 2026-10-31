@@ -267,6 +267,16 @@ final class SnowSimulation {
     var accumulates = true
     /// Screen edges with no display past them: a window slid past one leaves its snow heaped against the edge.
     var walls: (left: Bool, right: Bool) = (false, false)
+    /// Side edges past which lies a display with snow of its own that windows span onto: snow on a window reaching
+    /// over there is seen there.
+    var neighbours: (left: Bool, right: Bool) = (false, false)
+    /// Side edges past which another display goes on: snow thrown across goes on falling there, through `takeStrays`.
+    var openSides: (left: Bool, right: Bool) = (false, false)
+    /// Snow on windows that reach over here from a neighbouring display, which keeps it.
+    private var borrowed: [BorrowedSnow] = []
+    private var borrowedChanged = false
+    private var caught: [CaughtSnow] = []
+    private var strays: [StraySnow] = []
     /// Keeps the snowfall from starting until a scattered window's snow first reaches the bottom of the screen.
     var snowfallHeld = false {
         didSet { updateTarget() }
@@ -401,7 +411,7 @@ final class SnowSimulation {
     var hasSnow: Bool { layers.contains { $0.top > 0.5 } }
     var spriteCount: Int { flakes.count + grains.count + motes.count + ghosts.count * 2 + snowballs.count }
     /// Floats the renderer needs per frame: each layer's surface and bed.
-    var columnCount: Int { layers.reduce(0) { $0 + 2 * $1.count } }
+    var columnCount: Int { layers.reduce(0) { $0 + 2 * $1.count } + borrowed.reduce(0) { $0 + $1.columns.count } }
 
     func resize(width: Float, height: Float) {
         guard width != self.width || height != self.height else { return }
@@ -448,8 +458,9 @@ final class SnowSimulation {
         } else {
             pace = .calm
         }
-        let changed = wasMoving || !flakes.isEmpty || !grains.isEmpty || !motes.isEmpty || !ghosts.isEmpty || !fallingSigns.isEmpty || !snowballs.isEmpty || heightsChanged || windowsChanged || pumpkinsMoved
+        let changed = wasMoving || !flakes.isEmpty || !grains.isEmpty || !motes.isEmpty || !ghosts.isEmpty || !fallingSigns.isEmpty || !snowballs.isEmpty || heightsChanged || windowsChanged || pumpkinsMoved || borrowedChanged
         windowsChanged = false
+        borrowedChanged = false
         pumpkinsMoved = false
         return changed
     }
@@ -551,6 +562,11 @@ final class SnowSimulation {
             ))
             offset += 2 * layer.count
         }
+        for lent in borrowed where lent.top > 0.05 && offset + lent.columns.count <= capacity {
+            for (i, value) in lent.columns.enumerated() { buffer[offset + i] = value }
+            result.append(PileLayer(offset: offset, count: lent.count, origin: lent.origin, top: lent.top, bottom: lent.bottom, occluders: lent.occluders, isDock: false))
+            offset += lent.columns.count
+        }
         return result
     }
 
@@ -629,7 +645,7 @@ final class SnowSimulation {
             let blockers = surface.blockers.map { SIMD4<Float>(Float($0.minX), Float($0.minY), Float($0.maxX), Float($0.maxY)) }
             ledge.occluders = Array(blockers.prefix(16))
             ledge.isDock = surface.isDock
-            ledge.updateVisibility(screenWidth: width, blockers: blockers)
+            ledge.updateVisibility(seen: seenSpan, blockers: blockers)
         }
 
         for id in ledges.keys where !seen.contains(id) {
@@ -1145,10 +1161,11 @@ final class SnowSimulation {
     // MARK: - Particles
 
     /// The highest visible snow surface crossed while falling from `from` to `to` at `x`, allowing for the surface moving meanwhile.
-    private func landing(x: Float, from: Float, to: Float) -> (layer: SnowLayer, index: Int)? {
+    /// Past an edge shared with another display only the ground counts: snow there is the other display's to land.
+    private func landing(x: Float, from: Float, to: Float, here: Bool = true) -> (layer: SnowLayer, index: Int)? {
         var hit: (layer: SnowLayer, index: Int)?
         var highest = -Float.greatestFiniteMagnitude
-        for ledge in ledgeList {
+        for ledge in ledgeList where here {
             guard let i = ledge.index(at: x), ledge.visible[i] else { continue }
             let surface = ledge.surface(i)
             // Entering the snow from above the window's edge counts, even if the surface rose this frame.
@@ -1203,6 +1220,12 @@ final class SnowSimulation {
             flake.position.x += (flake.velocity.x + sway) * dt
             flake.position.y += flake.velocity.y * flutter * dt
 
+            if flake.blown != 0 && crossed(flake.position) {
+                strays.append(StraySnow(piece: .flake(flake)))
+                removeFlake(i)
+                i -= 1
+                continue
+            }
             if flake.blown != 0 && (flake.position.x < -30 || flake.position.x > width + 30) {
                 removeFlake(i)
                 i -= 1
@@ -1215,7 +1238,13 @@ final class SnowSimulation {
             }
 
             if flake.settles && accumulates && flake.blown == 0 {
-                if let hit = landing(x: flake.position.x, from: previousY, to: flake.position.y) {
+                let hit = landing(x: flake.position.x, from: previousY, to: flake.position.y, here: !crossed(flake.position))
+                if landsOnBorrowed(below: hit, x: flake.position.x, from: previousY, to: flake.position.y, area: flake.size * flake.size * deposition * flake.mass) {
+                    recycle(i)
+                    i -= 1
+                    continue
+                }
+                if let hit {
                     if snowfallHeld && flake.mass < 1 && hit.layer === ground {
                         snowfallHeld = false
                         snowfallReleased()
@@ -1261,10 +1290,16 @@ final class SnowSimulation {
                 grain.velocity *= damping
             }
             grain.position += grain.velocity * dt
+            let hit = grain.blown || grain.velocity.y > 0 ? nil : landing(x: grain.position.x, from: previousY, to: grain.position.y, here: !crossed(grain.position))
 
-            if grain.position.x < -10 || grain.position.x > width + 10 || grain.position.y < -10 {
+            if grain.position.y >= -10 && crossed(grain.position) {
+                strays.append(StraySnow(piece: .grain(grain)))
                 removeGrain(i)
-            } else if !grain.blown, grain.velocity.y <= 0, let hit = landing(x: grain.position.x, from: previousY, to: grain.position.y) {
+            } else if grain.position.x < -10 || grain.position.x > width + 10 || grain.position.y < -10 {
+                removeGrain(i)
+            } else if !grain.blown, grain.velocity.y <= 0, landsOnBorrowed(below: hit, x: grain.position.x, from: previousY, to: grain.position.y, area: grain.area) {
+                removeGrain(i)
+            } else if let hit {
                 if grain.lump > 0 {
                     burst(grain, into: hit.layer)
                     heightsChanged = true
@@ -1472,7 +1507,7 @@ final class SnowSimulation {
             let reach = Int((size * 0.4 / spot.layer.columnWidth).rounded(.up))
             let column = spot.layer.clampedIndex(at: spot.layer.base.x + spot.x)
             if layers.contains(where: { $0 === spot.layer }), column >= reach * 3, column < spot.layer.count - reach * 3,
-               spot.layer.visible[column] {
+               spot.layer.visible[column], onScreen(spot.layer, from: column, to: column) {
                 let ghost = Ghost(layer: spot.layer, x: spot.x, size: size, seed: random.next(), returns: false, avenges: true)
                 level(under: ghost)
                 ghosts.append(ghost)
@@ -1489,6 +1524,7 @@ final class SnowSimulation {
             guard room > 1 else { continue }
             let column = reach * 3 + min(Int(random.next() * Float(room)), room - 1)
             guard layer.heights[column] > 6, ((column - reach)...(column + reach)).allSatisfy({ layer.visible[$0] }),
+                  onScreen(layer, from: column - reach, to: column + reach),
                   !ghosts.contains(where: { $0.layer === layer && abs($0.column - column) < reach * 4 })
             else { continue }
             let ghost = Ghost(
@@ -1532,6 +1568,7 @@ final class SnowSimulation {
             let to = Int(target / layer.columnWidth)
             guard to >= reach * 3, to < layer.count - reach * 3,
                   (min(ghost.column, to)...max(ghost.column, to)).allSatisfy({ layer.visible[$0] && layer.heights[$0] > 4 }),
+                  onScreen(layer, from: to - reach, to: to + reach),
                   !ghosts.contains(where: { $0.layer === layer && $0.x != ghost.x && abs($0.column - to) < reach * 4 })
             else { continue }
             return (Float(to) + 0.5) * layer.columnWidth
@@ -2004,6 +2041,218 @@ final class SnowSimulation {
 
     private static func columnCount(for width: Float, columnWidth: Float) -> Int {
         Int((width / columnWidth).rounded(.up)) + 1
+    }
+}
+
+// MARK: - Neighbouring displays
+
+/// Snow between displays that each have snow of their own. A window's snow lies on one of them, and goes along when
+/// the window moves to another. Where windows span displays, the one keeping a window's snow lends it to the others
+/// the window reaches over: they draw it, the snow falling on it there goes back to the one keeping it, and snow
+/// thrown past an edge two displays share goes on falling on the other side.
+extension SnowSimulation {
+    /// The windows with snow here, the Dock's shelf aside.
+    var windowIDs: [CGWindowID] { ledges.filter { !$0.value.isDock }.map(\.key) }
+
+    func keeps(_ id: CGWindowID) -> Bool {
+        ledges[id] != nil
+    }
+
+    /// Takes the snow off a window that moved to another display, so it can lie on there instead of falling here.
+    /// Its ghosts crumble away as if leaving.
+    func takeWindow(_ id: CGWindowID) -> CarriedSnow? {
+        guard let ledge = ledges.removeValue(forKey: id) else { return nil }
+        for ghost in ghosts where ghost.layer === ledge {
+            if let sign = sign(of: ghost) {
+                fallingSigns.append((sign, SIMD2(random.range(-30, 30), 60), random.range(-2.5, 2.5), 0))
+            }
+            crumble(ghost, scared: false)
+        }
+        ghosts.removeAll { $0.layer === ledge }
+        if heldLayers.contains(where: { $0 === ledge }) {
+            ledge.releaseSupport()
+            heldLayers.removeAll { $0 === ledge }
+        }
+        ledgeList = Array(ledges.values)
+        layers = [ground] + ledgeList
+        windowsChanged = true
+        ledge.movedAt -= clock
+        ledge.trimmedAt -= clock
+        return CarriedSnow(layer: ledge)
+    }
+
+    /// Puts snow taken off another display onto its window here. `shift` takes the other display's coordinates to
+    /// these; the snow keeps its motion, so a drag across displays goes on as one.
+    func adoptWindow(_ id: CGWindowID, _ carried: CarriedSnow, shift: SIMD2<Float>) {
+        if let old = ledges[id] {
+            heldLayers.removeAll { $0 === old }
+            ghosts.removeAll { $0.layer === old }
+        }
+        dormant[id] = nil
+        parking.removeAll { $0.id == id }
+        let ledge = carried.layer
+        ledge.movedAt += clock
+        ledge.trimmedAt += clock
+        ledge.origin += shift
+        ledge.track += shift
+        ledge.previousBaseY += shift.y
+        ledge.occluders = ledge.occluders.map { $0 + SIMD4(shift.x, shift.y, shift.x, shift.y) }
+        ledges[id] = ledge
+        ledgeList = Array(ledges.values)
+        layers = [ground] + ledgeList
+        windowsChanged = true
+    }
+
+    /// The snow on a window kept here, to lend to a display it reaches over: `shift` takes these coordinates to that
+    /// display's, and `area` is that display's. Nil unless the snow reaches over it.
+    func lend(_ id: CGWindowID, shift: SIMD2<Float>, within area: CGRect) -> BorrowedSnow? {
+        guard let ledge = ledges[id], !ledge.isDock else { return nil }
+        let base = ledge.base + shift
+        let reach = CGRect(x: CGFloat(base.x), y: CGFloat(base.y - ledge.bedDepth), width: CGFloat(ledge.width), height: CGFloat(ledge.top + 2 + ledge.bedDepth))
+        guard reach.intersects(area) else { return nil }
+        var columns = [Float](repeating: 0, count: 2 * ledge.count)
+        columns.withUnsafeMutableBufferPointer { ledge.writeSmoothed(into: $0.baseAddress!) }
+        return BorrowedSnow(
+            id: id,
+            origin: base,
+            count: ledge.count,
+            columns: columns,
+            visible: ledge.visible,
+            top: ledge.top,
+            bottom: -ledge.bedDepth,
+            occluders: ledge.occluders.map { $0 + SIMD4(shift.x, shift.y, shift.x, shift.y) }
+        )
+    }
+
+    /// The snow neighbouring displays lend this one where their windows reach over it, in its coordinates.
+    func setBorrowed(_ lent: [BorrowedSnow]) {
+        guard lent != borrowed else { return }
+        // A window being dragged in from a neighbour moves at the rate of one dragged here.
+        if lent.contains(where: { new in borrowed.contains { $0.id == new.id && $0.origin != new.origin } }) {
+            lastWindowMotion = clock
+        }
+        borrowed = lent
+        borrowedChanged = true
+    }
+
+    /// The snow that fell on borrowed snow since the last call, for the displays keeping it.
+    func takeCaught() -> [CaughtSnow] {
+        defer { caught.removeAll() }
+        return caught
+    }
+
+    /// Lays snow caught on a neighbouring display onto the window it fell on; `shift` takes that display's x to this one's.
+    func receive(_ snow: CaughtSnow, shift: Float) {
+        guard let ledge = ledges[snow.id] else { return }
+        let x = snow.x + shift
+        let fill = ledge.index(at: x).map { ledge.fill($0) } ?? 1
+        _ = ledge.deposit(snow.area * fill, at: x, wide: true)
+        heightsChanged = true
+    }
+
+    /// The snow thrown past a shared edge since the last call, in this display's coordinates.
+    func takeStrays() -> [StraySnow] {
+        defer { strays.removeAll() }
+        return strays
+    }
+
+    /// Goes on with snow thrown in from a neighbouring display; `shift` takes its coordinates to these.
+    func adoptStrays(_ thrown: [StraySnow], shift: SIMD2<Float>) {
+        for stray in thrown {
+            switch stray.piece {
+            case .flake(var flake):
+                flake.position += shift
+                flakes.append(flake)
+            case .grain(var grain):
+                guard grains.count < maxGrains else { continue }
+                grain.position += shift
+                grains.append(grain)
+            }
+        }
+    }
+
+    /// From where, left to right, a window's snow can be seen: the screen, and the displays beside it.
+    private var seenSpan: ClosedRange<Float> {
+        (neighbours.left ? -.greatestFiniteMagnitude : 0)...(neighbours.right ? .greatestFiniteMagnitude : width)
+    }
+
+    /// Whether `point` lies past an edge shared with another display.
+    private func crossed(_ point: SIMD2<Float>) -> Bool {
+        (openSides.left && point.x < 0) || (openSides.right && point.x > width)
+    }
+
+    /// Whether columns `from` to `to` of `layer` lie on this screen: a window's snow reaching over a neighbouring
+    /// display is drawn there, but its ghosts aren't.
+    private func onScreen(_ layer: SnowLayer, from: Int, to: Int) -> Bool {
+        layer.centerX(from) >= 0 && layer.centerX(to) <= width
+    }
+
+    /// Hands snow falling from `from` to `to` at `x` to the display keeping a borrowed window's snow, when that lies
+    /// above `hit`, where it would land here. Returns whether it did.
+    private func landsOnBorrowed(below hit: (layer: SnowLayer, index: Int)?, x: Float, from: Float, to: Float, area: Float) -> Bool {
+        guard !borrowed.isEmpty, !crossed(SIMD2(x, to)) else { return false }
+        var highest = hit.map { $0.layer.surface($0.index) } ?? -.greatestFiniteMagnitude
+        var catcher: CGWindowID?
+        for lent in borrowed {
+            if let surface = lent.surface(crossedAt: x, from: from, to: to), surface > highest {
+                highest = surface
+                catcher = lent.id
+            }
+        }
+        guard let catcher else { return false }
+        caught.append(CaughtSnow(id: catcher, x: x, area: area))
+        return true
+    }
+}
+
+/// A window's snow taken off one display to lie on another. Its times are kept as ages, since each simulation keeps
+/// its own clock.
+struct CarriedSnow {
+    fileprivate let layer: SnowLayer
+}
+
+/// A window's snow as the display keeping it lends it to a neighbour the window reaches over.
+struct BorrowedSnow: Equatable {
+    let id: CGWindowID
+    fileprivate let origin: SIMD2<Float>
+    fileprivate let count: Int
+    /// The smoothed surface of each column, then the bed under it, up from `origin`, as drawn.
+    fileprivate let columns: [Float]
+    fileprivate let visible: [Bool]
+    fileprivate let top: Float
+    fileprivate let bottom: Float
+    fileprivate let occluders: [SIMD4<Float>]
+
+    /// The surface of the column under `x`, when snow falling from `from` to `to` there comes down on it.
+    fileprivate func surface(crossedAt x: Float, from: Float, to: Float) -> Float? {
+        let i = Int(((x - origin.x) / 2).rounded(.down))
+        guard i >= 0, i < count, visible[i] else { return nil }
+        let surface = origin.y + columns[i]
+        return from >= origin.y + columns[count + i] && to <= surface ? surface : nil
+    }
+}
+
+/// Snow that fell on a borrowed window's snow, at `x` in the coordinates of the display it fell on.
+struct CaughtSnow {
+    let id: CGWindowID
+    fileprivate let x: Float
+    fileprivate let area: Float
+}
+
+/// Snow thrown past an edge shared with another display, for that display to go on with.
+struct StraySnow {
+    fileprivate let piece: Piece
+
+    fileprivate enum Piece {
+        case flake(Flake)
+        case grain(Grain)
+    }
+
+    var position: SIMD2<Float> {
+        switch piece {
+        case .flake(let flake): flake.position
+        case .grain(let grain): grain.position
+        }
     }
 }
 

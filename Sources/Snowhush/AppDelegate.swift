@@ -6,6 +6,7 @@ import Sparkle
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUStandardUserDriverDelegate {
     private var device: MTLDevice!
     private var screens: [ScreenSnow] = []
+    private let displays = Displays()
     private var snowfall = Snowfall.steady
     private var accumulates = true
     private var thaws = true
@@ -74,6 +75,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     /// One overlay per display: new displays get snow, removed ones lose theirs, the rest follow resolution changes.
     private func syncScreens() {
         let current = NSScreen.screens
+        displays.update(screens: current)
         let ids = Set(current.compactMap(\.displayID))
         for gone in screens where !ids.contains(gone.displayID) { gone.close() }
         screens.removeAll { !ids.contains($0.displayID) }
@@ -81,7 +83,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         for screen in current {
             if let existing = screens.first(where: { $0.displayID == screen.displayID }) {
                 existing.fit(to: screen)
-            } else if let snow = ScreenSnow(screen: screen, device: device, snowOnWindows: { [unowned self] in snowOnWindows }) {
+            } else if let snow = ScreenSnow(screen: screen, device: device, displays: displays, snowOnWindows: { [unowned self] in snowOnWindows }) {
                 snow.simulation.snowfallHeld = snowfallHeld
                 snow.simulation.snowfallReleased = { [weak self] in self?.releaseSnowfall() }
                 snow.halloween = halloween
@@ -89,6 +91,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
                 screens.append(snow)
             }
         }
+        displays.snows = screens
         updateActivity()
     }
 

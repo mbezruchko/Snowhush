@@ -139,11 +139,12 @@ final class SnowLayer {
         replace(heights: Array(heights.prefix(columns)) + Array(repeating: 0, count: max(0, columns - heights.count)))
     }
 
-    func updateVisibility(screenWidth: Float, blockers: [SIMD4<Float>]) {
+    /// `seen` is where a column can be seen from, left to right: the screen, and the displays beside it.
+    func updateVisibility(seen: ClosedRange<Float>, blockers: [SIMD4<Float>]) {
         for i in heights.indices {
             let x = centerX(i)
             let y = origin.y + bed[i] + 1
-            visible[i] = x >= 0 && x <= screenWidth && !blockers.contains { x >= $0.x && x < $0.z && y >= $0.y && y < $0.w }
+            visible[i] = seen.contains(x) && !blockers.contains { x >= $0.x && x < $0.z && y >= $0.y && y < $0.w }
         }
     }
 
