@@ -119,7 +119,20 @@ function windows() {
             maximized: window.maximizeMode === 3,
         });
     }
-    return JSON.stringify({ screens: screens, windows: list, elsewhere: elsewhere, panels: panels, moving: moving });
+    const desktop = workspace.currentDesktop.id + " " + workspace.currentActivity;
+    const columns = Math.max(workspace.desktopGridWidth, 1);
+    const index = Math.max(workspace.desktops.findIndex(function (d) { return d.id === workspace.currentDesktop.id; }), 0);
+    return JSON.stringify({
+        screens: screens,
+        windows: list,
+        elsewhere: elsewhere,
+        panels: panels,
+        moving: moving,
+        desktop: desktop,
+        column: index % columns,
+        columns: columns,
+        wraps: options.rollOverDesktops,
+    });
 }
 
 const sendCursor = sender("Cursor", cursor);

@@ -42,6 +42,7 @@ const ADHESION: f32 = 3500.0;
 const SHAKING: f32 = 4.0;
 const JUMP_SPEED: f32 = 6000.0;
 const TRACK_TIME: f32 = 0.06;
+const REGROWTH: f32 = 0.4;
 const MAX_MOTES: usize = 1500;
 const GUST_SWEEP: f32 = 0.6;
 const GUST_LENGTH: f32 = 2.2;
@@ -50,6 +51,11 @@ const GUST_WIND: f32 = 1000.0;
 const GUST_LAG: f32 = 0.3;
 /// Snow a wall scrapes up packs down to this share of its fresh bulk.
 const PACKING: f32 = 0.6;
+/// A sliding desktop drags the air along: the wind it stirs up is this share of its speed, up to `SLIDE_WIND_MAX`,
+/// and dies down over `SLIDE_CALM` seconds once the desktop stops.
+const SLIDE_DRAG: f32 = 0.025;
+const SLIDE_WIND_MAX: f32 = 160.0;
+const SLIDE_CALM: f32 = 0.35;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Snowfall {
@@ -256,6 +262,7 @@ struct Air {
     /// Snow released while the air is full, laid straight onto the ground at the end of the step.
     overflow: Vec<(f32, f32)>,
     gust: Option<Gust>,
+    slide_wind: f32,
 }
 
 pub struct SnowSimulation {
@@ -338,6 +345,7 @@ impl SnowSimulation {
                 last_cursor_push: -10.0,
                 overflow: Vec::new(),
                 gust: None,
+                slide_wind: 0.0,
             },
         };
         simulation.update_target();
@@ -414,6 +422,8 @@ impl SnowSimulation {
         self.air.heights_changed = false;
 
         self.vary(dt);
+        let wind = self.air.slide_wind;
+        self.air.slide_wind = if wind.abs() < 1.0 { 0.0 } else { wind * (-dt / SLIDE_CALM).exp() };
         self.expire_parking();
         for ledge in &mut self.layers[1..] {
             self.air.carry(ledge, dt);
@@ -423,6 +433,7 @@ impl SnowSimulation {
             self.air.confine(ledge, li, self.width, self.walls);
         }
         self.blow(dt);
+        self.skim(dt);
         self.advance_flakes(dt);
         self.advance_grains(dt);
         self.air.advance_motes(dt);
@@ -447,7 +458,7 @@ impl SnowSimulation {
             || air.gust.is_some()
             || self.haunting.pushing(air.clock);
         // The steady trickle off window corners is a few tiny grains at a time; they read fine at the calm rate.
-        let flying = air.grains.len() > 24 || air.clock < self.scattered_until;
+        let flying = air.grains.len() > 24 || air.clock < self.scattered_until || air.slide_wind.abs() > 20.0;
         self.pace = if pushed {
             Pace::Interactive
         } else if flying {
@@ -515,6 +526,13 @@ impl SnowSimulation {
                 continue;
             }
             layer.write_smoothed(&mut buffer[offset..offset + span]);
+            let grown = smoothstep(0.0, REGROWTH, (self.air.clock - layer.returned_at) as f32);
+            if grown < 1.0 {
+                let (surface, bed) = buffer[offset..offset + span].split_at_mut(layer.count());
+                for (level, bed) in surface.iter_mut().zip(bed.iter()) {
+                    *level = bed + (*level - bed) * grown;
+                }
+            }
             result.push(PileLayer {
                 offset,
                 count: layer.count(),
@@ -555,6 +573,15 @@ impl SnowSimulation {
     }
 
     // Windows
+
+    /// A desktop slid past at `velocity` pixels a second, negative to the left: the air it drags along blows the
+    /// falling snow that way for a moment.
+    pub fn space_slid(&mut self, velocity: f32) {
+        let wind = (velocity * SLIDE_DRAG).clamp(-SLIDE_WIND_MAX, SLIDE_WIND_MAX);
+        if wind.abs() > self.air.slide_wind.abs() {
+            self.air.slide_wind = wind;
+        }
+    }
 
     pub fn space_changed(&mut self) {
         self.space_changed_at = self.air.clock;
@@ -600,6 +627,7 @@ impl SnowSimulation {
                 let ledge = match self.dormant.remove(&surface.id).or_else(|| self.unpark(surface.id)) {
                     Some(mut returning) => {
                         restore(&mut returning, left, top, columns);
+                        returning.returned_at = self.air.clock;
                         returning
                     }
                     None => {
@@ -713,8 +741,9 @@ impl SnowSimulation {
     // Particles
 
     fn advance_flakes(&mut self, dt: f32) {
-        let wind = self.air.breeze();
-        let follow = (dt * 1.2).min(1.0);
+        let wind = self.air.breeze() + self.air.slide_wind;
+        // A desktop's wind is short: the flakes take it up faster than the slow breeze, or it would be gone first.
+        let follow = (dt * (1.2 + self.air.slide_wind.abs() * 0.03)).min(1.0);
         let settle = (dt * 1.6).min(1.0);
         let wake_radius: f32 = 80.0;
         let mut wake_velocity = self.air.cursor_velocity;
@@ -950,6 +979,34 @@ impl SnowSimulation {
                 while dust >= 3.5 {
                     self.air.lift(V2::new(x, surface), gust.direction);
                     dust -= 3.5;
+                }
+            }
+        }
+    }
+
+    /// The wind of a sliding desktop skims the drifts, most off the crests that stand above the snow around them:
+    /// a little powder flies a short way downwind and settles again.
+    fn skim(&mut self, dt: f32) {
+        let share = self.air.slide_wind.abs() / SLIDE_WIND_MAX;
+        if share <= 0.1 {
+            return;
+        }
+        for layer in &mut self.layers {
+            let count = layer.count();
+            let mut dust = 0.0;
+            for i in 0..count {
+                let height = layer.heights[i];
+                if !layer.visible[i] || height <= 1.5 {
+                    continue;
+                }
+                let around = (layer.heights[i.saturating_sub(12)] + layer.heights[(i + 12).min(count - 1)]) / 2.0;
+                let loss = (height * 0.2).min((0.2 + (height - around).max(0.0) * 1.5) * share * dt);
+                layer.set(i, height - loss);
+                self.air.heights_changed = true;
+                dust += loss * layer.column_width;
+                while dust >= 1.5 {
+                    self.air.puff(V2::new(layer.center_x(i), layer.surface(i)), 1.5);
+                    dust -= 1.5;
                 }
             }
         }
@@ -1498,7 +1555,7 @@ impl Air {
     }
 
     fn wind_speed(&self) -> f32 {
-        self.breeze() + self.gust_speed()
+        self.breeze() + self.gust_speed() + self.slide_wind
     }
 
     fn breeze(&self) -> f32 {
@@ -1541,6 +1598,34 @@ impl Air {
             alpha: random.range(0.06, 0.14),
             age: 0.0,
             life: random.range(0.6, 1.3),
+        });
+    }
+
+    /// A pinch of powder off a crest, thrown downwind by a sliding desktop's wind; it lands again where it falls.
+    fn puff(&mut self, position: V2, area: f32) {
+        if self.grains.len() >= MAX_GRAINS {
+            return;
+        }
+        let wind = self.slide_wind;
+        let random = &mut self.random;
+        self.grains.push(Grain {
+            position: position + V2::new(random.range(-1.0, 1.0), random.range(-2.0, 0.0)),
+            velocity: V2::new(wind * random.range(1.5, 3.0), random.range(60.0, 260.0)),
+            area,
+            size: random.range(1.1, 2.4),
+            lump: 0.0,
+            blown: false,
+        });
+        if random.next() >= 0.3 || self.motes.len() >= MAX_MOTES {
+            return;
+        }
+        self.motes.push(Mote {
+            position,
+            velocity: V2::new(wind * random.range(0.8, 2.0), random.range(20.0, 90.0)),
+            size: random.range(6.0, 13.0),
+            alpha: random.range(0.06, 0.12),
+            age: 0.0,
+            life: random.range(0.5, 1.0),
         });
     }
 }

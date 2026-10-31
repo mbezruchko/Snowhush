@@ -195,6 +195,9 @@ impl Screen {
         self.last_step = Some(now);
         if let Some((report, generation, moving)) = report {
             self.follow(report, generation, moving, snow_on_windows, now);
+            if let Some(slide) = report.slide {
+                self.simulation.space_slid(slide.velocity(now));
+            }
         }
         let changed = self.simulation.step(dt, self.pointer(cursor));
         // The candle follows the cursor even over snow that lies still.
@@ -273,7 +276,12 @@ impl Screen {
         self.windows_seen = generation;
         let area = self.area();
         let listed = if snow_on_windows { report } else { &Report::default() };
-        let surfaces = windows::surfaces(listed, &area, self.shelf.as_ref());
+        let mut surfaces = windows::surfaces(listed, &area, self.shelf.as_ref());
+        if report.switching {
+            // Windows that came with the new desktop get their snow back once they have slid in; windows on every
+            // desktop keep theirs throughout.
+            surfaces.retain(|surface| self.surfaces.iter().any(|shown| shown.id == surface.id));
+        }
         self.simulation.covers = windows::covers(listed, &area);
         if surfaces == self.surfaces {
             return;

@@ -79,17 +79,36 @@ pub fn set_opens_at_login(on: bool) -> std::io::Result<()> {
 
 /// KDE's animation speed: zero, "Instant", means the person prefers less motion.
 pub fn animations_enabled() -> bool {
-    let Some(text) = config_home().and_then(|folder| std::fs::read_to_string(folder.join("kdeglobals")).ok()) else { return true };
-    let mut in_kde = false;
+    animation_factor() > 0.0
+}
+
+/// How much longer than usual KDE's animations take: zero for "Instant", larger when slower.
+pub fn animation_factor() -> f32 {
+    kde_setting("kdeglobals", "KDE", "AnimationDurationFactor").and_then(|value| value.parse::<f32>().ok()).map_or(1.0, |factor| factor.max(0.0))
+}
+
+/// Whether KWin slides the desktops past on a switch, as it does unless that effect is turned off.
+pub fn slide_enabled() -> bool {
+    kde_setting("kwinrc", "Plugins", "slideEnabled").is_none_or(|value| value != "false")
+}
+
+/// A setting from one of KDE's config files.
+fn kde_setting(file: &str, group: &str, key: &str) -> Option<String> {
+    let text = std::fs::read_to_string(config_home()?.join(file)).ok()?;
+    let header = format!("[{group}]");
+    let mut in_group = false;
     for line in text.lines() {
         let line = line.trim();
         if line.starts_with('[') {
-            in_kde = line == "[KDE]";
-        } else if in_kde && let Some(("AnimationDurationFactor", value)) = line.split_once('=').map(|(k, v)| (k.trim(), v.trim())) {
-            return value.parse::<f32>().map_or(true, |factor| factor > 0.0);
+            in_group = line == header;
+        } else if in_group
+            && let Some((name, value)) = line.split_once('=')
+            && name.trim() == key
+        {
+            return Some(value.trim().to_string());
         }
     }
-    true
+    None
 }
 
 fn config_home() -> Option<PathBuf> {

@@ -16,6 +16,8 @@ pub struct SnowLayer {
     pub bed_depth: f32,
     pub occluders: Vec<[f32; 4]>,
     pub moved_at: f64,
+    /// When the snow came back onto its window from elsewhere, to grow back into shape rather than appear at once.
+    pub returned_at: f64,
     pub spill_left: f32,
     pub spill_right: f32,
     /// Smoothed path of the supporting edge; the snow reacts to its accelerations, not to raw jittery samples.
@@ -53,6 +55,7 @@ impl SnowLayer {
             bed_depth: 0.0,
             occluders: Vec::new(),
             moved_at: -1.0,
+            returned_at: -10.0,
             spill_left: 0.0,
             spill_right: 0.0,
             track: origin,

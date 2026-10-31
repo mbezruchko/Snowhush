@@ -69,6 +69,24 @@ pub struct Report {
     /// The compositor shows something the snow mustn't be drawn over, such as niri's overview.
     #[serde(default)]
     pub hidden: bool,
+    /// The desktop and activity shown.
+    #[serde(default)]
+    pub desktop: String,
+    /// The desktop's column in KWin's grid of desktops, counted from 0, how many columns there are, and whether
+    /// switching on past the last desktop comes round to the first.
+    #[serde(default)]
+    pub column: i32,
+    #[serde(default)]
+    pub columns: i32,
+    #[serde(default)]
+    pub wraps: bool,
+    /// The desktops are sliding past: windows that came with the new one are listed where they will stop, not
+    /// where they are now.
+    #[serde(skip)]
+    pub switching: bool,
+    /// The latest switch that slid the desktops sideways.
+    #[serde(skip)]
+    pub slide: Option<kwin::Slide>,
 }
 
 /// What the compositor last told, read by the snow loop at each frame.
