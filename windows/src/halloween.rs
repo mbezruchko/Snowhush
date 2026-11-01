@@ -8,22 +8,9 @@ use windows::Win32::Graphics::Imaging::{
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::System::SystemInformation::GetLocalTime;
 use windows::Win32::UI::Shell::SHCreateMemStream;
-use windows::Win32::UI::WindowsAndMessaging::{CreateIconFromResourceEx, HICON, LR_DEFAULTCOLOR};
 use windows::core::{Error, Result};
 
 use snowhush_core::halloween::{SIGN_CAPTIONS, is_halloween};
-
-/// The jack-o'-lantern for the tray, at the sizes the tray draws it at.
-const PUMPKINS: [(i32, &[u8]); 8] = [
-    (16, include_bytes!("../assets/pumpkin-16.png")),
-    (20, include_bytes!("../assets/pumpkin-20.png")),
-    (24, include_bytes!("../assets/pumpkin-24.png")),
-    (32, include_bytes!("../assets/pumpkin-32.png")),
-    (40, include_bytes!("../assets/pumpkin-40.png")),
-    (48, include_bytes!("../assets/pumpkin-48.png")),
-    (64, include_bytes!("../assets/pumpkin-64.png")),
-    (256, include_bytes!("../assets/pumpkin-256.png")),
-];
 
 /// The signs the ghosts hold up, one picture for each of `SIGN_CAPTIONS`, drawn on the Mac.
 const SIGNS: [&[u8]; SIGN_CAPTIONS.len()] = [
@@ -52,13 +39,6 @@ const LANTERN: [&[u8]; 2] = [include_bytes!("../assets/lanterns/shell.png"), inc
 pub fn season() -> bool {
     let now = unsafe { GetLocalTime() };
     is_halloween(now.wMonth as u32, now.wDay as u32, now.wHour as u32)
-}
-
-/// A jack-o'-lantern in place of the snowflake in the tray, `size` pixels across.
-pub fn pumpkin(size: i32) -> Option<HICON> {
-    let (_, picture) = PUMPKINS.iter().find(|(side, _)| *side >= size).unwrap_or(&PUMPKINS[PUMPKINS.len() - 1]);
-    // Icon resources have kept the version Windows 3 gave them; a PNG is taken as one.
-    unsafe { CreateIconFromResourceEx(picture, true, 0x0003_0000, size, size, LR_DEFAULTCOLOR) }.ok()
 }
 
 /// A picture drawn on the Mac: rows of premultiplied RGBA from the top.

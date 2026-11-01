@@ -461,3 +461,189 @@ fn halloween_moonlight_only_shows_on_halloween() {
     assert!((moon[2] - 1.0).abs() < 1e-5 && moon[0] < 0.8);
     assert!((violet[3] - 0.6).abs() < 1e-5);
 }
+
+fn leaf_sprites(simulation: &SnowSimulation) -> usize {
+    let mut sprites = vec![Sprite::default(); simulation.sprite_count()];
+    let count = simulation.write_sprites(&mut sprites);
+    sprites[..count].iter().filter(|sprite| sprite.leaf[0] > 0.0).count()
+}
+
+#[test]
+fn leaves_lie_where_they_land() {
+    let mut simulation = SnowSimulation::new(800.0, 600.0, Snowfall::Heavy);
+    simulation.set_autumn(true);
+    run(&mut simulation, 90.0, AWAY);
+    assert_finite(&simulation);
+    assert!(simulation.has_snow(), "no leaves lying");
+    let mut sprites = vec![Sprite::default(); simulation.sprite_count()];
+    let count = simulation.write_sprites(&mut sprites);
+    assert!(sprites[..count].iter().all(|sprite| sprite.leaf[0] > 0.0), "snow among the leaves");
+    assert!(sprites[..count].iter().any(|sprite| sprite.position.y < 30.0), "nothing on the ground");
+}
+
+#[test]
+fn a_closed_window_drops_only_its_own_leaves() {
+    let mut simulation = SnowSimulation::new(800.0, 600.0, Snowfall::Heavy);
+    simulation.set_autumn(true);
+    let none = HashSet::new();
+    for _ in 0..(120.0 / DT) as usize {
+        simulation.update_windows(&[surface(7, 200.0, 400.0, 400.0)], DT, &none, &none, false);
+        simulation.step(DT, AWAY);
+    }
+    simulation.set_snowfall(Snowfall::Off);
+    run(&mut simulation, 30.0, AWAY);
+    let before = leaf_sprites(&simulation);
+    assert!(before > 10, "too few leaves on the window: {before}");
+    simulation.update_windows(&[], DT, &none, &none, false);
+    for _ in 0..30 {
+        simulation.step(DT, AWAY);
+        assert!(leaf_sprites(&simulation) <= before, "leaves out of nowhere");
+    }
+    let after = leaf_sprites(&simulation);
+    assert!(after * 10 >= before * 9, "the leaves vanished with their window: {before} -> {after}");
+}
+
+#[test]
+fn switching_modes_clears_the_screen_first() {
+    let mut simulation = SnowSimulation::new(800.0, 600.0, Snowfall::Heavy);
+    run(&mut simulation, 30.0, AWAY);
+    simulation.switch_mode(true, 1.0, false);
+    run(&mut simulation, 0.5, AWAY);
+    assert!(!simulation.autumn(), "switched before the gust cleared the screen");
+    run(&mut simulation, 8.0, AWAY);
+    assert!(simulation.autumn(), "never switched");
+    run(&mut simulation, 10.0, AWAY);
+    assert!(leaf_sprites(&simulation) > 0, "no leaves falling");
+    assert_eq!(leaf_sprites(&simulation), simulation.sprite_count(), "snow left over");
+}
+
+fn jerk(simulation: &mut SnowSimulation, id: isize) {
+    let none = HashSet::new();
+    let mut t = 0.0;
+    for _ in 0..120 {
+        t += DT;
+        let top = 650.0 + 50.0 * (2.0 * std::f32::consts::PI * 4.0 * t).sin();
+        simulation.update_windows(&[surface(id, 300.0, top, 500.0)], DT, &none, &none, false);
+        simulation.step(DT, AWAY);
+    }
+    simulation.update_windows(&[surface(id, 300.0, 650.0, 500.0)], DT, &none, &none, false);
+}
+
+#[test]
+fn a_heap_jerked_off_its_window_comes_off_as_leaves() {
+    let mut simulation = SnowSimulation::new(1280.0, 800.0, Snowfall::Heavy);
+    simulation.set_autumn(true);
+    simulation.thaws = false;
+    let none = HashSet::new();
+    simulation.update_windows(&[surface(3, 300.0, 650.0, 500.0)], 0.2, &none, &none, false);
+    run(&mut simulation, 120.0, AWAY);
+    simulation.set_snowfall(Snowfall::Off);
+    run(&mut simulation, 15.0, AWAY);
+    let resting = ledge(&simulation);
+    let before = leaf_sprites(&simulation);
+    assert!(resting > 50.0, "no heap on the window: {resting}");
+
+    jerk(&mut simulation, 3);
+    let left = ledge(&simulation);
+    let flying = leaf_sprites(&simulation);
+    assert!(left < resting * 0.7, "the heap held on: {resting} -> {left}");
+    assert!(flying > before, "the heap came off unseen: {before} leaves -> {flying}");
+    assert_finite(&simulation);
+
+    // Thrown about again and again, a heap shows the leaves buried in it, never more than its bulk is worth.
+    for _ in 0..6 {
+        run(&mut simulation, 30.0, AWAY);
+        jerk(&mut simulation, 3);
+    }
+    run(&mut simulation, 30.0, AWAY);
+    let worth = piles(&simulation).iter().map(|pile| pile.1).sum::<f32>() / (5.5 * 11.0);
+    let shown = leaf_sprites(&simulation);
+    assert!(shown as f32 <= worth * 1.2 + 10.0, "the leaves multiplied: {shown} shown for {worth} worth of bulk");
+}
+
+#[test]
+fn leaves_stay_put_as_their_window_is_resized() {
+    let mut simulation = SnowSimulation::new(1280.0, 800.0, Snowfall::Heavy);
+    simulation.set_autumn(true);
+    simulation.thaws = false;
+    let none = HashSet::new();
+    simulation.update_windows(&[surface(3, 300.0, 600.0, 500.0)], 0.2, &none, &none, false);
+    run(&mut simulation, 90.0, AWAY);
+    simulation.set_snowfall(Snowfall::Off);
+    run(&mut simulation, 20.0, AWAY);
+    let lying = |simulation: &SnowSimulation| -> Vec<V2> {
+        let mut sprites = vec![Sprite::default(); simulation.sprite_count()];
+        let count = simulation.write_sprites(&mut sprites);
+        sprites[..count].iter().filter(|sprite| sprite.leaf[0] > 0.0 && sprite.position.y > 590.0).map(|sprite| sprite.position).collect()
+    };
+    let before: Vec<V2> = lying(&simulation).into_iter().filter(|p| p.x > 460.0 && p.x < 780.0).collect();
+    assert!(before.len() > 5, "too few leaves on the window: {}", before.len());
+    // Where the heap's bulk lies along the screen, away from the end the window loses.
+    let centre = |simulation: &SnowSimulation| -> f32 {
+        let mut buffer = vec![0.0; simulation.column_count()];
+        let piles = simulation.write_layers(&mut buffer);
+        let pile = piles.iter().find(|pile| pile.origin.y > 500.0).unwrap();
+        let width = (800.0 - pile.origin.x) / pile.count as f32;
+        let (surface, bed) = buffer[pile.offset..pile.offset + 2 * pile.count].split_at(pile.count);
+        let (mut sum, mut weight) = (0.0, 0.0);
+        for i in 0..pile.count {
+            let x = pile.origin.x + (i as f32 + 0.5) * width;
+            if x > 450.0 && x < 780.0 {
+                sum += x * (surface[i] - bed[i]);
+                weight += surface[i] - bed[i];
+            }
+        }
+        sum / weight
+    };
+    let bulk_before = centre(&simulation);
+
+    // The left edge dragged in by a hundred points, the right one left where it is.
+    let mut slid: f32 = 0.0;
+    for step in 1..=30 {
+        let left = 300.0 + 100.0 * step as f32 / 30.0;
+        simulation.update_windows(&[surface(3, left, 600.0, 800.0 - left)], DT, &none, &none, false);
+        simulation.step(DT, AWAY);
+        let mut buffer = vec![0.0; simulation.column_count()];
+        for pile in simulation.write_layers(&mut buffer) {
+            if pile.origin.y > 500.0 {
+                slid = slid.max((pile.origin.x - left).abs());
+            }
+        }
+    }
+    assert!(slid < 1.0, "the heap slid {slid} points over the window as it was resized");
+    let walked = centre(&simulation) - bulk_before;
+    assert!(walked.abs() < 3.0, "the heap walked {walked} points along as the window was resized");
+    run(&mut simulation, 0.5, AWAY);
+    let after = lying(&simulation);
+    let kept = before.iter().filter(|p| after.iter().any(|q| (q.x - p.x).abs() < 3.0 && (q.y - p.y).abs() < 4.0)).count();
+    assert!(kept * 10 >= before.len() * 8, "the leaves moved with the window's edge: {kept} of {} stayed", before.len());
+}
+
+#[test]
+fn snow_pouring_off_a_window_heaps_up_no_higher_than_it_pours_from() {
+    let mut simulation = SnowSimulation::new(800.0, 600.0, Snowfall::Heavy);
+    simulation.thaws = false;
+    let none = HashSet::new();
+    // The upper window sits in front, over the top of the lower one; snow pours off its right end onto the lower one.
+    let windows = || {
+        let upper = surface(1, 100.0, 340.0, 300.0);
+        let mut lower = surface(2, 200.0, 300.0, 500.0);
+        lower.blockers = vec![upper.frame];
+        [upper, lower]
+    };
+    for _ in 0..(900.0 / DT) as usize {
+        simulation.update_windows(&windows(), DT, &none, &none, false);
+        simulation.step(DT, AWAY);
+    }
+    let mut buffer = vec![0.0; simulation.column_count()];
+    let piles = simulation.write_layers(&mut buffer);
+    let lower = piles.iter().find(|pile| (pile.origin.y - 300.0).abs() < 5.0).unwrap();
+    let upper = piles.iter().find(|pile| (pile.origin.y - 340.0).abs() < 5.0).unwrap();
+    let pours = upper.origin.y + buffer[upper.offset + upper.count - 1];
+    let width = 500.0 / lower.count as f32;
+    let peak = (0..lower.count)
+        .filter(|&i| (400.0..480.0).contains(&(lower.origin.x + (i as f32 + 0.5) * width)))
+        .map(|i| lower.origin.y + buffer[lower.offset + i])
+        .fold(f32::MIN, f32::max);
+    assert!(peak <= pours + 3.0, "the heap under the window's end rose to {peak}, above where the snow pours from at {pours}");
+}

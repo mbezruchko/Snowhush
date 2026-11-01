@@ -19,6 +19,8 @@ cbuffer Uniforms : register(b0) {
     // The pumpkins' candles: where each burns, how far its light reaches and how bright it is.
     float4 pumpkins[3];
     float4 occluders[16];
+    // One while leaves fall instead of snow.
+    float autumn;
 };
 
 Buffer<float> heights : register(t0);
@@ -29,6 +31,93 @@ float hash(float2 p) {
     p = frac(p * float2(123.34, 456.21));
     p += dot(p, p + 45.32);
     return frac(p.x * p.y);
+}
+
+float smoothNoise(float x) {
+    float i = floor(x);
+    float f = frac(x);
+    return lerp(hash(float2(i, 0.0)), hash(float2(i + 1.0, 0.0)), f * f * (3.0 - 2.0 * f));
+}
+
+// Golden, amber, orange, rust or brown, a little lighter or darker.
+float3 leafColor(float seed) {
+    float k = frac(seed * 7.13);
+    float3 c = k < 0.3 ? float3(0.97, 0.78, 0.22)
+        : (k < 0.55 ? float3(0.95, 0.56, 0.13)
+        : (k < 0.75 ? float3(0.86, 0.36, 0.11)
+        : (k < 0.9 ? float3(0.72, 0.2, 0.09)
+        : float3(0.58, 0.38, 0.17))));
+    return c * (0.86 + 0.24 * frac(seed * 31.7));
+}
+
+// Fallen leaves lying every which way: the topmost at each point shows, the gaps between them in shadow.
+float3 litter(float2 at) {
+    float2 cell = floor(at / 6.5);
+    float top = -1.0;
+    float margin = 0.0;
+    float3 color = float3(0.34, 0.19, 0.08);
+    for (int j = -1; j <= 1; j++) {
+        for (int i = -1; i <= 1; i++) {
+            for (int k = 0; k < 3; k++) {
+                float2 c = cell + float2(i, j) + float(k) * 0.37;
+                float2 d = at - (cell + float2(i, j) + float2(hash(c + 7.1), hash(c + 3.3))) * 6.5;
+                float angle = hash(c + 11.7) * 6.2832;
+                float2 q = float2(cos(angle) * d.x + sin(angle) * d.y, -sin(angle) * d.x + cos(angle) * d.y);
+                float size = 3.8 + 2.4 * hash(c + 2.9);
+                float t = q.x / size;
+                float inside = (1.0 - t * t) * size * 0.45 - abs(q.y);
+                float z = hash(c + 5.9);
+                if (inside > 0.0 && z > top) {
+                    top = z;
+                    margin = inside;
+                    color = leafColor(hash(c + 0.5));
+                }
+            }
+        }
+    }
+    return color * (0.7 + 0.3 * smoothstep(0.0, 0.7, margin));
+}
+
+// A leaf's outline at one moment, `p` running across it from -0.5 to 0.5: how far inside it a point is. Gives back how
+// far inside its blade alone, and the point in the leaf's own frame, stretched across by how much of its face shows.
+float leafShape(float2 p, float seed, float turn, float flip, out float blade, out float2 r) {
+    float across = max(abs(flip), 0.35);
+    r = float2(cos(turn) * p.x + sin(turn) * p.y, -sin(turn) * p.x + cos(turn) * p.y) * 2.0;
+    r.y /= across;
+    if (frac(seed * 13.7) < 0.4) {
+        // A maple leaf: five pointed lobes around the stem.
+        float2 m = r - float2(0.08, 0.0);
+        float a = atan2(m.y, m.x);
+        float reach = (0.5 + 0.44 * pow(abs(cos(a * 2.5)), 1.3)) * (0.82 + 0.18 * cos(a));
+        blade = reach - length(m);
+    } else {
+        // An oval leaf, widest toward the stem and pointed at the tip.
+        float t = (r.x + 0.88) / 1.82;
+        float halfWidth = 2.1 * pow(saturate(t), 0.7) * pow(saturate(1.0 - t), 1.1) * (0.8 + 0.4 * frac(seed * 5.3));
+        blade = min(halfWidth - abs(r.y), min(t, 1.0 - t) * 0.6);
+    }
+    float stem = 0.05 - max(abs(r.y) * across, max(-0.98 - r.x, r.x + 0.55));
+    return max(blade, stem);
+}
+
+// A leaf at one moment, its outline smoothed over `edge`: its colour, premultiplied.
+float4 leafAt(float2 p, float seed, float turn, float flip, float alpha, float warm, float edge) {
+    float inside;
+    float2 r;
+    float shape = leafShape(p, seed, turn, flip, inside, r);
+    float across = max(abs(flip), 0.35);
+    float a = smoothstep(-edge, edge, shape) * alpha;
+    float3 color = leafColor(seed);
+    color *= 0.76 + 0.24 * smoothstep(0.0, 0.22, inside);
+    float vein = (1.0 - smoothstep(0.0, 0.045, abs(r.y) * across)) * step(-0.9, r.x) * step(r.x, 0.7);
+    color = lerp(color, color * 0.6, vein * 0.55);
+    if (flip < 0.0) {
+        color = lerp(color, float3(0.86, 0.74, 0.52), 0.28) * 0.9;
+    }
+    // Night dims the leaves without draining their colour.
+    color *= (0.8 + 0.2 * abs(flip)) * lerp(float3(1.0, 1.0, 1.0), light.rgb, 0.4);
+    color = lerp(color, candle, warm * 0.45);
+    return float4(color * a, a);
 }
 
 float flicker(float seed) {
@@ -60,6 +149,8 @@ struct SpriteIn {
     float4 ghost : GHOST;
     float4 pose : POSE;
     float2 mood : MOOD;
+    float3 leaf : LEAF;
+    float2 spin : SPIN;
     uint vid : SV_VertexID;
 };
 
@@ -79,9 +170,40 @@ struct SpriteOut {
     nointerpolation float4 ghost : GHOST;
     nointerpolation float4 pose : POSE;
     nointerpolation float4 mood : MOOD;
+    // A leaf's seed, which way it points and how much of its face shows, then how many moments of the exposure it is
+    // drawn at; how much wider the sprite is than the leaf, and how far the leaf turns and tumbles over the exposure.
+    nointerpolation float4 leaf : LEAF;
+    nointerpolation float4 smear : SMEAR;
 };
 
+// A leaf's sprite, this corner of it. About a 1/40 s exposure: at 30 frames a second a falling leaf smears most of the
+// way to where the next frame shows it, so it glides instead of hopping. The sprite sits midway along the smear.
+SpriteOut leafVertex(SpriteIn s, float2 corner) {
+    float exposure = 0.024;
+    float pixels = max(s.size * scale, 2.0);
+    float2 travel = s.velocity * exposure;
+    float extent = pixels + length(travel) * scale;
+    float2 middle = (s.position - travel * 0.5 + shake.xy) / viewSize * 2.0 - 1.0;
+    SpriteOut o = (SpriteOut)0;
+    o.position = float4(middle + (corner - 0.5) * extent * 2.0 / (viewSize * scale), 0.0, 1.0);
+    o.coord = float2(corner.x, 1.0 - corner.y);
+    o.streak = travel / max(s.size, 0.001);
+    float turnSmear = s.spin.x * exposure;
+    float flipSmear = s.spin.y * exposure;
+    // Enough moments along the smear that no copy of the leaf stands apart from the next.
+    float motion = length(travel) * scale + (abs(turnSmear) + abs(flipSmear)) * pixels * 0.5;
+    o.leaf = float4(s.leaf, clamp(ceil(motion / 1.2), 1.0, 8.0));
+    o.smear = float4(extent / pixels, turnSmear, flipSmear, 0.0);
+    o.alpha = s.alpha;
+    o.warm = candlelight(s.position);
+    return o;
+}
+
 SpriteOut spriteVertex(SpriteIn s) {
+    float2 corner = float2(float(s.vid & 1), float(s.vid >> 1));
+    [branch] if (s.leaf.x != 0.0) {
+        return leafVertex(s, corner);
+    }
     float pixels = s.size * scale;
     // About a 1/55 s exposure, capped so even the fastest grain stays a short smear and never reads as rain.
     float2 travel = s.velocity * 0.018;
@@ -90,7 +212,6 @@ SpriteOut spriteVertex(SpriteIn s) {
     // A lump's ragged edge reaches past its nominal size.
     float reach = s.lump > 0.0 ? 1.3 : 1.0;
     float extent = max(pixels * reach + length(streak), 2.0);
-    float2 corner = float2(float(s.vid & 1), float(s.vid >> 1));
     SpriteOut o;
     float2 center = (s.position + shake.xy) / viewSize * 2.0 - 1.0;
     o.position = float4(center + (corner - 0.5) * extent * 2.0 / (viewSize * scale), 0.0, 1.0);
@@ -107,6 +228,8 @@ SpriteOut spriteVertex(SpriteIn s) {
     o.ghost = s.ghost;
     o.pose = s.pose;
     o.mood = float4(s.mood, s.size, 0.0);
+    o.leaf = float4(0.0, 0.0, 0.0, 0.0);
+    o.smear = float4(0.0, 0.0, 0.0, 0.0);
     if (s.ghost.x > 0.0) {
         o.spin = time + s.ghost.x * 40.0;
         o.ghost.y = (s.ghost.y - s.position.y) / max(s.size, 0.001);
@@ -196,14 +319,18 @@ float4 ghostColor(SpriteOut i, float2 p, float2 q, float side, float cover, floa
     float below = max(under, 0.0) * i.mood.z;
     float3 drift = lerp(surface, shadow, saturate((1.0 - exp(-below / 30.0)) * 0.32 + 0.064 * exp(-below / 5.0)));
     color = lerp(color, lerp(drift, float3(0.975, 0.982, 0.995), exp(-below * 0.9) * 0.6), smoothstep(1.0, 4.0, below));
+    [branch] if (autumn > 0.5) {
+        float2 world = float2(i.position.x / scale, viewSize.y - i.position.y / scale);
+        color = litter(world) * (1.0 - saturate(shade) * 0.6);
+    }
     color += (hash(floor(i.position.xy)) - 0.5) * 0.02;
-    float glint = hash(floor(i.position.xy * 0.5) + 31.7);
+    float glint = autumn > 0.5 ? 0.0 : hash(floor(i.position.xy * 0.5) + 31.7);
     if (glint > 0.992) {
         float twinkle = pow(saturate(sin(time * (0.6 + glint * 1.8) + glint * 90.0)), 28.0);
         color = lerp(color, float3(1.0, 1.0, 1.0), twinkle * exp(-depth / 7.0));
     }
-    color *= light.rgb;
-    color = lerp(color, rim.rgb, rim.a * exp(-depth / 2.5));
+    color *= autumn > 0.5 ? lerp(float3(1.0, 1.0, 1.0), light.rgb, 0.4) : light.rgb;
+    color = lerp(color, rim.rgb, rim.a * exp(-depth / 2.5) * (1.0 - autumn));
     color = lerp(color, candle, i.warm * (0.35 + 0.65 * exp(-depth / 14.0)) * 0.55);
 
     // Two dark hollows for eyes, blinking now and then; a cross one glares under brows slanting down inward, embers
@@ -237,6 +364,23 @@ float4 ghostColor(SpriteOut i, float2 p, float2 q, float side, float cover, floa
     return float4(color * a, a);
 }
 
+// The leaf over the exposure, from where it was to where it is now, turning and tumbling on the way, its outline
+// smoothed over `edge`.
+float4 leafSmear(SpriteOut i, float2 p, float edge) {
+    int n = int(i.leaf.w);
+    float4 sum = float4(0.0, 0.0, 0.0, 0.0);
+    [loop]
+    for (int k = 0; k < n; k++) {
+        float along = (float(k) + 0.5) / float(n) - 0.5;
+        float back = along - 0.5;
+        sum += leafAt(p * i.smear.x - i.streak * along, i.leaf.x, i.leaf.y + i.smear.y * back,
+                      clamp(i.leaf.z + i.smear.z * back, -1.0, 1.0), i.alpha, i.warm, edge);
+    }
+    sum /= float(n);
+    if (sum.a < 0.002) discard;
+    return sum;
+}
+
 float4 spriteFragment(SpriteOut i) : SV_Target {
     // Quad coordinates run down the screen; velocities run up.
     float2 p = float2(i.coord.x - 0.5, 0.5 - i.coord.y);
@@ -246,12 +390,21 @@ float4 spriteFragment(SpriteOut i) : SV_Target {
     float inside = 0.0;
     [branch] if (i.ghost.x > 0.0) {
         inside = ghostShape(p, i.spin, i.ghost, i.pose, i.mood.xy, q, side, cover);
+    } else if (i.leaf.x != 0.0) {
+        float blade;
+        float2 frame;
+        inside = leafShape(p * i.smear.x, i.leaf.x, i.leaf.y - i.smear.y * 0.5, clamp(i.leaf.z - i.smear.z * 0.5, -1.0, 1.0), blade, frame);
     }
     // Gradients are taken outside any branch, where every graphics card has them for all four pixels of a block.
-    // A sprite's pixels all take the same branch, so the ghost's are its own.
+    // A sprite's pixels all take the same branch, so a ghost's or a leaf's are its own.
     float2 slope = float2(ddx(inside), -ddy(inside));
     [branch] if (i.ghost.x > 0.0) {
         return ghostColor(i, p, q, side, cover, inside, slope);
+    }
+    [branch] if (i.leaf.x != 0.0) {
+        // Gradients can't be taken in a loop of varying length, so every moment's outline is smoothed as wide as the
+        // one midway through the exposure, the only moment drawn when the leaf hardly moves.
+        return leafSmear(i, p, max(abs(slope.x) + abs(slope.y), 1e-4));
     }
     float2 half_ = i.streak * 0.5;
     float span = dot(half_, half_);
@@ -308,8 +461,16 @@ float4 pileFragment(PileOut i) : SV_Target {
     }
 
     float x = i.local.x;
+    // Where along the heap itself: it stays put as the window's left edge is dragged under it. A pile's shake.z is
+    // how far along its window the heap has drifted.
+    float2 grain = float2(x - shake.z, i.local.y);
     float level = heightAt(heightOffset, x);
     float bed = heightAt(heightOffset + columnCount, x);
+    // The leaves on top are drawn one by one, the heap under them as a mass with a ragged top; a leaf or two lie on their own.
+    if (autumn > 0.5) {
+        level -= 2.5;
+        level += (smoothNoise(grain.x * 0.4) - 0.5) * 2.4 * saturate((level - bed) / 4.0);
+    }
     float depth = level - i.local.y;
     float coverage = saturate(depth * scale + 0.5)
         * saturate((i.local.y - bed) * scale + 0.5)
@@ -319,21 +480,30 @@ float4 pileFragment(PileOut i) : SV_Target {
     float slope = (heightAt(heightOffset, x + 2.0) - heightAt(heightOffset, x - 2.0)) * 0.25;
     float lit = dot(normalize(float2(-slope, 1.0)), normalize(float2(-0.5, 1.0)));
 
-    float3 shadow = lerp(float3(0.72, 0.78, 0.88), shadowTint.rgb, shadowTint.a);
-    float3 surface = lerp(float3(0.925, 0.94, 0.965), min(shadowTint.rgb * 1.18, float3(1.0, 1.0, 1.0)), shadowTint.a * 0.2);
-    float shade = (1.0 - exp(-depth / 30.0)) * 0.32 + (1.0 - lit) * 0.6 * exp(-depth / 5.0);
-    float3 color = lerp(surface, shadow, saturate(shade));
-    color = lerp(color, float3(0.975, 0.982, 0.995), exp(-depth * 0.9) * 0.6);
-    color += (hash(floor(i.position.xy)) - 0.5) * 0.02;
+    float3 color;
+    [branch] if (autumn > 0.5) {
+        // Deeper in the heap the leaves lie in shadow.
+        color = litter(grain);
+        color = lerp(color, color * float3(0.62, 0.54, 0.5), saturate(1.0 - exp(-depth / 18.0)) * 0.6);
+        color *= 0.84 + 0.2 * lit;
+    } else {
+        float3 shadow = lerp(float3(0.72, 0.78, 0.88), shadowTint.rgb, shadowTint.a);
+        float3 surface = lerp(float3(0.925, 0.94, 0.965), min(shadowTint.rgb * 1.18, float3(1.0, 1.0, 1.0)), shadowTint.a * 0.2);
+        float shade = (1.0 - exp(-depth / 30.0)) * 0.32 + (1.0 - lit) * 0.6 * exp(-depth / 5.0);
+        color = lerp(surface, shadow, saturate(shade));
+        color = lerp(color, float3(0.975, 0.982, 0.995), exp(-depth * 0.9) * 0.6);
+        color += (hash(floor(i.position.xy)) - 0.5) * 0.02;
 
-    float seed = hash(floor(i.position.xy * 0.5) + 31.7);
-    if (seed > 0.992) {
-        float twinkle = pow(saturate(sin(time * (0.6 + seed * 1.8) + seed * 90.0)), 28.0);
-        color = lerp(color, float3(1.0, 1.0, 1.0), twinkle * exp(-depth / 7.0));
+        float seed = hash(floor(i.position.xy * 0.5) + 31.7);
+        if (seed > 0.992) {
+            float twinkle = pow(saturate(sin(time * (0.6 + seed * 1.8) + seed * 90.0)), 28.0);
+            color = lerp(color, float3(1.0, 1.0, 1.0), twinkle * exp(-depth / 7.0));
+        }
     }
 
-    color *= light.rgb;
-    color = lerp(color, rim.rgb, rim.a * exp(-depth / 2.5));
+    // Night dims fallen leaves without draining their colour.
+    color *= autumn > 0.5 ? lerp(float3(1.0, 1.0, 1.0), light.rgb, 0.4) : light.rgb;
+    color = lerp(color, rim.rgb, rim.a * exp(-depth / 2.5) * (1.0 - autumn));
     color = lerp(color, candle, candlelight(world) * (0.35 + 0.65 * exp(-depth / 14.0)) * 0.55);
     return float4(color * coverage, coverage);
 }

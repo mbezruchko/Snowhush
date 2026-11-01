@@ -108,18 +108,18 @@ static float3 leafColor(float seed) {
 
 /// Fallen leaves lying every which way: the topmost at each point shows, the gaps between them in shadow.
 static float3 litter(float2 point) {
-    float2 cell = floor(point / 5.0);
+    float2 cell = floor(point / 6.5);
     float top = -1.0;
     float rim = 0.0;
-    float3 color = float3(0.26, 0.14, 0.06);
+    float3 color = float3(0.34, 0.19, 0.08);
     for (int j = -1; j <= 1; j++) {
         for (int i = -1; i <= 1; i++) {
             for (int k = 0; k < 3; k++) {
                 float2 c = cell + float2(i, j) + float(k) * 0.37;
-                float2 d = point - (cell + float2(i, j) + float2(hash(c + 7.1), hash(c + 3.3))) * 5.0;
+                float2 d = point - (cell + float2(i, j) + float2(hash(c + 7.1), hash(c + 3.3))) * 6.5;
                 float angle = hash(c + 11.7) * 6.2832;
                 float2 q = float2(cos(angle) * d.x + sin(angle) * d.y, -sin(angle) * d.x + cos(angle) * d.y);
-                float size = 2.8 + 1.8 * hash(c + 2.9);
+                float size = 3.8 + 2.4 * hash(c + 2.9);
                 float t = q.x / size;
                 float inside = (1.0 - t * t) * size * 0.45 - abs(q.y);
                 float z = hash(c + 5.9);
@@ -350,7 +350,7 @@ fragment float4 spriteFragment(SpriteOut in [[stage_in]], float2 coord [[point_c
             color = mix(color, float3(1.0), twinkle * exp(-depth / 7.0));
         }
         color *= u.autumn > 0.5 ? mix(float3(1.0), u.light.rgb, 0.4) : u.light.rgb;
-        color = mix(color, u.rim.rgb, u.rim.a * exp(-depth / 2.5));
+        color = mix(color, u.rim.rgb, u.rim.a * exp(-depth / 2.5) * (1.0 - u.autumn));
         color = mix(color, candle, in.warm * (0.35 + 0.65 * exp(-depth / 14.0)) * 0.55);
 
         // Two dark hollows for eyes, blinking now and then; a cross one glares under brows slanting down inward.
@@ -439,12 +439,14 @@ fragment float4 pileFragment(PileOut in [[stage_in]],
     }
 
     float x = in.point.x;
+    // Where along the heap itself: it stays put as the window's left edge is dragged under it.
+    float2 grain = float2(x - u.shake.z, in.point.y);
     float level = heightAt(heights, u, x);
     float bed = heightAt(heights + u.columnCount, u, x);
-    // The leaves on top are drawn one by one; only deep in a heap do the leaves under them show as a mass, with a ragged top.
+    // The leaves on top are drawn one by one, the heap under them as a mass with a ragged top; a leaf or two lie on their own.
     if (u.autumn > 0.5) {
-        level -= 6.0;
-        level += (noise(x * 0.4) - 0.5) * 2.4 * saturate((level - bed) / 4.0);
+        level -= 2.5;
+        level += (noise(grain.x * 0.4) - 0.5) * 2.4 * saturate((level - bed) / 4.0);
     }
     float depth = level - in.point.y;
     float coverage = saturate(depth * u.scale + 0.5)
@@ -458,8 +460,8 @@ fragment float4 pileFragment(PileOut in [[stage_in]],
     float3 color;
     if (u.autumn > 0.5) {
         // Deeper in the heap the leaves lie in shadow.
-        color = litter(in.point);
-        color = mix(color, color * float3(0.42, 0.34, 0.3), saturate(1.0 - exp(-depth / 14.0)) * 0.75);
+        color = litter(grain);
+        color = mix(color, color * float3(0.62, 0.54, 0.5), saturate(1.0 - exp(-depth / 18.0)) * 0.6);
         color *= 0.84 + 0.2 * light;
     } else {
         float3 shadow = mix(float3(0.72, 0.78, 0.88), u.shadowTint.rgb, u.shadowTint.a);
@@ -478,7 +480,7 @@ fragment float4 pileFragment(PileOut in [[stage_in]],
 
     // Night dims fallen leaves without draining their colour.
     color *= u.autumn > 0.5 ? mix(float3(1.0), u.light.rgb, 0.4) : u.light.rgb;
-    color = mix(color, u.rim.rgb, u.rim.a * exp(-depth / 2.5));
+    color = mix(color, u.rim.rgb, u.rim.a * exp(-depth / 2.5) * (1.0 - u.autumn));
     color = mix(color, candle, candlelight(u, world) * (0.35 + 0.65 * exp(-depth / 14.0)) * 0.55);
     return float4(color * coverage, coverage);
 }

@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::ffi::c_void;
 use std::mem::size_of;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{self, Sender};
@@ -8,6 +9,7 @@ use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Power::{POWERBROADCAST_SETTING, RegisterPowerSettingNotification};
+use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
 use windows::Win32::System::RemoteDesktop::{NOTIFY_FOR_THIS_SESSION, WTSRegisterSessionNotification};
 use windows::Win32::System::SystemServices::GUID_CONSOLE_DISPLAY_STATE;
 use windows::Win32::System::Threading::{CreateEventW, SetEvent};
@@ -42,6 +44,8 @@ const ID_UPDATES: u32 = 206;
 const ID_CLEAR: u32 = 207;
 const ID_HALLOWEEN: u32 = 208;
 const ID_TASKBAR: u32 = 209;
+const ID_SNOW: u32 = 210;
+const ID_AUTUMN: u32 = 211;
 const TIMER_WELCOME: usize = 1;
 const TIMER_UPDATES: usize = 2;
 const TIMER_HALLOWEEN: usize = 3;
@@ -52,14 +56,87 @@ const DAY: u32 = 24 * 60 * 60 * 1000;
 
 static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
 
+/// A glyph drawn like the Mac's menu bar ones, at the sizes the tray draws it at.
+macro_rules! glyph {
+    ($name:literal) => {
+        [
+            (16, include_bytes!(concat!("../assets/tray/", $name, "-16.png")).as_slice()),
+            (20, include_bytes!(concat!("../assets/tray/", $name, "-20.png")).as_slice()),
+            (24, include_bytes!(concat!("../assets/tray/", $name, "-24.png")).as_slice()),
+            (32, include_bytes!(concat!("../assets/tray/", $name, "-32.png")).as_slice()),
+            (40, include_bytes!(concat!("../assets/tray/", $name, "-40.png")).as_slice()),
+            (48, include_bytes!(concat!("../assets/tray/", $name, "-48.png")).as_slice()),
+            (64, include_bytes!(concat!("../assets/tray/", $name, "-64.png")).as_slice()),
+        ]
+    };
+}
+
+type Glyph = [(i32, &'static [u8]); 7];
+const SNOWFLAKE_WHITE: Glyph = glyph!("snowflake-white");
+const SNOWFLAKE_BLACK: Glyph = glyph!("snowflake-black");
+const LEAF_WHITE: Glyph = glyph!("leaf-white");
+const LEAF_BLACK: Glyph = glyph!("leaf-black");
+const PUMPKIN_WHITE: Glyph = glyph!("pumpkin-white");
+const PUMPKIN_BLACK: Glyph = glyph!("pumpkin-black");
+
+/// What the tray shows: a snowflake, a jack-o'-lantern while it is Halloween and wanted, or a leaf while leaves fall.
+#[derive(Clone, Copy, PartialEq)]
+enum Emblem {
+    Snowflake,
+    Pumpkin,
+    Leaf,
+}
+
+impl Emblem {
+    fn of(settings: &Settings) -> Emblem {
+        if settings.halloween && halloween::season() {
+            Emblem::Pumpkin
+        } else if settings.autumn {
+            Emblem::Leaf
+        } else {
+            Emblem::Snowflake
+        }
+    }
+
+    /// Black on a light taskbar, white on a dark one, as the system's own tray icons.
+    fn glyph(self, light: bool) -> &'static Glyph {
+        match (self, light) {
+            (Emblem::Snowflake, false) => &SNOWFLAKE_WHITE,
+            (Emblem::Snowflake, true) => &SNOWFLAKE_BLACK,
+            (Emblem::Leaf, false) => &LEAF_WHITE,
+            (Emblem::Leaf, true) => &LEAF_BLACK,
+            (Emblem::Pumpkin, false) => &PUMPKIN_WHITE,
+            (Emblem::Pumpkin, true) => &PUMPKIN_BLACK,
+        }
+    }
+}
+
+/// Whether the taskbar is light: the setting for "your default Windows mode".
+fn light_taskbar() -> bool {
+    let mut value = 0u32;
+    let mut size = size_of::<u32>() as u32;
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            w!("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"),
+            w!("SystemUsesLightTheme"),
+            RRF_RT_REG_DWORD,
+            None,
+            Some((&raw mut value).cast::<c_void>()),
+            Some(&mut size),
+        )
+    };
+    status.is_ok() && value == 1
+}
+
 struct App {
     settings: Settings,
     commands: Sender<Command>,
     wake: HANDLE,
     snow: Option<JoinHandle<()>>,
     icon: HICON,
-    /// Whether the tray shows the jack-o'-lantern.
-    halloween: bool,
+    emblem: Emblem,
+    light: bool,
     locked: bool,
     display_off: bool,
     away: bool,
@@ -93,8 +170,9 @@ pub fn run() -> Result<()> {
         let wake = CreateEventW(None, false, false, None)?;
         let links = Links { wake: wake.0 as isize, controller: window.0 as isize };
         let snow = thread::Builder::new().name("snow".into()).spawn(move || snow::run(receiver, links, settings)).ok();
-        let halloween = settings.halloween && halloween::season();
-        let icon = tray_icon(halloween);
+        let emblem = Emblem::of(&settings);
+        let light = light_taskbar();
+        let icon = tray_icon(emblem, light);
         add_tray_icon(window, icon);
         let _ = WTSRegisterSessionNotification(window, NOTIFY_FOR_THIS_SESSION);
         let _ = RegisterPowerSettingNotification(HANDLE(window.0), &GUID_CONSOLE_DISPLAY_STATE, DEVICE_NOTIFY_WINDOW_HANDLE);
@@ -103,7 +181,7 @@ pub fn run() -> Result<()> {
         }
         SetTimer(Some(window), TIMER_UPDATES, 30_000, None);
         SetTimer(Some(window), TIMER_HALLOWEEN, 60_000, None);
-        APP.set(Some(App { settings, commands, wake, snow, icon, halloween, locked: false, display_off: false, away: false, update: None }));
+        APP.set(Some(App { settings, commands, wake, snow, icon, emblem, light, locked: false, display_off: false, away: false, update: None }));
 
         let mut message = MSG::default();
         while GetMessageW(&mut message, None, 0, 0).as_bool() {
@@ -157,8 +235,12 @@ unsafe extern "system" fn procedure(window: HWND, message: u32, wparam: WPARAM, 
             LRESULT(0)
         }
         WM_TIMER if wparam.0 == TIMER_HALLOWEEN => {
-            refresh_halloween(window);
+            refresh_icon(window);
             LRESULT(0)
+        }
+        WM_SETTINGCHANGE => {
+            refresh_icon(window);
+            unsafe { DefWindowProcW(window, message, wparam, lparam) }
         }
         WM_UPDATE => {
             let result = unsafe { Box::from_raw(lparam.0 as *mut std::result::Result<Option<Release>, String>) };
@@ -230,21 +312,27 @@ fn show_menu(window: HWND, x: i32, y: i32) {
     let chosen = unsafe {
         let Ok(menu) = CreatePopupMenu() else { return };
         let Ok(snowfall) = CreatePopupMenu() else { return };
+        let Ok(modes) = CreatePopupMenu() else { return };
         for (i, option) in Snowfall::ALL.iter().enumerate() {
             let title: Vec<u16> = option.title().encode_utf16().chain([0]).collect();
             let _ = AppendMenuW(snowfall, MF_STRING, (ID_SNOWFALL + i as u32) as usize, PCWSTR(title.as_ptr()));
         }
         let current = Snowfall::ALL.iter().position(|&s| s == settings.snowfall).unwrap_or(0) as u32;
         let _ = CheckMenuRadioItem(snowfall, ID_SNOWFALL, ID_SNOWFALL + 4, ID_SNOWFALL + current, MF_BYCOMMAND.0);
+        let _ = AppendMenuW(modes, MF_STRING, ID_SNOW as usize, w!("Snow"));
+        let _ = AppendMenuW(modes, MF_STRING, ID_AUTUMN as usize, w!("Autumn Leaves"));
+        let _ = CheckMenuRadioItem(modes, ID_SNOW, ID_AUTUMN, if settings.autumn { ID_AUTUMN } else { ID_SNOW }, MF_BYCOMMAND.0);
         let checked = |on: bool| if on { MF_CHECKED } else { MF_UNCHECKED };
-        let _ = AppendMenuW(menu, MF_POPUP, snowfall.0 as usize, w!("Snowfall"));
+        let autumn = settings.autumn;
+        let _ = AppendMenuW(menu, MF_POPUP, snowfall.0 as usize, w!("Intensity"));
+        let _ = AppendMenuW(menu, MF_POPUP, modes.0 as usize, w!("Mode"));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
         let _ = AppendMenuW(menu, MF_STRING | checked(settings.accumulate), ID_ACCUMULATE as usize, w!("Accumulate"));
         let melt = MF_STRING | checked(settings.melt) | if settings.accumulate { MF_ENABLED } else { MF_GRAYED };
-        let _ = AppendMenuW(menu, melt, ID_MELT as usize, w!("Melt Snow"));
-        let windows = MF_STRING | checked(settings.snow_on_windows) | if settings.behind_windows { MF_GRAYED } else { MF_ENABLED };
-        let _ = AppendMenuW(menu, windows, ID_WINDOWS as usize, w!("Snow on Windows"));
-        let _ = AppendMenuW(menu, MF_STRING, ID_CLEAR as usize, w!("Clear Snow"));
+        let _ = AppendMenuW(menu, melt, ID_MELT as usize, if autumn { w!("Wither Leaves") } else { w!("Melt Snow") });
+        let windows = MF_STRING | checked(settings.snow_on_windows);
+        let _ = AppendMenuW(menu, windows, ID_WINDOWS as usize, if autumn { w!("Leaves on Windows") } else { w!("Snow on Windows") });
+        let _ = AppendMenuW(menu, MF_STRING, ID_CLEAR as usize, if autumn { w!("Clear Leaves") } else { w!("Clear Snow") });
         if halloween::season() {
             let _ = AppendMenuW(menu, MF_STRING | checked(settings.halloween), ID_HALLOWEEN as usize, w!("Halloween"));
         }
@@ -252,8 +340,8 @@ fn show_menu(window: HWND, x: i32, y: i32) {
         let _ = AppendMenuW(menu, MF_STRING | checked(settings.behind_windows), ID_BEHIND as usize, w!("Behind Windows"));
         let _ = AppendMenuW(menu, MF_STRING | checked(settings.behind_taskbar), ID_TASKBAR as usize, w!("Behind Taskbar"));
         let _ = AppendMenuW(menu, MF_STRING | checked(settings.show_in_screenshots), ID_SCREENSHOTS as usize, w!("Show in Screenshots"));
-        let _ = AppendMenuW(menu, MF_STRING | checked(login), ID_LOGIN as usize, w!("Open at Login"));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+        let _ = AppendMenuW(menu, MF_STRING | checked(login), ID_LOGIN as usize, w!("Open at Login"));
         let _ = AppendMenuW(menu, MF_STRING, ID_UPDATES as usize, w!("Check for Updates…"));
         let _ = AppendMenuW(menu, MF_STRING, ID_QUIT as usize, w!("Quit"));
 
@@ -288,7 +376,20 @@ fn choose(window: HWND, chosen: u32, login: bool) {
                 app.settings.save();
                 send(app, Command::Halloween(app.settings.halloween));
             });
-            refresh_halloween(window);
+            refresh_icon(window);
+        }
+        ID_SNOW | ID_AUTUMN => {
+            let autumn = chosen == ID_AUTUMN;
+            APP.with_borrow_mut(|app| {
+                let Some(app) = app else { return };
+                if autumn == app.settings.autumn {
+                    return;
+                }
+                app.settings.autumn = autumn;
+                app.settings.save();
+                send(app, Command::SwitchMode { autumn, calm: !prefs::animations_enabled() });
+            });
+            refresh_icon(window);
         }
         _ => APP.with_borrow_mut(|app| {
             let Some(app) = app else { return };
@@ -413,16 +514,19 @@ fn quit(window: HWND) {
     unsafe { PostQuitMessage(0) };
 }
 
-/// Puts a jack-o'-lantern in the tray while it is Halloween and wanted, and the app icon back after.
-fn refresh_halloween(window: HWND) {
+/// Puts a jack-o'-lantern in the tray while it is Halloween and wanted, a leaf while leaves fall, and the snowflake
+/// back after, recoloured whenever the taskbar turns light or dark.
+fn refresh_icon(window: HWND) {
     APP.with_borrow_mut(|app| {
         let Some(app) = app else { return };
-        let on = app.settings.halloween && halloween::season();
-        if on == app.halloween {
+        let emblem = Emblem::of(&app.settings);
+        let light = light_taskbar();
+        if emblem == app.emblem && light == app.light {
             return;
         }
-        app.halloween = on;
-        let icon = tray_icon(on);
+        app.emblem = emblem;
+        app.light = light;
+        let icon = tray_icon(emblem, light);
         let data = NOTIFYICONDATAW {
             cbSize: size_of::<NOTIFYICONDATAW>() as u32,
             hWnd: window,
@@ -439,18 +543,25 @@ fn refresh_halloween(window: HWND) {
     });
 }
 
-/// The tray's icon at its size for the display's scale: the jack-o'-lantern with `pumpkin`, or when it can't be had,
-/// the app icon from the executable's resources.
-fn tray_icon(pumpkin: bool) -> HICON {
+/// The tray's icon at its size for the display's scale, or when its picture can't be had, the app icon from the
+/// executable's resources.
+fn tray_icon(emblem: Emblem, light: bool) -> HICON {
     unsafe {
         let size = GetSystemMetricsForDpi(SM_CXSMICON, GetDpiForSystem());
-        if pumpkin && let Some(icon) = halloween::pumpkin(size) {
+        if let Some(icon) = picture_icon(emblem.glyph(light), size) {
             return icon;
         }
         let Ok(instance) = GetModuleHandleW(None) else { return HICON::default() };
         LoadImageW(Some(instance.into()), PCWSTR(1 as *const u16), IMAGE_ICON, size, size, LR_DEFAULTCOLOR)
             .map_or(HICON::default(), |icon| HICON(icon.0))
     }
+}
+
+/// The picture of `pictures` closest above `size` pixels across, or the largest, as an icon that size.
+fn picture_icon(pictures: &[(i32, &[u8])], size: i32) -> Option<HICON> {
+    let (_, picture) = pictures.iter().find(|(side, _)| *side >= size).or(pictures.last())?;
+    // Icon resources have kept the version Windows 3 gave them; a PNG is taken as one.
+    unsafe { CreateIconFromResourceEx(picture, true, 0x0003_0000, size, size, LR_DEFAULTCOLOR) }.ok()
 }
 
 fn add_tray_icon(window: HWND, icon: HICON) {

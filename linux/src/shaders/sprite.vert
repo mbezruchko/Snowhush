@@ -25,6 +25,9 @@ layout(location = 7) in float lump;
 layout(location = 8) in vec4 ghost;
 layout(location = 9) in vec4 pose;
 layout(location = 10) in vec2 mood;
+// A leaf's seed, which way it points and how much of its face shows; how fast it turns and tumbles, a second.
+layout(location = 11) in vec3 leaf;
+layout(location = 12) in vec2 spin;
 
 out vec2 vCoord;
 out float vAlpha;
@@ -40,6 +43,10 @@ flat out vec4 vGhost;
 flat out vec4 vPose;
 // Its dab, its anger and its size in points.
 flat out vec4 vMood;
+// A leaf's seed, which way it points, how much of its face shows, and how far its sprite reaches past it.
+flat out vec4 vLeaf;
+// How far it turns and tumbles over the exposure, and how many moments of it are drawn.
+flat out vec4 vSmear;
 
 float flicker(float t, float seed) {
     return 0.86 + 0.08 * sin(t * 11.0 + seed * 2.1) + 0.06 * sin(t * 29.0 + 1.3 + seed * 4.3);
@@ -59,6 +66,28 @@ float candlelight(vec2 point) {
 }
 
 void main() {
+    vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
+    vCoord = vec2(corner.x, 1.0 - corner.y);
+    vWarm = candlelight(position);
+    if (leaf.x != 0.0) {
+        // About a 1/40 s exposure: at 30 frames a second a falling leaf smears most of the way to where the next
+        // frame shows it, so it glides instead of hopping. The sprite sits midway along the smear.
+        float exposure = 0.024;
+        float pixels = max(size * scale, 2.0);
+        vec2 travel = velocity * exposure;
+        float extent = pixels + length(travel) * scale;
+        vec2 center = (position - travel * 0.5 + shake) / viewSize * 2.0 - 1.0;
+        gl_Position = vec4(center + (corner - 0.5) * extent * 2.0 / (viewSize * scale), 0.0, 1.0);
+        vStreak = travel / max(size, 0.001);
+        vec2 smear = spin * exposure;
+        // Enough moments along the smear that no copy of the leaf stands apart from the next.
+        float motion = length(travel) * scale + (abs(smear.x) + abs(smear.y)) * pixels * 0.5;
+        vLeaf = vec4(leaf, extent / pixels);
+        vSmear = vec4(smear, clamp(ceil(motion / 1.2), 1.0, 8.0), 0.0);
+        vAlpha = alpha;
+        return;
+    }
+    vLeaf = vec4(0.0);
     float pixels = size * scale;
     // About a 1/55 s exposure, capped so even the fastest grain stays a short smear and never reads as rain.
     vec2 travel = velocity * 0.018;
@@ -67,10 +96,8 @@ void main() {
     // A lump's ragged edge reaches past its nominal size.
     float reach = lump > 0.0 ? 1.3 : 1.0;
     float extent = max(pixels * reach + length(streak), 2.0);
-    vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
     vec2 center = (position + shake) / viewSize * 2.0 - 1.0;
     gl_Position = vec4(center + (corner - 0.5) * extent * 2.0 / (viewSize * scale), 0.0, 1.0);
-    vCoord = vec2(corner.x, 1.0 - corner.y);
     vStreak = streak / extent;
     vRadius = pixels / extent * 0.5;
     // A streak spreads the same flake over more pixels, so each is fainter.
@@ -79,7 +106,6 @@ void main() {
     vTint = vec4(tintColor, tintAmount);
     vLump = lump;
     vSpin = lump > 0.0 ? time * (lump - 0.5) * 9.0 + lump * 40.0 : 0.0;
-    vWarm = candlelight(position);
     vGhost = vec4(ghost.x, (ghost.y - position.y) / max(size, 0.001), ghost.zw);
     vPose = pose;
     vMood = vec4(mood, size, 0.0);

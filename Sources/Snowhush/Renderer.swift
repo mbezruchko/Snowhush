@@ -18,7 +18,7 @@ struct Uniforms {
     var rim = SIMD4<Float>(0, 0, 0, 0)
     /// The cursor's glow: where it is, how far it reaches and how bright it is.
     var lantern = SIMD4<Float>(0, 0, 0, 0)
-    /// How far everything is jolted: x and y.
+    /// How far everything is jolted: x and y. For a pile, z is how far along its window its snow has drifted.
     var shake = SIMD4<Float>(0, 0, 0, 0)
     /// The pumpkins' candles: where each burns, how far its light reaches and how bright it is.
     var pumpkins = (SIMD4<Float>(0, 0, 0, 0), SIMD4<Float>(0, 0, 0, 0), SIMD4<Float>(0, 0, 0, 0))
@@ -306,6 +306,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             uniforms.pileTop = pile.top + 2
             uniforms.pileBottom = pile.bottom
             uniforms.origin = pile.origin
+            uniforms.shake.z = pile.drift
             uniforms.occluderCount = Int32(pile.occluders.count)
             var occluders = pile.occluders.isEmpty ? [SIMD4<Float>(repeating: 0)] : pile.occluders
             encoder.setVertexBytes(&uniforms, length: uniformsLength, index: 0)
