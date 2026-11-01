@@ -41,6 +41,9 @@ struct Sprite {
     var turn: Float = 0
     /// How much of a leaf's face shows, and which side: one is its front face on, below zero its back.
     var flip: Float = 1
+    /// How fast a leaf turns and tumbles, a second: it blurs over the exposure, as it moves.
+    var turnSpeed: Float = 0
+    var flipSpeed: Float = 0
 }
 
 /// A Halloween sign a ghost holds up, or lets fall into the snow.
@@ -549,7 +552,7 @@ final class SnowSimulation {
         for flake in flakes where count < capacity {
             buffer[count] = Sprite(
                 position: flake.position,
-                velocity: flake.velocity,
+                velocity: flake.leaf != 0 ? motion(of: flake) : flake.velocity,
                 size: flake.size,
                 alpha: flake.alpha,
                 soft: flake.soft,
@@ -559,7 +562,9 @@ final class SnowSimulation {
                 tintBlue: flake.tint.z,
                 leaf: flake.leaf,
                 turn: turn(of: flake),
-                flip: tumble(flake.leaf)
+                flip: tumble(flake.leaf),
+                turnSpeed: flake.leaf != 0 ? cos(flake.phase) * 0.6 * flake.swayRate + flake.leaf - 0.5 : 0,
+                flipSpeed: flake.leaf != 0 ? tumbleSpeed(flake.leaf) : 0
             )
             count += 1
         }
@@ -573,7 +578,9 @@ final class SnowSimulation {
                     soft: 0,
                     leaf: grain.seed,
                     turn: turn(of: grain),
-                    flip: tumble(grain.seed)
+                    flip: tumble(grain.seed),
+                    turnSpeed: (grain.seed - 0.5) * 9,
+                    flipSpeed: tumbleSpeed(grain.seed)
                 )
             } else {
                 buffer[count] = Sprite(
@@ -1343,13 +1350,9 @@ final class SnowSimulation {
             // Harmonic ratios 2.3 and 1.3 stay continuous across the 20π wrap.
             flake.phase += flake.swayRate * dt
             if flake.phase > phaseWrap { flake.phase -= phaseWrap }
-            let sway = (cos(flake.phase) + 0.3 * cos(flake.phase * 2.3)) * flake.swayAmount
-            // A leaf swings like a pendulum, dropping fastest through the middle of each swing.
-            let flutter = flake.leaf > 0 ? 0.3 + 1.1 * abs(cos(flake.phase)) : 1 + 0.12 * sin(flake.phase * 1.3)
             if flake.tintAmount > 0 { flake.tintAmount = max(0, flake.tintAmount - dt * 1.3) }
             let previousY = flake.position.y
-            flake.position.x += (flake.velocity.x + sway) * dt
-            flake.position.y += flake.velocity.y * flutter * dt
+            flake.position += motion(of: flake) * dt
 
             if flake.blown != 0 && (flake.position.x < -30 || flake.position.x > width + 30) {
                 removeFlake(i)
@@ -2207,6 +2210,18 @@ final class SnowSimulation {
     /// How a leaf in the air tumbles about its length.
     private func tumble(_ seed: Float) -> Float {
         cos(spin(0.5 + seed * 1.1) + seed * 50)
+    }
+
+    /// How a flake actually moves: carried along, swaying from side to side, and for a leaf, swinging like a
+    /// pendulum, dropping fastest through the middle of each swing.
+    private func motion(of flake: Flake) -> SIMD2<Float> {
+        let sway = (cos(flake.phase) + 0.3 * cos(flake.phase * 2.3)) * flake.swayAmount
+        let flutter = flake.leaf > 0 ? 0.3 + 1.1 * abs(cos(flake.phase)) : 1 + 0.12 * sin(flake.phase * 1.3)
+        return SIMD2(flake.velocity.x + sway, flake.velocity.y * flutter)
+    }
+
+    private func tumbleSpeed(_ seed: Float) -> Float {
+        -sin(spin(0.5 + seed * 1.1) + seed * 50) * (0.5 + seed * 1.1)
     }
 
     private func turn(of flake: Flake) -> Float {
