@@ -32,7 +32,11 @@ A tiny app that lives in the menu bar on macOS and in the tray on Windows and Li
 - **Hides.** Screenshots and screen sharing show your desktop without it, unless you turn on Show in Screenshots.
 - **Rests.** About 6% of one processor core and 65 MB of memory, and less on battery or in Low Power Mode. It pauses while your screen sleeps, locks or is covered.
 
-Everything else lives in the menu bar: Snowfall (Off, Light, Steady, Heavy, Variable), Accumulate, Melt Snow, Snow on Windows, Clear Snow, Behind Windows, Show in Screenshots and Open at Login. On Windows, Behind Taskbar lets the snow settle at the bottom of the screen under a see-through taskbar, such as one made clear with TranslucentTB.
+## Autumn Leaves
+
+Choose Mode › Autumn Leaves and leaves fall instead of snow. They turn and swing on the way down, settle in heaps you can see are made of leaves, scatter under the cursor and come off a window you shake or drag. Melt Snow, Snow on Windows and Clear Snow become Wither Leaves, Leaves on Windows and Clear Leaves.
+
+Everything else lives in the menu bar: Intensity (Off, Light, Steady, Heavy, Variable), Mode (Snow or Autumn Leaves), Accumulate, Melt Snow, Snow on Windows, Clear Snow, Behind Windows, Show in Screenshots and Open at Login. On Windows, Behind Taskbar lets the snow settle at the bottom of the screen under a see-through taskbar, such as one made clear with TranslucentTB.
 
 ## Building
 
