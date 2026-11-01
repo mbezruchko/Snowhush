@@ -20,6 +20,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var snowOnWindowsItem: NSMenuItem!
     private var clearItem: NSMenuItem!
     private var halloweenItem: NSMenuItem!
+    private var snowItem: NSMenuItem!
+    private var autumnItem: NSMenuItem!
     private var behindWindowsItem: NSMenuItem!
     private var screenshotsItem: NSMenuItem!
     private var loginItem: NSMenuItem!
@@ -85,6 +87,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
                 snow.simulation.snowfallHeld = snowfallHeld
                 snow.simulation.snowfallReleased = { [weak self] in self?.releaseSnowfall() }
                 snow.halloween = halloween
+                snow.autumn = Preferences.autumn
                 snow.apply(power.budget)
                 screens.append(snow)
             }
@@ -123,18 +126,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
 
     private func makeStatusItem() -> NSStatusItem {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        item.button?.image = NSImage(systemSymbolName: "snowflake", accessibilityDescription: "Snowhush")
+        item.button?.image = Self.icon(halloween: false)
 
         let menu = NSMenu()
         menu.delegate = self
         menu.autoenablesItems = false
 
-        menu.addItem(.sectionHeader(title: "Snowfall"))
+        menu.addItem(.sectionHeader(title: "Intensity"))
         snowfallSlider.changed = { [unowned self] in select($0) }
         let sliderItem = NSMenuItem()
         sliderItem.view = snowfallSlider
         menu.addItem(sliderItem)
         menu.addItem(.separator())
+        let modes = NSMenu()
+        snowItem = add("Snow", #selector(chooseMode), to: modes)
+        autumnItem = add("Autumn Leaves", #selector(chooseMode), to: modes)
+        menu.addItem(withTitle: "Mode", action: nil, keyEquivalent: "").submenu = modes
         accumulateItem = add("Accumulate", #selector(toggleAccumulate), to: menu)
         meltItem = add("Melt Snow", #selector(toggleMeltSnow), to: menu)
         snowOnWindowsItem = add("Snow on Windows", #selector(toggleSnowOnWindows), to: menu)
@@ -143,8 +150,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         menu.addItem(.separator())
         behindWindowsItem = add("Behind Windows", #selector(toggleBehindWindows), to: menu)
         screenshotsItem = add("Show in Screenshots", #selector(toggleScreenshots), to: menu)
-        loginItem = add("Open at Login", #selector(toggleOpenAtLogin), to: menu)
         menu.addItem(.separator())
+        loginItem = add("Open at Login", #selector(toggleOpenAtLogin), to: menu)
         let updates = menu.addItem(withTitle: "Check for Updates…", action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)), keyEquivalent: "")
         updates.target = updater
         menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
@@ -163,10 +170,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     func menuNeedsUpdate(_ menu: NSMenu) {
         snowfallSlider.snowfall = snowfall
         accumulateItem.state = accumulates ? .on : .off
+        let autumn = Preferences.autumn
+        snowItem.state = autumn ? .off : .on
+        autumnItem.state = autumn ? .on : .off
+        meltItem.title = autumn ? "Wither Leaves" : "Melt Snow"
+        snowOnWindowsItem.title = autumn ? "Leaves on Windows" : "Snow on Windows"
+        clearItem.title = autumn ? "Clear Leaves" : "Clear Snow"
         meltItem.state = thaws ? .on : .off
         meltItem.isEnabled = accumulates
         snowOnWindowsItem.state = snowOnWindows ? .on : .off
-        snowOnWindowsItem.isEnabled = !behindWindows
         clearItem.isEnabled = screens.contains { $0.simulation.hasSnow || $0.simulation.spriteCount > 0 }
         halloweenItem.isHidden = !Halloween.isSeason()
         halloweenItem.state = Preferences.halloween ? .on : .off
@@ -209,10 +221,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     @objc private func toggleBehindWindows() {
         behindWindows.toggle()
         Preferences.behindWindows = behindWindows
-        for snow in screens {
-            snow.window.behindWindows = behindWindows
-            if behindWindows { snow.dropWindowSnow() }
-        }
+        for snow in screens { snow.window.behindWindows = behindWindows }
     }
 
     @objc private func toggleScreenshots() {
@@ -236,6 +245,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         }
     }
 
+    @objc private func chooseMode(_ sender: NSMenuItem) {
+        let autumn = sender === autumnItem
+        guard autumn != Preferences.autumn else { return }
+        Preferences.autumn = autumn
+        statusItem.button?.image = Self.icon(halloween: halloween)
+        let direction = screens.first?.simulation.breezeDirection ?? -1
+        let calm = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        for snow in screens { snow.simulation.switchMode(autumn: autumn, direction: direction, calm: calm) }
+    }
+
     @objc private func toggleHalloween() {
         Preferences.halloween.toggle()
         refreshHalloween()
@@ -245,10 +264,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         statusItem.button?.appearsDisabled = snowfall == .off
     }
 
+    private static func icon(halloween: Bool) -> NSImage? {
+        halloween ? Halloween.icon : NSImage(systemSymbolName: Preferences.autumn ? "leaf" : "snowflake", accessibilityDescription: "Snowhush")
+    }
+
     private func refreshHalloween() {
         guard Halloween.isOn != halloween else { return }
         halloween.toggle()
-        statusItem.button?.image = halloween ? Halloween.icon : NSImage(systemSymbolName: "snowflake", accessibilityDescription: "Snowhush")
+        statusItem.button?.image = Self.icon(halloween: halloween)
         for snow in screens { snow.halloween = halloween }
     }
 

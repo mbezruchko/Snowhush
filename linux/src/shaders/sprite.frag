@@ -10,6 +10,8 @@ uniform vec4 shadowTint;
 uniform vec4 rim;
 // The panel's rectangle, left, bottom, right, top: snow falling past it goes behind it.
 uniform vec4 panel;
+// One while leaves fall instead of snow.
+uniform float autumn;
 
 in vec2 vCoord;
 in float vAlpha;
@@ -23,6 +25,8 @@ in float vWarm;
 flat in vec4 vGhost;
 flat in vec4 vPose;
 flat in vec4 vMood;
+flat in vec4 vLeaf;
+flat in vec4 vSmear;
 
 out vec4 fragment;
 
@@ -32,6 +36,78 @@ float hash(vec2 p) {
     p = fract(p * vec2(123.34, 456.21));
     p += dot(p, p + 45.32);
     return fract(p.x * p.y);
+}
+
+/// Golden, amber, orange, rust or brown, a little lighter or darker.
+vec3 leafColor(float seed) {
+    float k = fract(seed * 7.13);
+    vec3 c = k < 0.3 ? vec3(0.97, 0.78, 0.22)
+        : k < 0.55 ? vec3(0.95, 0.56, 0.13)
+        : k < 0.75 ? vec3(0.86, 0.36, 0.11)
+        : k < 0.9 ? vec3(0.72, 0.2, 0.09)
+        : vec3(0.58, 0.38, 0.17);
+    return c * (0.86 + 0.24 * fract(seed * 31.7));
+}
+
+/// Fallen leaves lying every which way: the topmost at each point shows, the gaps between them in shadow.
+vec3 litter(vec2 point) {
+    vec2 cell = floor(point / 6.5);
+    float top = -1.0;
+    float rim = 0.0;
+    vec3 color = vec3(0.34, 0.19, 0.08);
+    for (int j = -1; j <= 1; j++) {
+        for (int i = -1; i <= 1; i++) {
+            for (int k = 0; k < 3; k++) {
+                vec2 c = cell + vec2(i, j) + float(k) * 0.37;
+                vec2 d = point - (cell + vec2(i, j) + vec2(hash(c + 7.1), hash(c + 3.3))) * 6.5;
+                float angle = hash(c + 11.7) * 6.2832;
+                vec2 q = vec2(cos(angle) * d.x + sin(angle) * d.y, -sin(angle) * d.x + cos(angle) * d.y);
+                float size = 3.8 + 2.4 * hash(c + 2.9);
+                float t = q.x / size;
+                float inside = (1.0 - t * t) * size * 0.45 - abs(q.y);
+                float z = hash(c + 5.9);
+                if (inside > 0.0 && z > top) {
+                    top = z;
+                    rim = inside;
+                    color = leafColor(hash(c + 0.5));
+                }
+            }
+        }
+    }
+    return color * (0.7 + 0.3 * smoothstep(0.0, 0.7, rim));
+}
+
+/// A leaf at one moment, `p` running across it from -0.5 to 0.5: its colour, premultiplied.
+vec4 leafAt(vec2 p, float seed, float turn, float flip) {
+    float across = max(abs(flip), 0.35);
+    vec2 r = vec2(cos(turn) * p.x + sin(turn) * p.y, -sin(turn) * p.x + cos(turn) * p.y) * 2.0;
+    r.y /= across;
+    float inside;
+    if (fract(seed * 13.7) < 0.4) {
+        // A maple leaf: five pointed lobes around the stem.
+        vec2 m = r - vec2(0.08, 0.0);
+        float a = atan(m.y, m.x);
+        float reach = (0.5 + 0.44 * pow(abs(cos(a * 2.5)), 1.3)) * (0.82 + 0.18 * cos(a));
+        inside = reach - length(m);
+    } else {
+        // An oval leaf, widest toward the stem and pointed at the tip.
+        float t = (r.x + 0.88) / 1.82;
+        float halfWidth = 2.1 * pow(clamp(t, 0.0, 1.0), 0.7) * pow(clamp(1.0 - t, 0.0, 1.0), 1.1) * (0.8 + 0.4 * fract(seed * 5.3));
+        inside = min(halfWidth - abs(r.y), min(t, 1.0 - t) * 0.6);
+    }
+    float stem = 0.05 - max(abs(r.y) * across, max(-0.98 - r.x, r.x + 0.55));
+    float shape = max(inside, stem);
+    float edge = max(fwidth(shape), 1e-4);
+    float a = smoothstep(-edge, edge, shape) * vAlpha;
+    vec3 color = leafColor(seed);
+    color *= 0.76 + 0.24 * smoothstep(0.0, 0.22, inside);
+    float vein = (1.0 - smoothstep(0.0, 0.045, abs(r.y) * across)) * step(-0.9, r.x) * step(r.x, 0.7);
+    color = mix(color, color * 0.6, vein * 0.55);
+    if (flip < 0.0) color = mix(color, vec3(0.86, 0.74, 0.52), 0.28) * 0.9;
+    // Night dims the leaves without draining their colour.
+    color *= (0.8 + 0.2 * abs(flip)) * mix(vec3(1.0), light.rgb, 0.4);
+    color = mix(color, candle, vWarm * 0.45);
+    return vec4(color * a, a);
 }
 
 /// Snow from the drift heaps up and takes the ghost's shape: a sheet over a tall round head that flares into swaying
@@ -109,14 +185,15 @@ vec4 ghost(vec2 p, bool hidden) {
     float below = max(under, 0.0) * size;
     vec3 drift = mix(surface, shadow, clamp((1.0 - exp(-below / 30.0)) * 0.32 + 0.064 * exp(-below / 5.0), 0.0, 1.0));
     color = mix(color, mix(drift, vec3(0.975, 0.982, 0.995), exp(-below * 0.9) * 0.6), smoothstep(1.0, 4.0, below));
+    if (autumn > 0.5) color = litter(gl_FragCoord.xy) * (1.0 - clamp(shade, 0.0, 1.0) * 0.6);
     color += (hash(floor(gl_FragCoord.xy)) - 0.5) * 0.02;
-    float glint = hash(floor(gl_FragCoord.xy * 0.5) + 31.7);
+    float glint = autumn > 0.5 ? 0.0 : hash(floor(gl_FragCoord.xy * 0.5) + 31.7);
     if (glint > 0.992) {
         float twinkle = pow(clamp(sin(time * (0.6 + glint * 1.8) + glint * 90.0), 0.0, 1.0), 28.0);
         color = mix(color, vec3(1.0), twinkle * exp(-depth / 7.0));
     }
-    color *= light.rgb;
-    color = mix(color, rim.rgb, rim.a * exp(-depth / 2.5));
+    color *= autumn > 0.5 ? mix(vec3(1.0), light.rgb, 0.4) : light.rgb;
+    color = mix(color, rim.rgb, rim.a * exp(-depth / 2.5) * (1.0 - autumn));
     color = mix(color, candle, vWarm * (0.35 + 0.65 * exp(-depth / 14.0)) * 0.55);
 
     // Two dark hollows for eyes, blinking now and then; a cross one glares under brows slanting down inward.
@@ -156,6 +233,21 @@ void main() {
     bool hidden = at.x >= panel.x && at.x < panel.z && at.y >= panel.y && at.y < panel.w;
     // Quad coordinates run down the screen; velocities run up.
     vec2 p = vec2(vCoord.x - 0.5, 0.5 - vCoord.y);
+    if (vLeaf.x != 0.0) {
+        // The leaf over the exposure, from where it was to where it is now, turning and tumbling on the way.
+        int n = int(vSmear.z);
+        vec4 sum = vec4(0.0);
+        for (int k = 0; k < n; k++) {
+            float along = (float(k) + 0.5) / float(n) - 0.5;
+            float back = along - 0.5;
+            sum += leafAt(p * vLeaf.w - vStreak * along, vLeaf.x, vLeaf.y + vSmear.x * back, clamp(vLeaf.z + vSmear.y * back, -1.0, 1.0));
+        }
+        sum /= float(n);
+        // Dropped only once its edges are measured, as the ghost is: a dropped fragment would leave its neighbours without theirs.
+        if (hidden || sum.a < 0.002) discard;
+        fragment = sum;
+        return;
+    }
     if (vGhost.x > 0.0) {
         fragment = ghost(p, hidden);
         return;

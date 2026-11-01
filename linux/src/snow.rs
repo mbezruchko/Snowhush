@@ -45,9 +45,16 @@ pub enum Command {
     Locked(bool),
     /// Blows all the snow away; when calm, for less motion, melts it where it lies instead.
     ClearSnow(bool),
+    /// Leaves fall instead of snow, or snow instead of leaves, once what lies is cleared away as `ClearSnow` clears it.
+    Mode {
+        autumn: bool,
+        calm: bool,
+    },
     Power(PowerBudget),
     /// Each display's desktop picture, with the tint it gives the shadows.
     Backdrops(Vec<Shade>),
+    /// The desktop turned light or dark.
+    Light(bool),
     Quit,
 }
 
@@ -242,11 +249,6 @@ impl App {
             }
             Command::BehindWindows(on) => {
                 self.settings.behind_windows = on;
-                if on {
-                    self.screens.iter_mut().for_each(Screen::drop_window_snow);
-                } else {
-                    self.screens.iter_mut().for_each(Screen::rewatch);
-                }
                 self.screens.iter_mut().for_each(|screen| screen.set_behind(on));
             }
             Command::ShowInScreenshots(on) => {
@@ -260,6 +262,15 @@ impl App {
             Command::ClearSnow(calm) => {
                 let direction = self.screens.first().map_or(-1.0, |screen| screen.simulation.breeze_direction());
                 self.screens.iter_mut().for_each(|screen| screen.simulation.blow_away(direction, calm));
+            }
+            Command::Mode { autumn, calm } => {
+                self.settings.autumn = autumn;
+                let direction = self.screens.first().map_or(-1.0, |screen| screen.simulation.breeze_direction());
+                let now = Instant::now();
+                self.screens.iter_mut().for_each(|screen| {
+                    screen.simulation.switch_mode(autumn, direction, calm);
+                    screen.wake(now);
+                });
             }
             Command::Locked(locked) => {
                 if locked == self.locked {
@@ -280,6 +291,11 @@ impl App {
                 self.screens.iter_mut().for_each(|screen| screen.simulation.set_density(density(budget)));
             }
             Command::Backdrops(shades) => self.screens.iter_mut().for_each(|screen| screen.update_backdrop(&shades)),
+            Command::Light(light) => {
+                if let Some(tray) = &self.tray {
+                    tray.update(|tray| tray.light = light);
+                }
+            }
         }
     }
 
@@ -326,7 +342,8 @@ impl App {
         if self.locked {
             return Ok(());
         }
-        let snow_on_windows = self.settings.snow_on_windows && !self.settings.behind_windows;
+        // Behind the windows the snow still settles on them: what lies on a window's top edge is above it, in plain view.
+        let snow_on_windows = self.settings.snow_on_windows;
         // A drag starting is drawn right away instead of at the next calm frame.
         if self.shared.take_started_moving() && snow_on_windows {
             self.screens.iter_mut().for_each(|screen| screen.wake(now));
@@ -450,6 +467,7 @@ fn new_simulation(bounds: &Area, settings: &Settings, budget: PowerBudget) -> Sn
     let mut simulation = SnowSimulation::new(bounds.w as f32, bounds.h as f32, settings.snowfall);
     simulation.thaws = settings.melt;
     simulation.accumulates = settings.accumulate;
+    simulation.set_autumn(settings.autumn);
     simulation.set_density(density(budget));
     simulation
 }

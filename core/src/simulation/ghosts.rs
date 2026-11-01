@@ -763,6 +763,8 @@ impl SnowSimulation {
                 size: random.range(2.4, 4.4),
                 lump: 0.0,
                 blown: false,
+                seed: random.range(0.001, 1.0),
+                bulk: false,
             };
             self.haunting.clinging.push((grain, 0.5 + (1.0 - out) * 1.6 + random.range(0.0, 0.4)));
         }
@@ -780,6 +782,8 @@ impl SnowSimulation {
                 size: random.range(1.4, 3.2),
                 lump: 0.0,
                 blown: false,
+                seed: random.range(0.001, 1.0),
+                bulk: false,
             };
             self.air.grains.push(grain);
         }
@@ -869,6 +873,8 @@ impl SnowSimulation {
                 size: random.range(1.2, 2.6),
                 lump: 0.0,
                 blown: false,
+                seed: random.range(0.001, 1.0),
+                bulk: false,
             };
             self.air.grains.push(grain);
         }

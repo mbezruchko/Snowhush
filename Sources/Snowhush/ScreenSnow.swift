@@ -21,6 +21,10 @@ final class ScreenSnow {
             simulation.halloween = halloween
         }
     }
+    var autumn: Bool {
+        get { simulation.autumn }
+        set { simulation.autumn = newValue }
+    }
 
     init?(screen: NSScreen, device: MTLDevice, snowOnWindows: @escaping () -> Bool) {
         guard let displayID = screen.displayID else { return nil }
@@ -55,7 +59,9 @@ final class ScreenSnow {
             return SIMD2(Float(mouse.x - window.frame.minX), Float(mouse.y - window.frame.minY))
         }
         renderer.windowSurfaces = { [unowned self] now in
-            guard snowOnWindows() && !window.behindWindows else { return nil }
+            // Behind the windows the snow still settles on them: what lies on a window's top edge is above it, in
+            // plain view.
+            guard snowOnWindows() else { return nil }
             let update = tracker.poll(now: now, eager: NSEvent.pressedMouseButtons != 0)
             simulation.windowFrames = tracker.covers.map { SIMD4(Float($0.minX), Float($0.minY), Float($0.maxX), Float($0.maxY)) }
             return update

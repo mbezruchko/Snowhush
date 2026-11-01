@@ -138,7 +138,7 @@ impl Gpu {
                 &gl,
                 SPRITE_VERTEX,
                 SPRITE_FRAGMENT,
-                &["viewSize", "scale", "time", "light", "shadowTint", "rim", "lantern", "pumpkins", "shake", "panel"],
+                &["viewSize", "scale", "time", "light", "shadowTint", "rim", "lantern", "pumpkins", "shake", "panel", "autumn"],
             )?;
             let pile = program(
                 &gl,
@@ -164,6 +164,8 @@ impl Gpu {
                     "occluders",
                     "heights",
                     "panel",
+                    "autumn",
+                    "drift",
                 ],
             )?;
             let sign = program(
@@ -184,10 +186,22 @@ impl Gpu {
             gl.bind_vertex_array(Some(sprite_array));
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(sprite_buffer));
             let stride = size_of::<Sprite>() as i32;
-            // Position, velocity, size, alpha, soft, tint amount, tint, lump, ghost, pose, mood: see `Sprite`.
-            for (location, components, offset) in
-                [(0, 2, 0), (1, 2, 8), (2, 1, 16), (3, 1, 20), (4, 1, 24), (5, 1, 28), (6, 3, 32), (7, 1, 44), (8, 4, 48), (9, 4, 64), (10, 2, 80)]
-            {
+            // Position, velocity, size, alpha, soft, tint amount, tint, lump, ghost, pose, mood, leaf, spin: see `Sprite`.
+            for (location, components, offset) in [
+                (0, 2, 0),
+                (1, 2, 8),
+                (2, 1, 16),
+                (3, 1, 20),
+                (4, 1, 24),
+                (5, 1, 28),
+                (6, 3, 32),
+                (7, 1, 44),
+                (8, 4, 48),
+                (9, 4, 64),
+                (10, 2, 80),
+                (11, 3, 88),
+                (12, 2, 100),
+            ] {
                 gl.enable_vertex_attrib_array(location);
                 gl.vertex_attrib_pointer_f32(location, components, glow::FLOAT, false, stride, offset);
                 gl.vertex_attrib_divisor(location, 1);
@@ -305,6 +319,7 @@ impl Gpu {
         let shake = [shake.x, shake.y];
         // An empty rectangle hides nothing.
         let panel = panel.unwrap_or([0.0; 4]);
+        let autumn = if simulation.autumn() { 1.0 } else { 0.0 };
         unsafe {
             gl.viewport(0, 0, surface.width, surface.height);
             gl.clear_color(0.0, 0.0, 0.0, 0.0);
@@ -365,6 +380,7 @@ impl Gpu {
                 gl.uniform_2_f32_slice(pile.location("shake"), &shake);
                 gl.uniform_1_i32(pile.location("heights"), 0);
                 gl.uniform_4_f32_slice(pile.location("panel"), &panel);
+                gl.uniform_1_f32(pile.location("autumn"), autumn);
                 for layer in &piles {
                     let count = layer.occluders.len().min(OCCLUDERS);
                     let occluders: Vec<f32> = layer.occluders[..count].iter().flatten().copied().collect();
@@ -372,6 +388,7 @@ impl Gpu {
                     gl.uniform_1_f32(pile.location("pileTop"), layer.top + 2.0);
                     gl.uniform_1_f32(pile.location("pileBottom"), layer.bottom);
                     gl.uniform_2_f32(pile.location("origin"), layer.origin.x, layer.origin.y);
+                    gl.uniform_1_f32(pile.location("drift"), layer.drift);
                     gl.uniform_1_i32(pile.location("heightOffset"), layer.offset as i32);
                     gl.uniform_1_i32(pile.location("occluderCount"), count as i32);
                     if count > 0 {
@@ -419,6 +436,7 @@ impl Gpu {
                 gl.uniform_4_f32_slice(sprite.location("pumpkins"), candles);
                 gl.uniform_2_f32_slice(sprite.location("shake"), &shake);
                 gl.uniform_4_f32_slice(sprite.location("panel"), &panel);
+                gl.uniform_1_f32(sprite.location("autumn"), autumn);
                 gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, 4, sprites as i32);
             }
             gl.bind_vertex_array(None);

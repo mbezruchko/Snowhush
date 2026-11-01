@@ -52,6 +52,12 @@ pub enum Command {
     ClearSnow(bool),
     /// Whether Halloween is wanted when it comes.
     Halloween(bool),
+    /// Leaves fall instead of snow, or snow instead of leaves, once a gust has blown what is there away; when calm, for
+    /// less motion, it melts where it lies instead.
+    SwitchMode {
+        autumn: bool,
+        calm: bool,
+    },
     Quit,
 }
 
@@ -128,9 +134,6 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                 }
                 Command::BehindWindows(on) => {
                     settings.behind_windows = on;
-                    if on {
-                        screens.iter_mut().for_each(Screen::drop_window_snow);
-                    }
                     layer = on.then(find_layer).flatten();
                     screens = sync_screens(&gpu, &settings, screens, layer, true);
                 }
@@ -171,6 +174,15 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                     settings.halloween = on;
                     chores_at = 0;
                     light_at = 0;
+                }
+                Command::SwitchMode { autumn, calm } => {
+                    settings.autumn = autumn;
+                    let direction = screens.first().map_or(-1.0, |screen| screen.simulation.breeze_direction());
+                    let now = Clock::now();
+                    screens.iter_mut().for_each(|screen| {
+                        screen.simulation.switch_mode(autumn, direction, calm);
+                        screen.wake(now);
+                    });
                 }
                 Command::Active(on) => {
                     if on && !active {
@@ -270,7 +282,8 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
             if screens.iter().any(|screen| screen.next_due <= now + clock.tolerance()) {
                 tracker.refresh(&clock, now);
             }
-            let windows = (settings.snow_on_windows && !settings.behind_windows).then_some(&tracker);
+            // Behind the windows the snow still settles on them: what lies on a window's top edge is above it, in plain view.
+            let windows = settings.snow_on_windows.then_some(&tracker);
             let time = (clock.seconds(now - started) % 1000.0) as f32;
             let mut lost = false;
             let mut released = false;
@@ -379,6 +392,7 @@ fn new_simulation(monitor: &Monitor, settings: &Settings) -> SnowSimulation {
     simulation.accumulates = settings.accumulate;
     simulation.set_snowfall_held(!settings.welcomed);
     simulation.set_halloween(settings.halloween && season());
+    simulation.set_autumn(settings.autumn);
     simulation
 }
 

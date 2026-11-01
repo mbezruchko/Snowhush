@@ -25,6 +25,9 @@ final class SnowLayer {
     /// When a switch between Spaces last shook the snow off the window's ends.
     var trimmedAt: Double = -10
     var spill: (left: Float, right: Float) = (0, 0)
+    /// How high the snow lying just past each end comes up that end: it holds up the snow on the ledge, which spills
+    /// off only above it.
+    var outside: (left: Float, right: Float) = (0, 0)
     /// Smoothed path of the supporting edge; the snow reacts to its accelerations, not to raw jittery samples.
     var track: SIMD2<Float>
     var trackVelocity = SIMD2<Float>(repeating: 0)
@@ -33,6 +36,14 @@ final class SnowLayer {
     var offsetVelocity = SIMD2<Float>(repeating: 0)
     var previousBaseY: Float
     var agitation: Float = 0
+    /// How far the snow has moved along the window since it came, as the window's left edge was dragged in or out
+    /// under it: what is drawn in it moves along too.
+    var drift: Float = 0
+    /// The window's right edge, where the snow ends short of a whole column: which edge moved tells a resize from a move.
+    var right: Float = 0
+    /// Where the snow's own positions along it start: what lies in it keeps its place there as it slides or the
+    /// window's left edge moves under it.
+    var heapX: Float { base.x + drift }
     var swingDirection = SIMD2<Float>(repeating: 0)
     var swingPeak: Float = 0
     var previousSwingPeak: Float = 0
@@ -237,6 +248,7 @@ final class SnowLayer {
         var spilledLeft: Float = 0
         var spilledRight: Float = 0
         let open = opensAtEdges
+        let outside = self.outside
 
         heights.withUnsafeMutableBufferPointer { h in
             packed.withUnsafeMutableBufferPointer { p in
@@ -267,15 +279,15 @@ final class SnowLayer {
                                 }
                             }
                             if open {
-                                if !held[0] && h[0] > limit + 0.01 {
-                                    let transfer = (h[0] - limit) * 0.5
+                                if !held[0] && h[0] - outside.left > limit + 0.01 {
+                                    let transfer = (h[0] - outside.left - limit) * 0.5
                                     h[0] -= transfer
                                     p[0] = min(p[0], h[0])
                                     spilledLeft += transfer
                                     moved = true
                                 }
-                                if !held[count - 1] && h[count - 1] > limit + 0.01 {
-                                    let transfer = (h[count - 1] - limit) * 0.5
+                                if !held[count - 1] && h[count - 1] - outside.right > limit + 0.01 {
+                                    let transfer = (h[count - 1] - outside.right - limit) * 0.5
                                     h[count - 1] -= transfer
                                     p[count - 1] = min(p[count - 1], h[count - 1])
                                     spilledRight += transfer

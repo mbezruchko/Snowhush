@@ -34,9 +34,15 @@ const SHADERS: &str = include_str!("shaders.hlsl");
 /// How far the cursor's candlelight reaches, in points.
 pub const LANTERN_REACH: f32 = 130.0;
 
-// The sprites' input layout reads a ghost's parts at these offsets.
-const _: () =
-    assert!(offset_of!(Sprite, ghost) == 48 && offset_of!(Sprite, pose) == 64 && offset_of!(Sprite, mood) == 80 && size_of::<Sprite>() == 88);
+// The sprites' input layout reads a ghost's and a leaf's parts at these offsets.
+const _: () = assert!(
+    offset_of!(Sprite, ghost) == 48
+        && offset_of!(Sprite, pose) == 64
+        && offset_of!(Sprite, mood) == 80
+        && offset_of!(Sprite, leaf) == 88
+        && offset_of!(Sprite, spin) == 100
+        && size_of::<Sprite>() == 108
+);
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -61,6 +67,9 @@ struct Uniforms {
     /// The pumpkins' candles: where each burns, how far its light reaches and how bright it is.
     pumpkins: [[f32; 4]; 3],
     occluders: [[f32; 4]; 16],
+    /// One while leaves fall instead of snow.
+    autumn: f32,
+    padding: [f32; 3],
 }
 
 /// Where a sign stands: its stick's foot, its size in points, how far it is turned and the drift's surface it comes up out of.
@@ -199,6 +208,8 @@ impl Gpu {
                 element(s!("GHOST"), DXGI_FORMAT_R32G32B32A32_FLOAT, 48),
                 element(s!("POSE"), DXGI_FORMAT_R32G32B32A32_FLOAT, 64),
                 element(s!("MOOD"), DXGI_FORMAT_R32G32_FLOAT, 80),
+                element(s!("LEAF"), DXGI_FORMAT_R32G32B32_FLOAT, 88),
+                element(s!("SPIN"), DXGI_FORMAT_R32G32_FLOAT, 100),
             ];
             let mut sprite_layout = None;
             device.CreateInputLayout(&elements, blob_bytes(&sprite_code), Some(&mut sprite_layout))?;
@@ -468,6 +479,8 @@ impl Surface {
                 shake: [shake.x, shake.y, 0.0, 0.0],
                 pumpkins: std::array::from_fn(|k| pumpkins.get(k).map_or([0.0; 4], |pumpkin| pumpkin.light(glow))),
                 occluders: [[0.0; 4]; 16],
+                autumn: if simulation.autumn() { 1.0 } else { 0.0 },
+                padding: [0.0; 3],
             };
 
             // The pumpkins go down before the snow, so the drift they sit in covers their bottoms.
@@ -495,6 +508,7 @@ impl Surface {
                     uniforms.pile_top = pile.top + 2.0;
                     uniforms.pile_bottom = pile.bottom;
                     uniforms.origin = [pile.origin.x, pile.origin.y];
+                    uniforms.shake[2] = pile.drift;
                     uniforms.height_offset = pile.offset as i32;
                     uniforms.occluder_count = pile.occluders.len().min(16) as i32;
                     uniforms.occluders[..pile.occluders.len().min(16)].copy_from_slice(&pile.occluders[..pile.occluders.len().min(16)]);

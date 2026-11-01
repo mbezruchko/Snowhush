@@ -23,6 +23,10 @@ uniform vec4 occluders[16];
 uniform sampler2D heights;
 // The panel's rectangle, left, bottom, right, top: the snow lying behind it doesn't show.
 uniform vec4 panel;
+// One while leaves fall instead of snow.
+uniform float autumn;
+// How far along its window the heap has drifted since it came, as the window's left edge was dragged under it.
+uniform float drift;
 
 in vec2 vLocal;
 
@@ -46,6 +50,51 @@ float hash(vec2 p) {
     p = fract(p * vec2(123.34, 456.21));
     p += dot(p, p + 45.32);
     return fract(p.x * p.y);
+}
+
+float noise(float x) {
+    float i = floor(x);
+    float f = fract(x);
+    return mix(hash(vec2(i, 0.0)), hash(vec2(i + 1.0, 0.0)), f * f * (3.0 - 2.0 * f));
+}
+
+/// Golden, amber, orange, rust or brown, a little lighter or darker.
+vec3 leafColor(float seed) {
+    float k = fract(seed * 7.13);
+    vec3 c = k < 0.3 ? vec3(0.97, 0.78, 0.22)
+        : k < 0.55 ? vec3(0.95, 0.56, 0.13)
+        : k < 0.75 ? vec3(0.86, 0.36, 0.11)
+        : k < 0.9 ? vec3(0.72, 0.2, 0.09)
+        : vec3(0.58, 0.38, 0.17);
+    return c * (0.86 + 0.24 * fract(seed * 31.7));
+}
+
+/// Fallen leaves lying every which way: the topmost at each point shows, the gaps between them in shadow.
+vec3 litter(vec2 point) {
+    vec2 cell = floor(point / 6.5);
+    float top = -1.0;
+    float rim = 0.0;
+    vec3 color = vec3(0.34, 0.19, 0.08);
+    for (int j = -1; j <= 1; j++) {
+        for (int i = -1; i <= 1; i++) {
+            for (int k = 0; k < 3; k++) {
+                vec2 c = cell + vec2(i, j) + float(k) * 0.37;
+                vec2 d = point - (cell + vec2(i, j) + vec2(hash(c + 7.1), hash(c + 3.3))) * 6.5;
+                float angle = hash(c + 11.7) * 6.2832;
+                vec2 q = vec2(cos(angle) * d.x + sin(angle) * d.y, -sin(angle) * d.x + cos(angle) * d.y);
+                float size = 3.8 + 2.4 * hash(c + 2.9);
+                float t = q.x / size;
+                float inside = (1.0 - t * t) * size * 0.45 - abs(q.y);
+                float z = hash(c + 5.9);
+                if (inside > 0.0 && z > top) {
+                    top = z;
+                    rim = inside;
+                    color = leafColor(hash(c + 0.5));
+                }
+            }
+        }
+    }
+    return color * (0.7 + 0.3 * smoothstep(0.0, 0.7, rim));
 }
 
 float flicker(float t, float seed) {
@@ -75,8 +124,15 @@ void main() {
     }
 
     float x = vLocal.x;
+    // Where along the heap itself: it stays put as the window's left edge is dragged under it.
+    vec2 grain = vec2(x - drift, vLocal.y);
     float level = heightAt(heightOffset, x);
     float bed = heightAt(heightOffset + columnCount, x);
+    // The leaves on top are drawn one by one, the heap under them as a mass with a ragged top; a leaf or two lie on their own.
+    if (autumn > 0.5) {
+        level -= 2.5;
+        level += (noise(grain.x * 0.4) - 0.5) * 2.4 * clamp((level - bed) / 4.0, 0.0, 1.0);
+    }
     float depth = level - vLocal.y;
     float coverage = clamp(depth * scale + 0.5, 0.0, 1.0)
         * clamp((vLocal.y - bed) * scale + 0.5, 0.0, 1.0)
@@ -86,21 +142,30 @@ void main() {
     float slope = (heightAt(heightOffset, x + 2.0) - heightAt(heightOffset, x - 2.0)) * 0.25;
     float lit = dot(normalize(vec2(-slope, 1.0)), normalize(vec2(-0.5, 1.0)));
 
-    vec3 shadow = mix(vec3(0.72, 0.78, 0.88), shadowTint.rgb, shadowTint.a);
-    vec3 surface = mix(vec3(0.925, 0.94, 0.965), min(shadowTint.rgb * 1.18, vec3(1.0)), shadowTint.a * 0.2);
-    float shade = (1.0 - exp(-depth / 30.0)) * 0.32 + (1.0 - lit) * 0.6 * exp(-depth / 5.0);
-    vec3 color = mix(surface, shadow, clamp(shade, 0.0, 1.0));
-    color = mix(color, vec3(0.975, 0.982, 0.995), exp(-depth * 0.9) * 0.6);
-    color += (hash(floor(gl_FragCoord.xy)) - 0.5) * 0.02;
+    vec3 color;
+    if (autumn > 0.5) {
+        // Deeper in the heap the leaves lie in shadow.
+        color = litter(grain);
+        color = mix(color, color * vec3(0.62, 0.54, 0.5), clamp(1.0 - exp(-depth / 18.0), 0.0, 1.0) * 0.6);
+        color *= 0.84 + 0.2 * lit;
+    } else {
+        vec3 shadow = mix(vec3(0.72, 0.78, 0.88), shadowTint.rgb, shadowTint.a);
+        vec3 surface = mix(vec3(0.925, 0.94, 0.965), min(shadowTint.rgb * 1.18, vec3(1.0)), shadowTint.a * 0.2);
+        float shade = (1.0 - exp(-depth / 30.0)) * 0.32 + (1.0 - lit) * 0.6 * exp(-depth / 5.0);
+        color = mix(surface, shadow, clamp(shade, 0.0, 1.0));
+        color = mix(color, vec3(0.975, 0.982, 0.995), exp(-depth * 0.9) * 0.6);
+        color += (hash(floor(gl_FragCoord.xy)) - 0.5) * 0.02;
 
-    float seed = hash(floor(gl_FragCoord.xy * 0.5) + 31.7);
-    if (seed > 0.992) {
-        float twinkle = pow(clamp(sin(time * (0.6 + seed * 1.8) + seed * 90.0), 0.0, 1.0), 28.0);
-        color = mix(color, vec3(1.0), twinkle * exp(-depth / 7.0));
+        float seed = hash(floor(gl_FragCoord.xy * 0.5) + 31.7);
+        if (seed > 0.992) {
+            float twinkle = pow(clamp(sin(time * (0.6 + seed * 1.8) + seed * 90.0), 0.0, 1.0), 28.0);
+            color = mix(color, vec3(1.0), twinkle * exp(-depth / 7.0));
+        }
     }
 
-    color *= light.rgb;
-    color = mix(color, rim.rgb, rim.a * exp(-depth / 2.5));
+    // Night dims fallen leaves without draining their colour.
+    color *= autumn > 0.5 ? mix(vec3(1.0), light.rgb, 0.4) : light.rgb;
+    color = mix(color, rim.rgb, rim.a * exp(-depth / 2.5) * (1.0 - autumn));
     color = mix(color, candle, candlelight(world) * (0.35 + 0.65 * exp(-depth / 14.0)) * 0.55);
     fragment = vec4(color * coverage, coverage);
 }

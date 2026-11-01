@@ -12,7 +12,7 @@ struct Uniforms {
     int occluderCount;
     float2 origin;
     float pileBottom;
-    float padding;
+    float autumn;
     float4 light;
     float4 shadowTint;
     float4 rim;
@@ -42,6 +42,11 @@ struct Sprite {
     float wave;
     float dab;
     float anger;
+    float leaf;
+    float turn;
+    float flip;
+    float turnSpeed;
+    float flipSpeed;
 };
 
 struct SpriteOut {
@@ -67,6 +72,13 @@ struct SpriteOut {
     float wave;
     float dab;
     float anger;
+    float leaf;
+    float turn;
+    float flip;
+    float reach;
+    float turnSmear;
+    float flipSmear;
+    float samples;
 };
 
 constant float3 candle = float3(1.0, 0.62, 0.26);
@@ -75,6 +87,84 @@ static float hash(float2 p) {
     p = fract(p * float2(123.34, 456.21));
     p += dot(p, p + 45.32);
     return fract(p.x * p.y);
+}
+
+static float noise(float x) {
+    float i = floor(x);
+    float f = fract(x);
+    return mix(hash(float2(i, 0.0)), hash(float2(i + 1.0, 0.0)), f * f * (3.0 - 2.0 * f));
+}
+
+/// Golden, amber, orange, rust or brown, a little lighter or darker.
+static float3 leafColor(float seed) {
+    float k = fract(seed * 7.13);
+    float3 c = k < 0.3 ? float3(0.97, 0.78, 0.22)
+        : k < 0.55 ? float3(0.95, 0.56, 0.13)
+        : k < 0.75 ? float3(0.86, 0.36, 0.11)
+        : k < 0.9 ? float3(0.72, 0.2, 0.09)
+        : float3(0.58, 0.38, 0.17);
+    return c * (0.86 + 0.24 * fract(seed * 31.7));
+}
+
+/// Fallen leaves lying every which way: the topmost at each point shows, the gaps between them in shadow.
+static float3 litter(float2 point) {
+    float2 cell = floor(point / 6.5);
+    float top = -1.0;
+    float rim = 0.0;
+    float3 color = float3(0.34, 0.19, 0.08);
+    for (int j = -1; j <= 1; j++) {
+        for (int i = -1; i <= 1; i++) {
+            for (int k = 0; k < 3; k++) {
+                float2 c = cell + float2(i, j) + float(k) * 0.37;
+                float2 d = point - (cell + float2(i, j) + float2(hash(c + 7.1), hash(c + 3.3))) * 6.5;
+                float angle = hash(c + 11.7) * 6.2832;
+                float2 q = float2(cos(angle) * d.x + sin(angle) * d.y, -sin(angle) * d.x + cos(angle) * d.y);
+                float size = 3.8 + 2.4 * hash(c + 2.9);
+                float t = q.x / size;
+                float inside = (1.0 - t * t) * size * 0.45 - abs(q.y);
+                float z = hash(c + 5.9);
+                if (inside > 0.0 && z > top) {
+                    top = z;
+                    rim = inside;
+                    color = leafColor(hash(c + 0.5));
+                }
+            }
+        }
+    }
+    return color * (0.7 + 0.3 * smoothstep(0.0, 0.7, rim));
+}
+
+/// A leaf at one moment, `p` running across it from -0.5 to 0.5: its colour, premultiplied.
+static float4 leafAt(float2 p, float seed, float turn, float flip, float alpha, float3 light, float warm) {
+    float across = max(abs(flip), 0.35);
+    float2 r = float2(cos(turn) * p.x + sin(turn) * p.y, -sin(turn) * p.x + cos(turn) * p.y) * 2.0;
+    r.y /= across;
+    float inside;
+    if (fract(seed * 13.7) < 0.4) {
+        // A maple leaf: five pointed lobes around the stem.
+        float2 m = r - float2(0.08, 0.0);
+        float a = atan2(m.y, m.x);
+        float reach = (0.5 + 0.44 * pow(abs(cos(a * 2.5)), 1.3)) * (0.82 + 0.18 * cos(a));
+        inside = reach - length(m);
+    } else {
+        // An oval leaf, widest toward the stem and pointed at the tip.
+        float t = (r.x + 0.88) / 1.82;
+        float halfWidth = 2.1 * pow(saturate(t), 0.7) * pow(saturate(1.0 - t), 1.1) * (0.8 + 0.4 * fract(seed * 5.3));
+        inside = min(halfWidth - abs(r.y), min(t, 1.0 - t) * 0.6);
+    }
+    float stem = 0.05 - max(abs(r.y) * across, max(-0.98 - r.x, r.x + 0.55));
+    float shape = max(inside, stem);
+    float edge = max(fwidth(shape), 1e-4);
+    float a = smoothstep(-edge, edge, shape) * alpha;
+    float3 color = leafColor(seed);
+    color *= 0.76 + 0.24 * smoothstep(0.0, 0.22, inside);
+    float vein = (1.0 - smoothstep(0.0, 0.045, abs(r.y) * across)) * step(-0.9, r.x) * step(r.x, 0.7);
+    color = mix(color, color * 0.6, vein * 0.55);
+    if (flip < 0.0) color = mix(color, float3(0.86, 0.74, 0.52), 0.28) * 0.9;
+    // Night dims the leaves without draining their colour.
+    color *= (0.8 + 0.2 * abs(flip)) * mix(float3(1.0), light, 0.4);
+    color = mix(color, candle, warm * 0.45);
+    return float4(color * a, a);
 }
 
 static float flicker(float time, float seed) {
@@ -98,6 +188,32 @@ vertex SpriteOut spriteVertex(uint vid [[vertex_id]],
                               const device Sprite *sprites [[buffer(0)]],
                               constant Uniforms &u [[buffer(1)]]) {
     Sprite s = sprites[vid];
+    if (s.leaf != 0.0) {
+        SpriteOut out;
+        // About a 1/40 s exposure: at 30 frames a second a falling leaf smears most of the way to where the next
+        // frame shows it, so it glides instead of hopping. The sprite sits midway along the smear.
+        float exposure = 0.024;
+        float pixels = max(s.size * u.scale, 2.0);
+        float2 travel = s.velocity * exposure;
+        float extent = pixels + length(travel) * u.scale;
+        out.position = float4((s.position - travel * 0.5 + u.shake.xy) / u.viewSize * 2.0 - 1.0, 0.0, 1.0);
+        out.pointSize = extent;
+        out.reach = extent / pixels;
+        out.streak = travel / max(s.size, 0.001);
+        out.turnSmear = s.turnSpeed * exposure;
+        out.flipSmear = s.flipSpeed * exposure;
+        // Enough moments along the smear that no copy of the leaf stands apart from the next.
+        float motion = length(travel) * u.scale + (abs(out.turnSmear) + abs(out.flipSmear)) * pixels * 0.5;
+        out.samples = clamp(ceil(motion / 1.2), 1.0, 8.0);
+        out.alpha = s.alpha;
+        out.light = u.light.rgb;
+        out.warm = candlelight(u, s.position);
+        out.leaf = s.leaf;
+        out.turn = s.turn;
+        out.flip = s.flip;
+        out.ghost = 0.0;
+        return out;
+    }
     float pixels = s.size * u.scale;
     // About a 1/55 s exposure, capped so even the fastest grain stays a short smear and never reads as rain.
     float2 travel = s.velocity * 0.018;
@@ -133,12 +249,27 @@ vertex SpriteOut spriteVertex(uint vid [[vertex_id]],
         out.dab = s.dab;
         out.anger = s.anger;
     }
+    out.leaf = 0.0;
     return out;
 }
 
 fragment float4 spriteFragment(SpriteOut in [[stage_in]], float2 coord [[point_coord]], constant Uniforms &u [[buffer(1)]]) {
     // Point coordinates run down the screen; velocities run up.
     float2 p = float2(coord.x - 0.5, 0.5 - coord.y);
+    if (in.leaf != 0.0) {
+        // The leaf over the exposure, from where it was to where it is now, turning and tumbling on the way.
+        int n = int(in.samples);
+        float4 sum = float4(0.0);
+        for (int k = 0; k < n; k++) {
+            float along = (float(k) + 0.5) / float(n) - 0.5;
+            float back = along - 0.5;
+            sum += leafAt(p * in.reach - in.streak * along, in.leaf, in.turn + in.turnSmear * back,
+                          clamp(in.flip + in.flipSmear * back, -1.0, 1.0), in.alpha, in.light, in.warm);
+        }
+        sum /= float(n);
+        if (sum.a < 0.002) discard_fragment();
+        return sum;
+    }
     if (in.ghost > 0.0) {
         // Snow from the drift heaps up and takes the ghost's shape: a sheet over a tall round head that flares
         // into swaying folds and runs into the drift through a skirt of snow.
@@ -208,14 +339,18 @@ fragment float4 spriteFragment(SpriteOut in [[stage_in]], float2 coord [[point_c
         float below = max(under, 0.0) * in.size;
         float3 drift = mix(surface, shadow, saturate((1.0 - exp(-below / 30.0)) * 0.32 + 0.064 * exp(-below / 5.0)));
         color = mix(color, mix(drift, float3(0.975, 0.982, 0.995), exp(-below * 0.9) * 0.6), smoothstep(1.0, 4.0, below));
+        if (u.autumn > 0.5) {
+            float2 world = float2(in.position.x / u.scale, u.viewSize.y - in.position.y / u.scale);
+            color = litter(world) * (1.0 - saturate(shade) * 0.6);
+        }
         color += (hash(floor(in.position.xy)) - 0.5) * 0.02;
-        float glint = hash(floor(in.position.xy * 0.5) + 31.7);
+        float glint = u.autumn > 0.5 ? 0.0 : hash(floor(in.position.xy * 0.5) + 31.7);
         if (glint > 0.992) {
             float twinkle = pow(saturate(sin(u.time * (0.6 + glint * 1.8) + glint * 90.0)), 28.0);
             color = mix(color, float3(1.0), twinkle * exp(-depth / 7.0));
         }
-        color *= u.light.rgb;
-        color = mix(color, u.rim.rgb, u.rim.a * exp(-depth / 2.5));
+        color *= u.autumn > 0.5 ? mix(float3(1.0), u.light.rgb, 0.4) : u.light.rgb;
+        color = mix(color, u.rim.rgb, u.rim.a * exp(-depth / 2.5) * (1.0 - u.autumn));
         color = mix(color, candle, in.warm * (0.35 + 0.65 * exp(-depth / 14.0)) * 0.55);
 
         // Two dark hollows for eyes, blinking now and then; a cross one glares under brows slanting down inward.
@@ -304,8 +439,15 @@ fragment float4 pileFragment(PileOut in [[stage_in]],
     }
 
     float x = in.point.x;
+    // Where along the heap itself: it stays put as the window's left edge is dragged under it.
+    float2 grain = float2(x - u.shake.z, in.point.y);
     float level = heightAt(heights, u, x);
     float bed = heightAt(heights + u.columnCount, u, x);
+    // The leaves on top are drawn one by one, the heap under them as a mass with a ragged top; a leaf or two lie on their own.
+    if (u.autumn > 0.5) {
+        level -= 2.5;
+        level += (noise(grain.x * 0.4) - 0.5) * 2.4 * saturate((level - bed) / 4.0);
+    }
     float depth = level - in.point.y;
     float coverage = saturate(depth * u.scale + 0.5)
         * saturate((in.point.y - bed) * u.scale + 0.5)
@@ -315,21 +457,30 @@ fragment float4 pileFragment(PileOut in [[stage_in]],
     float slope = (heightAt(heights, u, x + 2.0) - heightAt(heights, u, x - 2.0)) * 0.25;
     float light = dot(normalize(float2(-slope, 1.0)), normalize(float2(-0.5, 1.0)));
 
-    float3 shadow = mix(float3(0.72, 0.78, 0.88), u.shadowTint.rgb, u.shadowTint.a);
-    float3 surface = mix(float3(0.925, 0.94, 0.965), min(u.shadowTint.rgb * 1.18, float3(1.0)), u.shadowTint.a * 0.2);
-    float shade = (1.0 - exp(-depth / 30.0)) * 0.32 + (1.0 - light) * 0.6 * exp(-depth / 5.0);
-    float3 color = mix(surface, shadow, saturate(shade));
-    color = mix(color, float3(0.975, 0.982, 0.995), exp(-depth * 0.9) * 0.6);
-    color += (hash(floor(in.position.xy)) - 0.5) * 0.02;
+    float3 color;
+    if (u.autumn > 0.5) {
+        // Deeper in the heap the leaves lie in shadow.
+        color = litter(grain);
+        color = mix(color, color * float3(0.62, 0.54, 0.5), saturate(1.0 - exp(-depth / 18.0)) * 0.6);
+        color *= 0.84 + 0.2 * light;
+    } else {
+        float3 shadow = mix(float3(0.72, 0.78, 0.88), u.shadowTint.rgb, u.shadowTint.a);
+        float3 surface = mix(float3(0.925, 0.94, 0.965), min(u.shadowTint.rgb * 1.18, float3(1.0)), u.shadowTint.a * 0.2);
+        float shade = (1.0 - exp(-depth / 30.0)) * 0.32 + (1.0 - light) * 0.6 * exp(-depth / 5.0);
+        color = mix(surface, shadow, saturate(shade));
+        color = mix(color, float3(0.975, 0.982, 0.995), exp(-depth * 0.9) * 0.6);
+        color += (hash(floor(in.position.xy)) - 0.5) * 0.02;
 
-    float seed = hash(floor(in.position.xy * 0.5) + 31.7);
-    if (seed > 0.992) {
-        float twinkle = pow(saturate(sin(u.time * (0.6 + seed * 1.8) + seed * 90.0)), 28.0);
-        color = mix(color, float3(1.0), twinkle * exp(-depth / 7.0));
+        float seed = hash(floor(in.position.xy * 0.5) + 31.7);
+        if (seed > 0.992) {
+            float twinkle = pow(saturate(sin(u.time * (0.6 + seed * 1.8) + seed * 90.0)), 28.0);
+            color = mix(color, float3(1.0), twinkle * exp(-depth / 7.0));
+        }
     }
 
-    color *= u.light.rgb;
-    color = mix(color, u.rim.rgb, u.rim.a * exp(-depth / 2.5));
+    // Night dims fallen leaves without draining their colour.
+    color *= u.autumn > 0.5 ? mix(float3(1.0), u.light.rgb, 0.4) : u.light.rgb;
+    color = mix(color, u.rim.rgb, u.rim.a * exp(-depth / 2.5) * (1.0 - u.autumn));
     color = mix(color, candle, candlelight(u, world) * (0.35 + 0.65 * exp(-depth / 14.0)) * 0.55);
     return float4(color * coverage, coverage);
 }

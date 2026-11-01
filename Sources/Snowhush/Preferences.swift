@@ -34,6 +34,7 @@ enum Preferences {
     private static let welcomedKey = "welcomed"
     private static let showInScreenshotsKey = "showInScreenshots"
     private static let halloweenKey = "halloween"
+    private static let autumnKey = "autumn"
 
     static func registerDefaults() {
         let calm = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
@@ -45,6 +46,7 @@ enum Preferences {
             snowOnWindowsKey: true,
             showInScreenshotsKey: false,
             halloweenKey: true,
+            autumnKey: false,
         ])
     }
 
@@ -86,5 +88,10 @@ enum Preferences {
     static var halloween: Bool {
         get { defaults.bool(forKey: halloweenKey) }
         set { defaults.set(newValue, forKey: halloweenKey) }
+    }
+
+    static var autumn: Bool {
+        get { defaults.bool(forKey: autumnKey) }
+        set { defaults.set(newValue, forKey: autumnKey) }
     }
 }

@@ -11,13 +11,14 @@ struct Uniforms {
     var occluderCount: Int32 = 0
     var origin: SIMD2<Float> = .zero
     var pileBottom: Float = 0
-    var padding: Float = 0
+    /// One while leaves fall instead of snow.
+    var autumn: Float = 0
     var light = SIMD4<Float>(1, 1, 1, 1)
     var shadowTint = SIMD4<Float>(0, 0, 0, 0)
     var rim = SIMD4<Float>(0, 0, 0, 0)
     /// The cursor's glow: where it is, how far it reaches and how bright it is.
     var lantern = SIMD4<Float>(0, 0, 0, 0)
-    /// How far everything is jolted: x and y.
+    /// How far everything is jolted: x and y. For a pile, z is how far along its window its snow has drifted.
     var shake = SIMD4<Float>(0, 0, 0, 0)
     /// The pumpkins' candles: where each burns, how far its light reaches and how bright it is.
     var pumpkins = (SIMD4<Float>(0, 0, 0, 0), SIMD4<Float>(0, 0, 0, 0), SIMD4<Float>(0, 0, 0, 0))
@@ -248,6 +249,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             lantern: SIMD4(lowHalf: lanternAt, highHalf: SIMD2(Self.lanternReach, ambient.lantern)),
             shake: SIMD4(lowHalf: simulation.shake, highHalf: .zero)
         )
+        uniforms.autumn = simulation.autumn ? 1 : 0
         let pumpkins = simulation.pumpkins
         let candles = pumpkins.prefix(3).map { pumpkin in
             let height = pumpkin.width * HalloweenPumpkin.aspect
@@ -304,6 +306,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             uniforms.pileTop = pile.top + 2
             uniforms.pileBottom = pile.bottom
             uniforms.origin = pile.origin
+            uniforms.shake.z = pile.drift
             uniforms.occluderCount = Int32(pile.occluders.count)
             var occluders = pile.occluders.isEmpty ? [SIMD4<Float>(repeating: 0)] : pile.occluders
             encoder.setVertexBytes(&uniforms, length: uniformsLength, index: 0)

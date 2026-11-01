@@ -26,6 +26,8 @@ pub struct Settings {
     pub welcomed: bool,
     /// Whether the snow turns spooky on Halloween.
     pub halloween: bool,
+    /// Whether leaves fall instead of snow.
+    pub autumn: bool,
 }
 
 impl Settings {
@@ -42,6 +44,7 @@ impl Settings {
             show_in_screenshots: read(w!("showInScreenshots")).is_some_and(|v| v != 0),
             welcomed: read(w!("welcomed")).is_some_and(|v| v != 0),
             halloween: read(w!("halloween")).is_none_or(|v| v != 0),
+            autumn: read(w!("autumn")).is_some_and(|v| v != 0),
         }
     }
 
@@ -56,6 +59,7 @@ impl Settings {
         write(w!("showInScreenshots"), self.show_in_screenshots as u32);
         write(w!("welcomed"), self.welcomed as u32);
         write(w!("halloween"), self.halloween as u32);
+        write(w!("autumn"), self.autumn as u32);
     }
 }
 

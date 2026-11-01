@@ -20,6 +20,9 @@ pub struct SnowLayer {
     pub returned_at: f64,
     pub spill_left: f32,
     pub spill_right: f32,
+    /// How high the snow lying just past each end, left then right, comes up that end: it holds up the snow on the
+    /// ledge, which spills off only above it.
+    pub outside: [f32; 2],
     /// Smoothed path of the supporting edge; the snow reacts to its accelerations, not to raw jittery samples.
     pub track: V2,
     pub track_velocity: V2,
@@ -28,6 +31,16 @@ pub struct SnowLayer {
     pub offset_velocity: V2,
     pub previous_base_y: f32,
     pub agitation: f32,
+    /// How far the snow has moved along the window since it came, as the window's left edge was dragged in or out
+    /// under it: what is drawn in it moves along too.
+    pub drift: f32,
+    /// The window's right edge, where the snow ends short of a whole column: which edge moved tells a resize from a
+    /// move.
+    pub right: f32,
+    /// How many leaves lie on this heap, as of the last step.
+    pub lying_leaves: f32,
+    /// How fast the heap was going as it came off its window at this step, for the leaves lying on it to go along.
+    pub thrown: Option<V2>,
     pub swing_direction: V2,
     pub swing_peak: f32,
     pub previous_swing_peak: f32,
@@ -58,12 +71,17 @@ impl SnowLayer {
             returned_at: -10.0,
             spill_left: 0.0,
             spill_right: 0.0,
+            outside: [0.0; 2],
             track: origin,
             track_velocity: V2::ZERO,
             offset: V2::ZERO,
             offset_velocity: V2::ZERO,
             previous_base_y: origin.y,
             agitation: 0.0,
+            drift: 0.0,
+            right: 0.0,
+            lying_leaves: 0.0,
+            thrown: None,
             swing_direction: V2::ZERO,
             swing_peak: 0.0,
             previous_swing_peak: 0.0,
@@ -89,6 +107,12 @@ impl SnowLayer {
 
     pub fn base(&self) -> V2 {
         self.origin + self.offset
+    }
+
+    /// Where the snow's own positions along it start: what lies in it keeps its place there as it slides or the
+    /// window's left edge moves under it.
+    pub fn heap_x(&self) -> f32 {
+        self.base().x + self.drift
     }
 
     pub fn index(&self, x: f32) -> Option<usize> {
@@ -279,6 +303,7 @@ impl SnowLayer {
         let mut spilled_left = 0.0;
         let mut spilled_right = 0.0;
         let open = self.opens_at_edges;
+        let [outside_left, outside_right] = self.outside;
         let h = &mut self.heights;
         let p = &mut self.packed;
         let b = &self.bed;
@@ -307,15 +332,15 @@ impl SnowLayer {
                 }
             }
             if open {
-                if !held[0] && h[0] > limit + 0.01 {
-                    let transfer = (h[0] - limit) * 0.5;
+                if !held[0] && h[0] - outside_left > limit + 0.01 {
+                    let transfer = (h[0] - outside_left - limit) * 0.5;
                     h[0] -= transfer;
                     p[0] = p[0].min(h[0]);
                     spilled_left += transfer;
                     moved = true;
                 }
-                if !held[count - 1] && h[count - 1] > limit + 0.01 {
-                    let transfer = (h[count - 1] - limit) * 0.5;
+                if !held[count - 1] && h[count - 1] - outside_right > limit + 0.01 {
+                    let transfer = (h[count - 1] - outside_right - limit) * 0.5;
                     h[count - 1] -= transfer;
                     p[count - 1] = p[count - 1].min(h[count - 1]);
                     spilled_right += transfer;

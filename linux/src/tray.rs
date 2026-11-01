@@ -10,22 +10,42 @@ use crate::log;
 use crate::prefs::{self, Settings};
 use crate::snow::Command;
 
-const ICON: &[u8] = include_bytes!("../../windows/assets/icon-256.png");
-/// A jack-o'-lantern in place of the snowflake while Halloween is on.
-const PUMPKIN: &[u8] = include_bytes!("../../windows/assets/pumpkin-256.png");
+/// A glyph drawn like the Mac's menu bar ones, at the sizes a tray picks from.
+macro_rules! glyph {
+    ($name:literal) => {
+        [
+            include_bytes!(concat!("../../windows/assets/tray/", $name, "-16.png")).as_slice(),
+            include_bytes!(concat!("../../windows/assets/tray/", $name, "-20.png")).as_slice(),
+            include_bytes!(concat!("../../windows/assets/tray/", $name, "-24.png")).as_slice(),
+            include_bytes!(concat!("../../windows/assets/tray/", $name, "-32.png")).as_slice(),
+            include_bytes!(concat!("../../windows/assets/tray/", $name, "-40.png")).as_slice(),
+            include_bytes!(concat!("../../windows/assets/tray/", $name, "-48.png")).as_slice(),
+            include_bytes!(concat!("../../windows/assets/tray/", $name, "-64.png")).as_slice(),
+        ]
+    };
+}
+
+/// The snowflake, the leaf while leaves fall and the jack-o'-lantern while Halloween is on, each white then black.
+const GLYPHS: [[[&[u8]; 7]; 2]; 3] = [
+    [glyph!("snowflake-white"), glyph!("snowflake-black")],
+    [glyph!("leaf-white"), glyph!("leaf-black")],
+    [glyph!("pumpkin-white"), glyph!("pumpkin-black")],
+];
 
 pub struct Tray {
     settings: Settings,
     commands: Sender<Command>,
-    icon: Vec<ksni::Icon>,
-    pumpkin: Vec<ksni::Icon>,
+    glyphs: [[Vec<ksni::Icon>; 2]; 3],
     /// Whether it is Halloween, wanted or not: the snow loop keeps it up to date.
     pub season: bool,
+    /// Whether the desktop is light, so the panel wants a black glyph: the snow loop keeps it up to date.
+    pub light: bool,
 }
 
 impl Tray {
     pub fn new(settings: Settings, commands: Sender<Command>) -> Tray {
-        Tray { settings, commands, icon: icons(ICON), pumpkin: icons(PUMPKIN), season: false }
+        let glyphs = GLYPHS.map(|colors| colors.map(|pictures| icons(&pictures)));
+        Tray { settings, commands, glyphs, season: false, light: false }
     }
 
     fn halloween(&self) -> bool {
@@ -54,13 +74,15 @@ impl ksni::Tray for Tray {
         ksni::Category::ApplicationStatus
     }
 
-    /// Empty for the pumpkin, which has only a picture: a tray shows a named icon instead of the picture when it finds one.
-    fn icon_name(&self) -> String {
-        if self.halloween() { String::new() } else { "snowhush".into() }
-    }
-
     fn icon_pixmap(&self) -> Vec<ksni::Icon> {
-        if self.halloween() { self.pumpkin.clone() } else { self.icon.clone() }
+        let glyph = if self.halloween() {
+            2
+        } else if self.settings.autumn {
+            1
+        } else {
+            0
+        };
+        self.glyphs[glyph][usize::from(self.light)].clone()
     }
 
     fn tool_tip(&self) -> ksni::ToolTip {
@@ -70,9 +92,10 @@ impl ksni::Tray for Tray {
     fn menu(&self) -> Vec<MenuItem<Self>> {
         let settings = self.settings;
         let current = Snowfall::ALL.iter().position(|&s| s == settings.snowfall).unwrap_or(0);
+        let autumn = settings.autumn;
         vec![
             SubMenu {
-                label: "Snowfall".into(),
+                label: "Intensity".into(),
                 submenu: vec![
                     RadioGroup {
                         selected: current,
@@ -91,6 +114,28 @@ impl ksni::Tray for Tray {
             }
             .into(),
             MenuItem::Separator,
+            SubMenu {
+                label: "Mode".into(),
+                submenu: vec![
+                    RadioGroup {
+                        selected: autumn as usize,
+                        select: Box::new(|tray: &mut Tray, index| {
+                            let autumn = index == 1;
+                            if autumn == tray.settings.autumn {
+                                return;
+                            }
+                            tray.change(|settings| {
+                                settings.autumn = autumn;
+                                Command::Mode { autumn, calm: !prefs::animations_enabled() }
+                            });
+                        }),
+                        options: ["Snow", "Autumn Leaves"].iter().map(|&label| RadioItem { label: label.into(), ..Default::default() }).collect(),
+                    }
+                    .into(),
+                ],
+                ..Default::default()
+            }
+            .into(),
             CheckmarkItem {
                 label: "Accumulate".into(),
                 checked: settings.accumulate,
@@ -104,7 +149,7 @@ impl ksni::Tray for Tray {
             }
             .into(),
             CheckmarkItem {
-                label: "Melt Snow".into(),
+                label: if autumn { "Wither Leaves" } else { "Melt Snow" }.into(),
                 checked: settings.melt,
                 enabled: settings.accumulate,
                 activate: Box::new(|tray: &mut Tray| {
@@ -117,9 +162,8 @@ impl ksni::Tray for Tray {
             }
             .into(),
             CheckmarkItem {
-                label: "Snow on Windows".into(),
+                label: if autumn { "Leaves on Windows" } else { "Snow on Windows" }.into(),
                 checked: settings.snow_on_windows,
-                enabled: !settings.behind_windows,
                 activate: Box::new(|tray: &mut Tray| {
                     tray.change(|settings| {
                         settings.snow_on_windows = !settings.snow_on_windows;
@@ -130,7 +174,7 @@ impl ksni::Tray for Tray {
             }
             .into(),
             StandardItem {
-                label: "Clear Snow".into(),
+                label: if autumn { "Clear Leaves" } else { "Clear Snow" }.into(),
                 activate: Box::new(|tray: &mut Tray| {
                     let _ = tray.commands.send(Command::ClearSnow(!prefs::animations_enabled()));
                 }),
@@ -175,6 +219,7 @@ impl ksni::Tray for Tray {
                 ..Default::default()
             }
             .into(),
+            MenuItem::Separator,
             CheckmarkItem {
                 label: "Open at Login".into(),
                 checked: prefs::opens_at_login(),
@@ -186,7 +231,6 @@ impl ksni::Tray for Tray {
                 ..Default::default()
             }
             .into(),
-            MenuItem::Separator,
             StandardItem {
                 label: "Quit".into(),
                 icon_name: "application-exit".into(),
@@ -201,14 +245,13 @@ impl ksni::Tray for Tray {
 }
 
 /// An icon in the sizes a tray picks from, as ARGB in network byte order.
-fn icons(png: &[u8]) -> Vec<ksni::Icon> {
-    let Ok(picture) = image::load_from_memory(png) else { return Vec::new() };
-    [22u32, 32, 48, 64]
+fn icons(pictures: &[&[u8]]) -> Vec<ksni::Icon> {
+    pictures
         .iter()
-        .map(|&size| {
-            let scaled = picture.resize_exact(size, size, image::imageops::FilterType::Lanczos3).to_rgba8();
-            let data = scaled.pixels().flat_map(|pixel| [pixel[3], pixel[0], pixel[1], pixel[2]]).collect();
-            ksni::Icon { width: size as i32, height: size as i32, data }
+        .filter_map(|png| {
+            let picture = image::load_from_memory(png).ok()?.to_rgba8();
+            let data = picture.pixels().flat_map(|pixel| [pixel[3], pixel[0], pixel[1], pixel[2]]).collect();
+            Some(ksni::Icon { width: picture.width() as i32, height: picture.height() as i32, data })
         })
         .collect()
 }
