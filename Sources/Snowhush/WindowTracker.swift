@@ -51,7 +51,8 @@ final class WindowTracker {
     private let ownPID = ProcessInfo.processInfo.processIdentifier
     private let maxLayer = Int(CGWindowLevelForKey(.screenSaverWindow))
     private let dockLevel = Int(CGWindowLevelForKey(.dockWindow))
-    private let ignoredOwners: Set<String> = ["Window Server"]
+    /// CursorUIViewService draws the input source badge next to the text caret.
+    private let ignoredOwners: Set<String> = ["Window Server", "CursorUIViewService"]
     /// The Dock's windows (the Dock itself, the ⌘Tab switcher) hide snow behind them but don't collect any.
     private let coverOnlyOwners: Set<String> = ["Dock"]
     private var previous: [WindowSurface] = []
@@ -72,7 +73,9 @@ final class WindowTracker {
     private var slidingUntil: CFTimeInterval = -10
     /// The largest window at the last poll, checked every frame until the next: a Space that starts sliding carries
     /// it off well before the next poll would see. A floating panel might stay on every Space; a window that big won't.
-    private var watched: WindowSurface?
+    private var watched: (id: CGWindowID, frame: CGRect)?
+    /// Every app window on the screen at the last poll, by id, those that carry no snow too: a Space slides them all.
+    private var windowFrames: [CGWindowID: CGRect] = [:]
     /// A Space sliding on by itself after a swipe, for the snow to keep up with what the window list reports late.
     private var glide = Glide()
     /// How far ahead of the window list the last update drew the sliding Space's snow.
@@ -100,9 +103,10 @@ final class WindowTracker {
         // A sliding Space is followed every frame, its snow riding on the windows with no smoothing.
         guard minimizing || now < slidingUntil || interval >= (closely ? 1.0 / 62 : 0.2) || watchedMoved() else { return nil }
         lastQuery = now
+        let before = windowFrames
         let surfaces = query(now: now)
-        watched = surfaces.filter { !$0.isDock }.max { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }
-        let shift = slideShift(from: previous, to: surfaces)
+        watched = windowFrames.max { $0.value.width * $0.value.height < $1.value.width * $1.value.height }.map { ($0.key, $0.value) }
+        let shift = slideShift(from: before, to: windowFrames)
         if shift != nil {
             slidingUntil = now + 0.3
             staying = Set(surfaces.filter { surface in previous.contains { $0.id == surface.id && $0.frame == surface.frame } }.map(\.id))
@@ -118,7 +122,7 @@ final class WindowTracker {
             ahead = 0
         }
         // Snow drawn ahead of a Space that has just stopped still has to settle back onto its windows.
-        guard surfaces != previous || ahead != lead else { return nil }
+        guard surfaces != previous || ahead != lead || shift != nil else { return nil }
         lead = ahead
         let vanished = Set(previous.map(\.id)).subtracting(surfaces.map(\.id))
         previous = surfaces
@@ -144,7 +148,7 @@ final class WindowTracker {
 
     /// Looks at the watched window again a moment after the poll: a Space sliding on by itself moves its windows on
     /// within a few milliseconds, while one carried by fingers keeps them till the next frame.
-    private func probe(_ watched: WindowSurface) {
+    private func probe(_ watched: (id: CGWindowID, frame: CGRect)) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.006) { [weak self] in
             guard let self, let bounds = Self.listedBounds(of: watched.id) else { return }
             glide.noteMovedSoon(abs(bounds.minX - screen.minX - watched.frame.minX) > 0.5)
@@ -153,14 +157,13 @@ final class WindowTracker {
 
     /// How far every window that moved slid sideways, by the same amount and unchanged otherwise, with no button held:
     /// nobody drags several windows at once, but a Space switch carries them all. Nil when they didn't.
-    private func slideShift(from old: [WindowSurface], to new: [WindowSurface]) -> CGFloat? {
+    private func slideShift(from before: [CGWindowID: CGRect], to now: [CGWindowID: CGRect]) -> CGFloat? {
         guard NSEvent.pressedMouseButtons == 0 else { return nil }
-        let before = Dictionary(old.map { ($0.id, $0.frame) }, uniquingKeysWith: { first, _ in first })
         var shift: CGFloat?
-        for surface in new {
-            guard let frame = before[surface.id], frame != surface.frame else { continue }
-            let dx = surface.frame.minX - frame.minX
-            guard surface.frame.size == frame.size, abs(surface.frame.minY - frame.minY) < 0.5, abs(dx - (shift ?? dx)) < 1 else { return nil }
+        for (id, frame) in now {
+            guard let old = before[id], old != frame else { continue }
+            let dx = frame.minX - old.minX
+            guard frame.size == old.size, abs(frame.minY - old.minY) < 0.5, abs(dx - (shift ?? dx)) < 1 else { return nil }
             shift = dx
         }
         return shift
@@ -231,6 +234,7 @@ final class WindowTracker {
 
     func reset() {
         previous = []
+        windowFrames = [:]
         watched = nil
         covers = []
     }
@@ -354,6 +358,7 @@ final class WindowTracker {
         var fresh: [CGWindowID: Double] = [:]
         var panels: [CGWindowID: CFTimeInterval] = [:]
         var windows: [CGRect] = []
+        var frames: [CGWindowID: CGRect] = [:]
         var checked: [CGWindowID: (bounds: CGRect, card: Bool)] = [:]
         exposing = false
         sinkingDock = nil
@@ -361,6 +366,7 @@ final class WindowTracker {
             alphas = fresh
             panelsShownAt = panels
             covers = exposing ? [] : windows
+            windowFrames = frames
             cards = checked
         }
 
@@ -403,6 +409,7 @@ final class WindowTracker {
             let fills = fillsScreen(bounds)
 
             if layer < dockLevel && !fading { windows.append(frame) }
+            if layer == 0 && !fading && id != 0 { frames[id] = frame }
             let coverOnly = coverOnlyOwners.contains(owner) && !shelf
             if roomAbove && onScreen && !fills && !coverOnly && !fading && bounds.width >= 80 && bounds.height >= 40, id != 0,
                shelf || !isCard(id, bounds, into: &checked) {
