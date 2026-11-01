@@ -21,6 +21,10 @@ final class ScreenSnow {
             simulation.halloween = halloween
         }
     }
+    var autumn: Bool {
+        get { simulation.autumn }
+        set { simulation.autumn = newValue }
+    }
 
     init?(screen: NSScreen, device: MTLDevice, snowOnWindows: @escaping () -> Bool) {
         guard let displayID = screen.displayID else { return nil }

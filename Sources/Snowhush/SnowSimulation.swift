@@ -35,6 +35,12 @@ struct Sprite {
     var dab: Float = 0
     /// For a ghost, how cross it is: frowning and shaking.
     var anger: Float = 0
+    /// A leaf instead of a snowflake: its seed, which picks its shape and colour; zero for snow.
+    var leaf: Float = 0
+    /// Which way a leaf points.
+    var turn: Float = 0
+    /// How much of a leaf's face shows, and which side: one is its front face on, below zero its back.
+    var flip: Float = 1
 }
 
 /// A Halloween sign a ghost holds up, or lets fall into the snow.
@@ -91,6 +97,7 @@ private struct Flake {
     var tintAmount: Float = 0
     /// The direction of the gust that caught the flake and carries it off the screen; zero until then.
     var blown: Float = 0
+    var leaf: Float = 0
 }
 
 private struct Grain {
@@ -104,6 +111,32 @@ private struct Grain {
     var blown = false
     /// Seconds it still clings to the screen where a snowball hit it, sagging, before it falls.
     var stuck: Float = 0
+    /// For a leaf, picks its shape and colour.
+    var seed = Float.random(in: 0.001...1)
+}
+
+/// A leaf come to rest on a heap or a window: it lies flat on top, riding along with what it lies on, until others
+/// cover it. Its bulk is in the heap under it, so leaves pile up on one another.
+private struct LyingLeaf {
+    let layer: SnowLayer
+    /// From the layer's base along it, and up from the base to where the leaf rests and to the top of its own bulk.
+    var x: Float
+    var rest: Float
+    var top: Float
+    let size: Float
+    let seed: Float
+    let tilt: Float
+    /// Half a turn when it came down pointing the other way.
+    let around: Float
+    /// How it was turned and tumbled in the air, and how far along the surface it slides, while it settles.
+    let fromTurn: Float
+    let fromFlip: Float
+    let slide: Float
+    let settling: Float
+    var settled: Float = 0
+    let life: Float
+    var age: Float = 0
+    var fade: Float = 1
 }
 
 /// Powder thrown up by a lump bursting: it billows, slows in the air and fades without settling.
@@ -316,6 +349,12 @@ final class SnowSimulation {
     private let slideDrag: Float = 0.025
     private let slideWindMax: Float = 160
     private let slideCalm: Float = 0.35
+    /// The share of a heap one fallen leaf makes up.
+    private let leafArea: Float = 24
+    private let maxLying = 1500
+    /// The top of a heap is the lying leaves themselves: the pile shader draws the mass under them only this far down.
+    private let leafCover: Float = 6
+    private var lying: [LyingLeaf] = []
 
     private let ground: SnowLayer
     private var ledges: [CGWindowID: SnowLayer] = [:]
@@ -375,6 +414,21 @@ final class SnowSimulation {
             stirred()
         }
     }
+    /// Leaves fall instead of snow and heap up where it would.
+    var autumn = false {
+        didSet {
+            guard autumn != oldValue else { return }
+            lying.removeAll()
+            updateTarget()
+            flakes = flakes.prefix(targetFlakes).map { makeFlake(y: $0.position.y) }
+            restyled = true
+            stirred()
+        }
+    }
+    private var restyled = false
+    /// The mode waiting for the gust to clear the screen, so one kind never turns into the other in sight.
+    private var nextAutumn: Bool?
+    private var switchedAt: Double = 0
     /// Jack-o'-lanterns along the bottom of the screen, a pair on the right and one on the left: how far each sits
     /// from the right edge, or from the left one when the inset is negative, and its width.
     private let pumpkinSpots: [(inset: Float, width: Float)] = [(120, 52), (190, 37), (-150, 42)]
@@ -402,14 +456,14 @@ final class SnowSimulation {
     }
 
     var pileTop: Float { ground.top }
-    var hasSnow: Bool { layers.contains { $0.top > 0.5 } }
+    var hasSnow: Bool { !lying.isEmpty || layers.contains { $0.top > 0.5 } }
     /// Nothing falls, lies, waits for its window or haunts, and nothing will until the snow is stirred.
     var isEmpty: Bool {
         snowfall == .off && !halloween && flakes.isEmpty && grains.isEmpty && motes.isEmpty && ghosts.isEmpty
-            && fallingSigns.isEmpty && snowballs.isEmpty && gust == nil && dormant.isEmpty && parking.isEmpty
+            && fallingSigns.isEmpty && snowballs.isEmpty && gust == nil && dormant.isEmpty && parking.isEmpty && lying.isEmpty && nextAutumn == nil
             && !layers.contains { $0.top > 0 }
     }
-    var spriteCount: Int { flakes.count + grains.count + motes.count + ghosts.count * 2 + snowballs.count }
+    var spriteCount: Int { lying.count + flakes.count + grains.count + motes.count + ghosts.count * 2 + snowballs.count }
     /// Floats the renderer needs per frame: each layer's surface and bed.
     var columnCount: Int { layers.reduce(0) { $0 + 2 * $1.count } }
 
@@ -440,6 +494,11 @@ final class SnowSimulation {
         advanceMotes(dt: dt)
         haunt(dt: dt)
         settle(dt: dt)
+        tendLeaves(dt: dt)
+        if let next = nextAutumn, gust == nil, grains.isEmpty || clock - switchedAt > 6 {
+            nextAutumn = nil
+            autumn = next
+        }
         spawnFlakes()
         if halloween { settlePumpkins(dt: dt) }
 
@@ -458,7 +517,8 @@ final class SnowSimulation {
         } else {
             pace = .calm
         }
-        let changed = wasMoving || !flakes.isEmpty || !grains.isEmpty || !motes.isEmpty || !ghosts.isEmpty || !fallingSigns.isEmpty || !snowballs.isEmpty || heightsChanged || windowsChanged || pumpkinsMoved
+        let changed = wasMoving || !flakes.isEmpty || !grains.isEmpty || !motes.isEmpty || !ghosts.isEmpty || !fallingSigns.isEmpty || !snowballs.isEmpty || heightsChanged || windowsChanged || pumpkinsMoved || restyled
+        restyled = false
         windowsChanged = false
         pumpkinsMoved = false
         return changed
@@ -466,6 +526,26 @@ final class SnowSimulation {
 
     func writeSprites(into buffer: UnsafeMutablePointer<Sprite>, capacity: Int) -> Int {
         var count = 0
+        let shown = Set(layers.map(ObjectIdentifier.init))
+        for leaf in lying where count < capacity && shown.contains(ObjectIdentifier(leaf.layer)) {
+            let layer = leaf.layer
+            let ease = 1 - pow(1 - leaf.settled, 3)
+            let x = layer.base.x + leaf.x - leaf.slide * (1 - ease)
+            guard let i = layer.index(at: x), layer.visible[i] else { continue }
+            let target = restingTurn(of: leaf, on: layer, at: i)
+            // Sliding over to where it comes to rest, it skims the ground until it rides up onto the leaves there.
+            let rest = leaf.settled < 1 ? min(layer.surface(i) - layer.base.y, leaf.rest) : leaf.rest
+            buffer[count] = Sprite(
+                position: SIMD2(x, layer.base.y + rest + leaf.size * 0.13),
+                size: leaf.size,
+                alpha: leaf.fade,
+                soft: 0,
+                leaf: leaf.seed,
+                turn: leaf.fromTurn + (target - leaf.fromTurn) * ease,
+                flip: leaf.fromFlip + ((leaf.fromFlip < 0 ? -0.45 : 0.45) - leaf.fromFlip) * ease
+            )
+            count += 1
+        }
         for flake in flakes where count < capacity {
             buffer[count] = Sprite(
                 position: flake.position,
@@ -476,22 +556,38 @@ final class SnowSimulation {
                 tintAmount: flake.tintAmount,
                 tintRed: flake.tint.x,
                 tintGreen: flake.tint.y,
-                tintBlue: flake.tint.z
+                tintBlue: flake.tint.z,
+                leaf: flake.leaf,
+                turn: turn(of: flake),
+                flip: tumble(flake.leaf)
             )
             count += 1
         }
         for grain in grains where count < capacity {
-            buffer[count] = Sprite(
-                position: grain.position,
-                velocity: grain.velocity,
-                size: grain.size,
-                alpha: grain.lump > 0 ? 0.97 : grain.blown ? 0.8 : 0.95,
-                soft: grain.lump > 0 ? 0.2 : 0.3,
-                lump: grain.lump
-            )
+            if autumn {
+                buffer[count] = Sprite(
+                    position: grain.position,
+                    velocity: grain.velocity,
+                    size: grain.size >= 5.5 ? grain.size : 6 + grain.seed * 4.5,
+                    alpha: 0.95,
+                    soft: 0,
+                    leaf: grain.seed,
+                    turn: turn(of: grain),
+                    flip: tumble(grain.seed)
+                )
+            } else {
+                buffer[count] = Sprite(
+                    position: grain.position,
+                    velocity: grain.velocity,
+                    size: grain.size,
+                    alpha: grain.lump > 0 ? 0.97 : grain.blown ? 0.8 : 0.95,
+                    soft: grain.lump > 0 ? 0.2 : 0.3,
+                    lump: grain.lump
+                )
+            }
             count += 1
         }
-        for mote in motes where count < capacity {
+        for mote in motes where count < capacity && !autumn {
             let t = mote.age / mote.life
             let fade = min(1, mote.age / 0.06) * pow(1 - t, 1.5)
             buffer[count] = Sprite(position: mote.position, size: mote.size * (1 + t), alpha: mote.alpha * fade, soft: 1)
@@ -952,6 +1048,10 @@ final class SnowSimulation {
     }
 
     private func throwLump(_ area: Float, at position: SIMD2<Float>, velocity: SIMD2<Float>) {
+        if autumn {
+            release(area, at: position, velocity: velocity, spread: SIMD2(4, 2), scatter: 0.5)
+            return
+        }
         let pieces = Int(area / 90) + 1
         for _ in 0..<pieces where grains.count < maxGrains {
             let share = area / Float(pieces)
@@ -1006,6 +1106,23 @@ final class SnowSimulation {
         let room = maxGrains - grains.count
         guard room > 0 else {
             ground.deposit(area, at: position.x, wide: true)
+            return
+        }
+        if autumn {
+            let count = min(room, Int(area / leafArea + random.next()))
+            guard count > 0 else {
+                ground.deposit(area, at: position.x, wide: true)
+                return
+            }
+            let share = area / Float(count)
+            for _ in 0..<count {
+                grains.append(Grain(
+                    position: position + SIMD2(random.range(-spread.x, spread.x), random.range(0, spread.y)),
+                    velocity: velocity * (1 + random.range(-scatter, scatter)) + SIMD2(random.range(-30, 30), random.range(0, 40)),
+                    area: share,
+                    size: leafLength(depth: pow(random.next(), 1.2))
+                ))
+            }
             return
         }
         let count = min(room, max(1, min(6, Int(area / 3))))
@@ -1086,7 +1203,7 @@ final class SnowSimulation {
         guard lower <= upper else { return }
 
         let local = center.y - layer.base.y
-        let sprayShare = smoothstep(60, 420, simd_length(velocity))
+        let sprayShare = autumn ? smoothstep(60, 500, simd_length(velocity)) : smoothstep(60, 420, simd_length(velocity))
         var pushedLeft: Float = 0
         var pushedRight: Float = 0
 
@@ -1116,7 +1233,12 @@ final class SnowSimulation {
             lastCursorPush = clock
             heightsChanged = true
 
-            let area = removed * columnWidth
+            var area = removed * columnWidth
+            if autumn {
+                // The lying leaves on top fly off by themselves; only the mass under them is swept out.
+                let hidden = max(0, leafCover - (buried ? h - top : 0))
+                area = max(0, removed - hidden) * columnWidth
+            }
             let surface = layer.floor(i) + (buried ? h - removed : h)
             let sprayed = sprayShare > 0 ? emit(area * sprayShare, from: SIMD2(x, surface), center: center, velocity: velocity) : 0
             let side = abs(velocity.x) > 40 ? velocity.x : dx
@@ -1137,6 +1259,21 @@ final class SnowSimulation {
         let offset = origin - center
         let length = simd_length(offset)
         let outward = length > 0.001 ? offset / length : SIMD2<Float>(0, 1)
+
+        if autumn {
+            // Leaves swept out of a heap skim along the way the cursor goes, a whole leaf at a time.
+            let leaves = min(3, Int(area / leafArea + random.next()))
+            guard leaves > 0 else { return 0 }
+            for _ in 0..<leaves {
+                grains.append(Grain(
+                    position: origin + SIMD2(random.range(-2, 2), random.range(0, 3)),
+                    velocity: swept(by: velocity + outward * (speed * random.range(0.05, 0.15))),
+                    area: area / Float(leaves),
+                    size: leafLength(depth: pow(random.next(), 1.2))
+                ))
+            }
+            return area
+        }
 
         for _ in 0..<count {
             var v = velocity * random.range(0.55, 1.25) + outward * (speed * random.range(0.05, 0.25))
@@ -1207,7 +1344,8 @@ final class SnowSimulation {
             flake.phase += flake.swayRate * dt
             if flake.phase > phaseWrap { flake.phase -= phaseWrap }
             let sway = (cos(flake.phase) + 0.3 * cos(flake.phase * 2.3)) * flake.swayAmount
-            let flutter = 1 + 0.12 * sin(flake.phase * 1.3)
+            // A leaf swings like a pendulum, dropping fastest through the middle of each swing.
+            let flutter = flake.leaf > 0 ? 0.3 + 1.1 * abs(cos(flake.phase)) : 1 + 0.12 * sin(flake.phase * 1.3)
             if flake.tintAmount > 0 { flake.tintAmount = max(0, flake.tintAmount - dt * 1.3) }
             let previousY = flake.position.y
             flake.position.x += (flake.velocity.x + sway) * dt
@@ -1230,7 +1368,12 @@ final class SnowSimulation {
                         snowfallHeld = false
                         snowfallReleased()
                     }
-                    hit.layer.deposit(flake.size * flake.size * deposition * flake.mass * hit.layer.fill(hit.index), at: flake.position.x, wide: true)
+                    if flake.leaf > 0 {
+                        lay(size: flake.size, seed: flake.leaf, area: flake.size * 1.6, at: flake.position.x, on: hit.layer,
+                            turn: turn(of: flake), flip: tumble(flake.leaf), drift: flake.velocity.x)
+                    } else {
+                        hit.layer.deposit(flake.size * flake.size * deposition * flake.mass * hit.layer.fill(hit.index), at: flake.position.x, wide: true)
+                    }
                     heightsChanged = true
                     recycle(i)
                     i -= 1
@@ -1250,6 +1393,9 @@ final class SnowSimulation {
     private func advanceGrains(dt: Float) {
         guard !grains.isEmpty else { return }
         let damping = exp(-grainDrag * dt)
+        let airDrag = exp(-3.2 * dt)
+        let wind = breeze() + slideWind
+        let time = Float(clock.truncatingRemainder(dividingBy: 1000))
         var i = grains.count - 1
         while i >= 0 {
             var grain = grains[i]
@@ -1266,6 +1412,13 @@ final class SnowSimulation {
                 let speed = grain.velocity.x < 0 ? -gustWind * 1.6 : gustWind * 1.6
                 grain.velocity.x += (speed - grain.velocity.x) * min(1, dt * 2)
                 grain.velocity.y -= gravity * 0.08 * dt
+            } else if autumn {
+                // A leaf catches the air: flung up, it soon loses its speed and flutters down, swinging from side to side.
+                let phase = time * (1.2 + grain.seed) + grain.seed * 40
+                let fall = (35 + 30 * grain.seed) * (0.3 + 1.1 * abs(cos(phase)))
+                grain.velocity.x = (grain.velocity.x - wind) * airDrag + wind
+                grain.velocity.y = (grain.velocity.y + fall) * airDrag - fall
+                grain.position.x += cos(phase) * 28 * dt
             } else {
                 grain.velocity.y -= gravity * dt
                 grain.velocity *= damping
@@ -1278,6 +1431,13 @@ final class SnowSimulation {
                 if grain.lump > 0 {
                     burst(grain, into: hit.layer)
                     heightsChanged = true
+                    removeGrain(i)
+                    i -= 1
+                    continue
+                }
+                if autumn {
+                    lay(size: grain.size >= 5.5 ? grain.size : 6 + grain.seed * 4.5, seed: grain.seed, area: grain.area, at: grain.position.x,
+                        on: hit.layer, turn: turn(of: grain), flip: tumble(grain.seed), drift: grain.velocity.x)
                     removeGrain(i)
                     i -= 1
                     continue
@@ -1752,7 +1912,7 @@ final class SnowSimulation {
     }
 
     private func recycle(_ i: Int) {
-        if flakes.count <= targetFlakes && !blowing {
+        if flakes.count <= targetFlakes && !holding {
             flakes[i] = makeFlake(y: height + random.range(4, 40))
         } else {
             removeFlake(i)
@@ -1766,13 +1926,14 @@ final class SnowSimulation {
 
     /// No new snow falls until the gust has carried off the last flake, then the snowfall starts again from the top.
     private func spawnFlakes() {
-        guard flakes.count < targetFlakes, !blowing else { return }
+        guard flakes.count < targetFlakes, !holding else { return }
         for _ in flakes.count..<targetFlakes {
             flakes.append(makeFlake(y: height + random.range(0, height * 0.8)))
         }
     }
 
     private func makeFlake(y: Float) -> Flake {
+        if autumn { return makeLeaf(y: y) }
         let near = random.next() < 0.02
         let depth = near ? 1 : pow(random.next(), 1.6)
         let fallSpeed = near ? random.range(75, 100) : 16 + depth * 50 + random.range(0, 10)
@@ -1788,6 +1949,25 @@ final class SnowSimulation {
             swayRate: random.range(0.5, 1.4),
             swayAmount: near ? random.range(10, 20) : random.range(4, 9) + depth * 10,
             settles: !near
+        )
+    }
+
+    private func makeLeaf(y: Float) -> Flake {
+        let depth = pow(random.next(), 1.2)
+        let fallSpeed = 24 + depth * 36 + random.range(0, 12)
+        return Flake(
+            position: SIMD2(random.range(-30, width + 30), y),
+            velocity: SIMD2(windSpeed() * (0.35 + 0.65 * depth), -fallSpeed),
+            fallSpeed: fallSpeed,
+            size: leafLength(depth: depth),
+            depth: depth,
+            alpha: 0.88 + depth * 0.12,
+            soft: 0,
+            phase: random.range(0, phaseWrap),
+            swayRate: random.range(1.1, 2.0),
+            swayAmount: random.range(26, 46) + depth * 20,
+            settles: true,
+            leaf: random.range(0.001, 1)
         )
     }
 
@@ -1844,7 +2024,20 @@ final class SnowSimulation {
         }
     }
 
-    private var blowing: Bool { gust.map { !$0.calm } ?? false }
+    /// Clears the screen first and lets the other kind fall only after, from the top.
+    func switchMode(autumn: Bool, direction: Float, calm: Bool) {
+        guard autumn != self.autumn else {
+            nextAutumn = nil
+            return
+        }
+        guard nextAutumn == nil else { return }
+        nextAutumn = autumn
+        switchedAt = clock
+        blowAway(direction: direction, calm: calm)
+        stirred()
+    }
+
+    private var holding: Bool { nextAutumn != nil || gust.map { !$0.calm } ?? false }
 
     private func blow(dt: Float) {
         guard let gust else { return }
@@ -1879,6 +2072,15 @@ final class SnowSimulation {
             grains[i].area = 0
             grains[i].velocity = SIMD2(gust.direction * random.range(800, 1600), random.range(60, 300))
         }
+        for k in lying.indices.reversed() {
+            let leaf = lying[k]
+            guard finish || gust.calm || (front - leaf.layer.base.x - leaf.x) * gust.direction > 0 else { continue }
+            if gust.calm {
+                lying.remove(at: k)
+            } else {
+                fly(k, velocity: SIMD2(gust.direction * random.range(500, 1100), random.range(60, 260)), blown: true)
+            }
+        }
         for layer in layers {
             var dust: Float = 0
             for i in 0..<layer.count {
@@ -1905,6 +2107,17 @@ final class SnowSimulation {
     private func skim(dt: Float) {
         let share = abs(slideWind) / slideWindMax
         guard share > 0.1 else { return }
+        if autumn {
+            // It lifts some of the leaves lying on top, never the mass under them.
+            let shown = Set(layers.map(ObjectIdentifier.init))
+            for k in lying.indices.reversed() where random.next() < share * dt {
+                let leaf = lying[k]
+                guard shown.contains(ObjectIdentifier(leaf.layer)), let i = leaf.layer.index(at: leaf.layer.base.x + leaf.x),
+                      leaf.layer.visible[i], leaf.layer.surface(i) - leaf.layer.base.y < leaf.top + 2 else { continue }
+                fly(k, velocity: SIMD2(slideWind * random.range(1.5, 3), random.range(30, 120)))
+            }
+            return
+        }
         for layer in layers {
             let count = layer.count
             var dust: Float = 0
@@ -1987,17 +2200,183 @@ final class SnowSimulation {
 
     // MARK: - Piles
 
+    private func spin(_ rate: Float) -> Float {
+        Float((clock * Double(rate)).truncatingRemainder(dividingBy: 2 * .pi))
+    }
+
+    /// How a leaf in the air tumbles about its length.
+    private func tumble(_ seed: Float) -> Float {
+        cos(spin(0.5 + seed * 1.1) + seed * 50)
+    }
+
+    private func turn(of flake: Flake) -> Float {
+        flake.leaf * 40 + sin(flake.phase) * 0.6 + spin(flake.leaf - 0.5)
+    }
+
+    private func turn(of grain: Grain) -> Float {
+        grain.seed * 40 + spin((grain.seed - 0.5) * 9)
+    }
+
+    /// A lying leaf follows the slope under it.
+    private func restingTurn(of leaf: LyingLeaf, on layer: SnowLayer, at i: Int) -> Float {
+        let left = max(i - 2, 0)
+        let right = min(i + 2, layer.count - 1)
+        let slope = (layer.surface(right) - layer.surface(left)) / (Float(max(right - left, 1)) * layer.columnWidth)
+        return atan(slope) + leaf.tilt + leaf.around
+    }
+
+    /// A leaf comes down, slides a little the way it was going and settles flat on whatever lies there, adding its
+    /// bulk to the heap under it so the next one lands on top.
+    private func lay(size: Float, seed: Float, area: Float, at x: Float, on layer: SnowLayer, turn: Float, flip: Float, drift: Float) {
+        let slide = max(-8, min(8, drift * 0.06))
+        let spot = x + slide
+        let i = layer.clampedIndex(at: spot)
+        let rest = layer.surface(i) - layer.base.y
+        let steps = max(1, Int(size / 5))
+        for step in 0..<steps where area > 0 {
+            let along = (Float(step) + 0.5) / Float(steps) - 0.5
+            let missed = layer.deposit(area / Float(steps), at: spot + along * size * 0.8, wide: true)
+            dropPast(layer, missed, near: spot, velocity: 0)
+        }
+        let tilt = random.range(-0.2, 0.2)
+        let left = max(i - 2, 0)
+        let right = min(i + 2, layer.count - 1)
+        let flat = atan((layer.surface(right) - layer.surface(left)) / (Float(max(right - left, 1)) * layer.columnWidth)) + tilt
+        let toward = wrapped(flat - turn)
+        let around: Float = abs(toward) <= .pi / 2 ? 0 : .pi
+        let target = flat + around
+        lying.append(LyingLeaf(
+            layer: layer,
+            x: spot - layer.base.x,
+            rest: rest,
+            top: layer.surface(i) - layer.base.y,
+            size: size,
+            seed: seed,
+            tilt: tilt,
+            around: around,
+            fromTurn: target - wrapped(target - turn),
+            fromFlip: flip,
+            slide: slide,
+            settling: 0.45 + abs(slide) / 90,
+            life: random.range(90, 180)
+        ))
+        if lying.count > maxLying { lying.removeFirst() }
+        heightsChanged = true
+    }
+
+    private func leafLength(depth: Float) -> Float {
+        7 + depth * 7 + random.range(0, 2.5)
+    }
+
+    private func wrapped(_ angle: Float) -> Float {
+        var a = angle.truncatingRemainder(dividingBy: 2 * .pi)
+        if a > .pi { a -= 2 * .pi } else if a < -.pi { a += 2 * .pi }
+        return a
+    }
+
+    /// A leaf the cursor sweeps along: it goes the cursor's way a little slower, barely lifting, and the air soon
+    /// slows it down, so it lands a short way off.
+    private func swept(by velocity: SIMD2<Float>) -> SIMD2<Float> {
+        var v = velocity * random.range(0.5, 0.9)
+        let speed = simd_length(v)
+        if speed > 450 { v *= 450 / speed }
+        return v + SIMD2(random.range(-20, 20), random.range(10, 35) + speed * random.range(0.03, 0.1))
+    }
+
+    /// A lying leaf taken up into the air; its bulk stays in the heap, whatever takes the heap takes it.
+    private func fly(_ k: Int, velocity: SIMD2<Float>, blown: Bool = false) {
+        let leaf = lying.remove(at: k)
+        heightsChanged = true
+        guard grains.count < maxGrains else { return }
+        grains.append(Grain(
+            position: SIMD2(leaf.layer.base.x + leaf.x, leaf.layer.base.y + leaf.rest + 1),
+            velocity: velocity,
+            area: 0,
+            size: leaf.size,
+            blown: blown,
+            seed: leaf.seed
+        ))
+    }
+
+    /// Lying leaves fly up when the cursor kicks them or their window shakes, slip down when the heap under them
+    /// gives way, sink with it as it settles, sink out of sight deep under the leaves that land on them, and wither away while
+    /// the snow melts.
+    private func tendLeaves(dt: Float) {
+        guard !lying.isEmpty else { return }
+        let shown = Set(layers.map(ObjectIdentifier.init))
+        let kept = Set(dormant.values.map(ObjectIdentifier.init) + parking.map { ObjectIdentifier($0.ledge) })
+        let speed = simd_length(cursorVelocity)
+        for k in lying.indices.reversed() {
+            var leaf = lying[k]
+            let layer = leaf.layer
+            guard shown.contains(ObjectIdentifier(layer)) else {
+                if !kept.contains(ObjectIdentifier(layer)) { fly(k, velocity: .zero) }
+                continue
+            }
+            let x = layer.base.x + leaf.x
+            guard let i = layer.index(at: x) else {
+                fly(k, velocity: SIMD2(layer.trackVelocity.x, 0))
+                continue
+            }
+            let surface = layer.surface(i) - layer.base.y
+            let point = SIMD2(x, layer.base.y + leaf.rest)
+            if let cursor, speed > 8, simd_length(point - cursor) < cursorRadius + leaf.size * 0.4 {
+                fly(k, velocity: swept(by: cursorVelocity))
+                lastCursorPush = clock
+                continue
+            }
+            if layer.agitation > 0.8 || layer.offset.y > 3 {
+                fly(k, velocity: layer.trackVelocity * 0.8 + SIMD2(random.range(-40, 40), random.range(20, 80)))
+                continue
+            }
+            if surface < leaf.rest - 3 {
+                fly(k, velocity: SIMD2(random.range(-15, 15), 0))
+                continue
+            }
+            // Deep in a heap a leaf is hidden by the ones above it and the mass drawn under them.
+            let buried = surface > leaf.top + 10
+            if surface < leaf.top {
+                let sink = min(leaf.top - surface, 20 * dt)
+                leaf.top -= sink
+                leaf.rest -= sink
+                heightsChanged = true
+            }
+            if leaf.settled < 1 {
+                leaf.settled = min(1, leaf.settled + dt / leaf.settling)
+                heightsChanged = true
+            }
+            if buried {
+                leaf.fade -= dt * 2
+                heightsChanged = true
+            } else if thaws {
+                leaf.age += dt
+                if leaf.age > leaf.life {
+                    leaf.fade -= dt / 4
+                    heightsChanged = true
+                }
+            }
+            if leaf.fade <= 0 {
+                lying.remove(at: k)
+            } else {
+                lying[k] = leaf
+            }
+        }
+    }
+
     private func settle(dt: Float) {
         // Melting nearly keeps pace with the snowfall, so heavier snowfall builds drifts only a little higher.
         let falling = snowfall.flakesPerMegapoint * strength * density
         let meltPace = falling > 0 ? pow(falling / thawBalance, thawExponent) : 1
         for layer in layers {
             if !accumulates || thaws {
-                let floor = !accumulates ? 0 : (layer === ground ? thawDepth : ledgeThawDepth)
+                // Withered leaves leave nothing behind.
+                let floor = !accumulates || autumn ? 0 : (layer === ground ? thawDepth : ledgeThawDepth)
                 if layer.thaw(dt: dt * meltPace, down: floor, rate: thawRate, settle: thawTime) { heightsChanged = true }
             }
             // Shaken harder than gravity, a granular pile fluidizes and slumps to a flatter slope.
-            if layer.relax(repose: layer.agitation > shaking ? repose * 0.35 : repose, rounding: rounding) { heightsChanged = true }
+            // Leaves catch on one another and heap up steeper than snow.
+            let steepest = autumn ? repose * 1.8 : repose
+            if layer.relax(repose: layer.agitation > shaking ? steepest * 0.35 : steepest, rounding: rounding) { heightsChanged = true }
             if layer.spill.left > 1.5 {
                 release(layer.spill.left, at: edgePoint(of: layer, left: true), velocity: layer.trackVelocity + SIMD2(-6, -15), spread: SIMD2(0.25, 1))
                 layer.spill.left = 0
@@ -2010,7 +2389,8 @@ final class SnowSimulation {
     }
 
     private func updateTarget() {
-        targetFlakes = snowfallHeld ? 0 : Int(snowfall.flakesPerMegapoint * strength * density * width * height / 1_000_000)
+        let leaves: Float = autumn ? 0.07 : 1
+        targetFlakes = snowfallHeld ? 0 : Int(snowfall.flakesPerMegapoint * leaves * strength * density * width * height / 1_000_000)
     }
 
     private static func columnCount(for width: Float, columnWidth: Float) -> Int {
