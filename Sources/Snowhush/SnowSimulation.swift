@@ -138,11 +138,11 @@ private struct GlassDrop {
     var travelled: Float = 0
     var spacing: Float = 0
     /// Caught under the window's bottom edge, it clings there, taking in what runs down onto it, until it is heavy
-    /// enough to let go: how long it has hung, how far it has sagged from spread flat along the edge to round, and
-    /// when it lets go, once it starts to.
+    /// enough to let go: how long it has hung, how full it is, from a flat cap to a pear, and when it lets go, once
+    /// it starts to.
     var hanging = false
     var hung: Float = 0
-    var round: Float = 0
+    var fill: Float = 0
     var letsGo = Float.infinity
     /// Left behind by a running drop, or run out of water: it holds still and dries up.
     var bead = false
@@ -435,8 +435,9 @@ final class SnowSimulation {
     /// A drop hanging under a window this big lets go; a smaller one clings on, waiting for more, and dries up.
     private let heavyHanging: Float = 3.6
     private let hangingDrying: Float = 0.1
-    /// How long a hanging drop takes to draw out its neck and let go.
-    private let necking: Float = 0.35
+    /// A hanging drop pinches off far faster than it fills: only a few frames show it stretch. Not all of it falls.
+    private let pinching: Float = 0.06
+    private let fallingShare: Float = 0.6
     private var glassDrops: [GlassDrop] = []
 
     private let ground: SnowLayer
@@ -2348,47 +2349,48 @@ final class SnowSimulation {
         // Run into a drop hanging under the edge, it flows down into it.
         if let hanging {
             drop.offset = hanging.offset
-            hang(&drop, round: hanging.round)
+            hang(&drop, fill: hanging.fill)
         } else if -drop.offset.y >= drop.face {
-            hang(&drop, round: 1)
+            hang(&drop, fill: 0.6)
         } else if drop.radius < smallestRunning {
             drop.bead = true
         }
     }
 
-    /// How far along a hanging drop is, as the shader draws it: up to one it sags from spread flat along the edge to
-    /// round, from one to two it draws out a neck and lets go.
+    /// How far along a hanging drop is, as the shader draws it: up to one it fills, from a flat cap under the edge to
+    /// a pear; from one to two it lets go.
     private func hangingStage(of drop: GlassDrop) -> Float {
-        drop.round + smoothstep(drop.letsGo - necking, drop.letsGo, drop.hung)
+        drop.fill + (drop.letsGo.isFinite ? smoothstep(drop.letsGo - pinching, drop.letsGo, drop.hung) : 0)
     }
 
-    /// Run down to the window's bottom edge, a drop spreads along it and clings under it. Joining one already
-    /// hanging there, it hangs as that one did.
-    private func hang(_ drop: inout GlassDrop, round: Float) {
+    /// Run down to the window's bottom edge, a drop wraps round it and clings under it, settling into the shape its
+    /// water makes there. Joining one already hanging there, it hangs as that one did.
+    private func hang(_ drop: inout GlassDrop, fill: Float) {
         drop.hanging = true
         drop.speed = 0
         drop.slope = 0
         drop.offset.y = -drop.face
         drop.hung = 0
-        drop.round = round
+        drop.fill = fill
         drop.letsGo = .infinity
     }
 
-    /// A hanging drop sags rounder the more water it holds. Heavy enough, it draws out a neck and lets go; until
-    /// then it dries up slowly, and runs together with any other spread along the edge beside it.
+    /// A hanging drop sags further the more water it holds. Heavy enough, it pinches off in an instant: the lower
+    /// part falls and a smaller drop stays on the edge to fill again. Until then it dries up slowly, and runs
+    /// together with any other hanging beside it close enough to touch.
     private func cling(_ drop: inout GlassDrop, index: Int, dt: Float) {
         drop.hung += dt
-        // Only nearly heavy enough to let go does it sag round.
-        let full = min(max((drop.radius - 1.6) / (heavyHanging - 1.6), 0), 1)
-        drop.round += (pow(full, 1.5) - drop.round) * min(1, dt * 6)
+        let full = min(max((drop.radius - 1.4) / (heavyHanging - 1.4), 0), 1)
+        drop.fill += (full - drop.fill) * min(1, dt * 6)
         if drop.letsGo.isFinite {
             guard drop.hung >= drop.letsGo else { return }
             fall(drop)
-            drop.radius = 0
+            drop.radius *= (1 - fallingShare).squareRoot()
+            drop.letsGo = .infinity
             return
         }
-        if drop.radius >= heavyHanging && drop.round > 0.9 {
-            drop.letsGo = drop.hung + necking
+        if drop.radius >= heavyHanging && drop.fill > 0.9 {
+            drop.letsGo = drop.hung + pinching
             return
         }
         drop.radius -= hangingDrying * dt
@@ -2399,26 +2401,26 @@ final class SnowSimulation {
             let area = drop.radius * drop.radius, added = other.radius * other.radius
             drop.offset.x = (drop.offset.x * area + other.offset.x * added) / (area + added)
             drop.radius = min((area + added).squareRoot(), 9)
-            drop.round = max(drop.round, other.round)
+            drop.fill = max(drop.fill, other.fill)
             glassDrops[j].radius = 0
         }
     }
 
-    /// How far a hanging drop reaches along the edge each way.
+    /// How far a hanging drop reaches along the edge each way, as the shader draws it.
     private func spread(of drop: GlassDrop) -> Float {
-        (1.9 - 0.9 * min(drop.round, 1)) * drop.radius * glassScale
+        let aspect = 2.6 - 1.85 * pow(min(drop.fill, 1), 1.2)
+        return aspect.squareRoot() * drop.radius * glassScale
     }
 
-    /// A hanging drop lets go and falls like any raindrop, to burst on whatever is below.
+    /// The part of a hanging drop that lets go falls like any raindrop, to burst on whatever is below.
     private func fall(_ drop: GlassDrop) {
-        let below = 0.6 + 1.6 * min(max(hangingStage(of: drop) - 1, 0), 1)
-        let position = drop.layer.base + drop.offset - SIMD2(0, below * drop.radius * glassScale)
+        let position = drop.layer.base + drop.offset - SIMD2(0, 2.2 * drop.radius * glassScale)
         guard rain, position.y > 2 else { return }
         flakes.append(Flake(
             position: position,
             velocity: SIMD2(0, -20),
             fallSpeed: random.range(850, 1100),
-            size: 1.4 + drop.radius * 0.25,
+            size: 1.4 + drop.radius * fallingShare.squareRoot() * 0.25,
             depth: 1,
             alpha: 0.45,
             soft: 0.6,

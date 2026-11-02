@@ -186,28 +186,25 @@ static float candlelight(constant Uniforms &u, float2 point) {
     return min(glow, 1.0);
 }
 
-static float smin(float a, float b, float k) {
-    float h = saturate(0.5 + 0.5 * (b - a) / k);
-    return mix(b, a, h) - k * h * (1.0 - h);
+/// A drop hanging under an edge, in radii of the drop, from where it clings. Up to one along, it fills: a small one is
+/// a flat cap under the edge, and the more water it holds the further it sags into a pear, widest at its foot. From
+/// one to two it lets go, stretching for an instant before it falls. Its width and height radii, and how much narrower
+/// it is toward the edge than at its foot.
+static float3 hangingShape(float along) {
+    float fill = saturate(along), pull = saturate(along - 1.0);
+    float aspect = mix(2.6, 0.75, pow(fill, 1.2));
+    float2 axes = float2(sqrt(aspect), 1.0 / sqrt(aspect)) * float2(1.0 - 0.2 * pull, 1.0 + 0.5 * pull);
+    return float3(axes, 0.22 * fill);
 }
 
-/// A drop hanging under an edge, in radii of the drop, from where it clings. Up to one along, it is the water that ran
-/// down spreading along the edge and stuck to it, flat and wide at first, sagging rounder as it gathers more; from one
-/// to two its weight draws it down on a neck that narrows until it lets go.
-static float2 hangingAxes(float along) {
-    float round = saturate(along);
-    return float2(mix(1.9, 1.0, round), mix(0.45, 1.0, round));
-}
-
-static float2 hangingCenter(float along) {
-    return float2(0.0, -mix(0.3, 0.6, saturate(along)) - 1.6 * saturate(along - 1.0));
+/// How far below where it clings its middle is.
+static float hangingCenter(float along) {
+    return -hangingShape(along).y * mix(0.55, 0.8, saturate(along)) - 0.3 * saturate(along - 1.0);
 }
 
 /// How far above and below where it clings it reaches.
 static float2 hangingReach(float along) {
-    float2 axes = hangingAxes(along);
-    float2 center = hangingCenter(along);
-    return float2(max(center.y + axes.y, 0.25), center.y - axes.y);
+    return float2(0.06, hangingCenter(along) - hangingShape(along).y);
 }
 
 vertex SpriteOut spriteVertex(uint vid [[vertex_id]],
@@ -255,7 +252,8 @@ vertex SpriteOut spriteVertex(uint vid [[vertex_id]],
         // A drop hanging under an edge clings at `position`; `soft` is how far along it is, as `hangingAt` reads it.
         if (s.rain > 2.5) {
             float2 reach = hangingReach(s.soft) * pixels * 0.5;
-            extent = max(reach.x - reach.y, 3.8 * pixels * 0.5) + 4.0;
+            float3 shape = hangingShape(s.soft);
+            extent = max(reach.x - reach.y, 2.0 * shape.x * (1.0 + shape.z) * pixels * 0.5) + 4.0;
             center = s.position + float2(0.0, (reach.x + reach.y) * 0.5) / u.scale;
             streak = float2(s.soft * extent, 0.0);
         }
@@ -315,35 +313,29 @@ vertex SpriteOut spriteVertex(uint vid [[vertex_id]],
 }
 
 /// Rain, premultiplied: a streak or splash of water in the air, or a drop on the glass.
-/// Lit like a drop on the glass: a dark rim, a bright crescent along its foot, a glint.
+/// A drop in the air works as a ball lens: what is above it, the lit window it hangs from, shows upside down in its
+/// lower part, and what is below, darker, in its upper part; the light catches its outline only where it curves
+/// away underneath, and glints near its top.
 static float4 hangingAt(SpriteOut in, float2 p) {
     float radius = in.radius;
     float along = in.streak.x;
+    float3 shape = hangingShape(along);
     float2 reach = hangingReach(along);
     float2 q = p / radius + float2(0.0, (reach.x + reach.y) * 0.5);
-    float2 axes = hangingAxes(along);
-    float2 center = hangingCenter(along);
-    float drawn = saturate(along - 1.0);
-    float2 e = (q - center) / axes;
-    float body = (length(e) - 1.0) * min(axes.x, axes.y);
-    float t = saturate(dot(q, center) / max(dot(center, center), 0.0001));
-    float stem = max(length(q - center * t) - mix(0.75, 0.26, drawn), q.y);
-    float lip = (length((q - float2(0.0, -0.05)) / float2(axes.x * 0.85, 0.2)) - 1.0) * 0.2;
-    float d = smin(body, smin(stem, lip, 0.3), 0.35) + 1.0;
-    // The neck and the lip are threads of water: they catch the light along their middle, or on a dark backdrop
-    // the bulb would seem to float free of the edge.
-    float strand = smoothstep(0.0, 0.25, body) * (1.0 - smoothstep(0.55, 1.0, d));
+    float rise = (q.y - hangingCenter(along)) / shape.y;
+    float2 e = float2(q.x / (shape.x * (1.0 - shape.z * clamp(rise, -1.0, 1.0))), rise);
+    float body = (length(e) - 1.0) * min(shape.x, shape.y) + 1.0;
+    float d = max(body, q.y - 0.06 + 1.0);
     float aa = fwidth(d) * 1.2;
     float inside = 1.0 - smoothstep(1.0 - aa, 1.0, d);
     if (inside < 0.002) return float4(0.0);
-    float rim = smoothstep(0.45, 1.0, d);
+    float rim = smoothstep(0.45, 1.0, body);
     float tiny = 1.0 - smoothstep(3.0, 9.0, in.size);
     float darkA = 0.07 + 0.38 * rim * (0.55 + 0.45 * saturate(-e.y)) + 0.22 * tiny;
     float crescent = (1.0 - smoothstep(0.55, 0.92, length(e))) * smoothstep(-0.05, -0.7, e.y) * smoothstep(0.75, 0.2, abs(e.x)) * 0.5;
     float glint = exp(-dot(e - float2(-0.3, 0.38), e - float2(-0.3, 0.38)) / 0.035) * 0.95;
-    // Seen against what is behind it, not the glass, its outline catches a little light all round.
-    float sheen = smoothstep(0.7, 0.97, d) * 0.22;
-    float lightA = saturate(crescent + glint + strand * 0.45 + sheen);
+    float sheen = smoothstep(0.7, 0.97, body) * 0.22 * mix(0.3, 1.0, smoothstep(0.2, -0.6, e.y));
+    float lightA = saturate(crescent + glint + sheen);
     float3 dark = float3(0.03, 0.04, 0.06);
     float3 bright = float3(0.93, 0.96, 1.0) * in.light;
     float a = (darkA + lightA - darkA * lightA) * inside * in.alpha;
