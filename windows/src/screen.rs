@@ -326,7 +326,11 @@ impl Screen {
         self.next_due = clock.schedule(now, rate);
         self.idle_frames = if changed || lantern_moved { 0 } else { self.idle_frames + 1 };
         // A still pile only needs a slow refresh for its glints.
-        if !(changed || lantern_moved || fading || ((self.simulation.has_snow() || !self.simulation.pumpkins().is_empty()) && self.idle_frames % 2 == 0)) {
+        if !(changed
+            || lantern_moved
+            || fading
+            || ((self.simulation.has_snow() || !self.simulation.pumpkins().is_empty()) && self.idle_frames % 2 == 0))
+        {
             return Ok(false);
         }
         // Halloween night: cold moonlight, violet shadows and a candle's glow along the drifts' edges.
