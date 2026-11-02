@@ -1,5 +1,5 @@
-//! Halloween: from October 30, when the update bringing it comes, until dawn on November 1 the snow takes on a
-//! spooky mood.
+//! Halloween: the snow takes on a spooky mood from October 30 until dawn on November 1, and any other day it is
+//! turned on from the menu.
 
 use windows::Win32::Graphics::Imaging::{
     CLSID_WICImagingFactory, GUID_WICPixelFormat32bppRGBA, IWICImagingFactory, WICBitmapDitherTypeNone, WICBitmapPaletteTypeCustom,
@@ -10,7 +10,9 @@ use windows::Win32::System::SystemInformation::GetLocalTime;
 use windows::Win32::UI::Shell::SHCreateMemStream;
 use windows::core::{Error, Result};
 
-use snowhush_core::halloween::{SIGN_CAPTIONS, is_halloween};
+use snowhush_core::halloween::{Choice, SIGN_CAPTIONS, Today};
+
+use crate::prefs::Settings;
 
 /// The signs the ghosts hold up, one picture for each of `SIGN_CAPTIONS`, drawn on the Mac.
 const SIGNS: [&[u8]; SIGN_CAPTIONS.len()] = [
@@ -35,10 +37,19 @@ pub const SIGN_SCALE: f32 = 2.0;
 /// flickers in the face alone.
 const LANTERN: [&[u8]; 2] = [include_bytes!("../assets/lanterns/shell.png"), include_bytes!("../assets/lanterns/face.png")];
 
-/// Whether it is Halloween, wanted or not.
-pub fn season() -> bool {
+pub fn today() -> Today {
     let now = unsafe { GetLocalTime() };
-    is_halloween(now.wMonth as u32, now.wDay as u32, now.wHour as u32)
+    Today::at(now.wYear as u32, now.wMonth as u32, now.wDay as u32, now.wHour as u32)
+}
+
+/// Whether Halloween is wanted today, over snow or leaves.
+pub fn wanted(choice: Choice) -> bool {
+    choice.wanted(today())
+}
+
+/// Whether the snow is spooky: Halloween wanted, over snow, not leaves.
+pub fn shows(settings: &Settings) -> bool {
+    !settings.autumn && wanted(settings.halloween)
 }
 
 /// A picture drawn on the Mac: rows of premultiplied RGBA from the top.

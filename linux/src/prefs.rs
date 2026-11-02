@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 
+use snowhush_core::halloween::Choice;
 use snowhush_core::simulation::Snowfall;
 
 #[derive(Clone, Copy)]
@@ -14,7 +15,7 @@ pub struct Settings {
     /// The snow stays over full-screen apps instead of fading out of their way.
     pub over_full_screen: bool,
     pub show_in_screenshots: bool,
-    pub halloween: bool,
+    pub halloween: Choice,
     /// Leaves fall instead of snow.
     pub autumn: bool,
 }
@@ -35,7 +36,7 @@ impl Settings {
             behind_windows: read("behindWindows").is_some_and(|v| v != 0),
             over_full_screen: read("showOverFullScreen").is_some_and(|v| v != 0),
             show_in_screenshots: read("showInScreenshots").is_some_and(|v| v != 0),
-            halloween: read("halloween").is_none_or(|v| v != 0),
+            halloween: Choice { on: read("halloweenOn").is_some_and(|v| v != 0), skipped: read("halloweenSkipped").unwrap_or(0) },
             autumn: read("autumn").is_some_and(|v| v != 0),
         }
     }
@@ -44,14 +45,15 @@ impl Settings {
         let Some(folder) = config_dir() else { return };
         let snowfall = Snowfall::ALL.iter().position(|&s| s == self.snowfall).unwrap_or(2);
         let text = format!(
-            "snowfall={snowfall}\naccumulate={}\nmeltSnow={}\nsnowOnWindows={}\nbehindWindows={}\nshowOverFullScreen={}\nshowInScreenshots={}\nhalloween={}\nautumn={}\n",
+            "snowfall={snowfall}\naccumulate={}\nmeltSnow={}\nsnowOnWindows={}\nbehindWindows={}\nshowOverFullScreen={}\nshowInScreenshots={}\nhalloweenOn={}\nhalloweenSkipped={}\nautumn={}\n",
             self.accumulate as u32,
             self.melt as u32,
             self.snow_on_windows as u32,
             self.behind_windows as u32,
             self.over_full_screen as u32,
             self.show_in_screenshots as u32,
-            self.halloween as u32,
+            self.halloween.on as u32,
+            self.halloween.skipped,
             self.autumn as u32
         );
         let _ = std::fs::create_dir_all(&folder);

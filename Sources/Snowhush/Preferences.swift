@@ -34,7 +34,8 @@ enum Preferences {
     private static let snowOnWindowsKey = "snowOnWindows"
     private static let welcomedKey = "welcomed"
     private static let showInScreenshotsKey = "showInScreenshots"
-    private static let halloweenKey = "halloween"
+    private static let halloweenKey = "halloweenOn"
+    private static let halloweenSkippedKey = "halloweenSkipped"
     private static let autumnKey = "autumn"
 
     static func registerDefaults() {
@@ -47,7 +48,8 @@ enum Preferences {
             accumulateKey: true,
             snowOnWindowsKey: true,
             showInScreenshotsKey: false,
-            halloweenKey: true,
+            halloweenKey: false,
+            halloweenSkippedKey: 0,
             autumnKey: false,
         ])
     }
@@ -92,9 +94,16 @@ enum Preferences {
         set { defaults.set(newValue, forKey: showInScreenshotsKey) }
     }
 
+    /// Halloween turned on from the menu, for every day.
     static var halloween: Bool {
         get { defaults.bool(forKey: halloweenKey) }
         set { defaults.set(newValue, forKey: halloweenKey) }
+    }
+
+    /// The year whose Halloween was turned off from the menu, zero for none.
+    static var halloweenSkipped: Int {
+        get { defaults.integer(forKey: halloweenSkippedKey) }
+        set { defaults.set(newValue, forKey: halloweenSkippedKey) }
     }
 
     static var autumn: Bool {

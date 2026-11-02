@@ -452,6 +452,31 @@ fn halloween_runs_from_october_30_to_dawn_on_november_1() {
 }
 
 #[test]
+fn halloween_comes_with_its_season_and_whenever_turned_on() {
+    use crate::halloween::{Choice, Today};
+    let season = Today { year: 2027, season: true };
+    let later = Today { year: 2027, season: false };
+    let next = Today { year: 2028, season: true };
+
+    let fresh = Choice::default();
+    assert!(!fresh.wanted(later));
+    assert!(fresh.wanted(season));
+
+    let skipped = fresh.toggled(season);
+    assert!(!skipped.wanted(season));
+    assert!(skipped.wanted(next), "turned off for one season, Halloween comes back the next");
+    let back = skipped.toggled(season);
+    assert!(back.wanted(season));
+    assert!(!back.wanted(later), "turned back on in season, it ends with the season");
+
+    let kept = fresh.toggled(later);
+    assert!(kept.wanted(later) && kept.wanted(season));
+    let dropped = kept.toggled(season);
+    assert!(!dropped.wanted(season) && !dropped.wanted(later));
+    assert!(!kept.toggled(later).wanted(later));
+}
+
+#[test]
 fn halloween_moonlight_only_shows_on_halloween() {
     use crate::halloween::{moonlit, night};
     let light = [1.0, 0.98, 0.95];

@@ -4,6 +4,7 @@
 use calloop::channel::Sender;
 use ksni::menu::{CheckmarkItem, MenuItem, RadioGroup, RadioItem, StandardItem, SubMenu};
 
+use snowhush_core::halloween::Today;
 use snowhush_core::simulation::Snowfall;
 
 use crate::log;
@@ -36,8 +37,8 @@ pub struct Tray {
     settings: Settings,
     commands: Sender<Command>,
     glyphs: [[Vec<ksni::Icon>; 2]; 3],
-    /// Whether it is Halloween, wanted or not: the snow loop keeps it up to date.
-    pub season: bool,
+    /// The year and whether it is Halloween: the snow loop keeps it up to date.
+    pub today: Today,
     /// Whether the desktop is light, so the panel wants a black glyph: the snow loop keeps it up to date.
     pub light: bool,
 }
@@ -45,11 +46,11 @@ pub struct Tray {
 impl Tray {
     pub fn new(settings: Settings, commands: Sender<Command>) -> Tray {
         let glyphs = GLYPHS.map(|colors| colors.map(|pictures| icons(&pictures)));
-        Tray { settings, commands, glyphs, season: false, light: false }
+        Tray { settings, commands, glyphs, today: Today::default(), light: false }
     }
 
     fn halloween(&self) -> bool {
-        self.season && self.settings.halloween
+        !self.settings.autumn && self.settings.halloween.wanted(self.today)
     }
 
     fn change(&mut self, change: impl FnOnce(&mut Settings) -> Command) {
@@ -132,6 +133,21 @@ impl ksni::Tray for Tray {
                         options: ["Snow", "Autumn Leaves"].iter().map(|&label| RadioItem { label: label.into(), ..Default::default() }).collect(),
                     }
                     .into(),
+                    MenuItem::Separator,
+                    CheckmarkItem {
+                        label: "Halloween".into(),
+                        checked: settings.halloween.wanted(self.today),
+                        enabled: !autumn,
+                        activate: Box::new(|tray: &mut Tray| {
+                            let today = tray.today;
+                            tray.change(|settings| {
+                                settings.halloween = settings.halloween.toggled(today);
+                                Command::Halloween(settings.halloween)
+                            })
+                        }),
+                        ..Default::default()
+                    }
+                    .into(),
                 ],
                 ..Default::default()
             }
@@ -177,19 +193,6 @@ impl ksni::Tray for Tray {
                 label: if autumn { "Clear Leaves" } else { "Clear Snow" }.into(),
                 activate: Box::new(|tray: &mut Tray| {
                     let _ = tray.commands.send(Command::ClearSnow(!prefs::animations_enabled()));
-                }),
-                ..Default::default()
-            }
-            .into(),
-            CheckmarkItem {
-                label: "Halloween".into(),
-                checked: settings.halloween,
-                visible: self.season,
-                activate: Box::new(|tray: &mut Tray| {
-                    tray.change(|settings| {
-                        settings.halloween = !settings.halloween;
-                        Command::Halloween(settings.halloween)
-                    })
                 }),
                 ..Default::default()
             }
