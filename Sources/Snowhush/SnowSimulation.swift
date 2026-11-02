@@ -137,6 +137,11 @@ private struct GlassDrop {
     /// How far it has run since it last left a bead, and how far it runs before it leaves the next.
     var travelled: Float = 0
     var spacing: Float = 0
+    /// Caught under the window's bottom edge, it hangs there, taking in what runs down onto it, until it lets go;
+    /// how long it has hung, and how long it holds on.
+    var hanging = false
+    var hung: Float = 0
+    var patience: Float = 0
     /// Left behind by a running drop, or run out of water: it holds still and dries up.
     var bead = false
 }
@@ -425,6 +430,8 @@ final class SnowSimulation {
     private let beadDrying: Float = 0.3
     private let smallestRunning: Float = 1.6
     private let glassScale: Float = 1.6
+    /// A drop hanging under a window this big lets go almost at once; a smaller one waits a few seconds for more.
+    private let heavyHanging: Float = 3.6
     private var glassDrops: [GlassDrop] = []
 
     private let ground: SnowLayer
@@ -662,10 +669,14 @@ final class SnowSimulation {
             guard !drop.layer.faceOccluders.contains(where: { $0.x < position.x && $0.z > position.x && $0.y < position.y && $0.w > position.y }) else { continue }
             // It swells out of nothing as it gathers on the edge.
             let grown = drop.bead ? 1 : min(1, (drop.age / 0.15).squareRoot())
+            let size = max(drop.radius, 1.2) * 2 * glassScale * grown
+            // Hanging, it is drawn out into a neck up to the edge, longer as it is about to let go.
+            let stretch = smoothstep(drop.patience - 0.35, drop.patience, drop.hung)
+            let velocity = drop.hanging ? SIMD2(0, -size * (3 + 9 * stretch)) : drop.bead ? .zero : SIMD2(drop.slope, -1) * drop.speed
             buffer[count] = Sprite(
                 position: position,
-                velocity: drop.bead ? .zero : SIMD2(drop.slope, -1) * drop.speed,
-                size: max(drop.radius, 1.2) * 2 * glassScale * grown,
+                velocity: velocity,
+                size: size,
                 alpha: min(1, drop.radius / 0.35),
                 soft: 0,
                 rain: 2
@@ -2279,12 +2290,18 @@ final class SnowSimulation {
         while i >= 0 {
             var drop = glassDrops[i]
             drop.age += dt
-            if drop.bead {
+            if drop.hanging {
+                drop.hung += dt
+                if drop.hung >= drop.patience {
+                    fall(drop)
+                    drop.radius = 0
+                }
+            } else if drop.bead {
                 drop.radius -= beadDrying * dt
             } else {
                 run(&drop, index: i, dt: dt)
             }
-            let gone = drop.radius < 0.25 || -drop.offset.y > drop.face || drop.offset.x < 0 || drop.offset.x > drop.layer.width
+            let gone = drop.radius < 0.25 || (!drop.hanging && -drop.offset.y > drop.face) || drop.offset.x < 0 || drop.offset.x > drop.layer.width
                 || !layers.contains { $0 === drop.layer }
             if gone {
                 glassDrops.swapAt(i, glassDrops.count - 1)
@@ -2328,7 +2345,42 @@ final class SnowSimulation {
             drop.radius = min((drop.radius * drop.radius + glassDrops[j].radius * glassDrops[j].radius).squareRoot(), 9)
             glassDrops[j].radius = 0
         }
-        if drop.radius < smallestRunning { drop.bead = true }
+        if -drop.offset.y >= drop.face {
+            hang(&drop)
+        } else if drop.radius < smallestRunning {
+            drop.bead = true
+        }
+    }
+
+    /// Run down to the window's bottom edge, a drop hangs under it: a big one only a moment, a small one until what
+    /// runs down after it makes it heavy enough, or it gives up waiting.
+    private func hang(_ drop: inout GlassDrop) {
+        drop.hanging = true
+        drop.speed = 0
+        drop.slope = 0
+        drop.hung = 0
+        drop.offset.y = -drop.face - drop.radius * glassScale * 0.45
+        drop.patience = random.range(0.3, 0.9) + max(0, heavyHanging - drop.radius) * random.range(1.5, 3)
+    }
+
+    /// A hanging drop lets go and falls like any raindrop, to burst on whatever is below.
+    private func fall(_ drop: GlassDrop) {
+        let position = drop.layer.base + drop.offset
+        guard rain, position.y > 2 else { return }
+        flakes.append(Flake(
+            position: position,
+            velocity: SIMD2(0, -20),
+            fallSpeed: random.range(850, 1100),
+            size: 1.4 + drop.radius * 0.25,
+            depth: 1,
+            alpha: 0.45,
+            soft: 0.6,
+            phase: 0,
+            swayRate: 0,
+            swayAmount: 0,
+            settles: true,
+            rain: true
+        ))
     }
 
     private func trailSpacing(for radius: Float) -> Float {
