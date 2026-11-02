@@ -2317,7 +2317,10 @@ final class SnowSimulation {
     private func run(_ drop: inout GlassDrop, index: Int, dt: Float) {
         let excess = max(drop.radius - 1.2, 0)
         drop.speed += (min(700, 60 + 45 * pow(excess, 1.4)) * grip(at: drop.offset) - drop.speed) * min(1, dt * 5)
-        drop.slope = min(max((drop.slope + random.range(-1, 1) * dt * 1.6) * (1 - dt * 0.8), -0.25), 0.25)
+        // A window dragged along under it leaves it trailing a little behind; its own wandering stays within less.
+        let trail = -drop.layer.trackVelocity.x * 0.0006
+        let wander = (drop.slope + (random.range(-1, 1) * 1.6 + trail) * dt) * (1 - dt * 0.8)
+        drop.slope = min(max(wander, -0.45), 0.45)
         let heading = simd_normalize(SIMD2(drop.slope, -1))
         let advance = drop.speed * dt
         drop.offset += SIMD2(drop.slope, -1) * advance
