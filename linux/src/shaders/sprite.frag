@@ -294,13 +294,18 @@ vec4 rainAt(vec2 p) {
     vec2 halfStreak = vStreak * 0.5;
     float span = dot(halfStreak, halfStreak);
     if (vRain.x < 1.5) {
-        // Faint and cold, brightest at its head.
+        // Water in the air shows what is brightest around it: a bright thread against a dark backdrop, a darker one
+        // against a light one. Not knowing which is behind it, a raindrop is drawn as both, a bright core in a grey
+        // sheath, faint and brightest at its head.
         float t = span > 0.0 ? clamp(dot(p, halfStreak) / span, -1.0, 1.0) : 0.0;
         float r = length(p - halfStreak * t) / max(vRadius, 0.001);
         float head = span > 0.0 ? 0.25 + 0.75 * pow(t * 0.5 + 0.5, 2.0) : 1.0;
-        float a = (1.0 - smoothstep(mix(0.6, 0.0, vSoft), 1.0, r)) * vAlpha * head;
+        float strength = vAlpha * head;
+        float sheath = (1.0 - smoothstep(mix(0.5, 0.0, vSoft), 1.15, r)) * strength;
+        float core = (1.0 - smoothstep(0.0, 0.7, r)) * strength;
+        float a = sheath + core - sheath * core;
         if (a < 0.002) return vec4(0.0);
-        return vec4(vec3(0.78, 0.84, 0.92) * light.rgb * a, a);
+        return vec4(vec3(0.22, 0.26, 0.32) * sheath * (1.0 - core) + vec3(0.86, 0.9, 0.97) * light.rgb * core, a);
     }
     // A drop on the glass works as a little lens: darker toward its rim, most of all along its foot, where it bends
     // the light from above into a bright crescent, and a glint near its top. Its head leads; the tail it draws out
