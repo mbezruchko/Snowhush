@@ -168,6 +168,7 @@ pub struct Sprite {
     pub spin: [f32; 2],
     /// Draws rain instead, when the first is above zero: one for a raindrop's streak or a droplet it throws up, two
     /// for a drop on the glass, three for one hanging under a window's edge, the second then how far along it is.
+    /// A drop's `soft` is one when it is on a panel's shelf, which it shows in front of.
     pub rain: [f32; 2],
 }
 

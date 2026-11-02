@@ -245,6 +245,7 @@ impl SnowSimulation {
                 size: drop.radius.max(1.2) * 2.0 * GLASS_SCALE * grown,
                 // Drying up, a hanging drop fades rather than shrinking past the smallest drawn.
                 alpha: (drop.radius / if drop.hanging { 1.2 } else { 0.35 }).min(1.0),
+                soft: if self.shelf == Some(drop.layer) { 1.0 } else { 0.0 },
                 rain: if drop.hanging { [3.0, drop.stage()] } else { [2.0, 0.0] },
                 ..Sprite::default()
             })

@@ -334,7 +334,9 @@ void main() {
     vec2 p = vec2(vCoord.x - 0.5, 0.5 - vCoord.y);
     if (vRain.x > 0.0) {
         vec4 water = rainAt(p);
-        if (hidden || water.a < 0.002) discard;
+        // Rain falls behind the panel, but a drop on the panel itself runs down in front of it.
+        bool onPanel = vRain.x > 1.5 && vSoft > 0.5;
+        if ((hidden && !onPanel) || water.a < 0.002) discard;
         fragment = water;
         return;
     }
