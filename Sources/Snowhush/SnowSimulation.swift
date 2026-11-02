@@ -110,6 +110,9 @@ private struct Flake {
     var blown: Float = 0
     var leaf: Float = 0
     var rain = false
+    /// A drop come off the glass: how big the water it carries is, to run on down whatever window it lands on; zero
+    /// for rain from the sky.
+    var water: Float = 0
 }
 
 /// A droplet thrown up where a raindrop bursts on a window's edge or the bottom of the screen.
@@ -1582,8 +1585,8 @@ final class SnowSimulation {
                 if let hit = landing(x: flake.position.x, from: previousY, to: flake.position.y) {
                     if flake.rain {
                         splash(at: SIMD2(flake.position.x, hit.layer.surface(hit.index)), depth: flake.depth)
-                        if hit.layer !== ground && random.next() < runShare {
-                            runDown(hit.layer, from: flake.position.x)
+                        if hit.layer !== ground && (flake.water > 0 || random.next() < runShare) {
+                            runDown(hit.layer, from: flake.position.x, water: flake.water)
                         }
                         recycle(i)
                         i -= 1
@@ -2282,10 +2285,15 @@ final class SnowSimulation {
     }
 
     /// Now and then rain caught on the top edge of a window or the Dock gathers into a drop that runs down its face.
-    private func runDown(_ ledge: SnowLayer, from x: Float) {
+    private func runDown(_ ledge: SnowLayer, from x: Float, water: Float = 0) {
         guard glassDrops.count < maxGlassDrops else { return }
-        let u = random.next()
-        let radius = random.next() < 0.1 ? random.range(3.8, 4.6) : 2.2 + 2.2 * u * u
+        let radius: Float
+        if water > 0 {
+            radius = max(water, smallestRunning)
+        } else {
+            let u = random.next()
+            radius = random.next() < 0.1 ? random.range(3.8, 4.6) : 2.2 + 2.2 * u * u
+        }
         glassDrops.append(GlassDrop(
             layer: ledge,
             offset: SIMD2(x - ledge.base.x, -corner(of: ledge, at: x - ledge.base.x) - radius * 1.4),
@@ -2531,7 +2539,8 @@ final class SnowSimulation {
         (1.52 - 0.38 * min(drop.fill, 1)) * drop.radius * glassScale
     }
 
-    /// The part of a hanging drop that lets go falls like any raindrop, to burst on whatever is below.
+    /// The part of a hanging drop that lets go falls like any raindrop, to burst on whatever is below, and runs on down
+    /// a window it lands on.
     private func fall(_ drop: GlassDrop, share: Float? = nil, below: Float? = nil, flick: SIMD2<Float> = .zero, thrown: SIMD2<Float>? = nil) {
         let position = drop.layer.base + drop.offset - SIMD2(0, below ?? 2.6 * drop.radius * glassScale)
         guard rain, position.y > 2 else { return }
@@ -2552,7 +2561,8 @@ final class SnowSimulation {
             swayRate: 0,
             swayAmount: 0,
             settles: true,
-            rain: true
+            rain: true,
+            water: drop.radius * (share ?? fallingShare).squareRoot()
         ))
     }
 

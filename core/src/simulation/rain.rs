@@ -122,11 +122,12 @@ impl Rain {
 
 impl SnowSimulation {
     /// A raindrop landing at `x` on layer `li`: it bursts into a droplet or two, and now and then, on a window's top
-    /// edge, gathers into a drop that runs down its face.
-    pub(super) fn rain_landed(&mut self, li: usize, x: f32, surface: f32, depth: f32) {
+    /// edge, gathers into a drop that runs down its face. A drop come off the glass above, carrying `water`, always
+    /// runs on down the window it lands on.
+    pub(super) fn rain_landed(&mut self, li: usize, x: f32, surface: f32, depth: f32, water: f32) {
         self.splash(V2::new(x, surface), depth);
-        if li > 0 && self.air.random.next() < RUN_SHARE {
-            self.run_down(li, x);
+        if li > 0 && (water > 0.0 || self.air.random.next() < RUN_SHARE) {
+            self.run_down(li, x, water);
         }
     }
 
@@ -150,14 +151,18 @@ impl SnowSimulation {
         }
     }
 
-    fn run_down(&mut self, li: usize, x: f32) {
+    fn run_down(&mut self, li: usize, x: f32, water: f32) {
         if self.rain.drops.len() >= MAX_GLASS_DROPS {
             return;
         }
         let ledge = &self.layers[li];
         let random = &mut self.air.random;
-        let u = random.next();
-        let radius = if random.next() < 0.1 { random.range(3.8, 4.6) } else { 2.2 + 2.2 * u * u };
+        let radius = if water > 0.0 {
+            water.max(SMALLEST_RUNNING)
+        } else {
+            let u = random.next();
+            if random.next() < 0.1 { random.range(3.8, 4.6) } else { 2.2 + 2.2 * u * u }
+        };
         let along = x - ledge.origin.x;
         let mut drop = GlassDrop::new(self.ids[li], V2::new(along, -corner(ledge, along) - radius * 1.4), ledge.face, radius);
         drop.slope = random.range(-0.12, 0.12);
@@ -433,7 +438,8 @@ fn smear(air: &mut Air, drop: &GlassDrop, layer: &SnowLayer, point: V2, drops: &
     }
 }
 
-/// The part of a drop that lets go falls like any raindrop, to burst on whatever is below.
+/// The part of a drop that lets go falls like any raindrop, to burst on whatever is below, and runs on down a window
+/// it lands on.
 fn fall(air: &mut Air, drop: &GlassDrop, layer: &SnowLayer, share: f32, below: f32, throw: Throw) {
     let position = layer.origin + drop.offset - V2::new(0.0, below);
     if !air.rain || position.y <= 2.0 {
@@ -466,6 +472,7 @@ fn fall(air: &mut Air, drop: &GlassDrop, layer: &SnowLayer, share: f32, below: f
         blown: 0.0,
         leaf: 0.0,
         rain: true,
+        water: drop.radius * share.sqrt(),
     });
 }
 

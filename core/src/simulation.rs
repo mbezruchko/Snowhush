@@ -244,6 +244,9 @@ struct Flake {
     /// A leaf instead of a snowflake: its seed, which picks its shape and colour; zero for snow.
     leaf: f32,
     rain: bool,
+    /// A drop come off the glass: how big the water it carries is, to run on down whatever window it lands on; zero
+    /// for rain from the sky.
+    water: f32,
 }
 
 #[derive(Clone, Copy)]
@@ -807,6 +810,7 @@ impl SnowSimulation {
                 blown: 0.0,
                 leaf: 0.0,
                 rain: false,
+                water: 0.0,
             });
         }
     }
@@ -1042,7 +1046,7 @@ impl SnowSimulation {
                 if let Some((li, column)) = landing(&self.layers, flake.position.x, previous_y, flake.position.y) {
                     if flake.rain {
                         let surface = self.layers[li].surface(column);
-                        self.rain_landed(li, flake.position.x, surface, flake.depth);
+                        self.rain_landed(li, flake.position.x, surface, flake.depth, flake.water);
                         self.recycle(i);
                         continue;
                     }
@@ -2252,6 +2256,7 @@ impl Air {
             blown: 0.0,
             leaf: 0.0,
             rain: false,
+            water: 0.0,
         }
     }
 
@@ -2279,6 +2284,7 @@ impl Air {
             blown: 0.0,
             leaf: 0.0,
             rain: true,
+            water: 0.0,
         }
     }
 
@@ -2306,6 +2312,7 @@ impl Air {
             blown: 0.0,
             leaf: random.range(0.001, 1.0),
             rain: false,
+            water: 0.0,
         }
     }
 
