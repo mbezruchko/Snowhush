@@ -482,6 +482,22 @@ fn leaves_lie_where_they_land() {
 }
 
 #[test]
+fn unwithered_leaves_heap_no_deeper_than_snow() {
+    let mut simulation = SnowSimulation::new(800.0, 600.0, Snowfall::Heavy);
+    simulation.set_autumn(true);
+    simulation.thaws = false;
+    for _ in 0..15 * 60 * 30 {
+        simulation.step(1.0 / 30.0, AWAY);
+    }
+    let mut buffer = vec![0.0; simulation.column_count()];
+    let layers = simulation.write_layers(&mut buffer);
+    let ground = &layers[0];
+    let (surface, bed) = buffer[ground.offset..ground.offset + 2 * ground.count].split_at(ground.count);
+    let deepest = surface.iter().zip(bed).map(|(s, b)| s - b).fold(0.0, f32::max);
+    assert!(deepest < 60.0, "the leaves heaped {deepest} deep");
+}
+
+#[test]
 fn a_closed_window_drops_only_its_own_leaves() {
     let mut simulation = SnowSimulation::new(800.0, 600.0, Snowfall::Heavy);
     simulation.set_autumn(true);

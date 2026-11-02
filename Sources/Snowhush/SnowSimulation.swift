@@ -1477,7 +1477,8 @@ final class SnowSimulation {
                         snowfallReleased()
                     }
                     if flake.leaf > 0 {
-                        lay(size: flake.size, seed: flake.leaf, area: flake.size * leafBulk, at: flake.position.x, on: hit.layer,
+                        let bulk = hit.layer.fill(hit.index) > 0 ? flake.size * leafBulk : 0
+                        lay(size: flake.size, seed: flake.leaf, area: bulk, at: flake.position.x, on: hit.layer,
                             turn: turn(of: flake), flip: tumble(flake.leaf), drift: flake.velocity.x)
                     } else {
                         hit.layer.deposit(flake.size * flake.size * deposition * flake.mass * hit.layer.fill(hit.index), at: flake.position.x, wide: true)

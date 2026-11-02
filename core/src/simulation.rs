@@ -995,7 +995,8 @@ impl SnowSimulation {
                     }
                     if flake.leaf > 0.0 {
                         let (turn, flip) = (flake_turn(self.air.clock, &flake), tumble(self.air.clock, flake.leaf));
-                        self.lay(flake.size, flake.leaf, flake.size * LEAF_BULK, flake.position.x, li, turn, flip, flake.velocity.x);
+                        let bulk = if self.layers[li].fill(column) > 0.0 { flake.size * LEAF_BULK } else { 0.0 };
+                        self.lay(flake.size, flake.leaf, bulk, flake.position.x, li, turn, flip, flake.velocity.x);
                     } else {
                         let layer = &mut self.layers[li];
                         let amount = flake.size * flake.size * DEPOSITION * flake.mass * layer.fill(column);
