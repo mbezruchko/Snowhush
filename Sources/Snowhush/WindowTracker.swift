@@ -335,17 +335,22 @@ final class WindowTracker {
         fullScreenShare(in: Self.windowList(now: now))
     }
 
-    /// Whether Mission Control or App Exposé shows on this display: they lay a shield of their own over the screen,
-    /// and Mission Control keeps its bar of Spaces along the top, which stays as the shield drops out between Spaces.
+    /// Whether Mission Control or App Exposé shows on this display.
     func missionControlShows(now: CFTimeInterval) -> Bool {
         Self.windowList(now: now).contains { entry in
-            guard entry.owner == "WindowManager", let layer = entry.layer, layer > 0, let bounds = entry.bounds,
-                  bounds.intersects(screen)
-            else { return false }
-            let shield = bounds.width * bounds.height >= screen.width * screen.height * 0.9
-            let bar = bounds.width >= screen.width * 0.9 && bounds.minY <= screen.minY + 1 && bounds.height < screen.height * 0.3
-            return shield || bar
+            guard entry.owner == "WindowManager", let layer = entry.layer, layer > 0, let bounds = entry.bounds else { return false }
+            return isMissionControl(bounds)
         }
+    }
+
+    /// Mission Control and App Exposé lay a shield of their own over the screen, and Mission Control keeps its bar of
+    /// Spaces along the top, which stays while the shield drops out, as it does opening over a full-screen app and
+    /// between Spaces.
+    private func isMissionControl(_ bounds: CGRect) -> Bool {
+        guard bounds.intersects(screen) else { return false }
+        let shield = bounds.width * bounds.height >= screen.width * screen.height * 0.9
+        let bar = bounds.width >= screen.width * 0.9 && bounds.minY <= screen.minY + 1 && bounds.height < screen.height * 0.3
+        return shield || bar
     }
 
     private func fullScreenShare(in list: [ListedWindow]) -> CGFloat {
@@ -459,13 +464,14 @@ final class WindowTracker {
                 bounds = dock
                 dockOut = true
             }
-            guard bounds.intersects(screen) else { continue }
-            // Screen-sized windows above the normal layer (Notification Center, Siri) are transparent overlays.
-            if layer > 0 && bounds.width * bounds.height >= screen.width * screen.height * 0.9 {
-                // Mission Control and App Exposé lay a shield of their own over the screen.
-                if owner == "WindowManager" { exposing = true }
+            // Mission Control's shield, its bar of Spaces, their thumbnails and labels carry no snow.
+            if owner == "WindowManager" && layer > 0 {
+                if isMissionControl(bounds) { exposing = true }
                 continue
             }
+            guard bounds.intersects(screen) else { continue }
+            // Screen-sized windows above the normal layer (Notification Center, Siri) are transparent overlays.
+            if layer > 0 && bounds.width * bounds.height >= screen.width * screen.height * 0.9 { continue }
 
             let frame = CGRect(x: bounds.minX - screen.minX, y: screen.maxY - bounds.maxY, width: bounds.width, height: bounds.height)
             let roomAbove = bounds.minY - screen.minY >= menuBarHeight + 6 && frame.maxY < screen.height
