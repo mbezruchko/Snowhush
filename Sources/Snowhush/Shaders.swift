@@ -227,7 +227,18 @@ vertex SpriteOut spriteVertex(uint vid [[vertex_id]],
         float2 travel = !glass ? s.velocity * 0.028 : speed > 0.0 ? -s.velocity / speed * min(speed * 0.08, s.size * 0.9) : float2(0.0);
         float2 streak = travel * u.scale;
         float extent = max(pixels + length(streak) + (glass ? 2.0 : 0.0), 2.0);
-        out.position = float4((s.position - (glass ? -travel : travel) * 0.5 + u.shake.xy) / u.viewSize * 2.0 - 1.0, 0.0, 1.0);
+        float2 center = s.position - (glass ? -travel : travel) * 0.5;
+        // A drop hanging under an edge clings at `position`; `soft` is how far below that its bulb starts, in radii
+        // of the bulb, below zero while it still sits up on the edge.
+        if (s.rain > 2.5) {
+            float bulb = pixels * 0.5;
+            float neck = s.soft * bulb;
+            float top = max(0.0, -neck), bottom = -(neck + 2.0 * bulb);
+            extent = max(top - bottom, 2.0 * bulb) + 4.0;
+            center = s.position + float2(0.0, (top + bottom) * 0.5) / u.scale;
+            streak = float2(neck, 0.0);
+        }
+        out.position = float4((center + u.shake.xy) / u.viewSize * 2.0 - 1.0, 0.0, 1.0);
         out.pointSize = extent;
         out.streak = streak / extent;
         out.radius = pixels / extent * 0.5;
@@ -283,7 +294,46 @@ vertex SpriteOut spriteVertex(uint vid [[vertex_id]],
 }
 
 /// Rain, premultiplied: a streak or splash of water in the air, or a drop on the glass.
+static float smin(float a, float b, float k) {
+    float h = saturate(0.5 + 0.5 * (b - a) / k);
+    return mix(b, a, h) - k * h * (1.0 - h);
+}
+
+/// A drop hanging under an edge: a round bulb on a neck that spreads into a lip along the edge, drawn out longer and
+/// thinner as the bulb sinks. Lit like a drop on the glass: a dark rim, a bright crescent along its foot, a glint.
+static float4 hangingAt(SpriteOut in, float2 p) {
+    float radius = in.radius;
+    float neck = in.streak.x;
+    float top = max(0.0, -neck), bottom = -(neck + 2.0 * radius);
+    float2 cling = float2(0.0, -(top + bottom) * 0.5);
+    float2 q = (p - cling + float2(0.0, neck + radius)) / radius;
+    float2 edge = float2(0.0, neck / radius + 1.0);
+    float pull = saturate((neck / radius - 0.3) / 1.3);
+    float bulb = length(q) - 1.0;
+    float t = saturate(dot(q, edge) / max(dot(edge, edge), 0.0001));
+    float stem = length(q - edge * t) - mix(0.5, 0.26, pull);
+    float2 l = (q - edge + float2(0.0, 0.08)) / float2(0.75, 0.22);
+    float lip = (length(l) - 1.0) * 0.22;
+    float film = max(smin(stem, lip, 0.3), q.y - edge.y);
+    float d = smin(bulb, film, 0.35) + 1.0;
+    float aa = fwidth(d) * 1.2;
+    float inside = 1.0 - smoothstep(1.0 - aa, 1.0, d);
+    if (inside < 0.002) return float4(0.0);
+    float rim = smoothstep(0.45, 1.0, d);
+    float tiny = 1.0 - smoothstep(3.0, 9.0, in.size);
+    float darkA = 0.07 + 0.38 * rim * (0.55 + 0.45 * saturate(-q.y)) + 0.22 * tiny;
+    float crescent = (1.0 - smoothstep(0.55, 0.92, length(q))) * smoothstep(-0.05, -0.7, q.y) * smoothstep(0.75, 0.2, abs(q.x)) * 0.5;
+    float glint = exp(-dot(q - float2(-0.3, 0.38), q - float2(-0.3, 0.38)) / 0.035) * 0.95;
+    float lightA = saturate(crescent + glint);
+    float3 dark = float3(0.03, 0.04, 0.06);
+    float3 bright = float3(0.93, 0.96, 1.0) * in.light;
+    float a = (darkA + lightA - darkA * lightA) * inside * in.alpha;
+    float3 premultiplied = (dark * darkA * (1.0 - lightA) + bright * lightA) * inside * in.alpha;
+    return float4(premultiplied, a);
+}
+
 static float4 rainAt(SpriteOut in, float2 p) {
+    if (in.rain > 2.5) return hangingAt(in, p);
     float2 half_ = in.streak * 0.5;
     float span = dot(half_, half_);
     if (in.rain < 1.5) {
