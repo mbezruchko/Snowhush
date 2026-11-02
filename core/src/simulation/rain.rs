@@ -23,6 +23,11 @@ const GLASS_SCALE: f32 = 1.6;
 fn running_scale(radius: f32) -> f32 {
     1.2 - 0.2 * smoothstep(3.0, 4.6, radius)
 }
+/// How far a drop of `radius` reaches each way as drawn: one running down the glass, unless `still`, a little further.
+fn half_width(radius: f32, still: bool) -> f32 {
+    radius.max(1.2) * GLASS_SCALE * if still { 1.0 } else { running_scale(radius) }
+}
+
 /// How hard a window has to be shaken back and forth, in its swings against gravity, to shake off a drop of radius
 /// 2.4: far harder than its snow. A smaller one holds on harder, a hanging one less.
 const DROP_SHAKING: f32 = 22.0;
@@ -164,7 +169,9 @@ impl SnowSimulation {
             if random.next() < 0.1 { random.range(3.8, 4.6) } else { 2.2 + 2.2 * u * u }
         };
         let along = x - ledge.origin.x;
-        let mut drop = GlassDrop::new(self.ids[li], V2::new(along, -corner(ledge, along) - radius * 1.4), ledge.face, radius);
+        // It gathers right under the edge: its top, once it has swelled to its size, at the edge.
+        let top = -corner(ledge, along) - half_width(radius, false);
+        let mut drop = GlassDrop::new(self.ids[li], V2::new(along, top), ledge.face, radius);
         drop.slope = random.range(-0.12, 0.12);
         drop.spacing = trail_spacing(random.range(4.0, 9.0), radius);
         self.rain.drops.push(drop);
@@ -252,12 +259,15 @@ impl SnowSimulation {
             if hidden(layer, position) {
                 return None;
             }
-            // It swells out of nothing as it gathers on the edge.
+            // It swells out of nothing as it gathers on the edge, down from the edge, its top staying where it gathers.
+            let still = drop.hanging || drop.bead;
             let grown = if drop.bead { 1.0 } else { (drop.age / 0.15).sqrt().min(1.0) };
+            let half = half_width(drop.radius, still);
+            let swelling = if still { 0.0 } else { half * (1.0 - grown) };
             Some(Sprite {
-                position,
-                velocity: if drop.hanging || drop.bead { V2::ZERO } else { V2::new(drop.slope, -1.0) * drop.speed },
-                size: drop.radius.max(1.2) * 2.0 * GLASS_SCALE * if drop.hanging || drop.bead { 1.0 } else { running_scale(drop.radius) } * grown,
+                position: position + V2::new(0.0, swelling),
+                velocity: if still { V2::ZERO } else { V2::new(drop.slope, -1.0) * drop.speed },
+                size: half * 2.0 * grown,
                 // Drying up, a hanging drop fades rather than shrinking past the smallest drawn.
                 alpha: (drop.radius / if drop.hanging { 1.2 } else { 0.35 }).min(1.0),
                 soft: if self.shelf == Some(drop.layer) { 1.0 } else { 0.0 },

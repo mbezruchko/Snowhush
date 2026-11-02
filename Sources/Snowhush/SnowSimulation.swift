@@ -437,6 +437,12 @@ final class SnowSimulation {
     private let glassScale: Float = 1.6
     /// A drop running down the glass is drawn bigger still than the beads it leaves and the drops hanging below; the
     /// biggest no bigger than they were, or they would stand out.
+    /// How far a drop of `radius` reaches each way as drawn: one running down the glass, unless `still`, a little
+    /// further.
+    private func halfWidth(_ radius: Float, still: Bool) -> Float {
+        max(radius, 1.2) * glassScale * (still ? 1 : runningScale(radius))
+    }
+
     private func runningScale(_ radius: Float) -> Float {
         1.2 - 0.2 * smoothstep(3, 4.6, radius)
     }
@@ -686,12 +692,14 @@ final class SnowSimulation {
             let position = drop.layer.base + drop.offset
             // A window in front of the one it runs down hides it.
             guard !drop.layer.faceOccluders.contains(where: { $0.x < position.x && $0.z > position.x && $0.y < position.y && $0.w > position.y }) else { continue }
-            // It swells out of nothing as it gathers on the edge.
+            // It swells out of nothing as it gathers on the edge, down from the edge, its top staying where it gathers.
+            let still = drop.hanging || drop.bead
             let grown = drop.bead ? 1 : min(1, (drop.age / 0.15).squareRoot())
+            let half = halfWidth(drop.radius, still: still)
             buffer[count] = Sprite(
-                position: position,
-                velocity: drop.hanging || drop.bead ? .zero : SIMD2(drop.slope, -1) * drop.speed,
-                size: max(drop.radius, 1.2) * 2 * glassScale * (drop.hanging || drop.bead ? 1 : runningScale(drop.radius)) * grown,
+                position: position + SIMD2(0, still ? 0 : half * (1 - grown)),
+                velocity: still ? .zero : SIMD2(drop.slope, -1) * drop.speed,
+                size: half * 2 * grown,
                 // Drying up, a hanging drop fades rather than shrinking past the smallest drawn.
                 alpha: min(1, drop.radius / (drop.hanging ? 1.2 : 0.35)),
                 soft: drop.hanging ? hangingStage(of: drop) : 0,
@@ -2294,9 +2302,10 @@ final class SnowSimulation {
             let u = random.next()
             radius = random.next() < 0.1 ? random.range(3.8, 4.6) : 2.2 + 2.2 * u * u
         }
+        // It gathers right under the edge: its top, once it has swelled to its size, at the edge.
         glassDrops.append(GlassDrop(
             layer: ledge,
-            offset: SIMD2(x - ledge.base.x, -corner(of: ledge, at: x - ledge.base.x) - radius * 1.4),
+            offset: SIMD2(x - ledge.base.x, -corner(of: ledge, at: x - ledge.base.x) - halfWidth(radius, still: false)),
             face: ledge.face,
             radius: radius,
             slope: random.range(-0.12, 0.12),
