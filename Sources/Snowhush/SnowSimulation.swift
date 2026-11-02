@@ -2382,6 +2382,12 @@ final class SnowSimulation {
     /// together with any other hanging beside it close enough to touch.
     private func cling(_ drop: inout GlassDrop, index: Int, dt: Float) {
         drop.hung += dt
+        // The cursor brushing it knocks it off, all of it, flicked along the way the cursor goes.
+        if let cursor, touches(cursor, drop) {
+            fall(drop, share: 1, below: (0.6 + 1.2 * drop.fill) * drop.radius * glassScale, flick: cursorVelocity)
+            drop.radius = 0
+            return
+        }
         // It stays a flat cap for most of its filling and sags only as it gets close to letting go.
         let full = min(max((drop.radius - 1.4) / (heavyHanging - 1.4), 0), 1)
         drop.fill += (full * full * full - drop.fill) * min(1, dt * 6)
@@ -2409,21 +2415,33 @@ final class SnowSimulation {
         }
     }
 
+    /// Whether the cursor, at `point`, brushes a hanging drop where it shows.
+    private func touches(_ point: SIMD2<Float>, _ drop: GlassDrop) -> Bool {
+        let cling = drop.layer.base + drop.offset
+        let depth = (1 + 1.2 * drop.fill) * drop.radius * glassScale
+        guard abs(point.x - cling.x) < spread(of: drop) + cursorRadius * 0.7,
+              point.y < cling.y + cursorRadius * 0.5, point.y > cling.y - depth - cursorRadius else { return false }
+        return !drop.layer.faceOccluders.contains { $0.x < cling.x && $0.z > cling.x && $0.y < cling.y - 1 && $0.w > cling.y - 1 }
+    }
+
     /// How far a hanging drop reaches along the edge each way, as the shader draws it.
     private func spread(of drop: GlassDrop) -> Float {
         (1.52 - 0.38 * min(drop.fill, 1)) * drop.radius * glassScale
     }
 
     /// The part of a hanging drop that lets go falls like any raindrop, to burst on whatever is below.
-    private func fall(_ drop: GlassDrop) {
-        let position = drop.layer.base + drop.offset - SIMD2(0, 2.6 * drop.radius * glassScale)
+    private func fall(_ drop: GlassDrop, share: Float? = nil, below: Float? = nil, flick: SIMD2<Float> = .zero) {
+        let position = drop.layer.base + drop.offset - SIMD2(0, below ?? 2.6 * drop.radius * glassScale)
         guard rain, position.y > 2 else { return }
+        var velocity = flick * 0.5
+        let speed = simd_length(velocity)
+        if speed > 600 { velocity *= 600 / speed }
         // Free of the edge, it is falling fast within a few hundredths of a second.
         flakes.append(Flake(
             position: position,
-            velocity: SIMD2(0, -300),
+            velocity: velocity + SIMD2(0, flick == .zero ? -300 : -120),
             fallSpeed: random.range(850, 1100),
-            size: 1.4 + drop.radius * fallingShare.squareRoot() * 0.25,
+            size: 1.4 + drop.radius * (share ?? fallingShare).squareRoot() * 0.25,
             depth: 1,
             alpha: 0.45,
             soft: 0.6,
