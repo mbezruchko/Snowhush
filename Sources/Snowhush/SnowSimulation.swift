@@ -2368,6 +2368,7 @@ final class SnowSimulation {
     /// Run down to the window's bottom edge, a drop wraps round it and hangs under it, settling into the shape its
     /// water makes there. Joining one already hanging there, it hangs as that one did.
     private func hang(_ drop: inout GlassDrop, fill: Float) {
+        let speed = drop.speed
         drop.hanging = true
         drop.speed = 0
         drop.slope = 0
@@ -2375,6 +2376,13 @@ final class SnowSimulation {
         drop.hung = 0
         drop.fill = fill
         drop.letsGo = .infinity
+        // More water than the edge can hold runs straight on over it and falls; the edge keeps what it can.
+        if drop.radius > heavyHanging {
+            let kept = heavyHanging * 0.8
+            let share = 1 - (kept * kept) / (drop.radius * drop.radius)
+            fall(drop, share: share, below: drop.radius * glassScale, flick: SIMD2(0, -2 * max(speed, 150)))
+            drop.radius = kept
+        }
     }
 
     /// A hanging drop sags further the more water it holds. Heavy enough, it pinches off in an instant: the lower
@@ -2398,7 +2406,7 @@ final class SnowSimulation {
             drop.letsGo = .infinity
             return
         }
-        if drop.radius >= heavyHanging && drop.fill > 0.9 {
+        if drop.radius >= heavyHanging {
             drop.letsGo = drop.hung + pinching
             return
         }
