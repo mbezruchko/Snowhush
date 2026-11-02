@@ -291,9 +291,9 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                 let covering = tracker.covering(&screen.monitor.bounds);
                 if covering.is_some() != screen.covered() {
                     log!("{} {}", screen.monitor.name, covering.map_or("uncovered".to_string(), |class| format!("covered by {class}")));
-                    screen.set_covered(covering.is_some());
+                    screen.set_covered(&gpu, covering.is_some());
                 }
-                if screen.covered() {
+                if screen.hidden() {
                     screen.next_due = now + clock.frequency / 4;
                     continue;
                 }

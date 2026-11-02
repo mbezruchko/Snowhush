@@ -62,6 +62,10 @@ final class WindowTracker {
     private var dockShownAt: CFTimeInterval?
     /// The Dock's window while a full-screen app keeps the Dock away.
     private var sinkingDock: CGWindowID?
+    /// A full-screen app shows on this display, from the moment its Space starts sliding in.
+    private(set) var fullScreenInView = false
+    /// How much of this display a full-screen app's Space covers, from 0 to 1, as it slides in or away.
+    private(set) var fullScreenShare: CGFloat = 0
     private var alphas: [CGWindowID: Double] = [:]
     /// Windows on their way out before the window list shows it, as during a minimize's genie animation;
     /// left out until they're gone or their time is up.
@@ -326,6 +330,64 @@ final class WindowTracker {
         return shelf.offsetBy(dx: 0, dy: (screen.maxY - shelf.minY) * (1 - rise))
     }
 
+    /// How much of this display a full-screen app's Space covers, read from the window list alone, without a poll.
+    func readFullScreenShare(now: CFTimeInterval) -> CGFloat {
+        fullScreenShare(in: Self.windowList(now: now))
+    }
+
+    /// Whether Mission Control or App Exposé shows on this display: they lay a shield of their own over the screen,
+    /// and Mission Control keeps its bar of Spaces along the top, which stays as the shield drops out between Spaces.
+    func missionControlShows(now: CFTimeInterval) -> Bool {
+        Self.windowList(now: now).contains { entry in
+            guard entry.owner == "WindowManager", let layer = entry.layer, layer > 0, let bounds = entry.bounds,
+                  bounds.intersects(screen)
+            else { return false }
+            let shield = bounds.width * bounds.height >= screen.width * screen.height * 0.9
+            let bar = bounds.width >= screen.width * 0.9 && bounds.minY <= screen.minY + 1 && bounds.height < screen.height * 0.3
+            return shield || bar
+        }
+    }
+
+    private func fullScreenShare(in list: [ListedWindow]) -> CGFloat {
+        let candidates = list.compactMap { entry -> (id: CGWindowID, bounds: CGRect)? in
+            guard entry.layer == 0, let id = entry.id, let bounds = entry.bounds, fillsScreen(bounds) else { return nil }
+            return (id, bounds)
+        }
+        guard !candidates.isEmpty, let fullScreen = Spaces.fullScreen(), !fullScreen.isEmpty else { return 0 }
+        return candidates.reduce(0) { share, candidate in
+            guard let spaces = Spaces.of(candidate.id), !spaces.isDisjoint(with: fullScreen) else { return share }
+            return max(share, candidate.bounds.intersection(screen).width / screen.width)
+        }
+    }
+
+    /// How much of this display desktops cover while a full-screen app's Space is current, from 0 to 1, read from the
+    /// window list alone: what the app's windows leave of it as they slide away, or what a desktop's windows show of
+    /// it as they slide in, whichever is more; nil with neither in sight. A desktop may have no windows, and an app's
+    /// window may stay put in the list as its Space slides.
+    func desktopShare(now: CFTimeInterval) -> CGFloat? {
+        guard let fullScreen = Spaces.fullScreen() else { return nil }
+        var apps: [UInt64: CGFloat] = [:]
+        var desktops: [UInt64: CGFloat] = [:]
+        let area = screen.width * (screen.height - menuBarHeight) * 0.9
+        for entry in Self.windowList(now: now) {
+            guard entry.layer == 0, entry.pid != ownPID, let id = entry.id, let listed = entry.bounds else { continue }
+            let large = listed.width * listed.height >= area
+            let inView = listed.intersects(screen)
+            guard large || inView, let spaces = Spaces.of(id), let space = spaces.first else { continue }
+            if !spaces.isDisjoint(with: fullScreen) {
+                guard large else { continue }
+                apps[space] = max(apps[space] ?? 0, listed.intersection(screen).width / screen.width)
+            } else if inView {
+                // The list shows the window sliding in with its Space; its frame on the Space stays put.
+                let shown = SkyLight.bounds(of: id).map { max(0, 1 - abs(listed.minX - $0.minX) / screen.width) } ?? 1
+                desktops[space] = max(desktops[space] ?? 0, shown)
+            }
+        }
+        guard !apps.isEmpty || !desktops.isEmpty else { return nil }
+        let left = apps.isEmpty ? 0 : 1 - min(1, apps.values.reduce(0, +))
+        return max(left, min(1, desktops.values.reduce(0, +)))
+    }
+
     /// Whether an app in full screen shows on this display, its window reaching down past the Dock: the Dock sinks away
     /// as soon as the app's Space starts sliding in and stays away there, though the window server still reports it out.
     private func fullScreenAppHidesDock(in list: [ListedWindow]) -> Bool {
@@ -362,6 +424,8 @@ final class WindowTracker {
         var checked: [CGWindowID: (bounds: CGRect, card: Bool)] = [:]
         exposing = false
         sinkingDock = nil
+        fullScreenInView = fullScreenAppHidesDock(in: list)
+        fullScreenShare = fullScreenShare(in: list)
         defer {
             alphas = fresh
             panelsShownAt = panels
@@ -386,7 +450,7 @@ final class WindowTracker {
             let owner = entry.owner ?? ""
             let shelf = owner == "Dock" && layer == dockLevel
             if shelf {
-                if fullScreenAppHidesDock(in: list) {
+                if fullScreenInView {
                     sinkingDock = id
                     continue
                 }
@@ -692,7 +756,7 @@ enum SkyLight {
 }
 
 /// Which Spaces windows are on, through private SkyLight calls; when they're unavailable, nothing can be told.
-private enum Spaces {
+enum Spaces {
     private typealias SpacesForWindows = @convention(c) (Int32, Int32, CFArray) -> Unmanaged<CFArray>?
     private typealias DisplaySpaces = @convention(c) (Int32) -> Unmanaged<CFArray>?
 
@@ -716,6 +780,20 @@ private enum Spaces {
         // Type 4 is a full-screen app's Space; a desktop is type 0.
         let spaces = displays.flatMap { $0["Spaces"] as? [[String: Any]] ?? [] }
         return Set(spaces.filter { ($0["type"] as? NSNumber)?.intValue == 4 }.compactMap(id))
+    }
+
+    /// The Spaces of apps in full screen on a display, and whether one of them is showing.
+    static func fullScreen(on display: CGDirectDisplayID) -> (spaces: Set<UInt64>, showing: Bool)? {
+        guard let connection = SkyLight.connection,
+              let displays = displaySpaces?(connection)?.takeRetainedValue() as? [[String: Any]]
+        else { return nil }
+        let uuid = CGDisplayCreateUUIDFromDisplayID(display).map { CFUUIDCreateString(nil, $0.takeRetainedValue()) as String }
+        // Without separate Spaces for each display there is one entry, "Main", for them all.
+        guard let entry = displays.first(where: { $0["Display Identifier"] as? String == uuid }) ?? (displays.count == 1 ? displays.first : nil)
+        else { return nil }
+        let spaces = (entry["Spaces"] as? [[String: Any]] ?? []).filter { ($0["type"] as? NSNumber)?.intValue == 4 }.compactMap(id)
+        let current = entry["Current Space"] as? [String: Any]
+        return (Set(spaces), (current?["type"] as? NSNumber)?.intValue == 4)
     }
 
     static func of(_ window: CGWindowID) -> Set<UInt64>? {

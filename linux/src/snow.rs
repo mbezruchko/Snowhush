@@ -358,9 +358,9 @@ impl App {
             let covering = report.as_deref().and_then(|report| windows::covering(report, &screen.bounds));
             if covering.is_some() != screen.covered() {
                 log!("{} {}", screen.name, covering.map_or("uncovered".to_string(), |class| format!("covered by {class}")));
-                screen.set_covered(&self.gpu, covering.is_some());
+                screen.set_covered(covering.is_some());
             }
-            if screen.covered() {
+            if screen.hidden() {
                 screen.next_due = now + Duration::from_millis(250);
                 continue;
             }

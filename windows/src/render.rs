@@ -10,7 +10,8 @@ use windows::Win32::Graphics::Direct3D::{
 };
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::DirectComposition::{
-    DCOMPOSITION_BITMAP_INTERPOLATION_MODE_LINEAR, DCompositionCreateDevice, IDCompositionDevice, IDCompositionTarget, IDCompositionVisual,
+    DCOMPOSITION_BITMAP_INTERPOLATION_MODE_LINEAR, DCompositionCreateDevice, IDCompositionDevice, IDCompositionEffectGroup, IDCompositionTarget,
+    IDCompositionVisual,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R32_FLOAT,
@@ -372,6 +373,8 @@ pub struct Surface {
     target_view: ID3D11RenderTargetView,
     _target: IDCompositionTarget,
     _visual: IDCompositionVisual,
+    /// How much of the snow shows, as it fades out under a full-screen app and back in.
+    effect: IDCompositionEffectGroup,
     width: u32,
     height: u32,
     sprites: Option<ID3D11Buffer>,
@@ -407,6 +410,8 @@ impl Surface {
             visual.SetContent(&swap_chain)?;
             visual.SetBitmapInterpolationMode(DCOMPOSITION_BITMAP_INTERPOLATION_MODE_LINEAR)?;
             visual.SetTransform2(&Matrix3x2 { M11: scale.0, M12: 0.0, M21: 0.0, M22: scale.1, M31: 0.0, M32: 0.0 })?;
+            let effect = gpu.composition.CreateEffectGroup()?;
+            visual.SetEffect(&effect)?;
             target.SetRoot(&visual)?;
             gpu.composition.Commit()?;
 
@@ -415,6 +420,7 @@ impl Surface {
                 target_view: target_view.ok_or_else(Error::empty)?,
                 _target: target,
                 _visual: visual,
+                effect,
                 width,
                 height,
                 sprites: None,
@@ -422,6 +428,13 @@ impl Surface {
                 heights: None,
                 height_capacity: 0,
             })
+        }
+    }
+
+    pub fn set_opacity(&self, gpu: &Gpu, opacity: f32) -> Result<()> {
+        unsafe {
+            self.effect.SetOpacity2(opacity)?;
+            gpu.composition.Commit()
         }
     }
 
