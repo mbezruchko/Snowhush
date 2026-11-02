@@ -432,6 +432,9 @@ final class SnowSimulation {
     private let beadDrying: Float = 0.3
     private let smallestRunning: Float = 1.6
     private let glassScale: Float = 1.6
+    /// How hard a window has to be shaken back and forth, in its swings against gravity, to shake off a drop of
+    /// radius 2.4: far harder than its snow. A smaller one holds on harder, a hanging one less.
+    private let dropShaking: Float = 22
     /// A drop hanging under a window this big lets go; a smaller one clings on, waiting for more, and dries up.
     private let heavyHanging: Float = 2.6
     /// However much runs together, a drop on the glass grows no bigger than this.
@@ -1025,6 +1028,7 @@ final class SnowSimulation {
         let previousVelocity = ledge.trackVelocity
         smoothDamp(&ledge.track, &ledge.trackVelocity, toward: ledge.origin, time: trackTime, dt: dt)
         let acceleration = (ledge.trackVelocity - previousVelocity) / dt
+        ledge.jolt = acceleration
         // Agitation is vibration: two consecutive back-and-forth swings, not a single start or stop.
         ledge.agitation *= exp(-dt / 0.3)
         let magnitude = simd_length(acceleration)
@@ -2295,7 +2299,12 @@ final class SnowSimulation {
         while i >= 0 {
             var drop = glassDrops[i]
             drop.age += dt
-            if drop.hanging {
+            if shaken(drop, dt: dt) {
+                // It flies on as the window was going before the jerk.
+                let thrown = drop.layer.trackVelocity - drop.layer.jolt * dt
+                fall(drop, share: 1, below: drop.hanging ? drop.radius * glassScale : 0, thrown: thrown)
+                drop.radius = 0
+            } else if drop.hanging {
                 cling(&drop, index: i, dt: dt)
             } else if drop.bead {
                 drop.radius -= beadDrying * dt
@@ -2426,6 +2435,16 @@ final class SnowSimulation {
         }
     }
 
+    /// Whether shaking its window back and forth shakes a drop off the glass this step: the harder the shaking and
+    /// the bigger the drop, the likelier. A single start or stop doesn't, nor a switch between Spaces.
+    private func shaken(_ drop: GlassDrop, dt: Float) -> Bool {
+        let layer = drop.layer
+        guard !layer.carried, clock - spaceChangedAt > 0.6 else { return false }
+        let hold = dropShaking * 2.4 / max(drop.radius, 0.3) * (drop.hanging ? 0.7 : 1)
+        guard layer.agitation > hold else { return false }
+        return random.next() < min(0.9, 0.3 * (layer.agitation - hold)) * dt * 10
+    }
+
     /// Whether the cursor, at `point`, brushes a hanging drop where it shows.
     private func touches(_ point: SIMD2<Float>, _ drop: GlassDrop) -> Bool {
         let cling = drop.layer.base + drop.offset
@@ -2441,16 +2460,17 @@ final class SnowSimulation {
     }
 
     /// The part of a hanging drop that lets go falls like any raindrop, to burst on whatever is below.
-    private func fall(_ drop: GlassDrop, share: Float? = nil, below: Float? = nil, flick: SIMD2<Float> = .zero) {
+    private func fall(_ drop: GlassDrop, share: Float? = nil, below: Float? = nil, flick: SIMD2<Float> = .zero, thrown: SIMD2<Float>? = nil) {
         let position = drop.layer.base + drop.offset - SIMD2(0, below ?? 2.6 * drop.radius * glassScale)
         guard rain, position.y > 2 else { return }
-        var velocity = flick * 0.5
+        var velocity = thrown ?? flick * 0.5
         let speed = simd_length(velocity)
-        if speed > 600 { velocity *= 600 / speed }
+        let fastest: Float = thrown == nil ? 600 : 1200
+        if speed > fastest { velocity *= fastest / speed }
         // Free of the edge, it is falling fast within a few hundredths of a second.
         flakes.append(Flake(
             position: position,
-            velocity: velocity + SIMD2(0, flick == .zero ? -300 : -120),
+            velocity: velocity + SIMD2(0, thrown != nil ? -60 : flick == .zero ? -300 : -120),
             fallSpeed: random.range(850, 1100),
             size: 1.4 + drop.radius * (share ?? fallingShare).squareRoot() * 0.25,
             depth: 1,

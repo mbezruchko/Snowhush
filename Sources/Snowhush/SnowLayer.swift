@@ -35,6 +35,8 @@ final class SnowLayer {
     /// Smoothed path of the supporting edge; the snow reacts to its accelerations, not to raw jittery samples.
     var track: SIMD2<Float>
     var trackVelocity = SIMD2<Float>(repeating: 0)
+    /// How hard the window was jerked this step: its acceleration.
+    var jolt = SIMD2<Float>(repeating: 0)
     /// The snow body's displacement from its support: x slides along it, y lifts off it.
     var offset = SIMD2<Float>(repeating: 0)
     var offsetVelocity = SIMD2<Float>(repeating: 0)
