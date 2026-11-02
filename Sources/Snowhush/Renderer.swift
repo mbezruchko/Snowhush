@@ -47,6 +47,8 @@ final class Renderer: NSObject, MTKViewDelegate {
     /// Frames per second while the snow is being disturbed: the display's highest rate, up to 120 on ProMotion screens.
     var interactiveFrameRate = 60
     var budget = PowerBudget.full
+    /// Every frame at the display's highest rate, whatever the snow is doing and whatever the power.
+    var maxFrameRate = false
     /// Called when there is nothing to draw and nothing on its way, for the view to stop until the snow is stirred.
     var rest: () -> Void = {}
     private static let lanternReach: Float = 130
@@ -200,7 +202,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         case .lively: min(60, fastest)
         case .interactive: fastest
         }
-        let pace = lanternMoved ? max(frameRate, min(60, fastest)) : frameRate
+        let pace = maxFrameRate ? interactiveFrameRate : lanternMoved ? max(frameRate, min(60, fastest)) : frameRate
         if view.preferredFramesPerSecond != pace { view.preferredFramesPerSecond = pace }
         idleFrames = changed || lanternMoved ? 0 : idleFrames + 1
         // A still pile only needs a slow refresh for its glints.

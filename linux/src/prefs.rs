@@ -20,6 +20,8 @@ pub struct Settings {
     pub halloween: Choice,
     /// What falls: snow, leaves or rain.
     pub mode: Mode,
+    /// Drawn at the display's highest rate all the time, instead of only while something is pushed around.
+    pub max_performance: bool,
 }
 
 impl Settings {
@@ -40,6 +42,7 @@ impl Settings {
             show_in_screenshots: read("showInScreenshots").is_some_and(|v| v != 0),
             halloween: Choice { on: read("halloweenOn").is_some_and(|v| v != 0), skipped: read("halloweenSkipped").unwrap_or(0) },
             // Before rain there was only a switch for leaves.
+            max_performance: read("performance").is_some_and(|v| v == 1),
             mode: read("mode").and_then(|i| MODES.get(i as usize).copied()).unwrap_or(if read("autumn").is_some_and(|v| v != 0) {
                 Mode::Autumn
             } else {
@@ -52,7 +55,7 @@ impl Settings {
         let Some(folder) = config_dir() else { return };
         let snowfall = Snowfall::ALL.iter().position(|&s| s == self.snowfall).unwrap_or(2);
         let text = format!(
-            "snowfall={snowfall}\naccumulate={}\nmeltSnow={}\nsnowOnWindows={}\nbehindWindows={}\nshowOverFullScreen={}\nshowInScreenshots={}\nhalloweenOn={}\nhalloweenSkipped={}\nmode={}\nautumn={}\n",
+            "snowfall={snowfall}\naccumulate={}\nmeltSnow={}\nsnowOnWindows={}\nbehindWindows={}\nshowOverFullScreen={}\nshowInScreenshots={}\nhalloweenOn={}\nhalloweenSkipped={}\nmode={}\nautumn={}\nperformance={}\n",
             self.accumulate as u32,
             self.melt as u32,
             self.snow_on_windows as u32,
@@ -62,7 +65,8 @@ impl Settings {
             self.halloween.on as u32,
             self.halloween.skipped,
             MODES.iter().position(|&m| m == self.mode).unwrap_or(0),
-            (self.mode == Mode::Autumn) as u32
+            (self.mode == Mode::Autumn) as u32,
+            self.max_performance as u32
         );
         let _ = std::fs::create_dir_all(&folder);
         let _ = std::fs::write(folder.join("settings"), text);

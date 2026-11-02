@@ -23,6 +23,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var snowItem: NSMenuItem!
     private var autumnItem: NSMenuItem!
     private var rainItem: NSMenuItem!
+    private var defaultPerformanceItem: NSMenuItem!
+    private var maxPerformanceItem: NSMenuItem!
     private var behindWindowsItem: NSMenuItem!
     private var fullScreenItem: NSMenuItem!
     private var screenshotsItem: NSMenuItem!
@@ -90,6 +92,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
                 snow.simulation.snowfallReleased = { [weak self] in self?.releaseSnowfall() }
                 snow.halloween = halloween
                 snow.mode = Preferences.mode
+                snow.maxFrameRate = Preferences.maxPerformance
                 snow.activityChanged = { [weak self] in self?.updateActivity() }
                 snow.apply(power.budget)
                 screens.append(snow)
@@ -149,6 +152,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         modes.addItem(.separator())
         halloweenItem = add("Halloween", #selector(toggleHalloween), to: modes)
         menu.addItem(withTitle: "Mode", action: nil, keyEquivalent: "").submenu = modes
+        let performance = NSMenu()
+        performance.autoenablesItems = false
+        defaultPerformanceItem = add("Default", #selector(choosePerformance), to: performance)
+        maxPerformanceItem = add("Max", #selector(choosePerformance), to: performance)
+        menu.addItem(withTitle: "Performance", action: nil, keyEquivalent: "").submenu = performance
         accumulateItem = add("Accumulate", #selector(toggleAccumulate), to: menu)
         meltItem = add("Melt Snow", #selector(toggleMeltSnow), to: menu)
         snowOnWindowsItem = add("Snow on Windows", #selector(toggleSnowOnWindows), to: menu)
@@ -196,6 +204,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         clearItem.isEnabled = screens.contains { $0.simulation.hasSnow || $0.simulation.spriteCount > 0 }
         halloweenItem.state = Halloween.isWanted ? .on : .off
         halloweenItem.isEnabled = mode == .snow
+        defaultPerformanceItem.state = Preferences.maxPerformance ? .off : .on
+        maxPerformanceItem.state = Preferences.maxPerformance ? .on : .off
         behindWindowsItem.state = behindWindows ? .on : .off
         fullScreenItem.state = Preferences.showOverFullScreen ? .on : .off
         fullScreenItem.isEnabled = !behindWindows
@@ -275,6 +285,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         let direction = screens.first?.simulation.breezeDirection ?? -1
         let calm = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         for snow in screens { snow.simulation.switchMode(to: mode, direction: direction, calm: calm) }
+    }
+
+    @objc private func choosePerformance(_ sender: NSMenuItem) {
+        Preferences.maxPerformance = sender === maxPerformanceItem
+        for snow in screens { snow.maxFrameRate = Preferences.maxPerformance }
     }
 
     @objc private func toggleHalloween() {

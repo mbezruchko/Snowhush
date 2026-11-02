@@ -40,6 +40,8 @@ pub enum Command {
     SnowOnWindows(bool),
     BehindWindows(bool),
     OverFullScreen(bool),
+    /// Every frame at the display's highest rate, or as fast as what moves needs.
+    Performance(bool),
     ShowInScreenshots(bool),
     /// Halloween turned on or off from the menu.
     Halloween(Choice),
@@ -253,6 +255,10 @@ impl App {
                 let over = self.settings.over_full_screen;
                 self.screens.iter_mut().for_each(|screen| screen.set_layer(on, over));
             }
+            Command::Performance(max) => {
+                self.settings.max_performance = max;
+                self.screens.iter_mut().for_each(|screen| screen.max_rate = max);
+            }
             Command::OverFullScreen(on) => {
                 self.settings.over_full_screen = on;
                 let behind = self.settings.behind_windows;
@@ -429,7 +435,7 @@ impl App {
             log!("display {name}: {bounds:?}, scale {}, {refresh} Hz", info.scale_factor);
             let mut simulation = new_simulation(&bounds, &self.settings, self.budget);
             simulation.set_halloween(self.halloween);
-            let screen = Screen::new(
+            let mut screen = Screen::new(
                 (&self.compositor, &self.layer_shell, &self.qh),
                 output.clone(),
                 name,
@@ -438,6 +444,7 @@ impl App {
                 simulation,
                 screen::layer_for(self.settings.behind_windows, self.settings.over_full_screen),
             );
+            screen.max_rate = self.settings.max_performance;
             self.screens.push(screen);
         }
         for screen in current {

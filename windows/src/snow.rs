@@ -41,6 +41,8 @@ pub enum Command {
     SnowOnWindows(bool),
     BehindWindows(bool),
     OverFullScreen(bool),
+    /// Every frame at the display's highest rate, or as fast as what moves needs.
+    Performance(bool),
     BehindTaskbar(bool),
     /// Explorer started again, taking the desktop's wallpaper layer with it.
     ShellRestarted,
@@ -140,6 +142,10 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                     screens = sync_screens(&gpu, &settings, screens, layer, true);
                 }
                 Command::OverFullScreen(on) => settings.over_full_screen = on,
+                Command::Performance(max) => {
+                    settings.max_performance = max;
+                    screens.iter_mut().for_each(|screen| screen.max_rate = max);
+                }
                 Command::BehindTaskbar(on) => {
                     settings.behind_taskbar = on;
                     screens = sync_screens(&gpu, &settings, screens, layer, true);

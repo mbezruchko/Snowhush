@@ -54,6 +54,8 @@ pub struct Screen {
     last_step: Option<Instant>,
     idle_frames: u32,
     interactive_rate: u32,
+    /// Every frame at `interactive_rate`, whatever the snow is doing and whatever the power.
+    pub max_rate: bool,
     surfaces: Vec<WindowSurface>,
     windows_seen: u64,
     windows_changed_at: Instant,
@@ -109,6 +111,7 @@ impl Screen {
             last_step: None,
             idle_frames: 0,
             interactive_rate: refresh.clamp(60, 120),
+            max_rate: false,
             surfaces: Vec::new(),
             windows_seen: 0,
             windows_changed_at: Instant::now(),
@@ -244,7 +247,13 @@ impl Screen {
             Pace::Lively => fastest.min(60),
             Pace::Interactive => fastest,
         };
-        let rate = if lantern_moved || fading { rate.max(fastest.min(60)) } else { rate };
+        let rate = if self.max_rate {
+            self.interactive_rate
+        } else if lantern_moved || fading {
+            rate.max(fastest.min(60))
+        } else {
+            rate
+        };
         self.next_due = now + Duration::from_secs_f64(1.0 / rate as f64);
         self.idle_frames = if changed || lantern_moved { 0 } else { self.idle_frames + 1 };
         // A still pile only needs a slow refresh for its glints, and the pumpkins for their candles' flicker; once

@@ -162,6 +162,28 @@ impl ksni::Tray for Tray {
                 ..Default::default()
             }
             .into(),
+            SubMenu {
+                label: "Performance".into(),
+                submenu: vec![
+                    RadioGroup {
+                        selected: usize::from(settings.max_performance),
+                        select: Box::new(|tray: &mut Tray, index| {
+                            let max = index == 1;
+                            if max == tray.settings.max_performance {
+                                return;
+                            }
+                            tray.change(|settings| {
+                                settings.max_performance = max;
+                                Command::Performance(max)
+                            });
+                        }),
+                        options: ["Default", "Max"].iter().map(|&label| RadioItem { label: label.into(), ..Default::default() }).collect(),
+                    }
+                    .into(),
+                ],
+                ..Default::default()
+            }
+            .into(),
             CheckmarkItem {
                 label: "Accumulate".into(),
                 checked: settings.accumulate,

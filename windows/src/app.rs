@@ -49,6 +49,8 @@ const ID_SNOW: u32 = 210;
 const ID_AUTUMN: u32 = 211;
 const ID_FULL_SCREEN: u32 = 212;
 const ID_RAIN: u32 = 213;
+const ID_PERFORMANCE: u32 = 214;
+const ID_MAX_PERFORMANCE: u32 = 215;
 const TIMER_WELCOME: usize = 1;
 const TIMER_UPDATES: usize = 2;
 const TIMER_HALLOWEEN: usize = 3;
@@ -351,6 +353,13 @@ fn entries(settings: &Settings, login: bool) -> Vec<Entry> {
     let mut entries = vec![
         Entry::Submenu { label: "Intensity".to_string(), entries: snowfall },
         Entry::Submenu { label: "Mode".to_string(), entries: modes },
+        Entry::Submenu {
+            label: "Performance".to_string(),
+            entries: vec![
+                Entry::choice(ID_PERFORMANCE, "Default", !settings.max_performance),
+                Entry::choice(ID_MAX_PERFORMANCE, "Max", settings.max_performance),
+            ],
+        },
         Entry::Separator,
     ];
     // Rain doesn't lie anywhere: nothing to keep, melt or clear.
@@ -491,6 +500,10 @@ fn choose(window: HWND, chosen: u32, login: bool) {
                 ID_SCREENSHOTS => {
                     settings.show_in_screenshots = !settings.show_in_screenshots;
                     Command::ShowInScreenshots(settings.show_in_screenshots)
+                }
+                ID_PERFORMANCE | ID_MAX_PERFORMANCE => {
+                    settings.max_performance = chosen == ID_MAX_PERFORMANCE;
+                    Command::Performance(settings.max_performance)
                 }
                 _ => {
                     let Some(&snowfall) = Snowfall::ALL.get(chosen.wrapping_sub(ID_SNOWFALL) as usize) else { return };

@@ -221,6 +221,8 @@ pub struct Screen {
     last_step: i64,
     idle_frames: u32,
     interactive_rate: u32,
+    /// Every frame at `interactive_rate`, whatever the snow is doing and whatever the power.
+    pub max_rate: bool,
     surfaces: Vec<WindowSurface>,
     /// The taskbar's ledge while it rains, as last seen: one that hides itself slides in and out with no window
     /// changing, so it is looked at every frame.
@@ -258,6 +260,7 @@ impl Screen {
         };
         Ok(Screen {
             interactive_rate: monitor.refresh.clamp(60, 120),
+            max_rate: settings.max_performance,
             monitor,
             simulation,
             next_due: 0,
@@ -331,7 +334,13 @@ impl Screen {
             Pace::Lively => fastest.min(60),
             Pace::Interactive => fastest,
         };
-        let rate = if lantern_moved || fading { rate.max(fastest.min(60)) } else { rate };
+        let rate = if self.max_rate {
+            self.interactive_rate
+        } else if lantern_moved || fading {
+            rate.max(fastest.min(60))
+        } else {
+            rate
+        };
         self.next_due = clock.schedule(now, rate);
         self.idle_frames = if changed || lantern_moved { 0 } else { self.idle_frames + 1 };
         // A still pile only needs a slow refresh for its glints.
