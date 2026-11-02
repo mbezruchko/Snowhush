@@ -289,6 +289,28 @@ vec4 hangingAt(vec2 p) {
     return lensColor(darkA, clamp(crescent + glint + sheen, 0.0, 1.0), inside, vAlpha);
 }
 
+// A drop on the glass works as a little lens: darker toward its rim, most of all along its foot, where it bends the
+// light from above into a bright crescent, and a glint near its top. Its head leads, at `head`; the tail it draws out
+// behind it as it runs, `run` long along `axis`, narrows away.
+vec4 glassDropAt(vec2 p, vec2 head, vec2 axis, float run) {
+    float along = run > 0.001 ? clamp(dot(p - head, axis) / run, 0.0, 1.0) : 0.0;
+    float width = vRadius * mix(1.0, 0.3, along);
+    float d = length(p - head - axis * along * run) / max(width, 0.001);
+    float aa = 1.2 / max(width * vRain.w, 0.5);
+    float inside = 1.0 - smoothstep(1.0 - aa, 1.0, d);
+    if (inside < 0.002) return vec4(0.0);
+    vec2 q = (p - head) / max(vRadius, 0.001);
+    float rim = smoothstep(0.45, 1.0, d);
+    // A bead only a few pixels across shows mostly as its dark rim and its glint; drawn as faint as a big drop, a
+    // trail of them would vanish.
+    float tiny = 1.0 - smoothstep(3.0, 9.0, vRain.z);
+    float darkA = (0.07 + 0.38 * rim * (0.55 + 0.45 * clamp(-q.y, 0.0, 1.0)) + 0.22 * tiny) * (1.0 - along * 0.5);
+    float crescent = (1.0 - smoothstep(0.55, 0.92, d)) * smoothstep(-0.05, -0.7, q.y) * smoothstep(0.75, 0.2, abs(q.x)) * 0.5;
+    vec2 g = q - vec2(-0.3, 0.38);
+    float glint = exp(-dot(g, g) / 0.035) * 0.95;
+    return lensColor(darkA, clamp(crescent * (1.0 - along) + glint, 0.0, 1.0), inside, vAlpha);
+}
+
 vec4 rainAt(vec2 p) {
     if (vRain.x > 2.5) return hangingAt(p);
     vec2 halfStreak = vStreak * 0.5;
@@ -307,28 +329,18 @@ vec4 rainAt(vec2 p) {
         if (a < 0.002) return vec4(0.0);
         return vec4(vec3(0.22, 0.26, 0.32) * sheath * (1.0 - core) + vec3(0.86, 0.9, 0.97) * light.rgb * core, a);
     }
-    // A drop on the glass works as a little lens: darker toward its rim, most of all along its foot, where it bends
-    // the light from above into a bright crescent, and a glint near its top. Its head leads; the tail it draws out
-    // behind it as it runs narrows away.
+    // The drop at every moment of the exposure, from where it is back to where it was, each with its tail, close
+    // enough together that its glint draws a line rather than a row of dots.
     vec2 axis = span > 0.0 ? halfStreak / sqrt(span) : vec2(0.0, 1.0);
-    float len = 2.0 * sqrt(span);
-    vec2 head = -halfStreak;
-    float along = len > 0.001 ? clamp(dot(p - head, axis) / len, 0.0, 1.0) : 0.0;
-    float width = vRadius * mix(1.0, 0.3, along);
-    float d = length(p - head - axis * along * len) / max(width, 0.001);
-    float aa = 1.2 / max(width * vRain.w, 0.5);
-    float inside = 1.0 - smoothstep(1.0 - aa, 1.0, d);
-    if (inside < 0.002) return vec4(0.0);
-    vec2 q = (p - head) / max(vRadius, 0.001);
-    float rim = smoothstep(0.45, 1.0, d);
-    // A bead only a few pixels across shows mostly as its dark rim and its glint; drawn as faint as a big drop, a
-    // trail of them would vanish.
-    float tiny = 1.0 - smoothstep(3.0, 9.0, vRain.z);
-    float darkA = (0.07 + 0.38 * rim * (0.55 + 0.45 * clamp(-q.y, 0.0, 1.0)) + 0.22 * tiny) * (1.0 - along * 0.5);
-    float crescent = (1.0 - smoothstep(0.55, 0.92, d)) * smoothstep(-0.05, -0.7, q.y) * smoothstep(0.75, 0.2, abs(q.x)) * 0.5;
-    vec2 g = q - vec2(-0.3, 0.38);
-    float glint = exp(-dot(g, g) / 0.035) * 0.95;
-    return lensColor(darkA, clamp(crescent * (1.0 - along) + glint, 0.0, 1.0), inside, vAlpha);
+    float total = 2.0 * sqrt(span);
+    float smear = total * vRain.y;
+    int moments = clamp(int(ceil(smear * vRain.w / 0.75)), 1, 16);
+    vec4 sum = vec4(0.0);
+    for (int k = 0; k < moments; k++) {
+        float back = moments > 1 ? float(k) / float(moments - 1) : 0.0;
+        sum += glassDropAt(p, -halfStreak + axis * smear * back, axis, total - smear);
+    }
+    return sum / float(moments);
 }
 
 void main() {

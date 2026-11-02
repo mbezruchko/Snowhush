@@ -202,14 +202,17 @@ float2 hangingReach(float along) {
 }
 
 // A raindrop in the air shows as the whole streak it draws over a 1/35 s exposure, the sprite at its head; a drop on
-// the glass draws out a tail behind it as it runs; one hanging under an edge clings at its position.
+// the glass draws out a tail behind it as it runs, and smears back along its path over a 1/40 s exposure, as a leaf
+// does, so a fast one glides instead of hopping; one hanging under an edge clings at its position.
 SpriteOut rainVertex(SpriteIn s, float2 corner) {
     float pixels = max(s.size * scale, 1.5);
     bool glass = s.rain.x > 1.5;
     float speed = length(s.velocity);
+    float tail = min(speed * 0.08, s.size * 0.9);
+    float smear = speed * 0.024;
     float2 travel = s.velocity * 0.028;
     if (glass) {
-        travel = speed > 0.0 ? -s.velocity / speed * min(speed * 0.08, s.size * 0.9) : float2(0.0, 0.0);
+        travel = speed > 0.0 ? -s.velocity / speed * (tail + smear) : float2(0.0, 0.0);
     }
     float2 streak = travel * scale;
     float extent = max(pixels + length(streak) + (glass ? 2.0 : 0.0), 2.0);
@@ -229,7 +232,10 @@ SpriteOut rainVertex(SpriteIn s, float2 corner) {
     o.radius = pixels / extent * 0.5;
     o.alpha = s.alpha * min(pixels / 1.5, 1.0);
     o.soft = s.soft;
-    o.rain = float4(s.rain, pixels, extent);
+    // For a running drop, in place of how far along a hanging one is: the share of it from its head back that is its
+    // smear.
+    float blur = s.rain.x < 2.5 && tail + smear > 0.0 ? smear / (tail + smear) : s.rain.y;
+    o.rain = float4(s.rain.x, glass ? blur : s.rain.y, pixels, extent);
     return o;
 }
 
@@ -274,6 +280,28 @@ float4 hangingAt(SpriteOut i, float2 p) {
     return lensColor(darkA, saturate(crescent + glint + sheen), inside, i.alpha);
 }
 
+// A drop on the glass works as a little lens: darker toward its rim, most of all along its foot, where it bends the
+// light from above into a bright crescent, and a glint near its top. Its head leads, at `head`; the tail it draws out
+// behind it as it runs, `run` long along `axis`, narrows away.
+float4 glassDropAt(SpriteOut i, float2 p, float2 head, float2 axis, float run) {
+    float along = run > 0.001 ? clamp(dot(p - head, axis) / run, 0.0, 1.0) : 0.0;
+    float width = i.radius * lerp(1.0, 0.3, along);
+    float d = length(p - head - axis * along * run) / max(width, 0.001);
+    float aa = 1.2 / max(width * i.rain.w, 0.5);
+    float inside = 1.0 - smoothstep(1.0 - aa, 1.0, d);
+    if (inside < 0.002) return float4(0.0, 0.0, 0.0, 0.0);
+    float2 q = (p - head) / max(i.radius, 0.001);
+    float rim = smoothstep(0.45, 1.0, d);
+    // A bead only a few pixels across shows mostly as its dark rim and its glint; drawn as faint as a big drop, a
+    // trail of them would vanish.
+    float tiny = 1.0 - smoothstep(3.0, 9.0, i.rain.z);
+    float darkA = (0.07 + 0.38 * rim * (0.55 + 0.45 * saturate(-q.y)) + 0.22 * tiny) * (1.0 - along * 0.5);
+    float crescent = (1.0 - smoothstep(0.55, 0.92, d)) * smoothstep(-0.05, -0.7, q.y) * smoothstep(0.75, 0.2, abs(q.x)) * 0.5;
+    float2 g = q - float2(-0.3, 0.38);
+    float glint = exp(-dot(g, g) / 0.035) * 0.95;
+    return lensColor(darkA, saturate(crescent * (1.0 - along) + glint), inside, i.alpha);
+}
+
 float4 rainAt(SpriteOut i, float2 p) {
     [branch] if (i.rain.x > 2.5) {
         return hangingAt(i, p);
@@ -294,28 +322,19 @@ float4 rainAt(SpriteOut i, float2 p) {
         if (a < 0.002) return float4(0.0, 0.0, 0.0, 0.0);
         return float4(float3(0.22, 0.26, 0.32) * sheath * (1.0 - core) + float3(0.86, 0.9, 0.97) * light.rgb * core, a);
     }
-    // A drop on the glass works as a little lens: darker toward its rim, most of all along its foot, where it bends
-    // the light from above into a bright crescent, and a glint near its top. Its head leads; the tail it draws out
-    // behind it as it runs narrows away.
+    // The drop at every moment of the exposure, from where it is back to where it was, each with its tail, close
+    // enough together that its glint draws a line rather than a row of dots.
     float2 axis = span > 0.0 ? half_ / sqrt(span) : float2(0.0, 1.0);
-    float len = 2.0 * sqrt(span);
-    float2 head = -half_;
-    float along = len > 0.001 ? clamp(dot(p - head, axis) / len, 0.0, 1.0) : 0.0;
-    float width = i.radius * lerp(1.0, 0.3, along);
-    float d = length(p - head - axis * along * len) / max(width, 0.001);
-    float aa = 1.2 / max(width * i.rain.w, 0.5);
-    float inside = 1.0 - smoothstep(1.0 - aa, 1.0, d);
-    if (inside < 0.002) return float4(0.0, 0.0, 0.0, 0.0);
-    float2 q = (p - head) / max(i.radius, 0.001);
-    float rim = smoothstep(0.45, 1.0, d);
-    // A bead only a few pixels across shows mostly as its dark rim and its glint; drawn as faint as a big drop, a
-    // trail of them would vanish.
-    float tiny = 1.0 - smoothstep(3.0, 9.0, i.rain.z);
-    float darkA = (0.07 + 0.38 * rim * (0.55 + 0.45 * saturate(-q.y)) + 0.22 * tiny) * (1.0 - along * 0.5);
-    float crescent = (1.0 - smoothstep(0.55, 0.92, d)) * smoothstep(-0.05, -0.7, q.y) * smoothstep(0.75, 0.2, abs(q.x)) * 0.5;
-    float2 g = q - float2(-0.3, 0.38);
-    float glint = exp(-dot(g, g) / 0.035) * 0.95;
-    return lensColor(darkA, saturate(crescent * (1.0 - along) + glint), inside, i.alpha);
+    float total = 2.0 * sqrt(span);
+    float smear = total * i.rain.y;
+    int moments = clamp(int(ceil(smear * i.rain.w / 0.75)), 1, 16);
+    float4 sum = float4(0.0, 0.0, 0.0, 0.0);
+    [loop]
+    for (int k = 0; k < moments; k++) {
+        float back = moments > 1 ? float(k) / float(moments - 1) : 0.0;
+        sum += glassDropAt(i, p, -half_ + axis * smear * back, axis, total - smear);
+    }
+    return sum / float(moments);
 }
 
 // A leaf's sprite, this corner of it. About a 1/40 s exposure: at 30 frames a second a falling leaf smears most of the

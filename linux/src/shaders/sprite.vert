@@ -102,8 +102,12 @@ void main() {
         float pixels = max(size * scale, 1.5);
         bool glass = rain.x > 1.5;
         float speed = length(velocity);
+        // A drop on the glass also smears back along its path over a 1/40 s exposure, as a leaf does, so a fast one
+        // glides instead of hopping.
+        float tail = min(speed * 0.08, size * 0.9);
+        float smear = speed * 0.024;
         vec2 travel = velocity * 0.028;
-        if (glass) travel = speed > 0.0 ? -velocity / speed * min(speed * 0.08, size * 0.9) : vec2(0.0);
+        if (glass) travel = speed > 0.0 ? -velocity / speed * (tail + smear) : vec2(0.0);
         vec2 streak = travel * scale;
         float extent = max(pixels + length(streak) + (glass ? 2.0 : 0.0), 2.0);
         vec2 middle = position - (glass ? -travel : travel) * 0.5;
@@ -120,7 +124,10 @@ void main() {
         vRadius = pixels / extent * 0.5;
         vAlpha = alpha * min(pixels / 1.5, 1.0);
         vSoft = soft;
-        vRain = vec4(rain, pixels, extent);
+        // For a running drop, in place of how far along a hanging one is: the share of it from its head back that is
+        // its smear.
+        float blur = rain.x < 2.5 && tail + smear > 0.0 ? smear / (tail + smear) : rain.y;
+        vRain = vec4(rain.x, glass ? blur : rain.y, pixels, extent);
         vLeaf = vec4(0.0);
         vGhost = vec4(0.0);
         return;

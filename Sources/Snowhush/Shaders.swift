@@ -81,6 +81,8 @@ struct SpriteOut {
     float flipSmear;
     float samples;
     float rain;
+    /// For a drop running down the glass, the share of it from its head back that is its smear over the exposure.
+    float blur;
 };
 
 constant float3 candle = float3(1.0, 0.62, 0.26);
@@ -242,10 +244,13 @@ vertex SpriteOut spriteVertex(uint vid [[vertex_id]],
         SpriteOut out;
         float pixels = max(s.size * u.scale, 1.5);
         // A raindrop in the air shows as the whole streak it draws over a 1/35 s exposure, the sprite at its head;
-        // a drop on the glass draws out a tail behind it as it runs.
+        // a drop on the glass draws out a tail behind it as it runs, and smears back along its path over a 1/40 s
+        // exposure, as a leaf does, so a fast one glides instead of hopping.
         bool glass = s.rain > 1.5;
         float speed = length(s.velocity);
-        float2 travel = !glass ? s.velocity * 0.028 : speed > 0.0 ? -s.velocity / speed * min(speed * 0.08, s.size * 0.9) : float2(0.0);
+        float tail = min(speed * 0.08, s.size * 0.9);
+        float smear = speed * 0.024;
+        float2 travel = !glass ? s.velocity * 0.028 : speed > 0.0 ? -s.velocity / speed * (tail + smear) : float2(0.0);
         float2 streak = travel * u.scale;
         float extent = max(pixels + length(streak) + (glass ? 2.0 : 0.0), 2.0);
         float2 center = s.position - (glass ? -travel : travel) * 0.5;
@@ -270,6 +275,7 @@ vertex SpriteOut spriteVertex(uint vid [[vertex_id]],
         out.lump = 0.0;
         out.rain = s.rain;
         out.size = pixels;
+        out.blur = glass && tail + smear > 0.0 ? smear / (tail + smear) : 0.0;
         return out;
     }
     float pixels = s.size * u.scale;
@@ -350,6 +356,33 @@ static float4 hangingAt(SpriteOut in, float2 p) {
     return float4(premultiplied, a);
 }
 
+/// A drop on the glass works as a little lens: darker toward its rim, most of all along its foot, where it bends the
+/// light from above into a bright crescent, and a glint near its top. Its head leads, at `head`; the tail it draws out
+/// behind it as it runs, `length` long along `axis`, narrows away.
+static float4 glassDropAt(SpriteOut in, float2 p, float2 head, float2 axis, float length) {
+    float along = length > 0.001 ? clamp(dot(p - head, axis) / length, 0.0, 1.0) : 0.0;
+    float width = in.radius * mix(1.0, 0.3, along);
+    float d = metal::length(p - head - axis * along * length) / max(width, 0.001);
+    // Smoothed over a pixel, worked out from its size: it is drawn several times over in a loop.
+    float aa = 1.2 / max(width / max(in.radius, 0.001) * in.size * 0.5, 0.5);
+    float inside = 1.0 - smoothstep(1.0 - aa, 1.0, d);
+    if (inside < 0.002) return float4(0.0);
+    float2 q = (p - head) / max(in.radius, 0.001);
+    float rim = smoothstep(0.45, 1.0, d);
+    // A bead only a few pixels across shows mostly as its dark rim and its glint; drawn as faint as a big drop, a
+    // trail of them would vanish.
+    float tiny = 1.0 - smoothstep(3.0, 9.0, in.size);
+    float darkA = (0.07 + 0.38 * rim * (0.55 + 0.45 * saturate(-q.y)) + 0.22 * tiny) * (1.0 - along * 0.5);
+    float crescent = (1.0 - smoothstep(0.55, 0.92, d)) * smoothstep(-0.05, -0.7, q.y) * smoothstep(0.75, 0.2, abs(q.x)) * 0.5;
+    float glint = exp(-dot(q - float2(-0.3, 0.38), q - float2(-0.3, 0.38)) / 0.035) * 0.95;
+    float lightA = saturate(crescent * (1.0 - along) + glint);
+    float3 dark = float3(0.03, 0.04, 0.06);
+    float3 bright = float3(0.93, 0.96, 1.0) * in.light;
+    float a = (darkA + lightA - darkA * lightA) * inside * in.alpha;
+    float3 premultiplied = (dark * darkA * (1.0 - lightA) + bright * lightA) * inside * in.alpha;
+    return float4(premultiplied, a);
+}
+
 static float4 rainAt(SpriteOut in, float2 p) {
     if (in.rain > 2.5) return hangingAt(in, p);
     float2 half_ = in.streak * 0.5;
@@ -370,32 +403,19 @@ static float4 rainAt(SpriteOut in, float2 p) {
         float3 bright = float3(0.86, 0.9, 0.97) * in.light;
         return float4(dark * sheath * (1.0 - core) + bright * core, a);
     }
-    // A drop on the glass works as a little lens: darker toward its rim, most of all along its foot, where it bends
-    // the light from above into a bright crescent, and a glint near its top. Its head leads; the tail it draws out
-    // behind it as it runs narrows away.
+    // The drop at every moment of the exposure, from where it is back to where it was, each with its tail.
     float2 axis = span > 0.0 ? half_ / sqrt(span) : float2(0.0, 1.0);
-    float len = 2.0 * sqrt(span);
-    float2 head = -half_;
-    float along = len > 0.001 ? clamp(dot(p - head, axis) / len, 0.0, 1.0) : 0.0;
-    float width = in.radius * mix(1.0, 0.3, along);
-    float d = length(p - head - axis * along * len) / max(width, 0.001);
-    float aa = fwidth(d) * 1.2;
-    float inside = 1.0 - smoothstep(1.0 - aa, 1.0, d);
-    if (inside < 0.002) return float4(0.0);
-    float2 q = (p - head) / max(in.radius, 0.001);
-    float rim = smoothstep(0.45, 1.0, d);
-    // A bead only a few pixels across shows mostly as its dark rim and its glint; drawn as faint as a big drop, a
-    // trail of them would vanish.
-    float tiny = 1.0 - smoothstep(3.0, 9.0, in.size);
-    float darkA = (0.07 + 0.38 * rim * (0.55 + 0.45 * saturate(-q.y)) + 0.22 * tiny) * (1.0 - along * 0.5);
-    float crescent = (1.0 - smoothstep(0.55, 0.92, d)) * smoothstep(-0.05, -0.7, q.y) * smoothstep(0.75, 0.2, abs(q.x)) * 0.5;
-    float glint = exp(-dot(q - float2(-0.3, 0.38), q - float2(-0.3, 0.38)) / 0.035) * 0.95;
-    float lightA = saturate(crescent * (1.0 - along) + glint);
-    float3 dark = float3(0.03, 0.04, 0.06);
-    float3 bright = float3(0.93, 0.96, 1.0) * in.light;
-    float a = (darkA + lightA - darkA * lightA) * inside * in.alpha;
-    float3 premultiplied = (dark * darkA * (1.0 - lightA) + bright * lightA) * inside * in.alpha;
-    return float4(premultiplied, a);
+    float total = 2.0 * sqrt(span);
+    float smear = total * in.blur;
+    float extent = in.size / max(2.0 * in.radius, 0.001);
+    // Close enough together that its glint draws a line rather than a row of dots.
+    int moments = clamp(int(ceil(smear * extent / 0.75)), 1, 16);
+    float4 sum = float4(0.0);
+    for (int k = 0; k < moments; k++) {
+        float back = moments > 1 ? float(k) / float(moments - 1) : 0.0;
+        sum += glassDropAt(in, p, -half_ + axis * smear * back, axis, total - smear);
+    }
+    return sum / float(moments);
 }
 
 fragment float4 spriteFragment(SpriteOut in [[stage_in]], float2 coord [[point_coord]], constant Uniforms &u [[buffer(1)]]) {
