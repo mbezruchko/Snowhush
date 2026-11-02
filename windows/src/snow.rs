@@ -231,7 +231,7 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
             chores_at = now + clock.frequency;
             clock.refresh();
             // In case a display change went unannounced.
-            let current = monitors(settings.behind_taskbar);
+            let current = monitors(over_taskbar(&settings, &screens));
             if current.len() != screens.len() || screens.iter().any(|screen| !current.contains(&screen.monitor)) {
                 DISPLAYS_CHANGED.set(true);
             }
@@ -345,9 +345,16 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
 /// One overlay per display: new displays get snow, removed ones lose theirs, and a display that changed
 /// size keeps its snow in a fresh overlay. `rebuild` gives every display a fresh overlay, as when the snow
 /// moves behind windows or back.
+/// Whether the overlays reach down over the taskbar: behind it, or while it rains, which runs down the taskbar as down a
+/// window. Snow and leaves lie on its top edge. What falls is what the screens show, the switch to another kind
+/// coming only once the gust has cleared the screen.
+fn over_taskbar(settings: &Settings, screens: &[Screen]) -> bool {
+    settings.behind_taskbar || screens.first().map_or(settings.mode, |screen| screen.simulation.mode()) == Mode::Rain
+}
+
 fn sync_screens(gpu: &Gpu, settings: &Settings, mut current: Vec<Screen>, layer: Option<DesktopLayer>, rebuild: bool) -> Vec<Screen> {
     let mut result = Vec::new();
-    let displays = monitors(settings.behind_taskbar);
+    let displays = monitors(over_taskbar(settings, &current));
     for monitor in displays.iter().cloned() {
         let kept = current.iter().position(|screen| screen.monitor.name == monitor.name);
         let simulation = match kept.map(|i| current.swap_remove(i)) {

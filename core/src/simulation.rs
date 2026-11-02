@@ -209,7 +209,7 @@ pub struct PileLayer<'a> {
     pub drift: f32,
 }
 
-#[derive(PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct WindowSurface {
     pub id: WindowId,
     pub frame: Rect,

@@ -462,7 +462,7 @@ pub fn windows_build() -> u32 {
 
 /// A window's frame in the overlay coordinates of the display with work area `area` and an overlay `size` DIPs across,
 /// if any of it is on that display.
-fn local_frame(r: &RECT, area: &RECT, size: (u32, u32)) -> Option<Rect> {
+pub fn local_frame(r: &RECT, area: &RECT, size: (u32, u32)) -> Option<Rect> {
     if r.right <= area.left || r.left >= area.right || r.bottom <= area.top || r.top >= area.bottom {
         return None;
     }
