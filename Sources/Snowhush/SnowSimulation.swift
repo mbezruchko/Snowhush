@@ -427,7 +427,7 @@ final class SnowSimulation {
     private let maxSplashes = 1500
     private var splashes: [Splash] = []
     /// The share of raindrops hitting a window's top edge that run on down its face.
-    private let runShare: Float = 0.1
+    private let runShare: Float = 0.07
     private let maxGlassDrops = 600
     private let beadDrying: Float = 0.3
     private let smallestRunning: Float = 1.6
@@ -2353,7 +2353,7 @@ final class SnowSimulation {
             drop.offset = hanging.offset
             hang(&drop, fill: hanging.fill)
         } else if -drop.offset.y >= drop.face {
-            hang(&drop, fill: 0.6)
+            hang(&drop, fill: 0.35)
         } else if drop.radius < smallestRunning {
             drop.bead = true
         }
@@ -2382,8 +2382,9 @@ final class SnowSimulation {
     /// together with any other hanging beside it close enough to touch.
     private func cling(_ drop: inout GlassDrop, index: Int, dt: Float) {
         drop.hung += dt
+        // It stays a flat cap for most of its filling and sags only as it gets close to letting go.
         let full = min(max((drop.radius - 1.4) / (heavyHanging - 1.4), 0), 1)
-        drop.fill += (full - drop.fill) * min(1, dt * 6)
+        drop.fill += (full * full * full - drop.fill) * min(1, dt * 6)
         if drop.letsGo.isFinite {
             guard drop.hung >= drop.letsGo else { return }
             fall(drop)
