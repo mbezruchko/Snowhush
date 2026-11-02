@@ -192,13 +192,13 @@ static float candlelight(constant Uniforms &u, float2 point) {
 /// stretching down for an instant before it falls. Its width and height radii, and how far below the edge its middle is.
 static float3 hangingShape(float along) {
     float fill = saturate(along), pull = saturate(along - 1.0);
-    float2 axes = float2(mix(1.35, 0.9, fill) * (1.0 - 0.15 * pull), mix(0.6, 1.25, fill) * (1.0 + 0.5 * pull));
+    float2 axes = float2(mix(1.2, 0.9, fill) * (1.0 - 0.15 * pull), mix(0.6, 1.25, fill) * (1.0 + 0.5 * pull));
     return float3(axes, -axes.y * mix(0.15, 0.8, fill) - 0.3 * pull);
 }
 
 /// How far it flares out into the edge.
 static float hangingFlare(float along) {
-    return mix(1.0, 0.6, saturate(along));
+    return mix(0.8, 0.6, saturate(along));
 }
 
 /// How far above and below where it clings it reaches.
