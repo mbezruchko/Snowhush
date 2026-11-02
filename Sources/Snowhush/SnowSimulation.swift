@@ -2299,7 +2299,10 @@ final class SnowSimulation {
         while i >= 0 {
             var drop = glassDrops[i]
             drop.age += dt
-            if shaken(drop, dt: dt) {
+            if !drop.hanging, let cursor, wipes(cursor, drop, dt: dt) {
+                if drop.radius >= 1 { smear(drop, to: cursor) }
+                drop.radius = 0
+            } else if shaken(drop, dt: dt) {
                 // It flies on as the window was going before the jerk.
                 let thrown = drop.layer.trackVelocity - drop.layer.jolt * dt
                 fall(drop, share: 1, below: drop.hanging ? drop.radius * glassScale : 0, thrown: thrown)
@@ -2443,6 +2446,43 @@ final class SnowSimulation {
         let hold = dropShaking * 2.4 / max(drop.radius, 0.3) * (drop.hanging ? 0.7 : 1)
         guard layer.agitation > hold else { return false }
         return random.next() < min(0.9, 0.3 * (layer.agitation - hold)) * dt * 10
+    }
+
+    /// Whether the cursor, moving over the glass, passed over a drop on it this step where it shows.
+    private func wipes(_ point: SIMD2<Float>, _ drop: GlassDrop, dt: Float) -> Bool {
+        // What it has just smeared out it passes on over.
+        guard simd_length(cursorVelocity) > 40, drop.age > 0.3 || !drop.bead else { return false }
+        let position = drop.layer.base + drop.offset
+        let from = point - cursorVelocity * dt
+        let path = point - from
+        let along = min(max(simd_dot(position - from, path) / max(simd_length_squared(path), 0.0001), 0), 1)
+        let reach = cursorRadius * 0.8 + max(drop.radius, 1.2) * glassScale
+        guard simd_distance(position, from + path * along) < reach else { return false }
+        return !drop.layer.faceOccluders.contains { $0.x < position.x && $0.z > position.x && $0.y < position.y && $0.w > position.y }
+    }
+
+    /// The cursor drags a drop's water along with it, up to where it is now, in a streak that at once beads up
+    /// into a line of droplets, biggest where the drop was; some of the water it takes away. The tiniest it just
+    /// wipes off.
+    private func smear(_ drop: GlassDrop, to point: SIMD2<Float>) {
+        let speed = simd_length(cursorVelocity)
+        let direction = cursorVelocity / speed
+        let across = SIMD2(-direction.y, direction.x)
+        let length = min(max(simd_dot(point - (drop.layer.base + drop.offset), direction), 6), 45)
+        let count = min(9, max(2, Int(length / 5)))
+        let spots = (0..<count).map { k in (Float(k) + random.range(0.2, 0.8)) / Float(count) }
+        let weights = spots.map { 1.15 - $0 }
+        let total = weights.reduce(0, +)
+        let water = drop.radius * drop.radius * 0.7
+        for (spot, weight) in zip(spots, weights) where glassDrops.count < maxGlassDrops {
+            glassDrops.append(GlassDrop(
+                layer: drop.layer,
+                offset: drop.offset + direction * length * spot + across * random.range(-1.2, 1.2),
+                face: drop.face,
+                radius: max(0.3, (water * weight / total).squareRoot()),
+                bead: true
+            ))
+        }
     }
 
     /// Whether the cursor, at `point`, brushes a hanging drop where it shows.
