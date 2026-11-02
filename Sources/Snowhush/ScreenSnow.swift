@@ -18,6 +18,18 @@ final class ScreenSnow {
     private(set) var covered = false
     /// A full-screen app's Space is the current one here, though Mission Control may still show over it.
     private var fullScreenCurrent = false
+    /// The snow stays over full-screen apps instead of fading out of their way.
+    var overFullScreen = false {
+        didSet {
+            guard overFullScreen != oldValue else { return }
+            following = false
+            arriving = false
+            goneFullScreenAt = -10
+            fullScreenSpaces = nil
+            checkCovered()
+            activityChanged()
+        }
+    }
     /// Mission Control shows over a full-screen app's Space, picked in it or opened from it: the snow stays until
     /// the app fills the screen.
     private var exposed = false
@@ -100,6 +112,7 @@ final class ScreenSnow {
         window = OverlayWindow(screen: screen)
         window.behindWindows = Preferences.behindWindows
         window.showsInScreenshots = Preferences.showInScreenshots
+        overFullScreen = Preferences.showOverFullScreen
         dock = DockOverlay(screen: screen, device: device)
         dock.window.showsInScreenshots = Preferences.showInScreenshots
         renderer.dockOverlay = dock
@@ -185,6 +198,7 @@ final class ScreenSnow {
     /// in. Swiped between a desktop and a full-screen app, the snow follows the desktop: as much of it shows as the
     /// square of the desktop's share of the screen, so it is faint while the app fills most of it.
     private func watchForFullScreen(now: CFTimeInterval, tracked: Bool) {
+        guard !overFullScreen else { return }
         if covered {
             // Still drawn while fading out under the app: the lookout watches for the desktop until it comes back.
             guard leaving else { return }
@@ -242,7 +256,7 @@ final class ScreenSnow {
         let now = CACurrentMediaTime()
         let was = covered
         let wasFullScreen = fullScreenCurrent
-        fullScreenCurrent = Spaces.fullScreen(on: displayID)?.showing ?? false
+        fullScreenCurrent = !overFullScreen && Spaces.fullScreen(on: displayID)?.showing ?? false
         if fullScreenCurrent && !wasFullScreen && !was { coverAfter = now + 0.2 }
         exposed = fullScreenCurrent && (now < coverAfter || tracker.missionControlShows(now: now))
         covered = fullScreenCurrent && !exposed

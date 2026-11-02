@@ -208,6 +208,19 @@ impl ksni::Tray for Tray {
             }
             .into(),
             CheckmarkItem {
+                label: "Show over Full Screen".into(),
+                checked: settings.over_full_screen,
+                enabled: !settings.behind_windows,
+                activate: Box::new(|tray: &mut Tray| {
+                    tray.change(|settings| {
+                        settings.over_full_screen = !settings.over_full_screen;
+                        Command::OverFullScreen(settings.over_full_screen)
+                    })
+                }),
+                ..Default::default()
+            }
+            .into(),
+            CheckmarkItem {
                 label: "Show in Screenshots".into(),
                 checked: settings.show_in_screenshots,
                 activate: Box::new(|tray: &mut Tray| {

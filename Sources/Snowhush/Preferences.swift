@@ -28,6 +28,7 @@ enum Preferences {
     private static let defaults = UserDefaults.standard
     private static let snowfallKey = "snowfall"
     private static let behindWindowsKey = "behindWindows"
+    private static let showOverFullScreenKey = "showOverFullScreen"
     private static let meltSnowKey = "meltSnow"
     private static let accumulateKey = "accumulate"
     private static let snowOnWindowsKey = "snowOnWindows"
@@ -41,6 +42,7 @@ enum Preferences {
         defaults.register(defaults: [
             snowfallKey: (calm ? Snowfall.light : .steady).rawValue,
             behindWindowsKey: false,
+            showOverFullScreenKey: false,
             meltSnowKey: true,
             accumulateKey: true,
             snowOnWindowsKey: true,
@@ -78,6 +80,11 @@ enum Preferences {
     static var behindWindows: Bool {
         get { defaults.bool(forKey: behindWindowsKey) }
         set { defaults.set(newValue, forKey: behindWindowsKey) }
+    }
+
+    static var showOverFullScreen: Bool {
+        get { defaults.bool(forKey: showOverFullScreenKey) }
+        set { defaults.set(newValue, forKey: showOverFullScreenKey) }
     }
 
     static var showInScreenshots: Bool {

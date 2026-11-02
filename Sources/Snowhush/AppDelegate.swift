@@ -23,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var snowItem: NSMenuItem!
     private var autumnItem: NSMenuItem!
     private var behindWindowsItem: NSMenuItem!
+    private var fullScreenItem: NSMenuItem!
     private var screenshotsItem: NSMenuItem!
     private var loginItem: NSMenuItem!
     private var observers: [NSObjectProtocol] = []
@@ -150,6 +151,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         halloweenItem = add("Halloween", #selector(toggleHalloween), to: menu)
         menu.addItem(.separator())
         behindWindowsItem = add("Behind Windows", #selector(toggleBehindWindows), to: menu)
+        fullScreenItem = add("Show over Full Screen", #selector(toggleFullScreen), to: menu)
         screenshotsItem = add("Show in Screenshots", #selector(toggleScreenshots), to: menu)
         menu.addItem(.separator())
         loginItem = add("Open at Login", #selector(toggleOpenAtLogin), to: menu)
@@ -184,6 +186,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         halloweenItem.isHidden = !Halloween.isSeason()
         halloweenItem.state = Preferences.halloween ? .on : .off
         behindWindowsItem.state = behindWindows ? .on : .off
+        fullScreenItem.state = Preferences.showOverFullScreen ? .on : .off
+        fullScreenItem.isEnabled = !behindWindows
         screenshotsItem.state = Preferences.showInScreenshots ? .on : .off
         loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
     }
@@ -223,6 +227,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         behindWindows.toggle()
         Preferences.behindWindows = behindWindows
         for snow in screens { snow.window.behindWindows = behindWindows }
+    }
+
+    @objc private func toggleFullScreen() {
+        Preferences.showOverFullScreen.toggle()
+        for snow in screens { snow.overFullScreen = Preferences.showOverFullScreen }
     }
 
     @objc private func toggleScreenshots() {

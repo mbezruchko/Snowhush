@@ -39,6 +39,7 @@ pub enum Command {
     Melt(bool),
     SnowOnWindows(bool),
     BehindWindows(bool),
+    OverFullScreen(bool),
     BehindTaskbar(bool),
     /// Explorer started again, taking the desktop's wallpaper layer with it.
     ShellRestarted,
@@ -137,6 +138,7 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                     layer = on.then(find_layer).flatten();
                     screens = sync_screens(&gpu, &settings, screens, layer, true);
                 }
+                Command::OverFullScreen(on) => settings.over_full_screen = on,
                 Command::BehindTaskbar(on) => {
                     settings.behind_taskbar = on;
                     screens = sync_screens(&gpu, &settings, screens, layer, true);
@@ -288,7 +290,7 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
             let mut lost = false;
             let mut released = false;
             for screen in screens.iter_mut().filter(|screen| screen.next_due <= now + clock.tolerance()) {
-                let covering = tracker.covering(&screen.monitor.bounds);
+                let covering = if settings.over_full_screen { None } else { tracker.covering(&screen.monitor.bounds) };
                 if covering.is_some() != screen.covered() {
                     log!("{} {}", screen.monitor.name, covering.map_or("uncovered".to_string(), |class| format!("covered by {class}")));
                     screen.set_covered(&gpu, covering.is_some());

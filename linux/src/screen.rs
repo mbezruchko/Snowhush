@@ -73,8 +73,7 @@ pub struct Screen {
 }
 
 impl Screen {
-    /// `behind` puts the snow under the windows, just over the desktop; without it the snow is above them,
-    /// though under menus, notifications and full-screen windows.
+    /// `layer` is where the snow goes among the windows: see `layer_for`.
     pub fn new(
         app: (&CompositorState, &LayerShell, &QueueHandle<App>),
         output: WlOutput,
@@ -82,7 +81,7 @@ impl Screen {
         bounds: Area,
         refresh: u32,
         simulation: SnowSimulation,
-        behind: bool,
+        layer: Layer,
     ) -> Screen {
         let (compositor, layer_shell, qh) = app;
         let surface = compositor.create_surface(qh);
@@ -90,7 +89,7 @@ impl Screen {
         if let Ok(region) = Region::new(compositor) {
             surface.set_input_region(Some(region.wl_region()));
         }
-        let layer = layer_shell.create_layer_surface(qh, surface, layer_for(behind), Some("snowhush"), Some(&output));
+        let layer = layer_shell.create_layer_surface(qh, surface, layer, Some("snowhush"), Some(&output));
         layer.set_anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
         // Placed by its margins alone, over panels' reserved space as much as anything else.
         layer.set_exclusive_zone(-1);
@@ -175,8 +174,8 @@ impl Screen {
         self.layer.commit();
     }
 
-    pub fn set_behind(&mut self, behind: bool) {
-        self.layer.set_layer(layer_for(behind));
+    pub fn set_layer(&mut self, behind: bool, over_full_screen: bool) {
+        self.layer.set_layer(layer_for(behind, over_full_screen));
         self.layer.commit();
         self.resume();
     }
@@ -434,6 +433,14 @@ impl Screen {
     }
 }
 
-fn layer_for(behind: bool) -> Layer {
-    if behind { Layer::Bottom } else { Layer::Top }
+/// `behind` puts the snow under the windows, just over the desktop; without it the snow is above them, though under
+/// menus, notifications and full-screen windows, unless `over_full_screen` puts it over all of them.
+pub fn layer_for(behind: bool, over_full_screen: bool) -> Layer {
+    if behind {
+        Layer::Bottom
+    } else if over_full_screen {
+        Layer::Overlay
+    } else {
+        Layer::Top
+    }
 }
