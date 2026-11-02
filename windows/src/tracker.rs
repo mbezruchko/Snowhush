@@ -438,7 +438,7 @@ pub fn process_name(process: u32) -> String {
     }
 }
 
-fn windows_build() -> u32 {
+pub fn windows_build() -> u32 {
     let mut buffer = [0u16; 32];
     let mut size = (buffer.len() * 2) as u32;
     let status = unsafe {
