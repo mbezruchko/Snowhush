@@ -424,7 +424,7 @@ final class SnowSimulation {
     private let maxGlassDrops = 600
     private let beadDrying: Float = 0.3
     private let smallestRunning: Float = 1.6
-    private let glassScale: Float = 1.3
+    private let glassScale: Float = 1.6
     private var glassDrops: [GlassDrop] = []
 
     private let ground: SnowLayer
