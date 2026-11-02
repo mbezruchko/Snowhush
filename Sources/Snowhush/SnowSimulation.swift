@@ -427,7 +427,7 @@ final class SnowSimulation {
     private let maxSplashes = 1500
     private var splashes: [Splash] = []
     /// The share of raindrops hitting a window's top edge that run on down its face.
-    private let runShare: Float = 0.02
+    private let runShare: Float = 0.1
     private let maxGlassDrops = 600
     private let beadDrying: Float = 0.3
     private let smallestRunning: Float = 1.6
