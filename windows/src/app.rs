@@ -311,12 +311,13 @@ fn show_menu(window: HWND, x: i32, y: i32) {
     let Some(settings) = APP.with_borrow(|app| app.as_ref().map(|app| app.settings)) else { return };
     let login = prefs::opens_at_login();
     let entries = entries(&settings, login);
-    let chosen = match menu::track(x, y, entries.clone()) {
-        Ok(chosen) => chosen,
-        Err(error) => {
-            log!("menu failed, using the plain one: {error}");
+    let chosen = if menu::available() {
+        menu::track(x, y, entries.clone(), light_taskbar()).unwrap_or_else(|error| {
+            log!("menu failed, using the system's: {error}");
             native_menu(window, x, y, &entries)
-        }
+        })
+    } else {
+        native_menu(window, x, y, &entries)
     };
     choose(window, chosen, login);
 }
@@ -327,9 +328,9 @@ fn entries(settings: &Settings, login: bool) -> Vec<Entry> {
     let snowfall = Snowfall::ALL
         .iter()
         .enumerate()
-        .map(|(i, &option)| Entry::item(ID_SNOWFALL + i as u32, option.title(), option == settings.snowfall, true))
+        .map(|(i, &option)| Entry::choice(ID_SNOWFALL + i as u32, option.title(), option == settings.snowfall))
         .collect();
-    let modes = vec![Entry::item(ID_SNOW, "Snow", !autumn, true), Entry::item(ID_AUTUMN, "Autumn Leaves", autumn, true)];
+    let modes = vec![Entry::choice(ID_SNOW, "Snow", !autumn), Entry::choice(ID_AUTUMN, "Autumn Leaves", autumn)];
     let mut entries = vec![
         Entry::Submenu { label: "Intensity".to_string(), entries: snowfall },
         Entry::Submenu { label: "Mode".to_string(), entries: modes },
@@ -377,9 +378,12 @@ unsafe fn append(menu: HMENU, entries: &[Entry]) {
                 Entry::Separator => {
                     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
                 }
-                Entry::Item { id, label, checked, enabled } => {
+                Entry::Item { id, label, checked, enabled, radio } => {
                     let flags = MF_STRING | if *checked { MF_CHECKED } else { MF_UNCHECKED } | if *enabled { MF_ENABLED } else { MF_GRAYED };
                     let _ = AppendMenuW(menu, flags, *id as usize, PCWSTR(text(label).as_ptr()));
+                    if *radio && *checked {
+                        let _ = CheckMenuRadioItem(menu, *id, *id, *id, MF_BYCOMMAND.0);
+                    }
                 }
                 Entry::Submenu { label, entries } => {
                     let Ok(submenu) = CreatePopupMenu() else { continue };
