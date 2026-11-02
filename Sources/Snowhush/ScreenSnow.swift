@@ -118,7 +118,9 @@ final class ScreenSnow {
         renderer.dockOverlay = dock
         view = Self.makeView(device: device, size: screen.frame.size)
 
-        renderer.cursorLocation = { [unowned window] in
+        renderer.cursorLocation = { [unowned self] in
+            // Notification Center is in front of the snow then, which the pointer over it can't reach.
+            if window.notificationLevel != nil && tracker.notificationCoversPointer { return SIMD2(-10_000, -10_000) }
             let mouse = NSEvent.mouseLocation
             return SIMD2(Float(mouse.x - window.frame.minX), Float(mouse.y - window.frame.minY))
         }
@@ -127,6 +129,7 @@ final class ScreenSnow {
             // plain view.
             let onWindows = snowOnWindows()
             let update = onWindows ? tracker.poll(now: now, eager: NSEvent.pressedMouseButtons != 0) : nil
+            window.notificationLevel = onWindows ? tracker.notificationLevel : nil
             watchForFullScreen(now: now, tracked: onWindows)
             guard onWindows else { return nil }
             simulation.windowFrames = tracker.covers.map { SIMD4(Float($0.minX), Float($0.minY), Float($0.maxX), Float($0.maxY)) }

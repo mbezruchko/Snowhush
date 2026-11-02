@@ -29,6 +29,8 @@ struct WindowSurface: Equatable {
     let cornerExponent: CGFloat
     /// The Dock's shelf: its snow is drawn below the Dock, so the icons stay in front of it.
     let isDock: Bool
+    /// A notification banner sliding in over the windows: it pushes the snow in its way aside.
+    let sweeps: Bool
 
     func shifted(by dx: CGFloat) -> WindowSurface {
         WindowSurface(
@@ -38,7 +40,8 @@ struct WindowSurface: Equatable {
             cover: cover.map { $0.offsetBy(dx: dx, dy: 0) },
             cornerRadius: cornerRadius,
             cornerExponent: cornerExponent,
-            isDock: isDock
+            isDock: isDock,
+            sweeps: sweeps
         )
     }
 }
@@ -113,6 +116,22 @@ final class WindowTracker {
     private var staying: Set<CGWindowID> = []
     /// Mission Control or App Exposé shows every window shrunk, away from where the window list puts it.
     private var exposing = false
+    private var banner = NotificationBanner()
+    /// The level of Notification Center's window while it is up, showing banners or opened as a whole.
+    var notificationLevel: Int? { banner.level }
+    /// Whether the pointer is over Notification Center's panel or a banner, in front of the snow it can't reach there.
+    var notificationCoversPointer: Bool {
+        guard banner.level != nil else { return false }
+        let pointer = pointer
+        if var panel = banner.panelFrame(screen: screen, menuBarHeight: menuBarHeight) {
+            // The panel ends above a Dock along the bottom edge, which keeps the snow heaped on it within reach.
+            if let reserved = Dock.reserved, abs(reserved.maxY - screen.maxY) < 2 {
+                panel.size.height = screen.maxY - max(reserved.height, Dock.height) - 40 - panel.minY
+            }
+            if panel.contains(pointer) { return true }
+        }
+        return banner.surfaces(now: CACurrentMediaTime(), screen: screen, menuBarHeight: menuBarHeight).contains { $0.frame.contains(pointer) }
+    }
     /// When each floating panel carrying snow (Spotlight and the like) first showed.
     private var panelsShownAt: [CGWindowID: CFTimeInterval] = [:]
     /// Every app window on the screen at the last poll, in overlay coordinates, those filling it or too tall to
@@ -125,12 +144,13 @@ final class WindowTracker {
     func poll(now: CFTimeInterval, eager: Bool) -> WindowUpdate? {
         let interval = now - lastQuery
         let minimizing = watchForMinimize(now: now)
+        let bannerMoving = banner.update(now: now, screen: screen, menuBarHeight: menuBarHeight, pointer: pointer)
         // Panels like Spotlight vanish on a keystroke; once one has stayed a while it's more likely a long-lived floating window.
         let panelOpen = panelsShownAt.values.contains { now - $0 < 20 }
         // Even while windows move, 60 looks a second are plenty: the snow follows a smoothed path of the window anyway.
         let closely = eager || now - lastChange < 0.6 || dockShownAt != nil || pointerAtBottomEdge || panelOpen || exposing || windowsMayChange(now: now)
         // A sliding Space is followed every frame, its snow riding on the windows with no smoothing.
-        guard minimizing || now < slidingUntil || interval >= (closely ? 1.0 / 62 : 0.2) || watchedMoved() else { return nil }
+        guard minimizing || bannerMoving || now < slidingUntil || interval >= (closely ? 1.0 / 62 : 0.2) || watchedMoved() else { return nil }
         lastQuery = now
         let before = windowFrames
         let surfaces = query(now: now)
@@ -162,7 +182,7 @@ final class WindowTracker {
         var elsewhere = sliding || exposing ? away.elsewhere.union(vanished.subtracting(away.parked)) : away.elsewhere
         // The Dock stays behind as a full-screen app's Space slides in, and its snow falls.
         if let dock = sinkingDock { elsewhere.remove(dock) }
-        let shown = lead == 0 ? surfaces : surfaces.map { $0.isDock || staying.contains($0.id) ? $0 : $0.shifted(by: lead) }
+        let shown = lead == 0 ? surfaces : surfaces.map { $0.isDock || NotificationBanner.ids.contains($0.id) || staying.contains($0.id) ? $0 : $0.shifted(by: lead) }
         let slideVelocity = shift.map { Float($0) / Float(max(interval, 1.0 / 120)) } ?? 0
         return WindowUpdate(surfaces: shown, interval: Float(min(interval, 0.25)), parked: away.parked, elsewhere: elsewhere, sliding: sliding, slideVelocity: slideVelocity)
     }
@@ -170,7 +190,7 @@ final class WindowTracker {
     /// How far each window carried by the sliding Space is from where it rests on its own Space: the window server keeps
     /// that frame through the slide, while the window list follows the window across the screen.
     private func distancesToRest(of surfaces: [WindowSurface]) -> [Double] {
-        surfaces.filter { !$0.isDock && !staying.contains($0.id) }.prefix(4).compactMap { surface in
+        surfaces.filter { !$0.isDock && !NotificationBanner.ids.contains($0.id) && !staying.contains($0.id) }.prefix(4).compactMap { surface in
             SkyLight.bounds(of: surface.id).map { Double($0.minX - screen.minX - surface.frame.minX) }
         }
     }
@@ -449,6 +469,21 @@ final class WindowTracker {
         var blockers: [CGRect] = []
         var surfaces: [WindowSurface] = []
         var dockOut = false
+        // Notification banners are in front of every window.
+        for (id, bounds, sweeps) in banner.surfaces(now: now, screen: screen, menuBarHeight: menuBarHeight) {
+            let frame = CGRect(x: bounds.minX - screen.minX, y: screen.maxY - bounds.maxY, width: bounds.width, height: bounds.height)
+            surfaces.append(WindowSurface(
+                id: id,
+                frame: frame,
+                blockers: blockers.filter { $0.intersects(frame) },
+                cover: blockers.filter { $0.intersects(frame) },
+                cornerRadius: NotificationBanner.cornerRadius,
+                cornerExponent: 2.5,
+                isDock: false,
+                sweeps: sweeps
+            ))
+            blockers.append(frame)
+        }
         var fresh: [CGWindowID: Double] = [:]
         var panels: [CGWindowID: CFTimeInterval] = [:]
         var windows: [CGRect] = []
@@ -503,6 +538,7 @@ final class WindowTracker {
             // Screen-sized windows above the normal layer (Notification Center, Siri) are transparent overlays. Spotlight's
             // window turns into one for a moment on every keystroke, its bar still where it was, and keeps the bar meanwhile.
             if layer > 0 && fillsScreen(bounds) {
+                banner.notice(id, level: layer, pid: pid)
                 guard let bar = raised[id] else { continue }
                 bounds = bar.frame
             } else if layer > 0 {
@@ -534,7 +570,8 @@ final class WindowTracker {
                     cover: blockers.filter { $0.intersects(frame) },
                     cornerRadius: radius,
                     cornerExponent: capsule ? 2 : 2.5,
-                    isDock: shelf
+                    isDock: shelf,
+                    sweeps: false
                 ))
             }
             blockers.append(frame)
@@ -551,7 +588,8 @@ final class WindowTracker {
                 cover: blockers.filter { $0.intersects(frame) },
                 cornerRadius: 0,
                 cornerExponent: 2.5,
-                isDock: false
+                isDock: false,
+                sweeps: false
             ))
         }
         return exposing ? [] : surfaces

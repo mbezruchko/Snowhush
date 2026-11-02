@@ -8,7 +8,17 @@ final class OverlayWindow: NSWindow {
     private let frontLevel: NSWindow.Level
 
     var behindWindows = false {
-        didSet { level = behindWindows ? Self.desktopLevel : frontLevel }
+        didSet { placeLevel() }
+    }
+
+    /// The level of Notification Center's window while it is up: the snow goes just under it, so the banners and the
+    /// opened panel stay in front of the snow, and the snow on the windows behind them out of sight.
+    var notificationLevel: Int? {
+        didSet { if notificationLevel != oldValue { placeLevel() } }
+    }
+
+    private func placeLevel() {
+        level = behindWindows ? Self.desktopLevel : notificationLevel.map { NSWindow.Level(rawValue: min($0 - 1, frontLevel.rawValue)) } ?? frontLevel
     }
 
     var showsInScreenshots = false {
