@@ -35,14 +35,15 @@ const SHADERS: &str = include_str!("shaders.hlsl");
 /// How far the cursor's candlelight reaches, in points.
 pub const LANTERN_REACH: f32 = 130.0;
 
-// The sprites' input layout reads a ghost's and a leaf's parts at these offsets.
+// The sprites' input layout reads a ghost's, a leaf's and rain's parts at these offsets.
 const _: () = assert!(
     offset_of!(Sprite, ghost) == 48
         && offset_of!(Sprite, pose) == 64
         && offset_of!(Sprite, mood) == 80
         && offset_of!(Sprite, leaf) == 88
         && offset_of!(Sprite, spin) == 100
-        && size_of::<Sprite>() == 108
+        && offset_of!(Sprite, rain) == 108
+        && size_of::<Sprite>() == 116
 );
 
 #[repr(C)]
@@ -211,6 +212,7 @@ impl Gpu {
                 element(s!("MOOD"), DXGI_FORMAT_R32G32_FLOAT, 80),
                 element(s!("LEAF"), DXGI_FORMAT_R32G32B32_FLOAT, 88),
                 element(s!("SPIN"), DXGI_FORMAT_R32G32_FLOAT, 100),
+                element(s!("RAIN"), DXGI_FORMAT_R32G32_FLOAT, 108),
             ];
             let mut sprite_layout = None;
             device.CreateInputLayout(&elements, blob_bytes(&sprite_code), Some(&mut sprite_layout))?;

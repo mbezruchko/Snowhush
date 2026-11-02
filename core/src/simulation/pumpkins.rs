@@ -128,6 +128,7 @@ mod tests {
             id: 7,
             frame: Rect { x: 8.0, y: 0.0, width: 1184.0, height: 44.0 },
             blockers: Vec::new(),
+            cover: Vec::new(),
             corner_radius: 8.0,
             corner_exponent: 2.0,
         };

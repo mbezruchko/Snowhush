@@ -15,7 +15,7 @@ use windows::core::{HSTRING, PCWSTR, Result, w};
 
 use snowhush_core::geometry::V2;
 use snowhush_core::halloween::Choice;
-use snowhush_core::simulation::{ScatterPiece, SnowSimulation, Snowfall};
+use snowhush_core::simulation::{Mode, ScatterPiece, SnowSimulation, Snowfall};
 
 use crate::desktop::{self, DesktopLayer};
 use crate::halloween;
@@ -54,10 +54,10 @@ pub enum Command {
     ClearSnow(bool),
     /// Halloween turned on or off from the menu.
     Halloween(Choice),
-    /// Leaves fall instead of snow, or snow instead of leaves, once a gust has blown what is there away; when calm, for
-    /// less motion, it melts where it lies instead.
+    /// Another kind falls, once a gust has blown what is there away; when calm, for less motion, it melts where it
+    /// lies instead.
     SwitchMode {
-        autumn: bool,
+        mode: Mode,
         calm: bool,
     },
     Quit,
@@ -178,13 +178,13 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                     chores_at = 0;
                     light_at = 0;
                 }
-                Command::SwitchMode { autumn, calm } => {
-                    settings.autumn = autumn;
+                Command::SwitchMode { mode, calm } => {
+                    settings.mode = mode;
                     light_at = 0;
                     let direction = screens.first().map_or(-1.0, |screen| screen.simulation.breeze_direction());
                     let now = Clock::now();
                     screens.iter_mut().for_each(|screen| {
-                        screen.simulation.switch_mode(autumn, direction, calm);
+                        screen.simulation.switch_mode(mode, direction, calm);
                         screen.wake(now);
                     });
                 }
@@ -396,7 +396,7 @@ fn new_simulation(monitor: &Monitor, settings: &Settings) -> SnowSimulation {
     simulation.accumulates = settings.accumulate;
     simulation.set_snowfall_held(!settings.welcomed);
     simulation.set_halloween(halloween::shows(settings));
-    simulation.set_autumn(settings.autumn);
+    simulation.set_mode(settings.mode);
     simulation
 }
 

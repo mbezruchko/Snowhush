@@ -94,7 +94,14 @@ pub fn surfaces(report: &Report, area: &Area, shelf: Option<&Shelf>) -> Vec<Wind
     let mut surfaces = Vec::new();
     if let Some(shelf) = shelf {
         let frame = local_rect(&shelf.rect, area);
-        surfaces.push(WindowSurface { id: shelf.id, frame, blockers: Vec::new(), corner_radius: shelf.radius, corner_exponent: 2.0 });
+        surfaces.push(WindowSurface {
+            id: shelf.id,
+            frame,
+            blockers: Vec::new(),
+            cover: Vec::new(),
+            corner_radius: shelf.radius,
+            corner_exponent: 2.0,
+        });
         blockers.push(frame);
     }
     for window in &report.windows {
@@ -118,6 +125,7 @@ pub fn surfaces(report: &Report, area: &Area, shelf: Option<&Shelf>) -> Vec<Wind
                 id: window_id(&window.id),
                 frame,
                 blockers: blockers.iter().filter(|b| intersects(b, &region)).copied().collect(),
+                cover: blockers.iter().filter(|b| intersects(b, &frame)).copied().collect(),
                 corner_radius: radius,
                 corner_exponent: 2.0,
             });

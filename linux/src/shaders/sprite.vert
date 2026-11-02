@@ -28,6 +28,9 @@ layout(location = 10) in vec2 mood;
 // A leaf's seed, which way it points and how much of its face shows; how fast it turns and tumbles, a second.
 layout(location = 11) in vec3 leaf;
 layout(location = 12) in vec2 spin;
+// Rain: a raindrop's streak or a droplet it throws up (one), a drop on the glass (two) or one hanging under an edge
+// (three); how far along a hanging one is.
+layout(location = 13) in vec2 rain;
 
 out vec2 vCoord;
 out float vAlpha;
@@ -47,6 +50,8 @@ flat out vec4 vMood;
 flat out vec4 vLeaf;
 // How far it turns and tumbles over the exposure, and how many moments of it are drawn.
 flat out vec4 vSmear;
+// Rain's kind and how far along a hanging drop is, then the sprite's size and its quad's, in pixels.
+flat out vec4 vRain;
 
 float flicker(float t, float seed) {
     return 0.86 + 0.08 * sin(t * 11.0 + seed * 2.1) + 0.06 * sin(t * 29.0 + 1.3 + seed * 4.3);
@@ -65,10 +70,61 @@ float candlelight(vec2 point) {
     return min(glow, 1.0);
 }
 
+// A drop hanging under an edge, in radii of the drop, from where it clings. Up to one along, it fills: a small one is
+// a flat cap under the edge, and the more water it holds the further it sags, its sides straightening, its foot
+// round. Where it meets the edge it flares out into it, as water wetting the edge does. From one to two it lets go,
+// stretching down for an instant before it falls. Its width and height radii, and how far below the edge its middle is.
+vec3 hangingShape(float along) {
+    float fill = clamp(along, 0.0, 1.0), pull = clamp(along - 1.0, 0.0, 1.0);
+    vec2 axes = vec2(mix(1.2, 0.9, fill) * (1.0 - 0.15 * pull), mix(0.6, 1.25, fill) * (1.0 + 0.5 * pull));
+    return vec3(axes, -axes.y * mix(0.15, 0.8, fill) - 0.3 * pull);
+}
+
+// How far it flares out into the edge.
+float hangingFlare(float along) {
+    return mix(0.8, 0.6, clamp(along, 0.0, 1.0));
+}
+
+// How far above and below where it clings it reaches.
+vec2 hangingReach(float along) {
+    vec3 shape = hangingShape(along);
+    return vec2(0.05, shape.z - shape.y);
+}
+
 void main() {
     vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
     vCoord = vec2(corner.x, 1.0 - corner.y);
     vWarm = candlelight(position);
+    vRain = vec4(0.0);
+    if (rain.x > 0.0) {
+        // A raindrop in the air shows as the whole streak it draws over a 1/35 s exposure, the sprite at its head; a
+        // drop on the glass draws out a tail behind it as it runs; one hanging under an edge clings at its position.
+        float pixels = max(size * scale, 1.5);
+        bool glass = rain.x > 1.5;
+        float speed = length(velocity);
+        vec2 travel = velocity * 0.028;
+        if (glass) travel = speed > 0.0 ? -velocity / speed * min(speed * 0.08, size * 0.9) : vec2(0.0);
+        vec2 streak = travel * scale;
+        float extent = max(pixels + length(streak) + (glass ? 2.0 : 0.0), 2.0);
+        vec2 middle = position - (glass ? -travel : travel) * 0.5;
+        if (rain.x > 2.5) {
+            vec2 reach = hangingReach(rain.y) * pixels * 0.5;
+            vec3 shape = hangingShape(rain.y);
+            extent = max(reach.x - reach.y, 2.0 * (shape.x + 1.5 * hangingFlare(rain.y)) * pixels * 0.5) + 4.0;
+            middle = position + vec2(0.0, (reach.x + reach.y) * 0.5) / scale;
+            streak = vec2(0.0);
+        }
+        vec2 center = (middle + shake) / viewSize * 2.0 - 1.0;
+        gl_Position = vec4(center + (corner - 0.5) * extent * 2.0 / (viewSize * scale), 0.0, 1.0);
+        vStreak = streak / extent;
+        vRadius = pixels / extent * 0.5;
+        vAlpha = alpha * min(pixels / 1.5, 1.0);
+        vSoft = soft;
+        vRain = vec4(rain, pixels, extent);
+        vLeaf = vec4(0.0);
+        vGhost = vec4(0.0);
+        return;
+    }
     if (leaf.x != 0.0) {
         // About a 1/40 s exposure: at 30 frames a second a falling leaf smears most of the way to where the next
         // frame shows it, so it glides instead of hopping. The sprite sits midway along the smear.

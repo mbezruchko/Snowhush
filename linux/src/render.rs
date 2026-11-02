@@ -202,7 +202,8 @@ impl Gpu {
             gl.bind_vertex_array(Some(sprite_array));
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(sprite_buffer));
             let stride = size_of::<Sprite>() as i32;
-            // Position, velocity, size, alpha, soft, tint amount, tint, lump, ghost, pose, mood, leaf, spin: see `Sprite`.
+            // Position, velocity, size, alpha, soft, tint amount, tint, lump, ghost, pose, mood, leaf, spin, rain: see
+            // `Sprite`.
             for (location, components, offset) in [
                 (0, 2, 0),
                 (1, 2, 8),
@@ -217,6 +218,7 @@ impl Gpu {
                 (10, 2, 80),
                 (11, 3, 88),
                 (12, 2, 100),
+                (13, 2, 108),
             ] {
                 gl.enable_vertex_attrib_array(location);
                 gl.vertex_attrib_pointer_f32(location, components, glow::FLOAT, false, stride, offset);

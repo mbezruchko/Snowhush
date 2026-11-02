@@ -27,6 +27,7 @@ flat in vec4 vPose;
 flat in vec4 vMood;
 flat in vec4 vLeaf;
 flat in vec4 vSmear;
+flat in vec4 vRain;
 
 out vec4 fragment;
 
@@ -227,12 +228,116 @@ vec4 ghost(vec2 p, bool hidden) {
     return vec4(color * a, a);
 }
 
+// A drop hanging under an edge, in radii of the drop, from where it clings. Up to one along, it fills: a small one is
+// a flat cap under the edge, and the more water it holds the further it sags, its sides straightening, its foot
+// round. Where it meets the edge it flares out into it, as water wetting the edge does. From one to two it lets go,
+// stretching down for an instant before it falls. Its width and height radii, and how far below the edge its middle is.
+vec3 hangingShape(float along) {
+    float fill = clamp(along, 0.0, 1.0), pull = clamp(along - 1.0, 0.0, 1.0);
+    vec2 axes = vec2(mix(1.2, 0.9, fill) * (1.0 - 0.15 * pull), mix(0.6, 1.25, fill) * (1.0 + 0.5 * pull));
+    return vec3(axes, -axes.y * mix(0.15, 0.8, fill) - 0.3 * pull);
+}
+
+// How far it flares out into the edge.
+float hangingFlare(float along) {
+    return mix(0.8, 0.6, clamp(along, 0.0, 1.0));
+}
+
+// How far above and below where it clings it reaches.
+vec2 hangingReach(float along) {
+    vec3 shape = hangingShape(along);
+    return vec2(0.05, shape.z - shape.y);
+}
+
+// The lens shading of a drop: dark toward its rim, a bright crescent along its foot, a glint near its top.
+vec4 lensColor(float darkA, float lightA, float inside, float alpha) {
+    vec3 dark = vec3(0.03, 0.04, 0.06);
+    vec3 bright = vec3(0.93, 0.96, 1.0) * light.rgb;
+    float a = (darkA + lightA - darkA * lightA) * inside * alpha;
+    return vec4((dark * darkA * (1.0 - lightA) + bright * lightA) * inside * alpha, a);
+}
+
+// A drop in the air works as a ball lens: what is above it, the lit window it hangs from, shows upside down in its
+// lower part, and what is below, darker, in its upper part; the light catches its outline only where it curves away
+// underneath, and glints near its top.
+vec4 hangingAt(vec2 p) {
+    float along = vRain.y;
+    vec3 shape = hangingShape(along);
+    vec2 reach = hangingReach(along);
+    vec2 q = p / vRadius + vec2(0.0, (reach.x + reach.y) * 0.5);
+    vec2 e = (q - vec2(0.0, shape.z)) / shape.xy;
+    float squareness = mix(2.0, 2.6, clamp(along, 0.0, 1.0));
+    float head = (pow(pow(abs(e.x), squareness) + pow(abs(e.y), squareness), 1.0 / squareness) - 1.0) * min(shape.x, shape.y);
+    // The edge itself, everything above where it clings: the drop runs into it in a smooth hollow curve, and nothing
+    // of it shows above.
+    float k = hangingFlare(along);
+    float above = 0.05 - q.y;
+    float h = clamp(0.5 + 0.5 * (above - head) / k, 0.0, 1.0);
+    float flared = mix(above, head, h) - k * h * (1.0 - h);
+    float body = max(flared, q.y - 0.05) + 1.0;
+    // Smoothed over a pixel, worked out from the drop's size: gradients are undefined in a branch.
+    float aa = 1.2 / max(vRadius * vRain.w, 0.5);
+    float inside = 1.0 - smoothstep(1.0 - aa, 1.0, body);
+    if (inside < 0.002) return vec4(0.0);
+    float rim = smoothstep(0.45, 1.0, body);
+    float tiny = 1.0 - smoothstep(3.0, 9.0, vRain.z);
+    float darkA = 0.07 + 0.38 * rim * (0.55 + 0.45 * clamp(-e.y, 0.0, 1.0)) + 0.22 * tiny;
+    float crescent = (1.0 - smoothstep(0.55, 0.92, length(e))) * smoothstep(-0.05, -0.7, e.y) * smoothstep(0.75, 0.2, abs(e.x)) * 0.5;
+    vec2 g = e - vec2(-0.3, 0.38);
+    float glint = exp(-dot(g, g) / 0.035) * 0.95;
+    float sheen = smoothstep(0.7, 0.97, body) * 0.22 * mix(0.3, 1.0, smoothstep(0.2, -0.6, e.y));
+    return lensColor(darkA, clamp(crescent + glint + sheen, 0.0, 1.0), inside, vAlpha);
+}
+
+vec4 rainAt(vec2 p) {
+    if (vRain.x > 2.5) return hangingAt(p);
+    vec2 halfStreak = vStreak * 0.5;
+    float span = dot(halfStreak, halfStreak);
+    if (vRain.x < 1.5) {
+        // Faint and cold, brightest at its head.
+        float t = span > 0.0 ? clamp(dot(p, halfStreak) / span, -1.0, 1.0) : 0.0;
+        float r = length(p - halfStreak * t) / max(vRadius, 0.001);
+        float head = span > 0.0 ? 0.25 + 0.75 * pow(t * 0.5 + 0.5, 2.0) : 1.0;
+        float a = (1.0 - smoothstep(mix(0.6, 0.0, vSoft), 1.0, r)) * vAlpha * head;
+        if (a < 0.002) return vec4(0.0);
+        return vec4(vec3(0.78, 0.84, 0.92) * light.rgb * a, a);
+    }
+    // A drop on the glass works as a little lens: darker toward its rim, most of all along its foot, where it bends
+    // the light from above into a bright crescent, and a glint near its top. Its head leads; the tail it draws out
+    // behind it as it runs narrows away.
+    vec2 axis = span > 0.0 ? halfStreak / sqrt(span) : vec2(0.0, 1.0);
+    float len = 2.0 * sqrt(span);
+    vec2 head = -halfStreak;
+    float along = len > 0.001 ? clamp(dot(p - head, axis) / len, 0.0, 1.0) : 0.0;
+    float width = vRadius * mix(1.0, 0.3, along);
+    float d = length(p - head - axis * along * len) / max(width, 0.001);
+    float aa = 1.2 / max(width * vRain.w, 0.5);
+    float inside = 1.0 - smoothstep(1.0 - aa, 1.0, d);
+    if (inside < 0.002) return vec4(0.0);
+    vec2 q = (p - head) / max(vRadius, 0.001);
+    float rim = smoothstep(0.45, 1.0, d);
+    // A bead only a few pixels across shows mostly as its dark rim and its glint; drawn as faint as a big drop, a
+    // trail of them would vanish.
+    float tiny = 1.0 - smoothstep(3.0, 9.0, vRain.z);
+    float darkA = (0.07 + 0.38 * rim * (0.55 + 0.45 * clamp(-q.y, 0.0, 1.0)) + 0.22 * tiny) * (1.0 - along * 0.5);
+    float crescent = (1.0 - smoothstep(0.55, 0.92, d)) * smoothstep(-0.05, -0.7, q.y) * smoothstep(0.75, 0.2, abs(q.x)) * 0.5;
+    vec2 g = q - vec2(-0.3, 0.38);
+    float glint = exp(-dot(g, g) / 0.035) * 0.95;
+    return lensColor(darkA, clamp(crescent * (1.0 - along) + glint, 0.0, 1.0), inside, vAlpha);
+}
+
 void main() {
     // The viewport is the simulation's size, one pixel to a unit, so the fragment's place is its position.
     vec2 at = gl_FragCoord.xy;
     bool hidden = at.x >= panel.x && at.x < panel.z && at.y >= panel.y && at.y < panel.w;
     // Quad coordinates run down the screen; velocities run up.
     vec2 p = vec2(vCoord.x - 0.5, 0.5 - vCoord.y);
+    if (vRain.x > 0.0) {
+        vec4 water = rainAt(p);
+        if (hidden || water.a < 0.002) discard;
+        fragment = water;
+        return;
+    }
     if (vLeaf.x != 0.0) {
         // The leaf over the exposure, from where it was to where it is now, turning and tumbling on the way.
         int n = int(vSmear.z);

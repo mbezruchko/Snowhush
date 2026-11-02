@@ -176,6 +176,7 @@ impl Tracker {
                     id: window.id,
                     frame,
                     blockers: blockers.iter().filter(|b| intersects(b, &region)).copied().collect(),
+                    cover: blockers.iter().filter(|b| intersects(b, &frame)).copied().collect(),
                     corner_radius: radius,
                     corner_exponent: 2.0,
                 });

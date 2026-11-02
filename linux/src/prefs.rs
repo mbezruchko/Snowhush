@@ -3,7 +3,9 @@
 use std::path::PathBuf;
 
 use snowhush_core::halloween::Choice;
-use snowhush_core::simulation::Snowfall;
+use snowhush_core::simulation::{Mode, Snowfall};
+
+const MODES: [Mode; 3] = [Mode::Snow, Mode::Autumn, Mode::Rain];
 
 #[derive(Clone, Copy)]
 pub struct Settings {
@@ -16,8 +18,8 @@ pub struct Settings {
     pub over_full_screen: bool,
     pub show_in_screenshots: bool,
     pub halloween: Choice,
-    /// Leaves fall instead of snow.
-    pub autumn: bool,
+    /// What falls: snow, leaves or rain.
+    pub mode: Mode,
 }
 
 impl Settings {
@@ -37,7 +39,12 @@ impl Settings {
             over_full_screen: read("showOverFullScreen").is_some_and(|v| v != 0),
             show_in_screenshots: read("showInScreenshots").is_some_and(|v| v != 0),
             halloween: Choice { on: read("halloweenOn").is_some_and(|v| v != 0), skipped: read("halloweenSkipped").unwrap_or(0) },
-            autumn: read("autumn").is_some_and(|v| v != 0),
+            // Before rain there was only a switch for leaves.
+            mode: read("mode").and_then(|i| MODES.get(i as usize).copied()).unwrap_or(if read("autumn").is_some_and(|v| v != 0) {
+                Mode::Autumn
+            } else {
+                Mode::Snow
+            }),
         }
     }
 
@@ -45,7 +52,7 @@ impl Settings {
         let Some(folder) = config_dir() else { return };
         let snowfall = Snowfall::ALL.iter().position(|&s| s == self.snowfall).unwrap_or(2);
         let text = format!(
-            "snowfall={snowfall}\naccumulate={}\nmeltSnow={}\nsnowOnWindows={}\nbehindWindows={}\nshowOverFullScreen={}\nshowInScreenshots={}\nhalloweenOn={}\nhalloweenSkipped={}\nautumn={}\n",
+            "snowfall={snowfall}\naccumulate={}\nmeltSnow={}\nsnowOnWindows={}\nbehindWindows={}\nshowOverFullScreen={}\nshowInScreenshots={}\nhalloweenOn={}\nhalloweenSkipped={}\nmode={}\nautumn={}\n",
             self.accumulate as u32,
             self.melt as u32,
             self.snow_on_windows as u32,
@@ -54,7 +61,8 @@ impl Settings {
             self.show_in_screenshots as u32,
             self.halloween.on as u32,
             self.halloween.skipped,
-            self.autumn as u32
+            MODES.iter().position(|&m| m == self.mode).unwrap_or(0),
+            (self.mode == Mode::Autumn) as u32
         );
         let _ = std::fs::create_dir_all(&folder);
         let _ = std::fs::write(folder.join("settings"), text);

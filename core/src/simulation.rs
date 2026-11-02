@@ -9,9 +9,11 @@ use crate::layer::SnowLayer;
 
 mod ghosts;
 mod pumpkins;
+mod rain;
 
 use ghosts::Haunting;
 use pumpkins::Pumpkins;
+use rain::Rain;
 
 pub type WindowId = isize;
 
@@ -81,6 +83,16 @@ const LEAF_SHOWN: f32 = 30.0;
 const MAX_LYING: usize = 1500;
 /// The top of a heap is the lying leaves themselves: the pile shader draws the mass under them only this far down.
 const LEAF_COVER: f32 = 2.5;
+/// Rain crosses the screen in a second or so, where a flake takes half a minute: far fewer are in sight at once.
+const RAIN_SHARE: f32 = 0.12;
+
+/// What falls: snow, leaves heaping up where snow would, or rain bursting on the windows and running down the glass.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    Snow,
+    Autumn,
+    Rain,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Snowfall {
@@ -154,6 +166,9 @@ pub struct Sprite {
     pub leaf: [f32; 3],
     /// How fast a leaf turns and tumbles, a second: it blurs over the exposure, as it moves.
     pub spin: [f32; 2],
+    /// Draws rain instead, when the first is above zero: one for a raindrop's streak or a droplet it throws up, two
+    /// for a drop on the glass, three for one hanging under a window's edge, the second then how far along it is.
+    pub rain: [f32; 2],
 }
 
 /// A Halloween sign a ghost holds up, or lets fall: the picture of `SIGN_CAPTIONS[caption]`, its stick's foot at
@@ -198,8 +213,10 @@ pub struct PileLayer<'a> {
 pub struct WindowSurface {
     pub id: WindowId,
     pub frame: Rect,
-    /// Frames of windows in front of this one.
+    /// Frames of windows in front of this one, near its top edge.
     pub blockers: Vec<Rect>,
+    /// Frames of windows in front of any part of this one: what hides a drop running down it.
+    pub cover: Vec<Rect>,
     pub corner_radius: f32,
     pub corner_exponent: f32,
 }
@@ -225,6 +242,7 @@ struct Flake {
     blown: f32,
     /// A leaf instead of a snowflake: its seed, which picks its shape and colour; zero for snow.
     leaf: f32,
+    rain: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -328,6 +346,8 @@ struct Air {
     slide_wind: f32,
     /// Leaves fall instead of snow and heap up where it would.
     autumn: bool,
+    /// Rain falls instead.
+    rain: bool,
     /// How many more leaves the heaps can show coming off them, as `spare_leaves` found it, less those shown since.
     leaf_budget: f32,
     /// How much more a window's jolts up and down count than on the Mac the snow was tuned on: across a smaller
@@ -371,7 +391,8 @@ pub struct SnowSimulation {
     lanterns: Pumpkins,
     lying: Vec<LyingLeaf>,
     /// The mode waiting for the gust to clear the screen, so one kind never turns into the other in sight.
-    next_autumn: Option<bool>,
+    next_mode: Option<Mode>,
+    rain: Rain,
     switched_at: f64,
     restyled: bool,
     air: Air,
@@ -406,7 +427,8 @@ impl SnowSimulation {
             haunting: Haunting::new(),
             lanterns: Pumpkins::default(),
             lying: Vec::new(),
-            next_autumn: None,
+            next_mode: None,
+            rain: Rain::default(),
             switched_at: 0.0,
             restyled: false,
             air: Air {
@@ -427,6 +449,7 @@ impl SnowSimulation {
                 gust: None,
                 slide_wind: 0.0,
                 autumn: false,
+                rain: false,
                 leaf_budget: 0.0,
                 jolt_scale: jolt_scale(height),
             },
@@ -483,12 +506,23 @@ impl SnowSimulation {
         self.air.autumn
     }
 
-    /// Leaves fall instead of snow, starting at once: what falls now turns into the other kind where it is.
-    pub fn set_autumn(&mut self, autumn: bool) {
-        if autumn == self.air.autumn {
+    pub fn mode(&self) -> Mode {
+        if self.air.autumn {
+            Mode::Autumn
+        } else if self.air.rain {
+            Mode::Rain
+        } else {
+            Mode::Snow
+        }
+    }
+
+    /// Another kind falls, starting at once: what falls now turns into the other kind where it is.
+    pub fn set_mode(&mut self, mode: Mode) {
+        if mode == self.mode() {
             return;
         }
-        self.air.autumn = autumn;
+        self.air.autumn = mode == Mode::Autumn;
+        self.air.rain = mode == Mode::Rain;
         self.lying.clear();
         self.update_target();
         let width = self.width;
@@ -499,15 +533,17 @@ impl SnowSimulation {
 
     /// Clears the screen first, with a gust in `direction` (or, `calm`, melting it in place), and lets the other kind
     /// fall only after, from the top.
-    pub fn switch_mode(&mut self, autumn: bool, direction: f32, calm: bool) {
-        if autumn == self.air.autumn {
-            self.next_autumn = None;
+    pub fn switch_mode(&mut self, mode: Mode, direction: f32, calm: bool) {
+        if mode == self.mode() {
+            self.next_mode = None;
             return;
         }
-        if self.next_autumn.is_some() {
+        // Already clearing for another mode: the gust under way clears it for this one.
+        if self.next_mode.is_some() {
+            self.next_mode = Some(mode);
             return;
         }
-        self.next_autumn = Some(autumn);
+        self.next_mode = Some(mode);
         self.switched_at = self.air.clock;
         self.blow_away(direction, calm);
     }
@@ -523,12 +559,17 @@ impl SnowSimulation {
             && self.air.overflow.is_empty()
             && self.dormant.is_empty()
             && self.parking.is_empty()
-            && self.next_autumn.is_none()
+            && self.next_mode.is_none()
             && self.layers.iter().all(|layer| layer.top <= 0.0)
     }
 
     pub fn sprite_count(&self) -> usize {
-        self.lying.len() + self.air.flakes.len() + self.air.grains.len() + self.air.motes.len() + self.haunting.sprite_count()
+        self.lying.len()
+            + self.air.flakes.len()
+            + self.air.grains.len()
+            + self.air.motes.len()
+            + self.haunting.sprite_count()
+            + self.rain.sprite_count()
     }
 
     /// Floats the renderer needs per frame: each layer's surface and bed.
@@ -570,15 +611,17 @@ impl SnowSimulation {
         self.advance_flakes(dt);
         self.advance_grains(dt);
         self.air.advance_motes(dt);
+        self.advance_splashes(dt);
+        self.run_glass_drops(dt);
         self.haunt(dt);
         self.settle(dt);
         self.tend_leaves(dt);
-        if let Some(next) = self.next_autumn
+        if let Some(next) = self.next_mode
             && self.air.gust.is_none()
             && (self.air.grains.is_empty() || self.air.clock - self.switched_at > 6.0)
         {
-            self.next_autumn = None;
-            self.set_autumn(next);
+            self.next_mode = None;
+            self.set_mode(next);
         }
         self.spawn_flakes();
         if self.haunting.on {
@@ -662,6 +705,7 @@ impl SnowSimulation {
                 soft: flake.soft,
                 tint_amount: flake.tint_amount,
                 tint: flake.tint,
+                rain: if flake.rain { [1.0, 0.0] } else { [0.0; 2] },
                 ..Sprite::default()
             }
         });
@@ -701,7 +745,7 @@ impl SnowSimulation {
             Sprite { position: mote.position, size: mote.size * (1.0 + t), alpha: mote.alpha * fade, soft: 1.0, tint: [1.0; 3], ..Sprite::default() }
         });
         let mut count = 0;
-        for (slot, sprite) in buffer.iter_mut().zip(lying.chain(flakes).chain(grains).chain(motes)) {
+        for (slot, sprite) in buffer.iter_mut().zip(lying.chain(flakes).chain(self.rain_sprites()).chain(grains).chain(motes)) {
             *slot = sprite;
             count += 1;
         }
@@ -761,6 +805,7 @@ impl SnowSimulation {
                 tint_amount: 1.0,
                 blown: 0.0,
                 leaf: 0.0,
+                rain: false,
             });
         }
     }
@@ -843,6 +888,8 @@ impl SnowSimulation {
             ledge.shape_corners(surface.corner_radius, surface.corner_exponent);
             let blockers: Vec<[f32; 4]> = surface.blockers.iter().map(|b| [b.min_x(), b.min_y(), b.max_x(), b.max_y()]).collect();
             ledge.occluders = blockers.iter().take(16).copied().collect();
+            ledge.face = surface.frame.height;
+            ledge.face_occluders = surface.cover.iter().take(16).map(|b| [b.min_x(), b.min_y(), b.max_x(), b.max_y()]).collect();
             ledge.update_visibility(self.width, &blockers);
         }
 
@@ -957,11 +1004,15 @@ impl SnowSimulation {
                 // The nearer the flake, the faster the gust seems to carry it.
                 flake.velocity.x += (flake.blown * GUST_WIND * (1.3 + 1.3 * flake.depth) - flake.velocity.x) * (dt * 2.5).min(1.0);
             } else {
-                flake.velocity.x += (wind * (0.35 + 0.65 * flake.depth) - flake.velocity.x) * follow;
+                // Rain falls slanted, as wind drives it; snow and leaves only drift.
+                let drive = if flake.rain { 3.0 } else { 1.0 };
+                flake.velocity.x += (wind * drive * (0.35 + 0.65 * flake.depth) - flake.velocity.x) * follow;
             }
             flake.velocity.y += (-flake.fall_speed - flake.velocity.y) * settle;
 
-            if let Some(wake) = wake {
+            if let Some(wake) = wake
+                && !flake.rain
+            {
                 stir(&mut flake.velocity, flake.position, wake, dt);
             }
 
@@ -986,8 +1037,14 @@ impl SnowSimulation {
                 flake.position.x -= self.width + 60.0;
             }
 
-            if flake.settles && self.accumulates && flake.blown == 0.0 {
+            if flake.settles && (self.accumulates || flake.rain) && flake.blown == 0.0 {
                 if let Some((li, column)) = landing(&self.layers, flake.position.x, previous_y, flake.position.y) {
+                    if flake.rain {
+                        let surface = self.layers[li].surface(column);
+                        self.rain_landed(li, flake.position.x, surface, flake.depth);
+                        self.recycle(i);
+                        continue;
+                    }
                     if self.snowfall_held && flake.mass < 1.0 && li == 0 {
                         self.snowfall_held = false;
                         self.snowfall_released = true;
@@ -1119,7 +1176,7 @@ impl SnowSimulation {
 
     /// No new snow falls while a gust clears the screen or the mode waits to switch.
     fn holding(&self) -> bool {
-        self.next_autumn.is_some() || self.air.blowing()
+        self.next_mode.is_some() || self.air.blowing()
     }
 
     /// Wanders between light lulls, steady snow and heavy flurries.
@@ -1309,7 +1366,7 @@ impl SnowSimulation {
     fn settle(&mut self, dt: f32) {
         // Melting nearly keeps pace with the snowfall, so heavier snowfall builds drifts only a little higher, and the
         // far sparser leaves wither as slowly.
-        let falling = self.snowfall.flakes_per_megapoint() * self.air.strength * self.density * if self.air.autumn { LEAF_SHARE } else { 1.0 };
+        let falling = self.snowfall.flakes_per_megapoint() * self.air.strength * self.density * self.share();
         let melt_pace = if falling > 0.0 { (falling / THAW_BALANCE).powf(THAW_EXPONENT) } else { 1.0 };
         let outside: Vec<[f32; 2]> = (0..self.layers.len())
             .map(|li| if li == 0 { [0.0; 2] } else { [outside(&self.layers, li, true), outside(&self.layers, li, false)] })
@@ -1351,9 +1408,20 @@ impl SnowSimulation {
         }
     }
 
+    /// How much sparser than snow the kind falling now falls.
+    fn share(&self) -> f32 {
+        if self.air.autumn {
+            LEAF_SHARE
+        } else if self.air.rain {
+            RAIN_SHARE
+        } else {
+            1.0
+        }
+    }
+
     fn update_target(&mut self) {
         let per_megapoint = if self.snowfall_held { 0.0 } else { self.snowfall.flakes_per_megapoint() };
-        let share = if self.air.autumn { LEAF_SHARE } else { 1.0 };
+        let share = self.share();
         self.target_flakes = (per_megapoint * share * self.air.strength * self.density * self.width * self.height / 1_000_000.0) as usize;
     }
 
@@ -2157,6 +2225,9 @@ impl Air {
         if self.autumn {
             return self.make_leaf(width, y);
         }
+        if self.rain {
+            return self.make_raindrop(width, y);
+        }
         let wind = self.wind_speed();
         let random = &mut self.random;
         let near = random.next() < 0.02;
@@ -2179,6 +2250,34 @@ impl Air {
             tint_amount: 0.0,
             blown: 0.0,
             leaf: 0.0,
+            rain: false,
+        }
+    }
+
+    /// A raindrop, drawn as the streak it leaves over the exposure: the nearer, the faster, longer and brighter.
+    fn make_raindrop(&mut self, width: f32, y: f32) -> Flake {
+        let wind = self.wind_speed();
+        let random = &mut self.random;
+        let depth = random.next().powf(1.5);
+        let fall_speed = 650.0 + depth * 550.0 + random.range(0.0, 80.0);
+        Flake {
+            position: V2::new(random.range(-30.0, width + 30.0), y),
+            velocity: V2::new(wind * 3.0 * (0.35 + 0.65 * depth), -fall_speed),
+            fall_speed,
+            size: 0.8 + depth * 0.9,
+            depth,
+            alpha: 0.12 + depth * 0.22,
+            soft: 0.6,
+            phase: 0.0,
+            sway_rate: 0.0,
+            sway_amount: 0.0,
+            settles: true,
+            mass: 1.0,
+            tint: [1.0; 3],
+            tint_amount: 0.0,
+            blown: 0.0,
+            leaf: 0.0,
+            rain: true,
         }
     }
 
@@ -2205,6 +2304,7 @@ impl Air {
             tint_amount: 0.0,
             blown: 0.0,
             leaf: random.range(0.001, 1.0),
+            rain: false,
         }
     }
 

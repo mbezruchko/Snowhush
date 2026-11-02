@@ -15,6 +15,10 @@ pub struct SnowLayer {
     pub top: f32,
     pub bed_depth: f32,
     pub occluders: Vec<[f32; 4]>,
+    /// How far the window it lies on reaches down from its top edge: as far as a drop can run down it.
+    pub face: f32,
+    /// Windows in front of any part of the window it lies on, which hide a drop running down it.
+    pub face_occluders: Vec<[f32; 4]>,
     pub moved_at: f64,
     /// When the snow came back onto its window from elsewhere, to grow back into shape rather than appear at once.
     pub returned_at: f64,
@@ -67,6 +71,8 @@ impl SnowLayer {
             top: 0.0,
             bed_depth: 0.0,
             occluders: Vec::new(),
+            face: 200.0,
+            face_occluders: Vec::new(),
             moved_at: -1.0,
             returned_at: -10.0,
             spill_left: 0.0,

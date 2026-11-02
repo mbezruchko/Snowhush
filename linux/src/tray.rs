@@ -5,7 +5,7 @@ use calloop::channel::Sender;
 use ksni::menu::{CheckmarkItem, MenuItem, RadioGroup, RadioItem, StandardItem, SubMenu};
 
 use snowhush_core::halloween::Today;
-use snowhush_core::simulation::Snowfall;
+use snowhush_core::simulation::{Mode, Snowfall};
 
 use crate::log;
 use crate::prefs::{self, Settings};
@@ -27,16 +27,18 @@ macro_rules! glyph {
 }
 
 /// The snowflake, the leaf while leaves fall and the jack-o'-lantern while Halloween is on, each white then black.
-const GLYPHS: [[[&[u8]; 7]; 2]; 3] = [
+const GLYPHS: [[[&[u8]; 7]; 2]; 4] = [
     [glyph!("snowflake-white"), glyph!("snowflake-black")],
     [glyph!("leaf-white"), glyph!("leaf-black")],
     [glyph!("pumpkin-white"), glyph!("pumpkin-black")],
+    [glyph!("rain-white"), glyph!("rain-black")],
 ];
+const MODES: [Mode; 3] = [Mode::Snow, Mode::Autumn, Mode::Rain];
 
 pub struct Tray {
     settings: Settings,
     commands: Sender<Command>,
-    glyphs: [[Vec<ksni::Icon>; 2]; 3],
+    glyphs: [[Vec<ksni::Icon>; 2]; 4],
     /// The year and whether it is Halloween: the snow loop keeps it up to date.
     pub today: Today,
     /// Whether the desktop is light, so the panel wants a black glyph: the snow loop keeps it up to date.
@@ -50,7 +52,7 @@ impl Tray {
     }
 
     fn halloween(&self) -> bool {
-        !self.settings.autumn && self.settings.halloween.wanted(self.today)
+        self.settings.mode == Mode::Snow && self.settings.halloween.wanted(self.today)
     }
 
     fn change(&mut self, change: impl FnOnce(&mut Settings) -> Command) {
@@ -78,10 +80,12 @@ impl ksni::Tray for Tray {
     fn icon_pixmap(&self) -> Vec<ksni::Icon> {
         let glyph = if self.halloween() {
             2
-        } else if self.settings.autumn {
-            1
         } else {
-            0
+            match self.settings.mode {
+                Mode::Snow => 0,
+                Mode::Autumn => 1,
+                Mode::Rain => 3,
+            }
         };
         self.glyphs[glyph][usize::from(self.light)].clone()
     }
@@ -93,7 +97,10 @@ impl ksni::Tray for Tray {
     fn menu(&self) -> Vec<MenuItem<Self>> {
         let settings = self.settings;
         let current = Snowfall::ALL.iter().position(|&s| s == settings.snowfall).unwrap_or(0);
-        let autumn = settings.autumn;
+        let mode = settings.mode;
+        let autumn = mode == Mode::Autumn;
+        // Rain doesn't lie anywhere: nothing to keep, melt or clear.
+        let lies = mode != Mode::Rain;
         vec![
             SubMenu {
                 label: "Intensity".into(),
@@ -119,25 +126,28 @@ impl ksni::Tray for Tray {
                 label: "Mode".into(),
                 submenu: vec![
                     RadioGroup {
-                        selected: autumn as usize,
+                        selected: MODES.iter().position(|&m| m == mode).unwrap_or(0),
                         select: Box::new(|tray: &mut Tray, index| {
-                            let autumn = index == 1;
-                            if autumn == tray.settings.autumn {
+                            let Some(&mode) = MODES.get(index) else { return };
+                            if mode == tray.settings.mode {
                                 return;
                             }
                             tray.change(|settings| {
-                                settings.autumn = autumn;
-                                Command::Mode { autumn, calm: !prefs::animations_enabled() }
+                                settings.mode = mode;
+                                Command::Mode { mode, calm: !prefs::animations_enabled() }
                             });
                         }),
-                        options: ["Snow", "Autumn Leaves"].iter().map(|&label| RadioItem { label: label.into(), ..Default::default() }).collect(),
+                        options: ["Snow", "Autumn Leaves", "Rain"]
+                            .iter()
+                            .map(|&label| RadioItem { label: label.into(), ..Default::default() })
+                            .collect(),
                     }
                     .into(),
                     MenuItem::Separator,
                     CheckmarkItem {
                         label: "Halloween".into(),
                         checked: settings.halloween.wanted(self.today),
-                        enabled: !autumn,
+                        enabled: mode == Mode::Snow,
                         activate: Box::new(|tray: &mut Tray| {
                             let today = tray.today;
                             tray.change(|settings| {
@@ -155,6 +165,7 @@ impl ksni::Tray for Tray {
             CheckmarkItem {
                 label: "Accumulate".into(),
                 checked: settings.accumulate,
+                visible: lies,
                 activate: Box::new(|tray: &mut Tray| {
                     tray.change(|settings| {
                         settings.accumulate = !settings.accumulate;
@@ -168,6 +179,7 @@ impl ksni::Tray for Tray {
                 label: if autumn { "Wither Leaves" } else { "Melt Snow" }.into(),
                 checked: settings.melt,
                 enabled: settings.accumulate,
+                visible: lies,
                 activate: Box::new(|tray: &mut Tray| {
                     tray.change(|settings| {
                         settings.melt = !settings.melt;
@@ -178,7 +190,12 @@ impl ksni::Tray for Tray {
             }
             .into(),
             CheckmarkItem {
-                label: if autumn { "Leaves on Windows" } else { "Snow on Windows" }.into(),
+                label: match mode {
+                    Mode::Snow => "Snow on Windows",
+                    Mode::Autumn => "Leaves on Windows",
+                    Mode::Rain => "Rain on Windows",
+                }
+                .into(),
                 checked: settings.snow_on_windows,
                 activate: Box::new(|tray: &mut Tray| {
                     tray.change(|settings| {
@@ -191,6 +208,7 @@ impl ksni::Tray for Tray {
             .into(),
             StandardItem {
                 label: if autumn { "Clear Leaves" } else { "Clear Snow" }.into(),
+                visible: lies,
                 activate: Box::new(|tray: &mut Tray| {
                     let _ = tray.commands.send(Command::ClearSnow(!prefs::animations_enabled()));
                 }),
