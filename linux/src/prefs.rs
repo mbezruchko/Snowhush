@@ -11,6 +11,8 @@ pub struct Settings {
     pub melt: bool,
     pub snow_on_windows: bool,
     pub behind_windows: bool,
+    /// The snow stays over full-screen apps instead of fading out of their way.
+    pub over_full_screen: bool,
     pub show_in_screenshots: bool,
     pub halloween: bool,
     /// Leaves fall instead of snow.
@@ -31,6 +33,7 @@ impl Settings {
             melt: read("meltSnow").is_none_or(|v| v != 0),
             snow_on_windows: read("snowOnWindows").is_none_or(|v| v != 0),
             behind_windows: read("behindWindows").is_some_and(|v| v != 0),
+            over_full_screen: read("showOverFullScreen").is_some_and(|v| v != 0),
             show_in_screenshots: read("showInScreenshots").is_some_and(|v| v != 0),
             halloween: read("halloween").is_none_or(|v| v != 0),
             autumn: read("autumn").is_some_and(|v| v != 0),
@@ -41,11 +44,12 @@ impl Settings {
         let Some(folder) = config_dir() else { return };
         let snowfall = Snowfall::ALL.iter().position(|&s| s == self.snowfall).unwrap_or(2);
         let text = format!(
-            "snowfall={snowfall}\naccumulate={}\nmeltSnow={}\nsnowOnWindows={}\nbehindWindows={}\nshowInScreenshots={}\nhalloween={}\nautumn={}\n",
+            "snowfall={snowfall}\naccumulate={}\nmeltSnow={}\nsnowOnWindows={}\nbehindWindows={}\nshowOverFullScreen={}\nshowInScreenshots={}\nhalloween={}\nautumn={}\n",
             self.accumulate as u32,
             self.melt as u32,
             self.snow_on_windows as u32,
             self.behind_windows as u32,
+            self.over_full_screen as u32,
             self.show_in_screenshots as u32,
             self.halloween as u32,
             self.autumn as u32

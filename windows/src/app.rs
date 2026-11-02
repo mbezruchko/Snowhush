@@ -47,6 +47,7 @@ const ID_HALLOWEEN: u32 = 208;
 const ID_TASKBAR: u32 = 209;
 const ID_SNOW: u32 = 210;
 const ID_AUTUMN: u32 = 211;
+const ID_FULL_SCREEN: u32 = 212;
 const TIMER_WELCOME: usize = 1;
 const TIMER_UPDATES: usize = 2;
 const TIMER_HALLOWEEN: usize = 3;
@@ -346,6 +347,7 @@ fn entries(settings: &Settings, login: bool) -> Vec<Entry> {
     entries.extend([
         Entry::Separator,
         Entry::item(ID_BEHIND, "Behind Windows", settings.behind_windows, true),
+        Entry::item(ID_FULL_SCREEN, "Show over Full Screen", settings.over_full_screen, !settings.behind_windows),
         Entry::item(ID_TASKBAR, "Behind Taskbar", settings.behind_taskbar, true),
         Entry::item(ID_SCREENSHOTS, "Show in Screenshots", settings.show_in_screenshots, true),
         Entry::Separator,
@@ -450,6 +452,10 @@ fn choose(window: HWND, chosen: u32, login: bool) {
                 ID_BEHIND => {
                     settings.behind_windows = !settings.behind_windows;
                     Command::BehindWindows(settings.behind_windows)
+                }
+                ID_FULL_SCREEN => {
+                    settings.over_full_screen = !settings.over_full_screen;
+                    Command::OverFullScreen(settings.over_full_screen)
                 }
                 ID_TASKBAR => {
                     settings.behind_taskbar = !settings.behind_taskbar;

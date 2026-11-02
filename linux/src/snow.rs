@@ -27,7 +27,7 @@ use crate::light::{self, Shade, daylight};
 use crate::log;
 use crate::prefs::Settings;
 use crate::render::{Ambient, Gpu};
-use crate::screen::{PowerBudget, Screen};
+use crate::screen::{self, PowerBudget, Screen};
 use crate::source::{Report, Shared, Source};
 use crate::tray::Tray;
 use crate::windows::{self, Area};
@@ -38,6 +38,7 @@ pub enum Command {
     Melt(bool),
     SnowOnWindows(bool),
     BehindWindows(bool),
+    OverFullScreen(bool),
     ShowInScreenshots(bool),
     /// Halloween wanted or not, while it is Halloween.
     Halloween(bool),
@@ -249,7 +250,13 @@ impl App {
             }
             Command::BehindWindows(on) => {
                 self.settings.behind_windows = on;
-                self.screens.iter_mut().for_each(|screen| screen.set_behind(on));
+                let over = self.settings.over_full_screen;
+                self.screens.iter_mut().for_each(|screen| screen.set_layer(on, over));
+            }
+            Command::OverFullScreen(on) => {
+                self.settings.over_full_screen = on;
+                let behind = self.settings.behind_windows;
+                self.screens.iter_mut().for_each(|screen| screen.set_layer(behind, on));
             }
             Command::ShowInScreenshots(on) => {
                 self.settings.show_in_screenshots = on;
@@ -355,7 +362,8 @@ impl App {
         let windows = report.as_deref().map(|report| (report, self.report.0, report.moving));
         let mut released = false;
         for screen in self.screens.iter_mut().filter(|screen| screen.next_due <= now) {
-            let covering = report.as_deref().and_then(|report| windows::covering(report, &screen.bounds));
+            let covering =
+                if self.settings.over_full_screen { None } else { report.as_deref().and_then(|report| windows::covering(report, &screen.bounds)) };
             if covering.is_some() != screen.covered() {
                 log!("{} {}", screen.name, covering.map_or("uncovered".to_string(), |class| format!("covered by {class}")));
                 screen.set_covered(covering.is_some());
@@ -427,7 +435,7 @@ impl App {
                 bounds,
                 refresh,
                 simulation,
-                self.settings.behind_windows,
+                screen::layer_for(self.settings.behind_windows, self.settings.over_full_screen),
             );
             self.screens.push(screen);
         }
