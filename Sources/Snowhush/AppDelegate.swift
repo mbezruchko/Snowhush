@@ -141,14 +141,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         menu.addItem(sliderItem)
         menu.addItem(.separator())
         let modes = NSMenu()
+        modes.autoenablesItems = false
         snowItem = add("Snow", #selector(chooseMode), to: modes)
         autumnItem = add("Autumn Leaves", #selector(chooseMode), to: modes)
+        modes.addItem(.separator())
+        halloweenItem = add("Halloween", #selector(toggleHalloween), to: modes)
         menu.addItem(withTitle: "Mode", action: nil, keyEquivalent: "").submenu = modes
         accumulateItem = add("Accumulate", #selector(toggleAccumulate), to: menu)
         meltItem = add("Melt Snow", #selector(toggleMeltSnow), to: menu)
         snowOnWindowsItem = add("Snow on Windows", #selector(toggleSnowOnWindows), to: menu)
         clearItem = add("Clear Snow", #selector(clearSnow), to: menu)
-        halloweenItem = add("Halloween", #selector(toggleHalloween), to: menu)
         menu.addItem(.separator())
         behindWindowsItem = add("Behind Windows", #selector(toggleBehindWindows), to: menu)
         fullScreenItem = add("Show over Full Screen", #selector(toggleFullScreen), to: menu)
@@ -183,8 +185,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         meltItem.isEnabled = accumulates
         snowOnWindowsItem.state = snowOnWindows ? .on : .off
         clearItem.isEnabled = screens.contains { $0.simulation.hasSnow || $0.simulation.spriteCount > 0 }
-        halloweenItem.isHidden = !Halloween.isSeason()
-        halloweenItem.state = Preferences.halloween ? .on : .off
+        halloweenItem.state = Halloween.isWanted ? .on : .off
+        halloweenItem.isEnabled = !autumn
         behindWindowsItem.state = behindWindows ? .on : .off
         fullScreenItem.state = Preferences.showOverFullScreen ? .on : .off
         fullScreenItem.isEnabled = !behindWindows
@@ -259,6 +261,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         let autumn = sender === autumnItem
         guard autumn != Preferences.autumn else { return }
         Preferences.autumn = autumn
+        refreshHalloween()
         statusItem.button?.image = Self.icon(halloween: halloween)
         let direction = screens.first?.simulation.breezeDirection ?? -1
         let calm = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
@@ -266,7 +269,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     }
 
     @objc private func toggleHalloween() {
-        Preferences.halloween.toggle()
+        Halloween.toggle()
         refreshHalloween()
     }
 

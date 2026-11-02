@@ -302,7 +302,7 @@ impl SnowSimulation {
         self.throw_snowballs(dt);
         self.let_go(dt);
         let clock = self.air.clock;
-        if self.haunting.on && self.air.gust.is_none() && clock >= self.haunting.next_ghost {
+        if self.haunting.on && self.air.gust.is_none() && self.next_autumn.is_none() && clock >= self.haunting.next_ghost {
             let wait = if self.haunting.ghosts.len() >= 3 || self.raise_ghost() { self.air.random.range(20.0, 40.0) } else { 5.0 };
             self.haunting.next_ghost = clock + wait as f64;
         }

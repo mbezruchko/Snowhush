@@ -19,6 +19,7 @@ use wayland_client::{Connection, QueueHandle};
 use zbus::blocking::Connection as Bus;
 
 use snowhush_core::geometry::V2;
+use snowhush_core::halloween::{Choice, Today};
 use snowhush_core::simulation::{SnowSimulation, Snowfall};
 
 use crate::chores;
@@ -40,8 +41,8 @@ pub enum Command {
     BehindWindows(bool),
     OverFullScreen(bool),
     ShowInScreenshots(bool),
-    /// Halloween wanted or not, while it is Halloween.
-    Halloween(bool),
+    /// Halloween turned on or off from the menu.
+    Halloween(Choice),
     /// The screen locked or unlocked.
     Locked(bool),
     /// Blows all the snow away; when calm, for less motion, melts it where it lies instead.
@@ -77,9 +78,8 @@ pub struct App {
     report: (u64, Option<Arc<Report>>),
     budget: PowerBudget,
     light: [f32; 3],
-    /// Whether it is Halloween, wanted or not.
-    season: bool,
-    /// Whether the snow has Halloween's ghosts: in season and wanted.
+    today: Today,
+    /// Whether the snow has Halloween's ghosts: wanted, over snow, not leaves.
     halloween: bool,
     /// How far into Halloween night it is.
     night: f32,
@@ -149,7 +149,7 @@ pub fn run() -> Result<(), String> {
         report: (0, None),
         budget: PowerBudget::Full,
         light: daylight(),
-        season: false,
+        today: Today::default(),
         halloween: false,
         night: 0.0,
         tray: None,
@@ -262,8 +262,8 @@ impl App {
                 self.settings.show_in_screenshots = on;
                 self.source.show_in_screenshots(&self.bus, on);
             }
-            Command::Halloween(on) => {
-                self.settings.halloween = on;
+            Command::Halloween(choice) => {
+                self.settings.halloween = choice;
                 self.update_light();
             }
             Command::ClearSnow(calm) => {
@@ -278,6 +278,7 @@ impl App {
                     screen.simulation.switch_mode(autumn, direction, calm);
                     screen.wake(now);
                 });
+                self.update_light();
             }
             Command::Locked(locked) => {
                 if locked == self.locked {
@@ -390,14 +391,14 @@ impl App {
 
     /// The light of the hour, and Halloween with it: its ghosts, its night and the tray's pumpkin.
     fn update_light(&mut self) {
-        let season = light::is_halloween();
-        if season != self.season {
-            self.season = season;
+        let today = light::today();
+        if today != self.today {
+            self.today = today;
             if let Some(tray) = &self.tray {
-                tray.update(|tray| tray.season = season);
+                tray.update(|tray| tray.today = today);
             }
         }
-        let halloween = season && self.settings.halloween;
+        let halloween = !self.settings.autumn && self.settings.halloween.wanted(today);
         if halloween != self.halloween {
             self.halloween = halloween;
             log!("halloween: {halloween}");

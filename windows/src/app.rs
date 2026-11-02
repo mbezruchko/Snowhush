@@ -91,7 +91,7 @@ enum Emblem {
 
 impl Emblem {
     fn of(settings: &Settings) -> Emblem {
-        if settings.halloween && halloween::season() {
+        if halloween::shows(settings) {
             Emblem::Pumpkin
         } else if settings.autumn {
             Emblem::Leaf
@@ -331,8 +331,13 @@ fn entries(settings: &Settings, login: bool) -> Vec<Entry> {
         .enumerate()
         .map(|(i, &option)| Entry::choice(ID_SNOWFALL + i as u32, option.title(), option == settings.snowfall))
         .collect();
-    let modes = vec![Entry::choice(ID_SNOW, "Snow", !autumn), Entry::choice(ID_AUTUMN, "Autumn Leaves", autumn)];
-    let mut entries = vec![
+    let modes = vec![
+        Entry::choice(ID_SNOW, "Snow", !autumn),
+        Entry::choice(ID_AUTUMN, "Autumn Leaves", autumn),
+        Entry::Separator,
+        Entry::item(ID_HALLOWEEN, "Halloween", halloween::wanted(settings.halloween), !autumn),
+    ];
+    vec![
         Entry::Submenu { label: "Intensity".to_string(), entries: snowfall },
         Entry::Submenu { label: "Mode".to_string(), entries: modes },
         Entry::Separator,
@@ -340,11 +345,6 @@ fn entries(settings: &Settings, login: bool) -> Vec<Entry> {
         Entry::item(ID_MELT, if autumn { "Wither Leaves" } else { "Melt Snow" }, settings.melt, settings.accumulate),
         Entry::item(ID_WINDOWS, if autumn { "Leaves on Windows" } else { "Snow on Windows" }, settings.snow_on_windows, true),
         Entry::item(ID_CLEAR, if autumn { "Clear Leaves" } else { "Clear Snow" }, false, true),
-    ];
-    if halloween::season() {
-        entries.push(Entry::item(ID_HALLOWEEN, "Halloween", settings.halloween, true));
-    }
-    entries.extend([
         Entry::Separator,
         Entry::item(ID_BEHIND, "Behind Windows", settings.behind_windows, true),
         Entry::item(ID_FULL_SCREEN, "Show over Full Screen", settings.over_full_screen, !settings.behind_windows),
@@ -354,8 +354,7 @@ fn entries(settings: &Settings, login: bool) -> Vec<Entry> {
         Entry::item(ID_LOGIN, "Open at Login", login, true),
         Entry::item(ID_UPDATES, "Check for Updates\u{2026}", false, true),
         Entry::item(ID_QUIT, "Quit", false, true),
-    ]);
-    entries
+    ]
 }
 
 /// The system's own menu, for when the drawn one can't be shown.
@@ -414,7 +413,7 @@ fn choose(window: HWND, chosen: u32, login: bool) {
         ID_HALLOWEEN => {
             APP.with_borrow_mut(|app| {
                 let Some(app) = app else { return };
-                app.settings.halloween = !app.settings.halloween;
+                app.settings.halloween = app.settings.halloween.toggled(halloween::today());
                 app.settings.save();
                 send(app, Command::Halloween(app.settings.halloween));
             });

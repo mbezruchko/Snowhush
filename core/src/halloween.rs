@@ -1,5 +1,5 @@
-//! Halloween: from October 30, when the update bringing it comes, until dawn on November 1 the snow takes on a
-//! spooky mood.
+//! Halloween: the snow takes on a spooky mood from October 30 until dawn on November 1, and any other day it is
+//! turned on from the menu.
 //! The Mac app has the same in Swift, with more to it.
 
 use crate::geometry::smoothstep;
@@ -40,6 +40,43 @@ pub fn previewed_hour() -> Option<f32> {
 /// Whether it is Halloween at this local date and hour, months counted from 1, or it is being previewed.
 pub fn is_halloween(month: u32, day: u32, hour: u32) -> bool {
     month == 10 && day >= 30 || month == 11 && day == 1 && hour < 6 || previewed()
+}
+
+/// The local year, and whether it is Halloween.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Today {
+    pub year: u32,
+    pub season: bool,
+}
+
+impl Today {
+    pub fn at(year: u32, month: u32, day: u32, hour: u32) -> Today {
+        Today { year, season: is_halloween(month, day, hour) }
+    }
+}
+
+/// Halloween as turned on or off from the menu: on for every day, or off for the season of `skipped`, zero for none.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Choice {
+    pub on: bool,
+    pub skipped: u32,
+}
+
+impl Choice {
+    /// Whether Halloween is wanted today: turned on, or come with its season and not turned off for it.
+    pub fn wanted(self, today: Today) -> bool {
+        self.on || today.season && self.skipped != today.year
+    }
+
+    /// Turned on or off from the menu. Turned on in season, it ends with the season; any other day, it stays on.
+    pub fn toggled(self, today: Today) -> Choice {
+        match (self.wanted(today), today.season) {
+            (true, true) => Choice { on: false, skipped: today.year },
+            (true, false) => Choice { on: false, ..self },
+            (false, true) => Choice { skipped: 0, ..self },
+            (false, false) => Choice { on: true, ..self },
+        }
+    }
 }
 
 /// How much of full daylight there is at this local hour: none at night, all of it from mid-morning to late afternoon.

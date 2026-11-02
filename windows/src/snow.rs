@@ -14,10 +14,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{HSTRING, PCWSTR, Result, w};
 
 use snowhush_core::geometry::V2;
+use snowhush_core::halloween::Choice;
 use snowhush_core::simulation::{ScatterPiece, SnowSimulation, Snowfall};
 
 use crate::desktop::{self, DesktopLayer};
-use crate::halloween::season;
+use crate::halloween;
 use crate::light::{Sky, Wallpapers};
 use crate::log;
 use crate::prefs::Settings;
@@ -51,8 +52,8 @@ pub enum Command {
     ReleaseSnowfall,
     /// Blows all the snow away; when calm, for less motion, melts it where it lies instead.
     ClearSnow(bool),
-    /// Whether Halloween is wanted when it comes.
-    Halloween(bool),
+    /// Halloween turned on or off from the menu.
+    Halloween(Choice),
     /// Leaves fall instead of snow, or snow instead of leaves, once a gust has blown what is there away; when calm, for
     /// less motion, it melts where it lies instead.
     SwitchMode {
@@ -95,8 +96,8 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
     let started = Clock::now();
     let mut active = true;
     let mut budget = PowerBudget::Full;
-    let mut halloween = settings.halloween && season();
-    let mut sky = Sky::now(halloween);
+    let mut spooky = halloween::shows(&settings);
+    let mut sky = Sky::now(spooky);
     let wallpapers = Wallpapers::new().inspect_err(|error| log!("wallpapers unavailable: {error}")).ok();
     let mut chores_at = 0;
     let mut light_at = 0;
@@ -172,13 +173,14 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                     let direction = screens.first().map_or(-1.0, |screen| screen.simulation.breeze_direction());
                     screens.iter_mut().for_each(|screen| screen.simulation.blow_away(direction, calm));
                 }
-                Command::Halloween(on) => {
-                    settings.halloween = on;
+                Command::Halloween(choice) => {
+                    settings.halloween = choice;
                     chores_at = 0;
                     light_at = 0;
                 }
                 Command::SwitchMode { autumn, calm } => {
                     settings.autumn = autumn;
+                    light_at = 0;
                     let direction = screens.first().map_or(-1.0, |screen| screen.simulation.breeze_direction());
                     let now = Clock::now();
                     screens.iter_mut().for_each(|screen| {
@@ -260,16 +262,16 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
             }
             if now >= light_at {
                 light_at = now + clock.frequency * 60;
-                let on = settings.halloween && season();
-                if on != halloween {
-                    halloween = on;
+                let on = halloween::shows(&settings);
+                if on != spooky {
+                    spooky = on;
                     log!("halloween: {on}");
                     screens.iter_mut().for_each(|screen| {
                         screen.simulation.set_halloween(on);
                         screen.wake(now);
                     });
                 }
-                sky = Sky::now(halloween);
+                sky = Sky::now(spooky);
                 if let Some(wallpapers) = &wallpapers {
                     screens.iter_mut().for_each(|screen| screen.update_backdrop(wallpapers));
                 }
@@ -393,7 +395,7 @@ fn new_simulation(monitor: &Monitor, settings: &Settings) -> SnowSimulation {
     simulation.thaws = settings.melt;
     simulation.accumulates = settings.accumulate;
     simulation.set_snowfall_held(!settings.welcomed);
-    simulation.set_halloween(settings.halloween && season());
+    simulation.set_halloween(halloween::shows(settings));
     simulation.set_autumn(settings.autumn);
     simulation
 }

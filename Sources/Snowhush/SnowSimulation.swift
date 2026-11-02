@@ -1617,7 +1617,7 @@ final class SnowSimulation {
     private func haunt(dt: Float) {
         dropSigns(dt: dt)
         throwSnowballs(dt: dt)
-        if halloween, gust == nil, clock >= nextGhost {
+        if halloween, gust == nil, nextAutumn == nil, clock >= nextGhost {
             nextGhost = clock + Double(ghosts.count >= 3 || raiseGhost() ? random.range(20, 40) : 5)
         }
         var i = ghosts.count - 1
