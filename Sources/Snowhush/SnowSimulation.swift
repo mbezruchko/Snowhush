@@ -2303,6 +2303,13 @@ final class SnowSimulation {
         var i = glassDrops.count - 1
         while i >= 0 {
             var drop = glassDrops[i]
+            // Taken in by another drop since it last ran: nothing is left of it. Run on, it would take its water back.
+            if drop.radius <= 0 {
+                glassDrops.swapAt(i, glassDrops.count - 1)
+                glassDrops.removeLast()
+                i -= 1
+                continue
+            }
             drop.age += dt
             if !drop.hanging, let cursor, wipes(cursor, drop, dt: dt) {
                 if drop.radius >= 1 { smear(drop, to: cursor) }

@@ -189,6 +189,11 @@ impl SnowSimulation {
         while i > 0 {
             i -= 1;
             let mut drop = drops[i];
+            // Taken in by another drop since it last ran: nothing is left of it. Run on, it would take its water back.
+            if drop.radius <= 0.0 {
+                drops.swap_remove(i);
+                continue;
+            }
             let Some(&li) = shown.get(&drop.layer) else {
                 drops.swap_remove(i);
                 continue;
