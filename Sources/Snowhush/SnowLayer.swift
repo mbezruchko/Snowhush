@@ -19,6 +19,8 @@ final class SnowLayer {
     var occluders: [SIMD4<Float>] = []
     /// Lies on the Dock's shelf, and so is drawn below the Dock.
     var isDock = false
+    /// How far the window it lies on reaches down from its top edge: as far as a drop can run down it.
+    var face: Float = 200
     var movedAt: Double = -1
     /// Brought where it is by a switch between Spaces: past the screen's edge, no wall scrapes its snow off.
     var carried = false

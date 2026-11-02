@@ -850,6 +850,7 @@ final class SnowSimulation {
             let blockers = surface.blockers.map { SIMD4<Float>(Float($0.minX), Float($0.minY), Float($0.maxX), Float($0.maxY)) }
             ledge.occluders = Array(blockers.prefix(16))
             ledge.isDock = surface.isDock
+            ledge.face = Float(surface.frame.height)
             ledge.updateVisibility(screenWidth: width, blockers: blockers)
         }
 
@@ -1555,7 +1556,7 @@ final class SnowSimulation {
                 if let hit = landing(x: flake.position.x, from: previousY, to: flake.position.y) {
                     if flake.rain {
                         splash(at: SIMD2(flake.position.x, hit.layer.surface(hit.index)), depth: flake.depth)
-                        if hit.layer !== ground && !hit.layer.isDock && random.next() < runShare {
+                        if hit.layer !== ground && random.next() < runShare {
                             runDown(hit.layer, from: flake.position.x)
                         }
                         recycle(i)
@@ -2254,17 +2255,15 @@ final class SnowSimulation {
         }
     }
 
-    /// Now and then rain caught on a window's top edge gathers into a drop that runs down the window's face.
+    /// Now and then rain caught on the top edge of a window or the Dock gathers into a drop that runs down its face.
     private func runDown(_ ledge: SnowLayer, from x: Float) {
         guard glassDrops.count < maxGlassDrops else { return }
-        let top = ledge.base.y
-        let window = windowFrames.first { $0.x <= x && x <= $0.z && abs($0.w - top) < 6 }
         let u = random.next()
         let radius = random.next() < 0.1 ? random.range(5, 7) : 2.2 + 3 * u * u
         glassDrops.append(GlassDrop(
             layer: ledge,
             offset: SIMD2(x - ledge.base.x, -radius * 1.4),
-            face: window.map { top - $0.y } ?? 200,
+            face: ledge.face,
             radius: radius,
             slope: random.range(-0.12, 0.12),
             spacing: trailSpacing(for: radius)
