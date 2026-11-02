@@ -88,6 +88,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
                 snow.simulation.snowfallReleased = { [weak self] in self?.releaseSnowfall() }
                 snow.halloween = halloween
                 snow.autumn = Preferences.autumn
+                snow.activityChanged = { [weak self] in self?.updateActivity() }
                 snow.apply(power.budget)
                 screens.append(snow)
             }
@@ -310,7 +311,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private func updateActivity() {
         let awake = !screensAsleep && !screenLocked && !sessionInactive
         for snow in screens {
-            snow.setActive(awake && snow.window.occlusionState.contains(.visible), asleep: !awake)
+            snow.occlusionChanged()
+            snow.setActive(awake && !snow.givesWay && (snow.window.occlusionState.contains(.visible) || snow.fading), asleep: !awake)
         }
     }
 }

@@ -31,6 +31,9 @@ use crate::render::{Ambient, Gpu, LANTERN_REACH, Surface};
 use crate::tracker::{COVER_ONLY, Tracker, class_name, cloaked, process_name};
 
 const CLASS: PCWSTR = w!("SnowhushOverlay");
+/// Seconds the snow takes to fade out of a full-screen app's way, and back in once it goes.
+const FADE_OUT: f32 = 0.25;
+const FADE_IN: f32 = 0.35;
 
 thread_local! {
     /// Set by an overlay window when the displays change under it.
@@ -221,6 +224,8 @@ pub struct Screen {
     windows_seen: u64,
     windows_changed_at: i64,
     covered: bool,
+    /// How much of the snow shows, from 0 to 1.
+    opacity: f32,
     backdrop: Option<Backdrop>,
     shadow_tint: [f32; 4],
     layer: Option<DesktopLayer>,
@@ -258,6 +263,7 @@ impl Screen {
             windows_seen: 0,
             windows_changed_at: 0,
             covered: false,
+            opacity: 1.0,
             backdrop: None,
             shadow_tint: [0.0; 4],
             layer,
@@ -295,6 +301,7 @@ impl Screen {
         let changed = self.simulation.step(dt, cursor);
         // Nothing to draw and nothing on its way: the frame shown last stays up, as it would, till the snow is stirred.
         if !changed && self.simulation.is_empty() {
+            self.fade(gpu, dt, true);
             self.last_step = 0;
             self.next_due = now + clock.frequency;
             return Ok(false);
@@ -302,6 +309,10 @@ impl Screen {
         // The lantern follows the cursor even over snow that lies still, on the display it lights.
         let lantern_moved = sky.night > 0.0 && (cursor - self.lantern_at).length() > 0.5 && (self.lit_by(cursor) || self.lit_by(self.lantern_at));
         self.lantern_at = cursor;
+        let fading = self.fade(gpu, dt, false);
+        if self.hidden() {
+            return Ok(false);
+        }
 
         let fastest = if budget == PowerBudget::Full { self.interactive_rate } else { self.interactive_rate.min(60) };
         // 24 only where it divides the display's rate evenly; elsewhere it would judder.
@@ -311,11 +322,15 @@ impl Screen {
             Pace::Lively => fastest.min(60),
             Pace::Interactive => fastest,
         };
-        let rate = if lantern_moved { rate.max(fastest.min(60)) } else { rate };
+        let rate = if lantern_moved || fading { rate.max(fastest.min(60)) } else { rate };
         self.next_due = clock.schedule(now, rate);
         self.idle_frames = if changed || lantern_moved { 0 } else { self.idle_frames + 1 };
         // A still pile only needs a slow refresh for its glints.
-        if !(changed || lantern_moved || ((self.simulation.has_snow() || !self.simulation.pumpkins().is_empty()) && self.idle_frames % 2 == 0)) {
+        if !(changed
+            || lantern_moved
+            || fading
+            || ((self.simulation.has_snow() || !self.simulation.pumpkins().is_empty()) && self.idle_frames % 2 == 0))
+        {
             return Ok(false);
         }
         // Halloween night: cold moonlight, violet shadows and a candle's glow along the drifts' edges.
@@ -365,22 +380,46 @@ impl Screen {
         self.windows_seen = 0;
     }
 
-    /// Hides the snow while a full-screen app covers the display, and stops it, as it stops over a full-screen app on a Mac.
-    pub fn set_covered(&mut self, covered: bool) {
+    /// Fades the snow out while a full-screen app covers the display, still falling, then hides and stops it, as over
+    /// a full-screen app on a Mac; once the app goes, the snow fades back in from where it stopped.
+    pub fn set_covered(&mut self, gpu: &Gpu, covered: bool) {
         if covered == self.covered {
             return;
         }
         self.covered = covered;
-        unsafe {
-            let _ = ShowWindow(self.overlay.0, if covered { SW_HIDE } else { SW_SHOWNOACTIVATE });
+        if !covered && self.opacity <= 0.0 {
+            let _ = self.surface.set_opacity(gpu, 0.0);
+            unsafe {
+                let _ = ShowWindow(self.overlay.0, SW_SHOWNOACTIVATE);
+            }
         }
-        if !covered {
-            self.resume();
-        }
+        self.resume();
     }
 
     pub fn covered(&self) -> bool {
         self.covered
+    }
+
+    /// Faded all the way out under a full-screen app: nothing to draw until it goes.
+    pub fn hidden(&self) -> bool {
+        self.covered && self.opacity <= 0.0
+    }
+
+    /// Takes the fade a step toward shown, or gone under a full-screen app; true while it lasts.
+    fn fade(&mut self, gpu: &Gpu, dt: f32, at_once: bool) -> bool {
+        let target = if self.covered { 0.0 } else { 1.0 };
+        if self.opacity == target {
+            return false;
+        }
+        let step = if at_once { 1.0 } else { dt / if self.covered { FADE_OUT } else { FADE_IN } };
+        self.opacity = if target > self.opacity { (self.opacity + step).min(1.0) } else { (self.opacity - step).max(0.0) };
+        let _ = self.surface.set_opacity(gpu, self.opacity);
+        if self.hidden() {
+            unsafe {
+                let _ = ShowWindow(self.overlay.0, SW_HIDE);
+            }
+        }
+        true
     }
 
     /// Picks up the shadow colour again if the desktop picture changed.

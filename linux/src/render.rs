@@ -22,6 +22,19 @@ const SIGN_VERTEX: &str = include_str!("shaders/sign.vert");
 const SIGN_FRAGMENT: &str = include_str!("shaders/sign.frag");
 const PUMPKIN_VERTEX: &str = include_str!("shaders/pumpkin.vert");
 const PUMPKIN_FRAGMENT: &str = include_str!("shaders/pumpkin.frag");
+/// A quad over the whole surface, drawn with a blend that leaves what is there at the given opacity.
+const FADE_VERTEX: &str = "#version 300 es
+void main() {
+    gl_Position = vec4(float(gl_VertexID & 1) * 2.0 - 1.0, float(gl_VertexID >> 1) * 2.0 - 1.0, 0.0, 1.0);
+}
+";
+const FADE_FRAGMENT: &str = "#version 300 es
+precision mediump float;
+out vec4 color;
+void main() {
+    color = vec4(0.0);
+}
+";
 /// The ghosts' signs, one picture per caption at two pixels per point, the stick's foot at the middle of the bottom edge.
 const SIGNS: [&[u8]; SIGN_CAPTIONS.len()] = [
     include_bytes!("../../windows/assets/signs/sign-00.png"),
@@ -78,6 +91,7 @@ pub struct Gpu {
     pile: Program,
     sign: Program,
     pumpkin: Program,
+    fade: Program,
     sprite_array: glow::VertexArray,
     sprite_buffer: glow::Buffer,
     /// Holds no attributes: the corners of the piles, the signs and the pumpkins come from the vertex index alone.
@@ -181,6 +195,8 @@ impl Gpu {
                 &["viewSize", "shake", "anchor", "size", "wick", "seed", "time", "light", "night", "panel", "shell", "face"],
             )?;
 
+            let fade = program(&gl, FADE_VERTEX, FADE_FRAGMENT, &[])?;
+
             let sprite_array = gl.create_vertex_array()?;
             let sprite_buffer = gl.create_buffer()?;
             gl.bind_vertex_array(Some(sprite_array));
@@ -230,6 +246,7 @@ impl Gpu {
                 pile,
                 sign,
                 pumpkin,
+                fade,
                 sprite_array,
                 sprite_buffer,
                 empty_array,
@@ -284,6 +301,7 @@ impl Gpu {
         ambient: Ambient,
         panel: Option<[f32; 4]>,
         time: f32,
+        opacity: f32,
     ) -> Result<(), String> {
         self.egl.make_current(self.display, Some(surface.surface), Some(surface.surface), Some(self.context)).map_err(|error| error.to_string())?;
         let sprite_count = simulation.sprite_count();
@@ -438,6 +456,15 @@ impl Gpu {
                 gl.uniform_4_f32_slice(sprite.location("panel"), &panel);
                 gl.uniform_1_f32(sprite.location("autumn"), autumn);
                 gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, 4, sprites as i32);
+            }
+            // Fading under a full-screen app or back: the snow as drawn, all of it at once, so where flakes cross a
+            // drift it fades as one.
+            if opacity < 1.0 {
+                gl.bind_vertex_array(Some(self.empty_array));
+                gl.use_program(Some(self.fade.program));
+                gl.blend_color(0.0, 0.0, 0.0, opacity);
+                gl.blend_func_separate(glow::ZERO, glow::CONSTANT_ALPHA, glow::ZERO, glow::CONSTANT_ALPHA);
+                gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
             }
             gl.bind_vertex_array(None);
         }
