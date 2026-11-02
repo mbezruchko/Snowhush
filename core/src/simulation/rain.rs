@@ -18,8 +18,11 @@ const BEAD_DRYING: f32 = 0.3;
 const SMALLEST_RUNNING: f32 = 1.6;
 /// Drops on the glass are drawn this much bigger than the water they hold.
 const GLASS_SCALE: f32 = 1.6;
-/// A drop running down the glass is drawn bigger still than the beads it leaves and the drops hanging below.
-const RUNNING_SCALE: f32 = 1.2;
+/// A drop running down the glass is drawn bigger still than the beads it leaves and the drops hanging below; the
+/// biggest no bigger than they were, or they would stand out.
+fn running_scale(radius: f32) -> f32 {
+    1.2 - 0.2 * smoothstep(3.0, 4.6, radius)
+}
 /// How hard a window has to be shaken back and forth, in its swings against gravity, to shake off a drop of radius
 /// 2.4: far harder than its snow. A smaller one holds on harder, a hanging one less.
 const DROP_SHAKING: f32 = 22.0;
@@ -244,7 +247,7 @@ impl SnowSimulation {
             Some(Sprite {
                 position,
                 velocity: if drop.hanging || drop.bead { V2::ZERO } else { V2::new(drop.slope, -1.0) * drop.speed },
-                size: drop.radius.max(1.2) * 2.0 * GLASS_SCALE * if drop.hanging || drop.bead { 1.0 } else { RUNNING_SCALE } * grown,
+                size: drop.radius.max(1.2) * 2.0 * GLASS_SCALE * if drop.hanging || drop.bead { 1.0 } else { running_scale(drop.radius) } * grown,
                 // Drying up, a hanging drop fades rather than shrinking past the smallest drawn.
                 alpha: (drop.radius / if drop.hanging { 1.2 } else { 0.35 }).min(1.0),
                 soft: if self.shelf == Some(drop.layer) { 1.0 } else { 0.0 },

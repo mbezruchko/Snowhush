@@ -432,8 +432,11 @@ final class SnowSimulation {
     private let beadDrying: Float = 0.3
     private let smallestRunning: Float = 1.6
     private let glassScale: Float = 1.6
-    /// A drop running down the glass is drawn bigger still than the beads it leaves and the drops hanging below.
-    private let runningScale: Float = 1.2
+    /// A drop running down the glass is drawn bigger still than the beads it leaves and the drops hanging below; the
+    /// biggest no bigger than they were, or they would stand out.
+    private func runningScale(_ radius: Float) -> Float {
+        1.2 - 0.2 * smoothstep(3, 4.6, radius)
+    }
     /// How hard a window has to be shaken back and forth, in its swings against gravity, to shake off a drop of
     /// radius 2.4: far harder than its snow. A smaller one holds on harder, a hanging one less.
     private let dropShaking: Float = 22
@@ -685,7 +688,7 @@ final class SnowSimulation {
             buffer[count] = Sprite(
                 position: position,
                 velocity: drop.hanging || drop.bead ? .zero : SIMD2(drop.slope, -1) * drop.speed,
-                size: max(drop.radius, 1.2) * 2 * glassScale * (drop.hanging || drop.bead ? 1 : runningScale) * grown,
+                size: max(drop.radius, 1.2) * 2 * glassScale * (drop.hanging || drop.bead ? 1 : runningScale(drop.radius)) * grown,
                 // Drying up, a hanging drop fades rather than shrinking past the smallest drawn.
                 alpha: min(1, drop.radius / (drop.hanging ? 1.2 : 0.35)),
                 soft: drop.hanging ? hangingStage(of: drop) : 0,
