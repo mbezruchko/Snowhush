@@ -2283,7 +2283,7 @@ final class SnowSimulation {
         let radius = random.next() < 0.1 ? random.range(3.8, 4.6) : 2.2 + 2.2 * u * u
         glassDrops.append(GlassDrop(
             layer: ledge,
-            offset: SIMD2(x - ledge.base.x, -radius * 1.4),
+            offset: SIMD2(x - ledge.base.x, -corner(of: ledge, at: x - ledge.base.x) - radius * 1.4),
             face: ledge.face,
             radius: radius,
             slope: random.range(-0.12, 0.12),
@@ -2367,7 +2367,7 @@ final class SnowSimulation {
         if let hanging {
             drop.offset = hanging.offset
             hang(&drop, fill: hanging.fill)
-        } else if -drop.offset.y >= drop.face {
+        } else if -drop.offset.y >= bottom(of: drop) {
             hang(&drop, fill: 0.35)
         } else if drop.radius < smallestRunning {
             drop.bead = true
@@ -2387,7 +2387,7 @@ final class SnowSimulation {
         drop.hanging = true
         drop.speed = 0
         drop.slope = 0
-        drop.offset.y = -drop.face
+        drop.offset.y = -bottom(of: drop)
         drop.hung = 0
         drop.fill = fill
         drop.letsGo = .infinity
@@ -2405,6 +2405,14 @@ final class SnowSimulation {
     /// together with any other hanging beside it close enough to touch.
     private func cling(_ drop: inout GlassDrop, index: Int, dt: Float) {
         drop.hung += dt
+        // Where the bottom edge rounds up into a corner, it is too steep to hang from: the drop runs along it, down
+        // to where it levels out.
+        let x = drop.offset.x
+        let steepness = (corner(of: drop.layer, at: x + 1) - corner(of: drop.layer, at: x - 1)) / 2
+        if abs(steepness) > 0.3 {
+            drop.offset.x += (steepness > 0 ? -1 : 1) * 70 * dt
+            drop.offset.y = -bottom(of: drop)
+        }
         // The cursor brushing it knocks it off, all of it, flicked along the way the cursor goes.
         if let cursor, touches(cursor, drop) {
             fall(drop, share: 1, below: (0.6 + 1.2 * drop.fill) * drop.radius * glassScale, flick: cursorVelocity)
@@ -2483,6 +2491,18 @@ final class SnowSimulation {
                 bead: true
             ))
         }
+    }
+
+    /// How far the window's rounded corners bring its edges in at `x` along it: its top edge down, its bottom edge up.
+    private func corner(of layer: SnowLayer, at x: Float) -> Float {
+        let f = min(max(x / layer.columnWidth - 0.5, 0), Float(layer.count - 1))
+        let i = Int(f), j = min(i + 1, layer.count - 1)
+        return -(layer.bed[i] + (layer.bed[j] - layer.bed[i]) * (f - Float(i)))
+    }
+
+    /// How far below the window's top edge its bottom edge is, where a drop is on it.
+    private func bottom(of drop: GlassDrop) -> Float {
+        drop.face - corner(of: drop.layer, at: drop.offset.x)
     }
 
     /// Whether the cursor, at `point`, brushes a hanging drop where it shows.
