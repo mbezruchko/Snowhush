@@ -2363,7 +2363,7 @@ final class SnowSimulation {
         drop.fill + (drop.letsGo.isFinite ? smoothstep(drop.letsGo - pinching, drop.letsGo, drop.hung) : 0)
     }
 
-    /// Run down to the window's bottom edge, a drop wraps round it and clings under it, settling into the shape its
+    /// Run down to the window's bottom edge, a drop wraps round it and hangs under it, settling into the shape its
     /// water makes there. Joining one already hanging there, it hangs as that one did.
     private func hang(_ drop: inout GlassDrop, fill: Float) {
         drop.hanging = true
@@ -2408,13 +2408,12 @@ final class SnowSimulation {
 
     /// How far a hanging drop reaches along the edge each way, as the shader draws it.
     private func spread(of drop: GlassDrop) -> Float {
-        let aspect = 2.6 - 1.85 * pow(min(drop.fill, 1), 1.2)
-        return aspect.squareRoot() * drop.radius * glassScale
+        (1.75 - 0.6 * min(drop.fill, 1)) * drop.radius * glassScale
     }
 
     /// The part of a hanging drop that lets go falls like any raindrop, to burst on whatever is below.
     private func fall(_ drop: GlassDrop) {
-        let position = drop.layer.base + drop.offset - SIMD2(0, 2.2 * drop.radius * glassScale)
+        let position = drop.layer.base + drop.offset - SIMD2(0, 2.6 * drop.radius * glassScale)
         guard rain, position.y > 2 else { return }
         flakes.append(Flake(
             position: position,

@@ -187,24 +187,24 @@ static float candlelight(constant Uniforms &u, float2 point) {
 }
 
 /// A drop hanging under an edge, in radii of the drop, from where it clings. Up to one along, it fills: a small one is
-/// a flat cap under the edge, and the more water it holds the further it sags into a pear, widest at its foot. From
-/// one to two it lets go, stretching for an instant before it falls. Its width and height radii, and how much narrower
-/// it is toward the edge than at its foot.
+/// a flat cap under the edge, and the more water it holds the further it sags, its sides straightening, its foot
+/// round. Where it meets the edge it flares out into it, as water wetting the edge does. From one to two it lets go,
+/// stretching down for an instant before it falls. Its width and height radii, and how far below the edge its middle is.
 static float3 hangingShape(float along) {
     float fill = saturate(along), pull = saturate(along - 1.0);
-    float aspect = mix(2.6, 0.75, pow(fill, 1.2));
-    float2 axes = float2(sqrt(aspect), 1.0 / sqrt(aspect)) * float2(1.0 - 0.2 * pull, 1.0 + 0.5 * pull);
-    return float3(axes, 0.22 * fill);
+    float2 axes = float2(mix(1.35, 0.9, fill) * (1.0 - 0.15 * pull), mix(0.6, 1.25, fill) * (1.0 + 0.5 * pull));
+    return float3(axes, -axes.y * mix(0.15, 0.8, fill) - 0.3 * pull);
 }
 
-/// How far below where it clings its middle is.
-static float hangingCenter(float along) {
-    return -hangingShape(along).y * mix(0.55, 0.8, saturate(along)) - 0.3 * saturate(along - 1.0);
+/// How far it flares out into the edge.
+static float hangingFlare(float along) {
+    return mix(1.0, 0.6, saturate(along));
 }
 
 /// How far above and below where it clings it reaches.
 static float2 hangingReach(float along) {
-    return float2(0.06, hangingCenter(along) - hangingShape(along).y);
+    float3 shape = hangingShape(along);
+    return float2(0.05, shape.z - shape.y);
 }
 
 vertex SpriteOut spriteVertex(uint vid [[vertex_id]],
@@ -253,7 +253,7 @@ vertex SpriteOut spriteVertex(uint vid [[vertex_id]],
         if (s.rain > 2.5) {
             float2 reach = hangingReach(s.soft) * pixels * 0.5;
             float3 shape = hangingShape(s.soft);
-            extent = max(reach.x - reach.y, 2.0 * shape.x * (1.0 + shape.z) * pixels * 0.5) + 4.0;
+            extent = max(reach.x - reach.y, 2.0 * (shape.x + 1.5 * hangingFlare(s.soft)) * pixels * 0.5) + 4.0;
             center = s.position + float2(0.0, (reach.x + reach.y) * 0.5) / u.scale;
             streak = float2(s.soft * extent, 0.0);
         }
@@ -322,10 +322,17 @@ static float4 hangingAt(SpriteOut in, float2 p) {
     float3 shape = hangingShape(along);
     float2 reach = hangingReach(along);
     float2 q = p / radius + float2(0.0, (reach.x + reach.y) * 0.5);
-    float rise = (q.y - hangingCenter(along)) / shape.y;
-    float2 e = float2(q.x / (shape.x * (1.0 - shape.z * clamp(rise, -1.0, 1.0))), rise);
-    float body = (length(e) - 1.0) * min(shape.x, shape.y) + 1.0;
-    float d = max(body, q.y - 0.06 + 1.0);
+    float2 e = (q - float2(0.0, shape.z)) / shape.xy;
+    float squareness = mix(2.0, 2.6, saturate(along));
+    float head = (pow(pow(abs(e.x), squareness) + pow(abs(e.y), squareness), 1.0 / squareness) - 1.0) * min(shape.x, shape.y);
+    // The edge itself, everything above where it clings: the drop runs into it in a smooth hollow curve, and nothing
+    // of it shows above.
+    float k = hangingFlare(along);
+    float above = 0.05 - q.y;
+    float h = saturate(0.5 + 0.5 * (above - head) / k);
+    float flared = mix(above, head, h) - k * h * (1.0 - h);
+    float body = max(flared, q.y - 0.05) + 1.0;
+    float d = body;
     float aa = fwidth(d) * 1.2;
     float inside = 1.0 - smoothstep(1.0 - aa, 1.0, d);
     if (inside < 0.002) return float4(0.0);
