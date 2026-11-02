@@ -659,7 +659,7 @@ final class SnowSimulation {
         for drop in glassDrops where count < capacity {
             let position = drop.layer.base + drop.offset
             // A window in front of the one it runs down hides it.
-            guard !drop.layer.occluders.contains(where: { $0.x < position.x && $0.z > position.x && $0.y < position.y && $0.w > position.y }) else { continue }
+            guard !drop.layer.faceOccluders.contains(where: { $0.x < position.x && $0.z > position.x && $0.y < position.y && $0.w > position.y }) else { continue }
             // It swells out of nothing as it gathers on the edge.
             let grown = drop.bead ? 1 : min(1, (drop.age / 0.15).squareRoot())
             buffer[count] = Sprite(
@@ -849,6 +849,7 @@ final class SnowSimulation {
             ledge.shapeCorners(radius: Float(surface.cornerRadius), exponent: Float(surface.cornerExponent))
             let blockers = surface.blockers.map { SIMD4<Float>(Float($0.minX), Float($0.minY), Float($0.maxX), Float($0.maxY)) }
             ledge.occluders = Array(blockers.prefix(16))
+            ledge.faceOccluders = surface.cover.prefix(16).map { SIMD4<Float>(Float($0.minX), Float($0.minY), Float($0.maxX), Float($0.maxY)) }
             ledge.isDock = surface.isDock
             ledge.face = Float(surface.frame.height)
             ledge.updateVisibility(screenWidth: width, blockers: blockers)
