@@ -162,12 +162,15 @@ impl SnowSimulation {
         }
         let ledge = &self.layers[li];
         let random = &mut self.air.random;
+        // A short face like the Dock's or a taskbar's takes smaller drops: the biggest would loom over it.
+        let largest = (ledge.face / 32.0).clamp(HEAVY_HANGING, 4.6);
         let radius = if water > 0.0 {
             water.max(SMALLEST_RUNNING)
         } else {
             let u = random.next();
             if random.next() < 0.1 { random.range(3.8, 4.6) } else { 2.2 + 2.2 * u * u }
-        };
+        }
+        .min(largest);
         let along = x - ledge.origin.x;
         // It gathers right under the edge: its top, once it has swelled to its size, at the edge.
         let top = -corner(ledge, along) - half_width(radius, false);

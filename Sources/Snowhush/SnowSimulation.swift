@@ -2295,13 +2295,16 @@ final class SnowSimulation {
     /// Now and then rain caught on the top edge of a window or the Dock gathers into a drop that runs down its face.
     private func runDown(_ ledge: SnowLayer, from x: Float, water: Float = 0) {
         guard glassDrops.count < maxGlassDrops else { return }
-        let radius: Float
+        // A short face like the Dock's takes smaller drops: the biggest would loom over it.
+        let largest = min(max(ledge.face / 32, heavyHanging), 4.6)
+        var radius: Float
         if water > 0 {
             radius = max(water, smallestRunning)
         } else {
             let u = random.next()
             radius = random.next() < 0.1 ? random.range(3.8, 4.6) : 2.2 + 2.2 * u * u
         }
+        radius = min(radius, largest)
         // It gathers right under the edge: its top, once it has swelled to its size, at the edge.
         glassDrops.append(GlassDrop(
             layer: ledge,
