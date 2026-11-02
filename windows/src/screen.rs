@@ -225,6 +225,9 @@ pub struct Screen {
     /// The taskbar's ledge while it rains, as last seen: one that hides itself slides in and out with no window
     /// changing, so it is looked at every frame.
     taskbar: Option<WindowSurface>,
+    /// Whether the simulation has had this overlay's windows at least once: one made anew for a change of settings
+    /// carries on a simulation with the old overlay's, which might be gone, as the taskbar's are behind it.
+    synced: bool,
     windows_seen: u64,
     windows_changed_at: i64,
     covered: bool,
@@ -265,6 +268,7 @@ impl Screen {
             idle_frames: 0,
             surfaces: Vec::new(),
             taskbar: None,
+            synced: false,
             windows_seen: 0,
             windows_changed_at: 0,
             covered: false,
@@ -362,9 +366,10 @@ impl Screen {
         self.simulation.covers = tracker.covers(&self.monitor.rect, self.size);
         let mut surfaces = tracker.surfaces(&self.monitor.rect, self.size);
         surfaces.extend(self.taskbar.clone());
-        if surfaces == self.surfaces {
+        if self.synced && surfaces == self.surfaces {
             return;
         }
+        self.synced = true;
         let since = clock.seconds(now - self.windows_changed_at) as f32;
         // A window that moves outside a drag, as when it is maximized or snapped, jumps there in one go:
         // its snow is left behind instead of being carried along.
