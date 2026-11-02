@@ -36,6 +36,8 @@ enum Preferences {
     private static let showInScreenshotsKey = "showInScreenshots"
     private static let halloweenKey = "halloweenOn"
     private static let halloweenSkippedKey = "halloweenSkipped"
+    private static let modeKey = "mode"
+    /// Before rain, the mode was only whether leaves fell.
     private static let autumnKey = "autumn"
 
     static func registerDefaults() {
@@ -106,8 +108,11 @@ enum Preferences {
         set { defaults.set(newValue, forKey: halloweenSkippedKey) }
     }
 
-    static var autumn: Bool {
-        get { defaults.bool(forKey: autumnKey) }
-        set { defaults.set(newValue, forKey: autumnKey) }
+    static var mode: Mode {
+        get {
+            if let raw = defaults.object(forKey: modeKey) as? Int, let mode = Mode(rawValue: raw) { return mode }
+            return defaults.bool(forKey: autumnKey) ? .autumn : .snow
+        }
+        set { defaults.set(newValue.rawValue, forKey: modeKey) }
     }
 }

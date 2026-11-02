@@ -47,6 +47,7 @@ struct Sprite {
     float flip;
     float turnSpeed;
     float flipSpeed;
+    float rain;
 };
 
 struct SpriteOut {
@@ -79,6 +80,7 @@ struct SpriteOut {
     float turnSmear;
     float flipSmear;
     float samples;
+    float rain;
 };
 
 constant float3 candle = float3(1.0, 0.62, 0.26);
@@ -212,6 +214,32 @@ vertex SpriteOut spriteVertex(uint vid [[vertex_id]],
         out.turn = s.turn;
         out.flip = s.flip;
         out.ghost = 0.0;
+        out.rain = 0.0;
+        return out;
+    }
+    if (s.rain != 0.0) {
+        SpriteOut out;
+        float pixels = max(s.size * u.scale, 1.5);
+        // A raindrop in the air shows as the whole streak it draws over a 1/35 s exposure, the sprite at its head;
+        // a drop on the glass draws out a tail behind it as it runs.
+        bool glass = s.rain > 1.5;
+        float speed = length(s.velocity);
+        float2 travel = !glass ? s.velocity * 0.028 : speed > 0.0 ? -s.velocity / speed * min(speed * 0.08, s.size * 0.9) : float2(0.0);
+        float2 streak = travel * u.scale;
+        float extent = max(pixels + length(streak) + (glass ? 2.0 : 0.0), 2.0);
+        out.position = float4((s.position - (glass ? -travel : travel) * 0.5 + u.shake.xy) / u.viewSize * 2.0 - 1.0, 0.0, 1.0);
+        out.pointSize = extent;
+        out.streak = streak / extent;
+        out.radius = pixels / extent * 0.5;
+        out.alpha = s.alpha * min(pixels / 1.5, 1.0);
+        out.soft = s.soft;
+        out.light = u.light.rgb;
+        out.warm = 0.0;
+        out.ghost = 0.0;
+        out.leaf = 0.0;
+        out.lump = 0.0;
+        out.rain = s.rain;
+        out.size = pixels;
         return out;
     }
     float pixels = s.size * u.scale;
@@ -250,12 +278,60 @@ vertex SpriteOut spriteVertex(uint vid [[vertex_id]],
         out.anger = s.anger;
     }
     out.leaf = 0.0;
+    out.rain = 0.0;
     return out;
+}
+
+/// Rain, premultiplied: a streak or splash of water in the air, or a drop on the glass.
+static float4 rainAt(SpriteOut in, float2 p) {
+    float2 half_ = in.streak * 0.5;
+    float span = dot(half_, half_);
+    if (in.rain < 1.5) {
+        // Faint and cold, brightest at its head.
+        float t = span > 0.0 ? clamp(dot(p, half_) / span, -1.0, 1.0) : 0.0;
+        float r = length(p - half_ * t) / max(in.radius, 0.001);
+        float head = span > 0.0 ? 0.25 + 0.75 * pow(t * 0.5 + 0.5, 2.0) : 1.0;
+        float a = (1.0 - smoothstep(mix(0.6, 0.0, in.soft), 1.0, r)) * in.alpha * head;
+        if (a < 0.002) return float4(0.0);
+        float3 color = float3(0.78, 0.84, 0.92) * in.light;
+        return float4(color * a, a);
+    }
+    // A drop on the glass works as a little lens: darker toward its rim, most of all along its foot, where it bends
+    // the light from above into a bright crescent, and a glint near its top. Its head leads; the tail it draws out
+    // behind it as it runs narrows away.
+    float2 axis = span > 0.0 ? half_ / sqrt(span) : float2(0.0, 1.0);
+    float len = 2.0 * sqrt(span);
+    float2 head = -half_;
+    float along = len > 0.001 ? clamp(dot(p - head, axis) / len, 0.0, 1.0) : 0.0;
+    float width = in.radius * mix(1.0, 0.3, along);
+    float d = length(p - head - axis * along * len) / max(width, 0.001);
+    float aa = fwidth(d) * 1.2;
+    float inside = 1.0 - smoothstep(1.0 - aa, 1.0, d);
+    if (inside < 0.002) return float4(0.0);
+    float2 q = (p - head) / max(in.radius, 0.001);
+    float rim = smoothstep(0.45, 1.0, d);
+    // A bead only a few pixels across shows mostly as its dark rim and its glint; drawn as faint as a big drop, a
+    // trail of them would vanish.
+    float tiny = 1.0 - smoothstep(3.0, 9.0, in.size);
+    float darkA = (0.07 + 0.38 * rim * (0.55 + 0.45 * saturate(-q.y)) + 0.22 * tiny) * (1.0 - along * 0.5);
+    float crescent = (1.0 - smoothstep(0.55, 0.92, d)) * smoothstep(-0.05, -0.7, q.y) * smoothstep(0.75, 0.2, abs(q.x)) * 0.5;
+    float glint = exp(-dot(q - float2(-0.3, 0.38), q - float2(-0.3, 0.38)) / 0.035) * 0.95;
+    float lightA = saturate(crescent * (1.0 - along) + glint);
+    float3 dark = float3(0.03, 0.04, 0.06);
+    float3 bright = float3(0.93, 0.96, 1.0) * in.light;
+    float a = (darkA + lightA - darkA * lightA) * inside * in.alpha;
+    float3 premultiplied = (dark * darkA * (1.0 - lightA) + bright * lightA) * inside * in.alpha;
+    return float4(premultiplied, a);
 }
 
 fragment float4 spriteFragment(SpriteOut in [[stage_in]], float2 coord [[point_coord]], constant Uniforms &u [[buffer(1)]]) {
     // Point coordinates run down the screen; velocities run up.
     float2 p = float2(coord.x - 0.5, 0.5 - coord.y);
+    if (in.rain != 0.0) {
+        float4 water = rainAt(in, p);
+        if (water.a < 0.002) discard_fragment();
+        return water;
+    }
     if (in.leaf != 0.0) {
         // The leaf over the exposure, from where it was to where it is now, turning and tumbling on the way.
         int n = int(in.samples);

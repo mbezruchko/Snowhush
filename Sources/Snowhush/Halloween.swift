@@ -16,8 +16,8 @@ enum Halloween {
         Preferences.halloween || isSeason() && Preferences.halloweenSkipped != year
     }
 
-    /// Whether the snow is spooky: Halloween wanted, over snow, not leaves.
-    static var isOn: Bool { isWanted && !Preferences.autumn }
+    /// Whether the snow is spooky: Halloween wanted, and snow falling, not leaves or rain.
+    static var isOn: Bool { isWanted && Preferences.mode == .snow }
 
     /// Turned on in season, Halloween ends with the season; any other day, it stays on.
     static func toggle() {
