@@ -49,7 +49,8 @@ struct Sprite {
     /// How fast a leaf turns and tumbles, a second: it blurs over the exposure, as it moves.
     var turnSpeed: Float = 0
     var flipSpeed: Float = 0
-    /// Rain instead of snow: one for a raindrop or a splash in the air, two for a drop running down the glass.
+    /// Rain instead of snow: one for a raindrop or a splash in the air, two for a drop running down the glass, three for
+    /// one hanging under an edge, four for spray on the glass.
     var rain: Float = 0
 }
 
@@ -458,6 +459,15 @@ final class SnowSimulation {
     private let pinching: Float = 0.06
     private let fallingShare: Float = 0.6
     private var glassDrops: [GlassDrop] = []
+    /// Droplets of spray on all the windows at most, and on one for each point of its top edge.
+    private let maxSpray = 6000
+    private let sprayAlong: Float = 3
+    /// How far below a window's top edge its spray lands: most of it within the first, none past the second.
+    private let sprayReach: Float = 9
+    private let sprayDeepest: Float = 36
+    private let largestSpray: Float = 0.9
+    private let sprayDrying: Float = 0.003
+    private var wet: Bool { ledgeList.contains { !$0.spray.isEmpty } }
 
     private let ground: SnowLayer
     private var ledges: [CGWindowID: SnowLayer] = [:]
@@ -568,11 +578,12 @@ final class SnowSimulation {
     var isEmpty: Bool {
         snowfall == .off && !halloween && flakes.isEmpty && grains.isEmpty && motes.isEmpty && ghosts.isEmpty
             && fallingSigns.isEmpty && snowballs.isEmpty && gust == nil && dormant.isEmpty && parking.isEmpty && lying.isEmpty && nextMode == nil
-            && splashes.isEmpty && glassDrops.isEmpty
+            && splashes.isEmpty && glassDrops.isEmpty && !wet
             && !layers.contains { $0.top > 0 }
     }
     var spriteCount: Int {
         lying.count + flakes.count + grains.count + motes.count + ghosts.count * 2 + snowballs.count + splashes.count + glassDrops.count
+            + ledgeList.reduce(0) { $0 + $1.spray.count }
     }
     /// Floats the renderer needs per frame: each layer's surface and bed.
     var columnCount: Int { layers.reduce(0) { $0 + 2 * $1.count } }
@@ -589,7 +600,7 @@ final class SnowSimulation {
     func step(dt: Float, cursor point: SIMD2<Float>) -> Bool {
         clock += Double(dt)
         let wasMoving = !flakes.isEmpty || !grains.isEmpty || !motes.isEmpty || !ghosts.isEmpty || !fallingSigns.isEmpty || !snowballs.isEmpty
-            || !splashes.isEmpty || !glassDrops.isEmpty
+            || !splashes.isEmpty || !glassDrops.isEmpty || wet
         heightsChanged = false
         leafBudget = nil
 
@@ -606,6 +617,7 @@ final class SnowSimulation {
         advanceMotes(dt: dt)
         advanceSplashes(dt: dt)
         runGlassDrops(dt: dt)
+        tendSpray(dt: dt)
         haunt(dt: dt)
         settle(dt: dt)
         tendLeaves(dt: dt)
@@ -632,7 +644,7 @@ final class SnowSimulation {
             pace = .calm
         }
         let changed = wasMoving || !flakes.isEmpty || !grains.isEmpty || !motes.isEmpty || !ghosts.isEmpty || !fallingSigns.isEmpty || !snowballs.isEmpty
-            || !splashes.isEmpty || !glassDrops.isEmpty || heightsChanged || windowsChanged || pumpkinsMoved || restyled
+            || !splashes.isEmpty || !glassDrops.isEmpty || wet || heightsChanged || windowsChanged || pumpkinsMoved || restyled
         restyled = false
         windowsChanged = false
         pumpkinsMoved = false
@@ -687,6 +699,20 @@ final class SnowSimulation {
             let fade = 1 - splash.age / splash.life
             buffer[count] = Sprite(position: splash.position, velocity: splash.velocity, size: splash.size, alpha: splash.alpha * fade, soft: 0.5, rain: 1)
             count += 1
+        }
+        for ledge in ledgeList {
+            for droplet in ledge.spray where count < capacity {
+                let position = ledge.base + droplet.offset
+                guard !ledge.faceOccluders.contains(where: { $0.x < position.x && $0.z > position.x && $0.y < position.y && $0.w > position.y }) else { continue }
+                buffer[count] = Sprite(
+                    position: position,
+                    size: droplet.radius * 2 * glassScale,
+                    alpha: 0.8 * min(1, (droplet.radius - 0.2) / 0.15),
+                    soft: 0,
+                    rain: 4
+                )
+                count += 1
+            }
         }
         for drop in glassDrops where count < capacity {
             let position = drop.layer.base + drop.offset
@@ -1593,8 +1619,11 @@ final class SnowSimulation {
                 if let hit = landing(x: flake.position.x, from: previousY, to: flake.position.y) {
                     if flake.rain {
                         splash(at: SIMD2(flake.position.x, hit.layer.surface(hit.index)), depth: flake.depth)
-                        if hit.layer !== ground && (flake.water > 0 || random.next() < runShare) {
-                            runDown(hit.layer, from: flake.position.x, water: flake.water)
+                        if hit.layer !== ground {
+                            spray(hit.layer, from: flake.position.x, depth: flake.depth)
+                            if flake.water > 0 || random.next() < runShare {
+                                runDown(hit.layer, from: flake.position.x, water: flake.water)
+                            }
                         }
                         recycle(i)
                         i -= 1
@@ -2367,7 +2396,9 @@ final class SnowSimulation {
         drop.slope = min(max(wander, -0.45), 0.45)
         let heading = simd_normalize(SIMD2(drop.slope, -1))
         let advance = drop.speed * dt
+        let from = drop.offset
         drop.offset += SIMD2(drop.slope, -1) * advance
+        sweep(drop.layer, from: from, to: drop.offset, reach: halfWidth(drop.radius, still: false))
 
         drop.travelled += advance
         if drop.travelled >= drop.spacing {
@@ -2403,6 +2434,78 @@ final class SnowSimulation {
             hang(&drop, fill: 0.35)
         } else if drop.radius < smallestRunning {
             drop.bead = true
+        }
+    }
+
+    /// Rain bursting on a window's top edge spatters its face with spray: most right under the edge, less and less
+    /// further down. A droplet landing on one already there runs together with it; on a window with all the spray it
+    /// holds, it takes the place of another.
+    private func spray(_ ledge: SnowLayer, from x: Float, depth: Float) {
+        let count = Int(random.next() * (4 + 16 * depth))
+        guard count > 0 else { return }
+        let deepest = min(sprayDeepest, ledge.face * 0.4)
+        let room = ledgeList.reduce(0) { $0 + $1.spray.count } < maxSpray && Float(ledge.spray.count) < ledge.width * sprayAlong
+        for _ in 0..<count {
+            let along = x - ledge.base.x + random.range(-1, 1) * (8 + 16 * depth)
+            let below = -log(1 - random.next() * 0.999) * sprayReach
+            guard along > 2, along < ledge.width - 2, below < deepest else { continue }
+            let u = random.next()
+            let radius = 0.3 + 0.5 * u * u
+            let offset = SIMD2(along, -corner(of: ledge, at: along) - below - radius * glassScale)
+            if let j = ledge.spray.firstIndex(where: { simd_distance($0.offset, offset) < ($0.radius + radius) * glassScale }) {
+                let area = ledge.spray[j].radius * ledge.spray[j].radius, added = radius * radius
+                ledge.spray[j].offset = (ledge.spray[j].offset * area + offset * added) / (area + added)
+                ledge.spray[j].radius = min((area + added).squareRoot(), largestSpray)
+            } else if room {
+                ledge.spray.append((offset, radius))
+            } else if !ledge.spray.isEmpty {
+                ledge.spray[Int(random.next() * Float(ledge.spray.count)) % ledge.spray.count] = (offset, radius)
+            }
+        }
+    }
+
+    /// A drop running down through the spray takes it in: behind it the glass is clear.
+    private func sweep(_ layer: SnowLayer, from: SIMD2<Float>, to: SIMD2<Float>, reach: Float) {
+        guard -to.y - reach < sprayDeepest + 2, !layer.spray.isEmpty else { return }
+        let path = to - from
+        let length = max(simd_length_squared(path), 0.0001)
+        layer.spray.removeAll { droplet in
+            let along = min(max(simd_dot(droplet.offset - from, path) / length, 0), 1)
+            return simd_distance(droplet.offset, from + path * along) < reach + droplet.radius * glassScale * 0.5
+        }
+    }
+
+    /// Spray dries up slowly in the rain and soon once it stops. The cursor moving over the glass wipes it off where
+    /// it passes, as a finger would.
+    private func tendSpray(dt: Float) {
+        let drying = sprayDrying * dt * (rain ? 1 : 12)
+        let wiping = cursor.flatMap { point in simd_length(cursorVelocity) > 40 ? (from: point - cursorVelocity * dt, to: point) : nil }
+        let reach = cursorRadius * 0.8
+        for ledge in ledgeList where !ledge.spray.isEmpty {
+            let top = ledge.base.y
+            let near = wiping.map { path in
+                min(path.from.y, path.to.y) - reach < top && max(path.from.y, path.to.y) + reach > top - sprayDeepest - 4
+                    && min(path.from.x, path.to.x) - reach < ledge.base.x + ledge.width && max(path.from.x, path.to.x) + reach > ledge.base.x
+            } ?? false
+            let width = ledge.width, face = ledge.face, base = ledge.base, covers = ledge.faceOccluders
+            var n = 0
+            for i in ledge.spray.indices {
+                var droplet = ledge.spray[i]
+                droplet.radius -= drying
+                var gone = droplet.radius < 0.2 || droplet.offset.x < 0 || droplet.offset.x > width || -droplet.offset.y > face
+                if !gone, near, let wiping {
+                    let position = base + droplet.offset
+                    let path = wiping.to - wiping.from
+                    let along = min(max(simd_dot(position - wiping.from, path) / max(simd_length_squared(path), 0.0001), 0), 1)
+                    gone = simd_distance(position, wiping.from + path * along) < reach
+                        && !covers.contains { $0.x < position.x && $0.z > position.x && $0.y < position.y && $0.w > position.y }
+                }
+                if !gone {
+                    ledge.spray[n] = droplet
+                    n += 1
+                }
+            }
+            ledge.spray.removeLast(ledge.spray.count - n)
         }
     }
 

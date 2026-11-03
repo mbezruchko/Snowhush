@@ -255,7 +255,7 @@ vertex SpriteOut spriteVertex(uint vid [[vertex_id]],
         float extent = max(pixels + length(streak) + (glass ? 2.0 : 0.0), 2.0);
         float2 center = s.position - (glass ? -travel : travel) * 0.5;
         // A drop hanging under an edge clings at `position`; `soft` is how far along it is, as `hangingAt` reads it.
-        if (s.rain > 2.5) {
+        if (s.rain > 2.5 && s.rain < 3.5) {
             float2 reach = hangingReach(s.soft) * pixels * 0.5;
             float3 shape = hangingShape(s.soft);
             extent = max(reach.x - reach.y, 2.0 * (shape.x + 1.5 * hangingFlare(s.soft)) * pixels * 0.5) + 4.0;
@@ -372,7 +372,9 @@ static float4 glassDropAt(SpriteOut in, float2 p, float2 head, float2 axis, floa
     // A bead only a few pixels across shows mostly as its dark rim and its glint; drawn as faint as a big drop, a
     // trail of them would vanish.
     float tiny = 1.0 - smoothstep(3.0, 9.0, in.size);
-    float darkA = (0.07 + 0.38 * rim * (0.55 + 0.45 * saturate(-q.y)) + 0.22 * tiny) * (1.0 - along * 0.5);
+    // Spray is finer still: its glint shows on a dark window, its rim hardly on a light one.
+    float rimmed = in.rain > 3.5 ? 0.4 : 1.0;
+    float darkA = (0.07 + 0.38 * rim * (0.55 + 0.45 * saturate(-q.y)) + 0.22 * tiny) * (1.0 - along * 0.5) * rimmed;
     float crescent = (1.0 - smoothstep(0.55, 0.92, d)) * smoothstep(-0.05, -0.7, q.y) * smoothstep(0.75, 0.2, abs(q.x)) * 0.5;
     float glint = exp(-dot(q - float2(-0.3, 0.38), q - float2(-0.3, 0.38)) / 0.035) * 0.95;
     float lightA = saturate(crescent * (1.0 - along) + glint);
@@ -384,7 +386,7 @@ static float4 glassDropAt(SpriteOut in, float2 p, float2 head, float2 axis, floa
 }
 
 static float4 rainAt(SpriteOut in, float2 p) {
-    if (in.rain > 2.5) return hangingAt(in, p);
+    if (in.rain > 2.5 && in.rain < 3.5) return hangingAt(in, p);
     float2 half_ = in.streak * 0.5;
     float span = dot(half_, half_);
     if (in.rain < 1.5) {

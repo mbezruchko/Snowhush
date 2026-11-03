@@ -23,6 +23,8 @@ final class SnowLayer {
     var isDock = false
     /// How far the window it lies on reaches down from its top edge: as far as a drop can run down it.
     var face: Float = 200
+    /// Rain's spray on the window's glass: each droplet from the left end of its top edge, and how big it is.
+    var spray: [(offset: SIMD2<Float>, radius: Float)] = []
     var movedAt: Double = -1
     /// Brought where it is by a switch between Spaces: past the screen's edge, no wall scrapes its snow off.
     var carried = false
