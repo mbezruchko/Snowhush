@@ -367,32 +367,44 @@ impl Screen {
     /// Hands the simulation the windows on this display when they changed.
     fn follow(&mut self, tracker: &Tracker, clock: &Clock, now: i64) {
         let taskbar = self.taskbar_surface();
-        if tracker.generation == self.windows_seen && taskbar == self.taskbar {
+        let gen_changed = tracker.generation != self.windows_seen || taskbar != self.taskbar;
+        if !gen_changed && !tracker.animating() {
             return;
         }
-        self.windows_seen = tracker.generation;
-        self.taskbar = taskbar;
-        self.simulation.covers = tracker.covers(&self.monitor.rect, self.size);
-        let mut surfaces = tracker.surfaces(&self.monitor.rect, self.size);
-        surfaces.extend(self.taskbar.clone());
-        if self.synced && surfaces == self.surfaces {
-            return;
-        }
-        self.synced = true;
+        let sweeps = tracker.toast_sweeps(&self.monitor.rect, self.size);
         let since = clock.seconds(now - self.windows_changed_at) as f32;
         // A window that moves outside a drag, as when it is maximized or snapped, jumps there in one go:
         // its snow is left behind instead of being carried along.
-        let interval = if tracker.moving() || since < 0.1 { since.min(0.25) } else { 1.0 / 60.0 };
-        // Snow waits for a window gone to another desktop, or maximized or full screen and so without room for it.
-        let elsewhere: HashSet<WindowId> = self
-            .surfaces
-            .iter()
-            .map(|surface| surface.id)
-            .filter(|&id| !surfaces.iter().any(|surface| surface.id == id) && (tracker.elsewhere(id) || tracker.fills(id, &self.monitor.rect)))
-            .collect();
-        self.simulation.update_windows(&surfaces, interval, &HashSet::new(), &elsewhere, false);
-        self.surfaces = surfaces;
-        self.windows_changed_at = now;
+        let interval = if tracker.moving() || tracker.animating() || since < 0.1 {
+            since.min(0.25).max(1.0 / 120.0)
+        } else {
+            1.0 / 60.0
+        };
+        if gen_changed {
+            self.windows_seen = tracker.generation;
+            self.taskbar = taskbar;
+            self.simulation.covers = tracker.covers(&self.monitor.rect, self.size);
+            let mut surfaces = tracker.surfaces(&self.monitor.rect, self.size);
+            surfaces.extend(self.taskbar.clone());
+            if !(self.synced && surfaces == self.surfaces) {
+                self.synced = true;
+                // Snow waits for a window gone to another desktop, or maximized or full screen and so without room for it.
+                let elsewhere: HashSet<WindowId> = self
+                    .surfaces
+                    .iter()
+                    .map(|surface| surface.id)
+                    .filter(|&id| !surfaces.iter().any(|surface| surface.id == id) && (tracker.elsewhere(id) || tracker.fills(id, &self.monitor.rect)))
+                    .collect();
+                self.simulation.update_windows(&surfaces, interval, &HashSet::new(), &elsewhere, false);
+                self.surfaces = surfaces;
+                self.windows_changed_at = now;
+            }
+        }
+        // Toast slide must not rewrite every app ledge each frame — only the sweep band.
+        if tracker.animating() || !sweeps.is_empty() {
+            self.simulation.sweep_toasts(&sweeps, interval);
+            self.windows_changed_at = now;
+        }
     }
 
     /// While it rains over a taskbar along the bottom of the display, the taskbar is a ledge, as the Dock is on the Mac:
@@ -409,13 +421,17 @@ impl Screen {
         if rect.bottom < bounds.bottom || rect.right - rect.left < (bounds.right - bounds.left) / 2 || showing < 16 {
             return None;
         }
+        let frame = local_frame(&rect, &self.monitor.rect, self.size)?;
         Some(WindowSurface {
             id: TASKBAR,
-            frame: local_frame(&rect, &self.monitor.rect, self.size)?,
+            frame,
             blockers: Vec::new(),
             cover: Vec::new(),
             corner_radius: 0.0,
             corner_exponent: 2.0,
+            sweeps: false,
+            sweep_left: frame.min_x(),
+            sweep_only: false,
         })
     }
 

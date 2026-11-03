@@ -224,6 +224,11 @@ pub struct WindowSurface {
     pub cover: Vec<Rect>,
     pub corner_radius: f32,
     pub corner_exponent: f32,
+    /// A notification sliding in: its left edge pushes snow aside (see `sweep_left`).
+    pub sweeps: bool,
+    pub sweep_left: f32,
+    /// Only runs `sweep`; never creates a ledge on the window.
+    pub sweep_only: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -393,6 +398,7 @@ pub struct SnowSimulation {
     /// Every app window on the screen, maximized and full-screen ones too, left, bottom, right, top in points:
     /// a pumpkin hides from any that covers it.
     pub covers: Vec<[f32; 4]>,
+    sweep_edges: HashMap<WindowId, f32>,
     /// The window that is a panel's shelf along the bottom of the screen, if any: pumpkins over it sit in its snow.
     pub shelf: Option<WindowId>,
     haunting: Haunting,
@@ -431,6 +437,7 @@ impl SnowSimulation {
             strength_target: 1.0,
             next_shift: 0.0,
             covers: Vec::new(),
+            sweep_edges: HashMap::new(),
             shelf: None,
             haunting: Haunting::new(),
             lanterns: Pumpkins::default(),
@@ -856,6 +863,9 @@ impl SnowSimulation {
         let known: HashMap<WindowId, usize> = self.ids.iter().enumerate().skip(1).map(|(li, &id)| (id, li)).collect();
         let mut seen = HashSet::new();
         for surface in surfaces {
+            if surface.sweep_only {
+                continue;
+            }
             let left = surface.frame.min_x() + LEDGE_INSET;
             let right = surface.frame.max_x() - LEDGE_INSET;
             let top = surface.frame.max_y();
@@ -901,6 +911,7 @@ impl SnowSimulation {
             ledge.occluders = blockers.iter().take(16).copied().collect();
             ledge.face = surface.frame.height;
             ledge.face_occluders = surface.cover.iter().take(16).map(|b| [b.min_x(), b.min_y(), b.max_x(), b.max_y()]).collect();
+            ledge.banner = surface.sweeps && !surface.sweep_only;
             ledge.update_visibility(self.width, &blockers);
         }
 
@@ -1522,12 +1533,22 @@ impl SnowSimulation {
 
     fn fly_from(&mut self, k: usize, from: V2, velocity: V2, blown: bool) {
         let leaf = self.lying.remove(k);
+        let position = V2::new(from.x + leaf.x, from.y + leaf.rest + 1.0);
+        self.fly_lying(leaf, position, velocity, blown);
+    }
+
+    fn fly_at(&mut self, k: usize, position: V2, velocity: V2) {
+        let leaf = self.lying.remove(k);
+        self.fly_lying(leaf, position, velocity, false);
+    }
+
+    fn fly_lying(&mut self, leaf: LyingLeaf, position: V2, velocity: V2, blown: bool) {
         self.air.heights_changed = true;
         if self.air.grains.len() >= MAX_GRAINS {
             return;
         }
         self.air.grains.push(Grain {
-            position: V2::new(from.x + leaf.x, from.y + leaf.rest + 1.0),
+            position,
             velocity,
             area: 0.0,
             size: leaf.size,
@@ -1637,6 +1658,121 @@ impl SnowSimulation {
                 self.lying[k] = leaf;
             }
         }
+    }
+
+    /// Toast slide only: does not create or move app ledges.
+    pub fn sweep_toasts(&mut self, surfaces: &[WindowSurface], interval: f32) {
+        // Keep scraping past the banner's left edge so the shove doesn't leave a wall flush against it.
+        const PUSH: f32 = 96.0;
+        let mut seen = HashSet::new();
+        for surface in surfaces {
+            if !surface.sweep_only {
+                continue;
+            }
+            seen.insert(surface.id);
+            if !surface.sweeps {
+                continue;
+            }
+            let top = surface.frame.max_y();
+            let bottom = surface.frame.min_y();
+            let edge = (surface.sweep_left + LEDGE_INSET - PUSH).max(0.0);
+            let from = self.sweep_edges.get(&surface.id).copied().unwrap_or(self.width);
+            self.sweep(from, edge, bottom, top, interval, surface.id);
+            self.sweep_edges.insert(surface.id, edge);
+        }
+        self.sweep_edges.retain(|id, _| seen.contains(id));
+    }
+
+    /// A notification sliding in, its left edge moving from `from` to `to` over the band from `bottom` to `top`:
+    /// it scrapes the snow, or the leaves, off whatever it passes over, which flies off ahead of it, and pushes the
+    /// falling snow along.
+    fn sweep(&mut self, from: f32, to: f32, bottom: f32, top: f32, interval: f32, banner: WindowId) {
+        if to >= from - 0.5 {
+            return;
+        }
+        let speed = (from - to) / interval.max(1.0 / 120.0);
+        // Hard left shove: a soft dump piles into a mound against the banner.
+        let thrown = V2::new(-(speed * 0.45).min(1200.0).max(420.0), 90.0);
+        for li in 0..self.layers.len() {
+            if self.ids[li] == banner || self.layers[li].banner {
+                continue;
+            }
+            let base_x = self.layers[li].base().x;
+            let lower = ((to - base_x) / COLUMN_WIDTH).floor().max(0.0) as usize;
+            let upper = (((from - base_x) / COLUMN_WIDTH).ceil() as usize).min(self.layers[li].count());
+            let mut start = lower;
+            while start < upper {
+                let end = upper.min(start + (self.air.random.range(2.0, 7.0) as usize).max(1));
+                if end <= start {
+                    break;
+                }
+                let mut area = 0.0;
+                let mut seen = 0.0;
+                let mut highest = bottom;
+                for i in start..end {
+                    let floor = self.layers[li].floor(i);
+                    let surface = floor + self.layers[li].heights[i];
+                    if floor > top || surface <= bottom + 0.01 {
+                        continue;
+                    }
+                    let removed = surface - floor.max(bottom);
+                    let height = self.layers[li].heights[i];
+                    self.layers[li].set(i, height - removed);
+                    area += removed * COLUMN_WIDTH;
+                    seen += (removed - LEAF_COVER).max(0.0) * COLUMN_WIDTH;
+                    highest = highest.max(surface);
+                }
+                if area > 0.02 {
+                    let base_y = self.layers[li].base().y;
+                    // Scatter ahead of the edge so one frame doesn't stack a cliff at `to`.
+                    let land_x = to - self.air.random.range(COLUMN_WIDTH, 88.0);
+                    let position = V2::new(land_x, (bottom.max(base_y) + highest) / 2.0);
+                    let cohesion = if area > 18.0 && !self.air.autumn { self.air.random.range(0.15, 0.35) } else { 0.0 };
+                    let spread = V2::new(self.air.random.range(24.0, 64.0), (highest - position.y) + 1.0);
+                    let kick = thrown + V2::new(self.air.random.range(-80.0, 40.0), self.air.random.range(-20.0, 80.0));
+                    self.air.release_leaves(area * (1.0 - cohesion), seen / area, position, kick, spread, 0.5);
+                    if cohesion > 0.0 {
+                        self.air.throw_lump(area * cohesion, position, kick);
+                    }
+                    self.air.heights_changed = true;
+                }
+                start = end;
+            }
+        }
+        let mut tossed = Vec::new();
+        for k in 0..self.lying.len() {
+            let leaf = self.lying[k];
+            if leaf.layer == banner {
+                continue;
+            }
+            let Some(li) = self.ids.iter().position(|id| *id == leaf.layer) else { continue };
+            if self.layers[li].banner {
+                continue;
+            }
+            let x = self.layers[li].heap_x() + leaf.x;
+            let y = self.layers[li].base().y + leaf.rest;
+            if x < to || x >= from || y < bottom {
+                continue;
+            }
+            let Some(i) = self.layers[li].index(x) else { continue };
+            if self.layers[li].floor(i) > top {
+                continue;
+            }
+            tossed.push((k, V2::new(to - self.air.random.range(COLUMN_WIDTH, 72.0), y)));
+        }
+        for (k, position) in tossed.into_iter().rev() {
+            let velocity = thrown + V2::new(self.air.random.range(-120.0, 20.0), self.air.random.range(20.0, 100.0));
+            self.fly_at(k, position, velocity);
+        }
+        for flake in &mut self.air.flakes {
+            if flake.position.x >= to && flake.position.x < from && flake.position.y >= bottom && flake.position.y <= top {
+                flake.position.x = to - self.air.random.range(2.0, 48.0);
+                flake.velocity.x = flake.velocity.x.min(thrown.x);
+            }
+        }
+        self.air.last_window_motion = self.air.clock;
+        self.air.windows_changed = true;
+        self.air.heights_changed = true;
     }
 }
 
@@ -1837,7 +1973,7 @@ impl Air {
         let count = ledge.count() as i64;
         let base = ledge.base().x;
         let first = if walls.0 { ((-base / COLUMN_WIDTH - 0.5).ceil() as i64).clamp(0, count) } else { 0 };
-        let last = if walls.1 { (((width - base) / COLUMN_WIDTH - 0.5).floor() as i64).clamp(-1, count - 1) } else { count - 1 };
+        let last = if walls.1 || ledge.banner { (((width - base) / COLUMN_WIDTH - 0.5).floor() as i64).clamp(-1, count - 1) } else { count - 1 };
         if first == 0 && last == count - 1 {
             return;
         }

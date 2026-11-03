@@ -101,6 +101,9 @@ pub fn surfaces(report: &Report, area: &Area, shelf: Option<&Shelf>) -> Vec<Wind
             cover: Vec::new(),
             corner_radius: shelf.radius,
             corner_exponent: 2.0,
+            sweeps: false,
+            sweep_left: frame.min_x(),
+            sweep_only: false,
         });
         blockers.push(frame);
     }
@@ -128,6 +131,9 @@ pub fn surfaces(report: &Report, area: &Area, shelf: Option<&Shelf>) -> Vec<Wind
                 cover: blockers.iter().filter(|b| intersects(b, &frame)).copied().collect(),
                 corner_radius: radius,
                 corner_exponent: 2.0,
+                sweeps: false,
+                sweep_left: frame.min_x(),
+                sweep_only: false,
             });
         }
         blockers.push(frame);
