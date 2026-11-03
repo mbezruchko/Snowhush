@@ -28,7 +28,7 @@ use crate::prefs::{self, Settings};
 use crate::snow::{self, Command, Links};
 use crate::update::{self, Release};
 use crate::welcome::{self, Handlers};
-use snowhush_core::simulation::Snowfall;
+use snowhush_core::simulation::{Mode, Snowfall};
 
 const CLASS: PCWSTR = w!("SnowhushController");
 const WM_TRAY: u32 = WM_APP + 1;
@@ -48,6 +48,9 @@ const ID_TASKBAR: u32 = 209;
 const ID_SNOW: u32 = 210;
 const ID_AUTUMN: u32 = 211;
 const ID_FULL_SCREEN: u32 = 212;
+const ID_RAIN: u32 = 213;
+const ID_PERFORMANCE: u32 = 214;
+const ID_MAX_PERFORMANCE: u32 = 215;
 const TIMER_WELCOME: usize = 1;
 const TIMER_UPDATES: usize = 2;
 const TIMER_HALLOWEEN: usize = 3;
@@ -80,23 +83,29 @@ const LEAF_WHITE: Glyph = glyph!("leaf-white");
 const LEAF_BLACK: Glyph = glyph!("leaf-black");
 const PUMPKIN_WHITE: Glyph = glyph!("pumpkin-white");
 const PUMPKIN_BLACK: Glyph = glyph!("pumpkin-black");
+const RAIN_WHITE: Glyph = glyph!("rain-white");
+const RAIN_BLACK: Glyph = glyph!("rain-black");
 
-/// What the tray shows: a snowflake, a jack-o'-lantern while it is Halloween and wanted, or a leaf while leaves fall.
+/// What the tray shows: a snowflake, a jack-o'-lantern while it is Halloween and wanted, a leaf while leaves fall, or
+/// a rain cloud while it rains.
 #[derive(Clone, Copy, PartialEq)]
 enum Emblem {
     Snowflake,
     Pumpkin,
     Leaf,
+    Rain,
 }
 
 impl Emblem {
     fn of(settings: &Settings) -> Emblem {
         if halloween::shows(settings) {
             Emblem::Pumpkin
-        } else if settings.autumn {
-            Emblem::Leaf
         } else {
-            Emblem::Snowflake
+            match settings.mode {
+                Mode::Snow => Emblem::Snowflake,
+                Mode::Autumn => Emblem::Leaf,
+                Mode::Rain => Emblem::Rain,
+            }
         }
     }
 
@@ -109,6 +118,8 @@ impl Emblem {
             (Emblem::Leaf, true) => &LEAF_BLACK,
             (Emblem::Pumpkin, false) => &PUMPKIN_WHITE,
             (Emblem::Pumpkin, true) => &PUMPKIN_BLACK,
+            (Emblem::Rain, false) => &RAIN_WHITE,
+            (Emblem::Rain, true) => &RAIN_BLACK,
         }
     }
 }
@@ -325,26 +336,47 @@ fn show_menu(window: HWND, x: i32, y: i32) {
 
 /// What the tray menu lists, with what is on or off.
 fn entries(settings: &Settings, login: bool) -> Vec<Entry> {
-    let autumn = settings.autumn;
+    let mode = settings.mode;
+    let autumn = mode == Mode::Autumn;
     let snowfall = Snowfall::ALL
         .iter()
         .enumerate()
         .map(|(i, &option)| Entry::choice(ID_SNOWFALL + i as u32, option.title(), option == settings.snowfall))
         .collect();
     let modes = vec![
-        Entry::choice(ID_SNOW, "Snow", !autumn),
+        Entry::choice(ID_SNOW, "Snow", mode == Mode::Snow),
         Entry::choice(ID_AUTUMN, "Autumn Leaves", autumn),
+        Entry::choice(ID_RAIN, "Rain", mode == Mode::Rain),
         Entry::Separator,
-        Entry::item(ID_HALLOWEEN, "Halloween", halloween::wanted(settings.halloween), !autumn),
+        Entry::item(ID_HALLOWEEN, "Halloween", halloween::wanted(settings.halloween), mode == Mode::Snow),
     ];
-    vec![
+    let mut entries = vec![
         Entry::Submenu { label: "Intensity".to_string(), entries: snowfall },
         Entry::Submenu { label: "Mode".to_string(), entries: modes },
+        Entry::Submenu {
+            label: "Performance".to_string(),
+            entries: vec![
+                Entry::choice(ID_PERFORMANCE, "Default", !settings.max_performance),
+                Entry::choice(ID_MAX_PERFORMANCE, "Max", settings.max_performance),
+            ],
+        },
         Entry::Separator,
-        Entry::item(ID_ACCUMULATE, "Accumulate", settings.accumulate, true),
-        Entry::item(ID_MELT, if autumn { "Wither Leaves" } else { "Melt Snow" }, settings.melt, settings.accumulate),
-        Entry::item(ID_WINDOWS, if autumn { "Leaves on Windows" } else { "Snow on Windows" }, settings.snow_on_windows, true),
-        Entry::item(ID_CLEAR, if autumn { "Clear Leaves" } else { "Clear Snow" }, false, true),
+    ];
+    // Rain doesn't lie anywhere: nothing to keep, melt or clear.
+    if mode != Mode::Rain {
+        entries.push(Entry::item(ID_ACCUMULATE, "Accumulate", settings.accumulate, true));
+        entries.push(Entry::item(ID_MELT, if autumn { "Wither Leaves" } else { "Melt Snow" }, settings.melt, settings.accumulate));
+    }
+    let windows = match mode {
+        Mode::Snow => "Snow on Windows",
+        Mode::Autumn => "Leaves on Windows",
+        Mode::Rain => "Rain on Windows",
+    };
+    entries.push(Entry::item(ID_WINDOWS, windows, settings.snow_on_windows, true));
+    if mode != Mode::Rain {
+        entries.push(Entry::item(ID_CLEAR, if autumn { "Clear Leaves" } else { "Clear Snow" }, false, true));
+    }
+    entries.extend([
         Entry::Separator,
         Entry::item(ID_BEHIND, "Behind Windows", settings.behind_windows, true),
         Entry::item(ID_FULL_SCREEN, "Show over Full Screen", settings.over_full_screen, !settings.behind_windows),
@@ -354,7 +386,8 @@ fn entries(settings: &Settings, login: bool) -> Vec<Entry> {
         Entry::item(ID_LOGIN, "Open at Login", login, true),
         Entry::item(ID_UPDATES, "Check for Updates\u{2026}", false, true),
         Entry::item(ID_QUIT, "Quit", false, true),
-    ]
+    ]);
+    entries
 }
 
 /// The system's own menu, for when the drawn one can't be shown.
@@ -419,16 +452,20 @@ fn choose(window: HWND, chosen: u32, login: bool) {
             });
             refresh_icon(window);
         }
-        ID_SNOW | ID_AUTUMN => {
-            let autumn = chosen == ID_AUTUMN;
+        ID_SNOW | ID_AUTUMN | ID_RAIN => {
+            let mode = match chosen {
+                ID_AUTUMN => Mode::Autumn,
+                ID_RAIN => Mode::Rain,
+                _ => Mode::Snow,
+            };
             APP.with_borrow_mut(|app| {
                 let Some(app) = app else { return };
-                if autumn == app.settings.autumn {
+                if mode == app.settings.mode {
                     return;
                 }
-                app.settings.autumn = autumn;
+                app.settings.mode = mode;
                 app.settings.save();
-                send(app, Command::SwitchMode { autumn, calm: !prefs::animations_enabled() });
+                send(app, Command::SwitchMode { mode, calm: !prefs::animations_enabled() });
             });
             refresh_icon(window);
         }
@@ -463,6 +500,10 @@ fn choose(window: HWND, chosen: u32, login: bool) {
                 ID_SCREENSHOTS => {
                     settings.show_in_screenshots = !settings.show_in_screenshots;
                     Command::ShowInScreenshots(settings.show_in_screenshots)
+                }
+                ID_PERFORMANCE | ID_MAX_PERFORMANCE => {
+                    settings.max_performance = chosen == ID_MAX_PERFORMANCE;
+                    Command::Performance(settings.max_performance)
                 }
                 _ => {
                     let Some(&snowfall) = Snowfall::ALL.get(chosen.wrapping_sub(ID_SNOWFALL) as usize) else { return };

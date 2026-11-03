@@ -2,6 +2,11 @@ import CoreGraphics
 import Foundation
 import simd
 
+/// What falls: snow, autumn leaves or rain.
+enum Mode: Int {
+    case snow, autumn, rain
+}
+
 struct Sprite {
     var position: SIMD2<Float>
     /// Smears fast snow into a short streak, as a camera would.
@@ -44,6 +49,9 @@ struct Sprite {
     /// How fast a leaf turns and tumbles, a second: it blurs over the exposure, as it moves.
     var turnSpeed: Float = 0
     var flipSpeed: Float = 0
+    /// Rain instead of snow: one for a raindrop or a splash in the air, two for a drop running down the glass, three for
+    /// one hanging under an edge, four for spray on the glass, five for the film a running drop leaves behind.
+    var rain: Float = 0
 }
 
 /// A Halloween sign a ghost holds up, or lets fall into the snow.
@@ -102,6 +110,56 @@ private struct Flake {
     /// The direction of the gust that caught the flake and carries it off the screen; zero until then.
     var blown: Float = 0
     var leaf: Float = 0
+    var rain = false
+    /// A drop come off the glass: how big the water it carries is, to run on down whatever window it lands on; zero
+    /// for rain from the sky.
+    var water: Float = 0
+}
+
+/// A droplet thrown up where a raindrop bursts on a window's edge or the bottom of the screen.
+private struct Splash {
+    var position: SIMD2<Float>
+    var velocity: SIMD2<Float>
+    let size: Float
+    let alpha: Float
+    var age: Float = 0
+    let life: Float
+}
+
+/// Rain caught on a window's top edge, running down the window's face, or a bead of it left behind on the way.
+private struct GlassDrop {
+    let layer: SnowLayer
+    /// From the left end of the window's top edge.
+    var offset: SIMD2<Float>
+    /// How far down it can run before it reaches the window's bottom edge.
+    let face: Float
+    var radius: Float
+    var speed: Float = 0
+    /// Sideways for each point down: a running drop wanders a little.
+    var slope: Float = 0
+    var age: Float = 0
+    /// How far it has run since it last left a bead, and how far it runs before it leaves the next.
+    var travelled: Float = 0
+    var spacing: Float = 0
+    /// Caught under the window's bottom edge, it clings there, taking in what runs down onto it, until it is heavy
+    /// enough to let go: how long it has hung, how full it is, from a flat cap to a pear, and when it lets go, once
+    /// it starts to.
+    var hanging = false
+    var hung: Float = 0
+    var fill: Float = 0
+    var letsGo = Float.infinity
+    /// Left behind by a running drop, or run out of water: it holds still and dries up.
+    var bead = false
+    /// Where the film it leaves behind as it runs was last laid down to.
+    var mark = SIMD2<Float>(repeating: 0)
+    /// Caught on a speck on the glass: how much longer it holds there, and the patch of glass it last ran onto.
+    var held: Float = 0
+    var patch = SIMD2<Int32>(repeating: .min)
+    /// Picks its outline: where its edge clings to the glass, it is never quite round.
+    var seed: Float = 0
+    /// How hard it squashed and stretched when it last ran into more water or broke free, and when.
+    var jiggle: Float = 0
+    var jolted: Float = 0
 }
 
 private struct Grain {
@@ -377,6 +435,73 @@ final class SnowSimulation {
     /// The top of a heap is the lying leaves themselves: the pile shader draws the mass under them only this far down.
     private let leafCover: Float = 2.5
     private var lying: [LyingLeaf] = []
+    /// Rain crosses the screen in a second or so, where a flake takes half a minute: far fewer are in sight at once.
+    private let rainShare: Float = 0.12
+    private let rainGravity: Float = 900
+    private let maxSplashes = 1500
+    private var splashes: [Splash] = []
+    /// The share of raindrops hitting a window's top edge that run on down its face.
+    private let runShare: Float = 0.07
+    private let maxGlassDrops = 600
+    private let beadDrying: Float = 0.3
+    private let smallestRunning: Float = 1.6
+    private let glassScale: Float = 1.6
+    /// A drop running down the glass is drawn bigger still than the beads it leaves and the drops hanging below; the
+    /// biggest no bigger than they were, or they would stand out.
+    /// How far a drop of `radius` reaches each way as drawn: one running down the glass, unless `still`, a little
+    /// further.
+    private func halfWidth(_ radius: Float, still: Bool) -> Float {
+        let flat = max(radius, 1.2) * glassScale
+        if still { return flat }
+        // Past a size, bigger ones grow ever less, nearing the widest but still each its own size.
+        let half = flat * runningScale(radius) * glassy
+        let knee: Float = 2.5
+        guard half > knee else { return half }
+        return knee + (widestRunning - knee) * (1 - exp(-(half - knee) / (widestRunning - knee) * 0.8))
+    }
+
+    /// Drawn as glass, lit along its rim and with a shadow below, a running drop or a bead looks bigger than drawn
+    /// flat: it is drawn this much smaller, and a running drop reaches no further each way than the widest.
+    private let glassy: Float = 0.75
+    private let widestRunning: Float = 3.5
+
+    private func runningScale(_ radius: Float) -> Float {
+        1.2 - 0.2 * smoothstep(3, 4.6, radius)
+    }
+    /// How hard a window has to be shaken back and forth, in its swings against gravity, to shake off a drop of
+    /// radius 2.4: far harder than its snow. A smaller one holds on harder, a hanging one less.
+    private let dropShaking: Float = 22
+    /// A drop hanging under a window this big lets go; a smaller one clings on, waiting for more, and dries up.
+    private let heavyHanging: Float = 2.6
+    /// However much runs together, a drop on the glass grows no bigger than this.
+    private let largestDrop: Float = 6
+    private let hangingDrying: Float = 0.1
+    /// A hanging drop pinches off far faster than it fills: only a few frames show it stretch. Not all of it falls.
+    private let pinching: Float = 0.06
+    private let fallingShare: Float = 0.6
+    private var glassDrops: [GlassDrop] = []
+    /// Droplets of spray on all the windows at most, and on one for each point of its top edge.
+    private let maxSpray = 6000
+    private let sprayAlong: Float = 3
+    /// How far below a window's top edge its spray lands: most of it within the first, none past the second.
+    private let sprayReach: Float = 9
+    private let sprayDeepest: Float = 36
+    private let largestSpray: Float = 0.9
+    private let sprayDrying: Float = 0.003
+    /// A running drop lays down its film in pieces this long, as wide as this share of the drop, that dry in a few
+    /// seconds.
+    private let filmPiece: Float = 4
+    private let filmShare: Float = 0.4
+    private let filmLife: ClosedRange<Float> = 2...3.5
+    private let maxFilm = 4000
+    /// Specks that catch a running drop for a moment: one patch of glass this big in this many has one.
+    private let speckSpacing: Float = 6
+    private let speckShare: Float = 0.05
+    /// How far a running drop turns toward the water that joins it from one side, for the share of it that water is.
+    private let turning: Float = 1
+    /// How much of the spray a running drop runs into it keeps: the rest it leaves on the glass behind it.
+    private let sprayKept: Float = 0.35
+    private var wet: Bool { ledgeList.contains { !$0.spray.isEmpty || !$0.film.isEmpty } }
 
     private let ground: SnowLayer
     private var ledges: [CGWindowID: SnowLayer] = [:]
@@ -438,10 +563,10 @@ final class SnowSimulation {
             stirred()
         }
     }
-    /// Leaves fall instead of snow and heap up where it would.
-    var autumn = false {
+    /// What falls: leaves heap up where snow would, rain bursts on the windows and runs down the glass.
+    var mode = Mode.snow {
         didSet {
-            guard autumn != oldValue else { return }
+            guard mode != oldValue else { return }
             lying.removeAll()
             updateTarget()
             flakes = flakes.prefix(targetFlakes).map { makeFlake(y: $0.position.y) }
@@ -449,9 +574,11 @@ final class SnowSimulation {
             stirred()
         }
     }
+    var autumn: Bool { mode == .autumn }
+    var rain: Bool { mode == .rain }
     private var restyled = false
     /// The mode waiting for the gust to clear the screen, so one kind never turns into the other in sight.
-    private var nextAutumn: Bool?
+    private var nextMode: Mode?
     private var switchedAt: Double = 0
     /// Jack-o'-lanterns along the bottom of the screen, a pair on the right and one on the left: how far each sits
     /// from the right edge, or from the left one when the inset is negative, and its width.
@@ -484,10 +611,16 @@ final class SnowSimulation {
     /// Nothing falls, lies, waits for its window or haunts, and nothing will until the snow is stirred.
     var isEmpty: Bool {
         snowfall == .off && !halloween && flakes.isEmpty && grains.isEmpty && motes.isEmpty && ghosts.isEmpty
-            && fallingSigns.isEmpty && snowballs.isEmpty && gust == nil && dormant.isEmpty && parking.isEmpty && lying.isEmpty && nextAutumn == nil
+            && fallingSigns.isEmpty && snowballs.isEmpty && gust == nil && dormant.isEmpty && parking.isEmpty && lying.isEmpty && nextMode == nil
+            && splashes.isEmpty && glassDrops.isEmpty && !wet
             && !layers.contains { $0.top > 0 }
     }
-    var spriteCount: Int { lying.count + flakes.count + grains.count + motes.count + ghosts.count * 2 + snowballs.count }
+    /// Running drops or beads on the glass, drawn from a field of their own.
+    var hasGlassDrops: Bool { glassDrops.contains { !$0.hanging } }
+    var spriteCount: Int {
+        lying.count + flakes.count + grains.count + motes.count + ghosts.count * 2 + snowballs.count + splashes.count + glassDrops.count
+            + ledgeList.reduce(0) { $0 + $1.spray.count + $1.film.count }
+    }
     /// Floats the renderer needs per frame: each layer's surface and bed.
     var columnCount: Int { layers.reduce(0) { $0 + 2 * $1.count } }
 
@@ -503,6 +636,7 @@ final class SnowSimulation {
     func step(dt: Float, cursor point: SIMD2<Float>) -> Bool {
         clock += Double(dt)
         let wasMoving = !flakes.isEmpty || !grains.isEmpty || !motes.isEmpty || !ghosts.isEmpty || !fallingSigns.isEmpty || !snowballs.isEmpty
+            || !splashes.isEmpty || !glassDrops.isEmpty || wet
         heightsChanged = false
         leafBudget = nil
 
@@ -517,12 +651,15 @@ final class SnowSimulation {
         advanceFlakes(dt: dt)
         advanceGrains(dt: dt)
         advanceMotes(dt: dt)
+        advanceSplashes(dt: dt)
+        runGlassDrops(dt: dt)
+        tendGlass(dt: dt)
         haunt(dt: dt)
         settle(dt: dt)
         tendLeaves(dt: dt)
-        if let next = nextAutumn, gust == nil, grains.isEmpty || clock - switchedAt > 6 {
-            nextAutumn = nil
-            autumn = next
+        if let next = nextMode, gust == nil, grains.isEmpty || clock - switchedAt > 6 {
+            nextMode = nil
+            mode = next
         }
         spawnFlakes()
         if halloween { settlePumpkins(dt: dt) }
@@ -542,7 +679,8 @@ final class SnowSimulation {
         } else {
             pace = .calm
         }
-        let changed = wasMoving || !flakes.isEmpty || !grains.isEmpty || !motes.isEmpty || !ghosts.isEmpty || !fallingSigns.isEmpty || !snowballs.isEmpty || heightsChanged || windowsChanged || pumpkinsMoved || restyled
+        let changed = wasMoving || !flakes.isEmpty || !grains.isEmpty || !motes.isEmpty || !ghosts.isEmpty || !fallingSigns.isEmpty || !snowballs.isEmpty
+            || !splashes.isEmpty || !glassDrops.isEmpty || wet || heightsChanged || windowsChanged || pumpkinsMoved || restyled
         restyled = false
         windowsChanged = false
         pumpkinsMoved = false
@@ -588,7 +726,67 @@ final class SnowSimulation {
                 turn: turn(of: flake),
                 flip: tumble(flake.leaf),
                 turnSpeed: flake.leaf != 0 ? cos(flake.phase) * 0.6 * flake.swayRate + flake.leaf - 0.5 : 0,
-                flipSpeed: flake.leaf != 0 ? tumbleSpeed(flake.leaf) : 0
+                flipSpeed: flake.leaf != 0 ? tumbleSpeed(flake.leaf) : 0,
+                rain: flake.rain ? 1 : 0
+            )
+            count += 1
+        }
+        for splash in splashes where count < capacity {
+            let fade = 1 - splash.age / splash.life
+            buffer[count] = Sprite(position: splash.position, velocity: splash.velocity, size: splash.size, alpha: splash.alpha * fade, soft: 0.5, rain: 1)
+            count += 1
+        }
+        for ledge in ledgeList {
+            for piece in ledge.film where count < capacity {
+                let position = ledge.base + (piece.from + piece.to) * 0.5
+                guard !ledge.faceOccluders.contains(where: { $0.x < position.x && $0.z > position.x && $0.y < position.y && $0.w > position.y }) else { continue }
+                // It dries from its edges in, thinning as it fades.
+                let dry = piece.age / piece.life
+                buffer[count] = Sprite(
+                    position: position,
+                    velocity: piece.to - piece.from,
+                    size: piece.width * (1 - 0.45 * dry),
+                    alpha: pow(1 - dry, 1.5),
+                    soft: 0,
+                    rain: 5
+                )
+                count += 1
+            }
+            for droplet in ledge.spray where count < capacity {
+                let position = ledge.base + droplet.offset
+                guard !ledge.faceOccluders.contains(where: { $0.x < position.x && $0.z > position.x && $0.y < position.y && $0.w > position.y }) else { continue }
+                buffer[count] = Sprite(
+                    position: position,
+                    size: droplet.radius * 2 * glassScale,
+                    alpha: 0.8 * min(1, (droplet.radius - 0.2) / 0.15),
+                    soft: 0,
+                    rain: 4
+                )
+                count += 1
+            }
+        }
+        for drop in glassDrops where count < capacity {
+            let position = drop.layer.base + drop.offset
+            // A window in front of the one it runs down hides it.
+            guard !drop.layer.faceOccluders.contains(where: { $0.x < position.x && $0.z > position.x && $0.y < position.y && $0.w > position.y }) else { continue }
+            // It swells out of nothing as it gathers on the edge, down from the edge, its top staying where it gathers.
+            let still = drop.hanging || drop.bead
+            let grown = drop.bead ? 1 : min(1, (drop.age / 0.15).squareRoot())
+            let half = drop.bead ? beadWidth(drop.radius) : halfWidth(drop.radius, still: still)
+            // Held back, a running drop's water piles up in its front; jolted, it squashes and stretches for a moment.
+            let since = drop.age - drop.jolted
+            buffer[count] = Sprite(
+                position: position + SIMD2(0, still ? 0 : half * (1 - grown)),
+                velocity: still ? .zero : SIMD2(drop.slope, -1) * drop.speed,
+                size: half * 2 * grown,
+                // Drying up, a hanging drop fades rather than shrinking past the smallest drawn.
+                alpha: min(1, drop.radius / (drop.hanging ? 1.2 : 0.35)),
+                soft: drop.hanging ? hangingStage(of: drop) : 0,
+                tintAmount: still ? 0 : 0.16 * (1 - smoothstep(0, 40, drop.speed)),
+                lump: drop.seed,
+                turn: drop.offset.y * 0.06,
+                turnSpeed: still ? 0 : drop.jiggle * exp(-since / 0.15) * cos(since * 2 * .pi * 11),
+                rain: drop.hanging ? 3 : 2
             )
             count += 1
         }
@@ -769,7 +967,9 @@ final class SnowSimulation {
             ledge.shapeCorners(radius: Float(surface.cornerRadius), exponent: Float(surface.cornerExponent))
             let blockers = surface.blockers.map { SIMD4<Float>(Float($0.minX), Float($0.minY), Float($0.maxX), Float($0.maxY)) }
             ledge.occluders = Array(blockers.prefix(16))
+            ledge.faceOccluders = surface.cover.prefix(16).map { SIMD4<Float>(Float($0.minX), Float($0.minY), Float($0.maxX), Float($0.maxY)) }
             ledge.isDock = surface.isDock
+            ledge.face = Float(surface.frame.height)
             ledge.updateVisibility(screenWidth: width, blockers: blockers)
         }
 
@@ -927,6 +1127,7 @@ final class SnowSimulation {
         let previousVelocity = ledge.trackVelocity
         smoothDamp(&ledge.track, &ledge.trackVelocity, toward: ledge.origin, time: trackTime, dt: dt)
         let acceleration = (ledge.trackVelocity - previousVelocity) / dt
+        ledge.jolt = acceleration
         // Agitation is vibration: two consecutive back-and-forth swings, not a single start or stop.
         ledge.agitation *= exp(-dt / 0.3)
         let magnitude = simd_length(acceleration)
@@ -1446,11 +1647,12 @@ final class SnowSimulation {
                 // The nearer the flake, the faster the gust seems to carry it.
                 flake.velocity.x += (flake.blown * gustWind * (1.3 + 1.3 * flake.depth) - flake.velocity.x) * min(1, dt * 2.5)
             } else {
-                flake.velocity.x += (wind * (0.35 + 0.65 * flake.depth) - flake.velocity.x) * follow
+                // Rain falls slanted, as wind drives it; snow and leaves only drift.
+                flake.velocity.x += (wind * (flake.rain ? 3 : 1) * (0.35 + 0.65 * flake.depth) - flake.velocity.x) * follow
             }
             flake.velocity.y += (-flake.fallSpeed - flake.velocity.y) * settle
 
-            if let wake { stir(&flake.velocity, at: flake.position, in: wake, dt: dt) }
+            if let wake, !flake.rain { stir(&flake.velocity, at: flake.position, in: wake, dt: dt) }
 
             // Harmonic ratios 2.3 and 1.3 stay continuous across the 20π wrap.
             flake.phase += flake.swayRate * dt
@@ -1470,8 +1672,20 @@ final class SnowSimulation {
                 flake.position.x -= width + 60
             }
 
-            if flake.settles && accumulates && flake.blown == 0 {
+            if flake.settles && (accumulates || flake.rain) && flake.blown == 0 {
                 if let hit = landing(x: flake.position.x, from: previousY, to: flake.position.y) {
+                    if flake.rain {
+                        splash(at: SIMD2(flake.position.x, hit.layer.surface(hit.index)), depth: flake.depth)
+                        if hit.layer !== ground {
+                            spray(hit.layer, from: flake.position.x, depth: flake.depth)
+                            if flake.water > 0 || random.next() < runShare {
+                                runDown(hit.layer, from: flake.position.x, water: flake.water)
+                            }
+                        }
+                        recycle(i)
+                        i -= 1
+                        continue
+                    }
                     if snowfallHeld && flake.mass < 1 && hit.layer === ground {
                         snowfallHeld = false
                         snowfallReleased()
@@ -1617,7 +1831,7 @@ final class SnowSimulation {
     private func haunt(dt: Float) {
         dropSigns(dt: dt)
         throwSnowballs(dt: dt)
-        if halloween, gust == nil, nextAutumn == nil, clock >= nextGhost {
+        if halloween, gust == nil, nextMode == nil, clock >= nextGhost {
             nextGhost = clock + Double(ghosts.count >= 3 || raiseGhost() ? random.range(20, 40) : 5)
         }
         var i = ghosts.count - 1
@@ -2073,6 +2287,7 @@ final class SnowSimulation {
 
     private func makeFlake(y: Float) -> Flake {
         if autumn { return makeLeaf(y: y) }
+        if rain { return makeRaindrop(y: y) }
         let near = random.next() < 0.02
         let depth = near ? 1 : pow(random.next(), 1.6)
         let fallSpeed = near ? random.range(75, 100) : 16 + depth * 50 + random.range(0, 10)
@@ -2108,6 +2323,546 @@ final class SnowSimulation {
             settles: true,
             leaf: random.range(0.001, 1)
         )
+    }
+
+    /// A raindrop, drawn as the streak it leaves over the exposure: the nearer, the faster, longer and brighter.
+    private func makeRaindrop(y: Float) -> Flake {
+        let depth = pow(random.next(), 1.5)
+        let fallSpeed = 650 + depth * 550 + random.range(0, 80)
+        return Flake(
+            position: SIMD2(random.range(-30, width + 30), y),
+            velocity: SIMD2(windSpeed() * 3 * (0.35 + 0.65 * depth), -fallSpeed),
+            fallSpeed: fallSpeed,
+            size: 0.8 + depth * 0.9,
+            depth: depth,
+            alpha: 0.12 + depth * 0.22,
+            soft: 0.6,
+            phase: 0,
+            swayRate: 0,
+            swayAmount: 0,
+            settles: true,
+            rain: true
+        )
+    }
+
+    // MARK: - Rain
+
+    /// A raindrop bursting on a window's edge or the bottom of the screen throws up a droplet or two.
+    private func splash(at point: SIMD2<Float>, depth: Float) {
+        let count = 1 + Int(random.next() * (1 + depth * 2))
+        for _ in 0..<count where splashes.count < maxSplashes {
+            let angle = random.range(0.3, 1.2) * (random.next() < 0.5 ? -1 : 1)
+            let speed = random.range(45, 120) * (0.6 + 0.6 * depth)
+            splashes.append(Splash(
+                position: point,
+                velocity: SIMD2(sin(angle), cos(angle)) * speed,
+                size: random.range(0.8, 1.4) * (0.7 + 0.5 * depth),
+                alpha: 0.25 + 0.3 * depth,
+                life: random.range(0.2, 0.4)
+            ))
+        }
+    }
+
+    private func advanceSplashes(dt: Float) {
+        var i = splashes.count - 1
+        while i >= 0 {
+            splashes[i].age += dt
+            if splashes[i].age >= splashes[i].life {
+                splashes.swapAt(i, splashes.count - 1)
+                splashes.removeLast()
+            } else {
+                splashes[i].velocity.y -= rainGravity * dt
+                splashes[i].position += splashes[i].velocity * dt
+            }
+            i -= 1
+        }
+    }
+
+    /// Now and then rain caught on the top edge of a window or the Dock gathers into a drop that runs down its face.
+    private func runDown(_ ledge: SnowLayer, from x: Float, water: Float = 0) {
+        guard glassDrops.count < maxGlassDrops else { return }
+        let largest = largestRunning(on: ledge.face)
+        var radius: Float
+        if water > 0 {
+            radius = max(water, smallestRunning)
+        } else {
+            let u = random.next()
+            radius = random.next() < 0.1 ? random.range(3.8, 4.6) : 2.2 + 2.2 * u * u
+        }
+        radius = min(radius, largest)
+        // It gathers right under the edge: its top, once it has swelled to its size, at the edge.
+        let along = x - ledge.base.x, edge = -corner(of: ledge, at: x - ledge.base.x)
+        glassDrops.append(GlassDrop(
+            layer: ledge,
+            offset: SIMD2(along, edge - halfWidth(radius, still: false)),
+            face: ledge.face,
+            radius: radius,
+            slope: random.range(-0.12, 0.12),
+            spacing: trailSpacing(for: radius),
+            mark: SIMD2(along, edge),
+            seed: max(random.next(), 0.001)
+        ))
+    }
+
+    /// A drop runs down its window, hurrying over clean patches and hesitating on greasy ones, wandering a little
+    /// from side to side. It leaves a trail of beads behind and shrinks with each, until too little is left to run
+    /// and it holds still as a bead itself; beads dry up. A running drop swallows the beads in its way.
+    private func runGlassDrops(dt: Float) {
+        var i = glassDrops.count - 1
+        while i >= 0 {
+            var drop = glassDrops[i]
+            // Taken in by another drop since it last ran: nothing is left of it. Run on, it would take its water back.
+            if drop.radius <= 0 {
+                glassDrops.swapAt(i, glassDrops.count - 1)
+                glassDrops.removeLast()
+                i -= 1
+                continue
+            }
+            drop.age += dt
+            if !drop.hanging, let cursor, wipes(cursor, drop, dt: dt) {
+                if drop.radius >= 1 { smear(drop, to: cursor) }
+                drop.radius = 0
+            } else if shaken(drop, dt: dt) {
+                // It flies on as the window was going before the jerk.
+                let thrown = drop.layer.trackVelocity - drop.layer.jolt * dt
+                fall(drop, share: 1, below: drop.hanging ? drop.radius * glassScale : 0, thrown: thrown)
+                drop.radius = 0
+            } else if drop.hanging {
+                cling(&drop, index: i, dt: dt)
+            } else if drop.bead {
+                drop.radius -= beadDrying * dt
+            } else {
+                run(&drop, index: i, dt: dt)
+            }
+            let gone = drop.radius < (drop.bead ? 0.15 : 0.25) || (!drop.hanging && -drop.offset.y > drop.face) || drop.offset.x < 0 || drop.offset.x > drop.layer.width
+                || !layers.contains { $0 === drop.layer }
+            if gone {
+                glassDrops.swapAt(i, glassDrops.count - 1)
+                glassDrops.removeLast()
+            } else {
+                glassDrops[i] = drop
+            }
+            i -= 1
+        }
+    }
+
+    private func run(_ drop: inout GlassDrop, index: Int, dt: Float) {
+        let excess = max(drop.radius - 1.2, 0)
+        let pull = min(700, 60 + 45 * pow(excess, 1.4)) * grip(at: drop.offset)
+        if drop.held > 0 {
+            // Caught on a speck, its front holds while its water piles up behind it, until it breaks free with a lurch,
+            // leaving a lump of it behind where its rear was held.
+            drop.held -= dt
+            drop.speed *= max(0, 1 - dt * 25)
+            if drop.held <= 0 {
+                drop.speed = pull * 1.3
+                drop.jiggle = 0.12
+                drop.jolted = drop.age
+                leave(&drop, radius: drop.radius * random.range(0.22, 0.32), heading: simd_normalize(SIMD2(drop.slope, -1)))
+            }
+        } else {
+            drop.speed += (pull - drop.speed) * min(1, dt * 5)
+        }
+        // A window dragged along under it leaves it trailing a little behind; its own wandering stays within less.
+        let trail = -drop.layer.trackVelocity.x * 0.0006
+        let wander = (drop.slope + (random.range(-1, 1) * 1.6 + trail) * dt) * (1 - dt * 0.8)
+        drop.slope = min(max(wander, -0.45), 0.45)
+        let heading = simd_normalize(SIMD2(drop.slope, -1))
+        let advance = drop.speed * dt
+        let from = drop.offset
+        drop.offset += SIMD2(drop.slope, -1) * advance
+        gather(&drop, from: from)
+        catches(&drop)
+
+        // The film behind it breaks up into beads at no even pace: mostly small, now and then a big one, bunched up in
+        // places and gone for a stretch in others. A fast drop leaves fewer and smaller, its film too thin for more.
+        drop.travelled += advance
+        if drop.travelled >= drop.spacing {
+            drop.travelled = 0
+            let haste = smoothstep(80, 450, drop.speed)
+            drop.spacing = trailSpacing(for: drop.radius) * (1 + 0.6 * haste)
+            if random.next() < 0.9 {
+                let kind = random.next()
+                let share = kind < 0.2 ? random.range(0.06, 0.12) : kind < 0.9 ? random.range(0.13, 0.24) : random.range(0.26, 0.34)
+                leave(&drop, radius: drop.radius * share * (1.2 - 0.5 * haste), heading: heading)
+            }
+        }
+
+        // What lies ahead on the same window joins it; its own trail is behind it.
+        var hanging: GlassDrop?
+        for j in glassDrops.indices where j != index && glassDrops[j].layer === drop.layer && glassDrops[j].radius > 0 {
+            let offset = glassDrops[j].offset - drop.offset
+            guard simd_dot(offset, heading) > -drop.radius * 0.2, simd_length(offset) < (drop.radius + glassDrops[j].radius) * 0.9 else { continue }
+            let other = glassDrops[j]
+            if other.hanging { hanging = other }
+            // Joined, the water gathers round the middle of the two and runs on as one: it sets the other's water moving,
+            // or carries on with it if it was running too, and the drop turns a little its way.
+            let area = drop.radius * drop.radius, added = other.radius * other.radius
+            drop.offset += offset * added / (area + added)
+            drop.jiggle = min(0.25, 0.6 * added / (area + added))
+            drop.jolted = drop.age
+            drop.speed = (drop.speed * area + (other.bead || other.hanging ? 0 : other.speed) * added) / (area + added)
+            drop.slope = min(max(drop.slope + offset.x / (drop.radius + other.radius) * added / (area + added) * turning, -0.45), 0.45)
+            drop.radius = min((area + added).squareRoot(), largestDrop)
+            glassDrops[j].radius = 0
+        }
+        // Run into a drop hanging under the edge, it flows down into it.
+        if let hanging {
+            drop.offset = hanging.offset
+            hang(&drop, fill: hanging.fill)
+        } else if -drop.offset.y >= bottom(of: drop) {
+            hang(&drop, fill: 0.35)
+        } else if drop.radius < smallestRunning {
+            drop.bead = true
+        }
+        // Behind it the glass stays wet: a film down to where it is now, or to where it came to rest.
+        let stopped = drop.hanging || drop.bead
+        if simd_distance(drop.mark, drop.offset) >= (stopped ? 0.5 : filmPiece) {
+            let width = halfWidth(drop.radius, still: false) * 2 * filmShare
+            if ledgeList.reduce(0, { $0 + $1.film.count }) < maxFilm {
+                drop.layer.film.append((drop.mark, drop.offset, width, 0, random.range(filmLife.lowerBound, filmLife.upperBound)))
+            }
+            drop.mark = drop.offset
+        }
+    }
+
+    /// Rain bursting on a window's top edge spatters its face with spray: most right under the edge, less and less
+    /// further down. A droplet landing on one already there runs together with it; on a window with all the spray it
+    /// holds, it takes the place of another.
+    private func spray(_ ledge: SnowLayer, from x: Float, depth: Float) {
+        let count = Int(random.next() * (4 + 16 * depth))
+        guard count > 0 else { return }
+        let deepest = min(sprayDeepest, ledge.face * 0.4)
+        let room = ledgeList.reduce(0) { $0 + $1.spray.count } < maxSpray && Float(ledge.spray.count) < ledge.width * sprayAlong
+        for _ in 0..<count {
+            let along = x - ledge.base.x + random.range(-1, 1) * (8 + 16 * depth)
+            let below = -log(1 - random.next() * 0.999) * sprayReach
+            guard along > 2, along < ledge.width - 2, below < deepest else { continue }
+            let u = random.next()
+            let radius = 0.3 + 0.5 * u * u
+            let offset = SIMD2(along, -corner(of: ledge, at: along) - below - radius * glassScale)
+            if let j = ledge.spray.firstIndex(where: { simd_distance($0.offset, offset) < ($0.radius + radius) * glassScale }) {
+                let area = ledge.spray[j].radius * ledge.spray[j].radius, added = radius * radius
+                ledge.spray[j].offset = (ledge.spray[j].offset * area + offset * added) / (area + added)
+                ledge.spray[j].radius = min((area + added).squareRoot(), largestSpray)
+            } else if room {
+                ledge.spray.append((offset, radius))
+            } else if !ledge.spray.isEmpty {
+                ledge.spray[Int(random.next() * Float(ledge.spray.count)) % ledge.spray.count] = (offset, radius)
+            }
+        }
+    }
+
+    /// Spray in a running drop's way joins it as the drop touches it: the drop takes in its water and gathers round
+    /// the middle of it all, so it lurches toward where it joined, slows for the moment it takes to set the water
+    /// moving, and turns a little that way. The more water it gathers, the faster it runs; behind it the glass is
+    /// clear.
+    private func gather(_ drop: inout GlassDrop, from: SIMD2<Float>) {
+        let layer = drop.layer
+        let reach = halfWidth(drop.radius, still: false)
+        guard -drop.offset.y - reach < sprayDeepest + 2, !layer.spray.isEmpty else { return }
+        let path = drop.offset - from
+        let length = max(simd_length_squared(path), 0.0001)
+        let start = drop.radius * drop.radius
+        var area = start
+        var turn: Float = 0
+        var shift: Float = 0
+        layer.spray.removeAll { droplet in
+            let along = min(max(simd_dot(droplet.offset - from, path) / length, 0), 1)
+            let toward = droplet.offset - (from + path * along)
+            guard simd_length(toward) < reach + droplet.radius * glassScale * 0.5 else { return false }
+            let added = droplet.radius * droplet.radius * sprayKept
+            turn += toward.x / reach * added
+            shift += toward.x * added
+            area += added
+            return true
+        }
+        guard area > start else { return }
+        drop.offset.x += shift / area
+        drop.speed *= start / area
+        drop.slope = min(max(drop.slope + turn / area * turning, -0.45), 0.45)
+        drop.radius = max(drop.radius, min(area.squareRoot(), largestRunning(on: layer.face)))
+    }
+
+    /// A running drop come onto a patch of glass with a speck of dust or grease on it is caught there for a moment:
+    /// the smaller the drop, the longer.
+    private func catches(_ drop: inout GlassDrop) {
+        let patch = SIMD2<Int32>(Int32((drop.offset.x / speckSpacing).rounded(.down)), Int32((drop.offset.y / speckSpacing).rounded(.down)))
+        guard patch != drop.patch else { return }
+        drop.patch = patch
+        var n = UInt32(bitPattern: patch.x) &* 2_654_435_761 &+ UInt32(bitPattern: patch.y) &* 2_246_822_519
+        n = (n ^ (n >> 15)) &* 3_266_489_917
+        let speck = Float((n ^ (n >> 13)) & 0xFFFF) / 65536
+        guard speck < speckShare else { return }
+        let hold = speck / speckShare * 0.5 * pow(heavyHanging / drop.radius, 2)
+        if hold > 0.05 { drop.held = min(hold, 0.7) }
+    }
+
+    /// The biggest drop a window's face takes running down it: a short one, like the Dock's, smaller ones, or the
+    /// biggest would loom over it.
+    private func largestRunning(on face: Float) -> Float {
+        min(max(face / 32, heavyHanging), 4.6)
+    }
+
+    /// Spray dries up slowly in the rain and soon once it stops, a running drop's film in a few seconds, and both fast
+    /// once the rain stops. The cursor moving over the glass wipes them off where it passes, as a finger would.
+    private func tendGlass(dt: Float) {
+        let hurry: Float = rain ? 1 : 12
+        let wiping = cursor.flatMap { point in simd_length(cursorVelocity) > 40 ? (from: point - cursorVelocity * dt, to: point) : nil }
+        let reach = cursorRadius * 0.8
+        for ledge in ledgeList where !ledge.spray.isEmpty || !ledge.film.isEmpty {
+            let near = wiping.map { path in
+                min(path.from.y, path.to.y) - reach < ledge.base.y && max(path.from.y, path.to.y) + reach > ledge.base.y - ledge.face
+                    && min(path.from.x, path.to.x) - reach < ledge.base.x + ledge.width && max(path.from.x, path.to.x) + reach > ledge.base.x
+            } ?? false
+            let width = ledge.width, face = ledge.face, base = ledge.base, covers = ledge.faceOccluders
+            func off(_ offset: SIMD2<Float>) -> Bool {
+                offset.x < 0 || offset.x > width || -offset.y > face
+            }
+            func wiped(_ offset: SIMD2<Float>, by margin: Float) -> Bool {
+                guard near, let wiping else { return false }
+                let position = base + offset
+                let path = wiping.to - wiping.from
+                let along = min(max(simd_dot(position - wiping.from, path) / max(simd_length_squared(path), 0.0001), 0), 1)
+                return simd_distance(position, wiping.from + path * along) < reach + margin
+                    && !covers.contains { $0.x < position.x && $0.z > position.x && $0.y < position.y && $0.w > position.y }
+            }
+            var n = 0
+            for i in ledge.spray.indices {
+                var droplet = ledge.spray[i]
+                droplet.radius -= sprayDrying * dt * hurry
+                if droplet.radius >= 0.2 && !off(droplet.offset) && !wiped(droplet.offset, by: 0) {
+                    ledge.spray[n] = droplet
+                    n += 1
+                }
+            }
+            ledge.spray.removeLast(ledge.spray.count - n)
+            n = 0
+            for i in ledge.film.indices {
+                var piece = ledge.film[i]
+                piece.age += dt * hurry
+                let middle = (piece.from + piece.to) * 0.5
+                if piece.age < piece.life && !off(middle) && !wiped(middle, by: piece.width * 0.5) {
+                    ledge.film[n] = piece
+                    n += 1
+                }
+            }
+            ledge.film.removeLast(ledge.film.count - n)
+        }
+    }
+
+    /// How far along a hanging drop is, as the shader draws it: up to one it fills, from a flat cap under the edge to
+    /// a pear; from one to two it lets go.
+    private func hangingStage(of drop: GlassDrop) -> Float {
+        drop.fill + (drop.letsGo.isFinite ? smoothstep(drop.letsGo - pinching, drop.letsGo, drop.hung) : 0)
+    }
+
+    /// Run down to the window's bottom edge, a drop wraps round it and hangs under it, settling into the shape its
+    /// water makes there. Joining one already hanging there, it hangs as that one did.
+    private func hang(_ drop: inout GlassDrop, fill: Float) {
+        let speed = drop.speed
+        drop.hanging = true
+        drop.speed = 0
+        drop.slope = 0
+        drop.offset.y = -bottom(of: drop)
+        drop.hung = 0
+        drop.fill = fill
+        drop.letsGo = .infinity
+        // More water than the edge can hold runs straight on over it and falls; the edge keeps what it can.
+        if drop.radius > heavyHanging {
+            let kept = heavyHanging * 0.8
+            let share = 1 - (kept * kept) / (drop.radius * drop.radius)
+            fall(drop, share: share, below: drop.radius * glassScale, flick: SIMD2(0, -2 * max(speed, 150)))
+            drop.radius = kept
+        }
+    }
+
+    /// A hanging drop sags further the more water it holds. Heavy enough, it pinches off in an instant: the lower
+    /// part falls and a smaller drop stays on the edge to fill again. Until then it dries up slowly, and runs
+    /// together with any other hanging beside it close enough to touch.
+    private func cling(_ drop: inout GlassDrop, index: Int, dt: Float) {
+        drop.hung += dt
+        // Where the bottom edge rounds up into a corner, it is too steep to hang from: the drop runs along it, down
+        // to where it levels out.
+        let x = drop.offset.x
+        let steepness = (corner(of: drop.layer, at: x + 1) - corner(of: drop.layer, at: x - 1)) / 2
+        if abs(steepness) > 0.3 {
+            drop.offset.x += (steepness > 0 ? -1 : 1) * 70 * dt
+            drop.offset.y = -bottom(of: drop)
+        }
+        // The cursor brushing it knocks it off, all of it, flicked along the way the cursor goes.
+        if let cursor, touches(cursor, drop) {
+            fall(drop, share: 1, below: (0.6 + 1.2 * drop.fill) * drop.radius * glassScale, flick: cursorVelocity)
+            drop.radius = 0
+            return
+        }
+        // It stays a flat cap for most of its filling and sags only as it gets close to letting go.
+        let full = min(max((drop.radius - 1.4) / (heavyHanging - 1.4), 0), 1)
+        drop.fill += (full * full * full - drop.fill) * min(1, dt * 6)
+        if drop.letsGo.isFinite {
+            guard drop.hung >= drop.letsGo else { return }
+            fall(drop)
+            drop.radius *= (1 - fallingShare).squareRoot()
+            drop.letsGo = .infinity
+            return
+        }
+        if drop.radius >= heavyHanging {
+            drop.letsGo = drop.hung + pinching
+            return
+        }
+        drop.radius -= hangingDrying * dt
+        for j in glassDrops.indices where j != index && glassDrops[j].hanging && glassDrops[j].layer === drop.layer && glassDrops[j].radius > 0 {
+            let other = glassDrops[j]
+            let reach = (spread(of: drop) + spread(of: other)) * 0.7
+            guard abs(other.offset.x - drop.offset.x) < reach, other.letsGo.isInfinite else { continue }
+            let area = drop.radius * drop.radius, added = other.radius * other.radius
+            drop.offset.x = (drop.offset.x * area + other.offset.x * added) / (area + added)
+            drop.radius = min((area + added).squareRoot(), largestDrop)
+            drop.fill = max(drop.fill, other.fill)
+            glassDrops[j].radius = 0
+        }
+    }
+
+    /// Whether shaking its window back and forth shakes a drop off the glass this step: the harder the shaking and
+    /// the bigger the drop, the likelier. A single start or stop doesn't, nor a switch between Spaces.
+    private func shaken(_ drop: GlassDrop, dt: Float) -> Bool {
+        let layer = drop.layer
+        guard !layer.carried, clock - spaceChangedAt > 0.6 else { return false }
+        let hold = dropShaking * 2.4 / max(drop.radius, 0.3) * (drop.hanging ? 0.7 : 1)
+        guard layer.agitation > hold else { return false }
+        return random.next() < min(0.9, 0.3 * (layer.agitation - hold)) * dt * 10
+    }
+
+    /// Whether the cursor, moving over the glass, passed over a drop on it this step where it shows.
+    private func wipes(_ point: SIMD2<Float>, _ drop: GlassDrop, dt: Float) -> Bool {
+        // What it has just smeared out it passes on over.
+        guard simd_length(cursorVelocity) > 40, drop.age > 0.3 || !drop.bead else { return false }
+        let position = drop.layer.base + drop.offset
+        let from = point - cursorVelocity * dt
+        let path = point - from
+        let along = min(max(simd_dot(position - from, path) / max(simd_length_squared(path), 0.0001), 0), 1)
+        let reach = cursorRadius * 0.8 + max(drop.radius, 1.2) * glassScale
+        guard simd_distance(position, from + path * along) < reach else { return false }
+        return !drop.layer.faceOccluders.contains { $0.x < position.x && $0.z > position.x && $0.y < position.y && $0.w > position.y }
+    }
+
+    /// The cursor drags a drop's water along with it, up to where it is now, in a streak that at once beads up
+    /// into a line of droplets, biggest where the drop was; some of the water it takes away. The tiniest it just
+    /// wipes off.
+    private func smear(_ drop: GlassDrop, to point: SIMD2<Float>) {
+        let speed = simd_length(cursorVelocity)
+        let direction = cursorVelocity / speed
+        let across = SIMD2(-direction.y, direction.x)
+        let length = min(max(simd_dot(point - (drop.layer.base + drop.offset), direction), 6), 45)
+        let count = min(9, max(2, Int(length / 5)))
+        let spots = (0..<count).map { k in (Float(k) + random.range(0.2, 0.8)) / Float(count) }
+        let weights = spots.map { 1.15 - $0 }
+        let total = weights.reduce(0, +)
+        let water = drop.radius * drop.radius * 0.7
+        for (spot, weight) in zip(spots, weights) where glassDrops.count < maxGlassDrops {
+            glassDrops.append(GlassDrop(
+                layer: drop.layer,
+                offset: drop.offset + direction * length * spot + across * random.range(-1.2, 1.2),
+                face: drop.face,
+                radius: max(0.3, (water * weight / total).squareRoot()),
+                bead: true,
+                seed: max(random.next(), 0.001)
+            ))
+        }
+    }
+
+    /// How far the window's rounded corners bring its edges in at `x` along it: its top edge down, its bottom edge up.
+    private func corner(of layer: SnowLayer, at x: Float) -> Float {
+        let f = min(max(x / layer.columnWidth - 0.5, 0), Float(layer.count - 1))
+        let i = Int(f), j = min(i + 1, layer.count - 1)
+        return -(layer.bed[i] + (layer.bed[j] - layer.bed[i]) * (f - Float(i)))
+    }
+
+    /// How far below the window's top edge its bottom edge is, where a drop is on it.
+    private func bottom(of drop: GlassDrop) -> Float {
+        drop.face - corner(of: drop.layer, at: drop.offset.x)
+    }
+
+    /// Whether the cursor, at `point`, brushes a hanging drop where it shows.
+    private func touches(_ point: SIMD2<Float>, _ drop: GlassDrop) -> Bool {
+        let cling = drop.layer.base + drop.offset
+        let depth = (1 + 1.2 * drop.fill) * drop.radius * glassScale
+        guard abs(point.x - cling.x) < spread(of: drop) + cursorRadius * 0.7,
+              point.y < cling.y + cursorRadius * 0.5, point.y > cling.y - depth - cursorRadius else { return false }
+        return !drop.layer.faceOccluders.contains { $0.x < cling.x && $0.z > cling.x && $0.y < cling.y - 1 && $0.w > cling.y - 1 }
+    }
+
+    /// How far a hanging drop reaches along the edge each way, as the shader draws it.
+    private func spread(of drop: GlassDrop) -> Float {
+        (1.52 - 0.38 * min(drop.fill, 1)) * drop.radius * glassScale
+    }
+
+    /// The part of a hanging drop that lets go falls like any raindrop, to burst on whatever is below, and runs on down
+    /// a window it lands on.
+    private func fall(_ drop: GlassDrop, share: Float? = nil, below: Float? = nil, flick: SIMD2<Float> = .zero, thrown: SIMD2<Float>? = nil) {
+        let position = drop.layer.base + drop.offset - SIMD2(0, below ?? 2.6 * drop.radius * glassScale)
+        guard rain, position.y > 2 else { return }
+        var velocity = thrown ?? flick * 0.5
+        let speed = simd_length(velocity)
+        let fastest: Float = thrown == nil ? 600 : 1200
+        if speed > fastest { velocity *= fastest / speed }
+        // Free of the edge, it is falling fast within a few hundredths of a second.
+        flakes.append(Flake(
+            position: position,
+            velocity: velocity + SIMD2(0, thrown != nil ? -60 : flick == .zero ? -300 : -120),
+            fallSpeed: random.range(850, 1100),
+            size: 1.4 + drop.radius * (share ?? fallingShare).squareRoot() * 0.25,
+            depth: 1,
+            alpha: 0.45,
+            soft: 0.6,
+            phase: 0,
+            swayRate: 0,
+            swayAmount: 0,
+            settles: true,
+            rain: true,
+            water: drop.radius * (share ?? fallingShare).squareRoot()
+        ))
+    }
+
+    private func trailSpacing(for radius: Float) -> Float {
+        (2 - 4 * log(1 - random.next() * 0.98)) * radius / 4
+    }
+
+    /// A bead of `left` a running drop leaves behind it, from the rear of the drop, off to one side or the other.
+    private func leave(_ drop: inout GlassDrop, radius left: Float, heading: SIMD2<Float>) {
+        drop.radius = max(0, drop.radius * drop.radius - left * left).squareRoot()
+        guard glassDrops.count < maxGlassDrops, left >= 0.15 else { return }
+        let across = SIMD2(-heading.y, heading.x) * random.range(-0.4, 0.4) * halfWidth(drop.radius, still: false)
+        glassDrops.append(GlassDrop(
+            layer: drop.layer,
+            offset: drop.offset - heading * (drop.radius * 0.95 + left * 0.4) + across,
+            face: drop.face,
+            radius: left,
+            bead: true,
+            seed: max(random.next(), 0.001)
+        ))
+    }
+
+    /// How far a bead reaches each way as drawn: a small one bigger than its water, or it would be lost, the
+    /// smallest smaller still and a big one bigger, up to the size of a drop of its water.
+    private func beadWidth(_ radius: Float) -> Float {
+        max(radius, min(radius * 2.4, 1.2 + (radius - 0.5) * 0.5)) * glassScale * glassy
+    }
+
+    /// Clean and greasy patches on a window: drops hurry across some and hesitate on others.
+    private func grip(at point: SIMD2<Float>) -> Float {
+        let q = point * 0.045
+        let base = SIMD2(q.x.rounded(.down), q.y.rounded(.down))
+        let f = q - base
+        let u = f * f * (3 - 2 * f)
+        func hash(_ x: Float, _ y: Float) -> Float {
+            var n = UInt32(truncatingIfNeeded: Int(x)) &* 374_761_393 &+ UInt32(truncatingIfNeeded: Int(y)) &* 668_265_263
+            n = (n ^ (n >> 13)) &* 1_274_126_177
+            return Float(n & 0xFFFF) / 65535
+        }
+        let bottom = hash(base.x, base.y) + (hash(base.x + 1, base.y) - hash(base.x, base.y)) * u.x
+        let top = hash(base.x, base.y + 1) + (hash(base.x + 1, base.y + 1) - hash(base.x, base.y + 1)) * u.x
+        return 0.35 + 0.65 * (bottom + (top - bottom) * u.y)
     }
 
     private func windSpeed() -> Float {
@@ -2164,19 +2919,23 @@ final class SnowSimulation {
     }
 
     /// Clears the screen first and lets the other kind fall only after, from the top.
-    func switchMode(autumn: Bool, direction: Float, calm: Bool) {
-        guard autumn != self.autumn else {
-            nextAutumn = nil
+    func switchMode(to mode: Mode, direction: Float, calm: Bool) {
+        guard mode != self.mode else {
+            nextMode = nil
             return
         }
-        guard nextAutumn == nil else { return }
-        nextAutumn = autumn
+        // Already clearing for another mode: the gust under way clears it for this one.
+        guard nextMode == nil else {
+            nextMode = mode
+            return
+        }
+        nextMode = mode
         switchedAt = clock
         blowAway(direction: direction, calm: calm)
         stirred()
     }
 
-    private var holding: Bool { nextAutumn != nil || gust.map { !$0.calm } ?? false }
+    private var holding: Bool { nextMode != nil || gust.map { !$0.calm } ?? false }
 
     private func blow(dt: Float) {
         guard let gust else { return }
@@ -2555,7 +3314,7 @@ final class SnowSimulation {
     }
 
     private func updateTarget() {
-        let share: Float = autumn ? leafShare : 1
+        let share: Float = autumn ? leafShare : rain ? rainShare : 1
         targetFlakes = snowfallHeld ? 0 : Int(snowfall.flakesPerMegapoint * share * strength * density * width * height / 1_000_000)
     }
 

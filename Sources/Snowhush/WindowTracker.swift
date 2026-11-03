@@ -20,8 +20,10 @@ struct WindowSurface: Equatable {
     let id: CGWindowID
     /// Overlay coordinates: origin at the bottom-left of the primary screen.
     let frame: CGRect
-    /// Frames of windows in front of this one, in overlay coordinates.
+    /// Frames of windows in front of this one near its top edge, in overlay coordinates.
     let blockers: [CGRect]
+    /// Frames of windows in front of any part of this one: what hides a drop running down it.
+    let cover: [CGRect]
     /// Top corners as a superellipse quadrant: macOS windows are close to exponent 2.5, Spotlight's capsule is a circle.
     let cornerRadius: CGFloat
     let cornerExponent: CGFloat
@@ -33,6 +35,7 @@ struct WindowSurface: Equatable {
             id: id,
             frame: frame.offsetBy(dx: dx, dy: 0),
             blockers: blockers.map { $0.offsetBy(dx: dx, dy: 0) },
+            cover: cover.map { $0.offsetBy(dx: dx, dy: 0) },
             cornerRadius: cornerRadius,
             cornerExponent: cornerExponent,
             isDock: isDock
@@ -51,6 +54,10 @@ final class WindowTracker {
     private let ownPID = ProcessInfo.processInfo.processIdentifier
     private let maxLayer = Int(CGWindowLevelForKey(.screenSaverWindow))
     private let dockLevel = Int(CGWindowLevelForKey(.dockWindow))
+    private let desktopIconLevel = Int(CGWindowLevelForKey(.desktopIconWindow))
+    /// Whether each process seen with a window just above the desktop's icons is Notification Center, which shows
+    /// the desktop's widgets there.
+    private var widgetHosts: [Int32: Bool] = [:]
     /// CursorUIViewService draws the input source badge next to the text caret.
     private let ignoredOwners: Set<String> = ["Window Server", "CursorUIViewService"]
     /// The Dock's windows (the Dock itself, the ⌘Tab switcher) hide snow behind them but don't collect any.
@@ -441,7 +448,7 @@ final class WindowTracker {
 
         for entry in list {
             guard let pid = entry.pid, pid != ownPID,
-                  let layer = entry.layer, layer >= 0, layer < maxLayer,
+                  let layer = entry.layer, layer >= 0 || isWidget(pid: pid, layer: layer), layer < maxLayer,
                   var bounds = entry.bounds,
                   let alpha = entry.alpha, alpha > 0.3,
                   !ignoredOwners.contains(entry.owner ?? "")
@@ -464,6 +471,8 @@ final class WindowTracker {
                 bounds = dock
                 dockOut = true
             }
+            // A widget's window leaves room around it for its shadow.
+            if layer < 0 { bounds = bounds.insetBy(dx: 8, dy: 8) }
             // Mission Control's shield, its bar of Spaces, their thumbnails and labels carry no snow.
             if owner == "WindowManager" && layer > 0 {
                 if isMissionControl(bounds) { exposing = true }
@@ -485,7 +494,7 @@ final class WindowTracker {
                shelf || !isCard(id, bounds, into: &checked) {
                 // Search bars like Spotlight are capsules: low and wide, with fully rounded ends.
                 let capsule = !shelf && (owner.lowercased().contains("spotlight") || (bounds.height <= 90 && bounds.width >= bounds.height * 3))
-                let corner = shelf ? Dock.cornerRadius(height: bounds.height) : capsule ? min(bounds.height / 2, 32) : 18
+                let corner = shelf ? Dock.cornerRadius(height: bounds.height) : capsule ? min(bounds.height / 2, 32) : layer < 0 ? 22 : 18
                 let radius = min(corner, bounds.width / 2, bounds.height / 2)
                 let region = CGRect(x: frame.minX, y: frame.maxY - radius, width: frame.width, height: 40 + radius)
                 if layer > 0 && !shelf { panels[id] = panelsShownAt[id] ?? now }
@@ -493,6 +502,7 @@ final class WindowTracker {
                     id: id,
                     frame: frame,
                     blockers: blockers.filter { $0.intersects(region) },
+                    cover: blockers.filter { $0.intersects(frame) },
                     cornerRadius: radius,
                     cornerExponent: capsule ? 2 : 2.5,
                     isDock: shelf
@@ -502,6 +512,14 @@ final class WindowTracker {
         }
         if !dockOut { dockShownAt = nil }
         return exposing ? [] : surfaces
+    }
+
+    private func isWidget(pid: Int32, layer: Int) -> Bool {
+        guard layer < 0, layer > desktopIconLevel else { return false }
+        if let known = widgetHosts[pid] { return known }
+        let host = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier == "com.apple.notificationcenterui"
+        widgetHosts[pid] = host
+        return host
     }
 
     /// Stage Manager shows the windows of other stages as small tilted cards: the list gives the box around a card,

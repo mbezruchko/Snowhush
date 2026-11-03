@@ -84,9 +84,9 @@ final class ScreenSnow {
             simulation.halloween = halloween
         }
     }
-    var autumn: Bool {
-        get { simulation.autumn }
-        set { simulation.autumn = newValue }
+    var mode: Mode {
+        get { simulation.mode }
+        set { simulation.mode = newValue }
     }
 
     init?(screen: NSScreen, device: MTLDevice, snowOnWindows: @escaping () -> Bool) {
@@ -163,6 +163,11 @@ final class ScreenSnow {
 
     private static func interactiveFrameRate(of screen: NSScreen) -> Int {
         min(max(screen.maximumFramesPerSecond, 60), 120)
+    }
+
+    var maxFrameRate: Bool {
+        get { renderer.maxFrameRate }
+        set { renderer.maxFrameRate = newValue }
     }
 
     func apply(_ budget: PowerBudget) {

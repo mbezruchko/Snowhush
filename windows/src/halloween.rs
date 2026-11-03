@@ -11,6 +11,7 @@ use windows::Win32::UI::Shell::SHCreateMemStream;
 use windows::core::{Error, Result};
 
 use snowhush_core::halloween::{Choice, SIGN_CAPTIONS, Today};
+use snowhush_core::simulation::Mode;
 
 use crate::prefs::Settings;
 
@@ -47,9 +48,9 @@ pub fn wanted(choice: Choice) -> bool {
     choice.wanted(today())
 }
 
-/// Whether the snow is spooky: Halloween wanted, over snow, not leaves.
+/// Whether the snow is spooky: Halloween wanted, over snow, not leaves or rain.
 pub fn shows(settings: &Settings) -> bool {
-    !settings.autumn && wanted(settings.halloween)
+    settings.mode == Mode::Snow && wanted(settings.halloween)
 }
 
 /// A picture drawn on the Mac: rows of premultiplied RGBA from the top.

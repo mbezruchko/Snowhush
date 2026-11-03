@@ -36,7 +36,10 @@ enum Preferences {
     private static let showInScreenshotsKey = "showInScreenshots"
     private static let halloweenKey = "halloweenOn"
     private static let halloweenSkippedKey = "halloweenSkipped"
+    private static let modeKey = "mode"
+    /// Before rain, the mode was only whether leaves fell.
     private static let autumnKey = "autumn"
+    private static let performanceKey = "performance"
 
     static func registerDefaults() {
         let calm = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
@@ -106,8 +109,17 @@ enum Preferences {
         set { defaults.set(newValue, forKey: halloweenSkippedKey) }
     }
 
-    static var autumn: Bool {
-        get { defaults.bool(forKey: autumnKey) }
-        set { defaults.set(newValue, forKey: autumnKey) }
+    static var mode: Mode {
+        get {
+            if let raw = defaults.object(forKey: modeKey) as? Int, let mode = Mode(rawValue: raw) { return mode }
+            return defaults.bool(forKey: autumnKey) ? .autumn : .snow
+        }
+        set { defaults.set(newValue.rawValue, forKey: modeKey) }
+    }
+
+    /// Drawn at the display's highest rate all the time, instead of only while something is pushed around.
+    static var maxPerformance: Bool {
+        get { defaults.integer(forKey: performanceKey) == 1 }
+        set { defaults.set(newValue ? 1 : 0, forKey: performanceKey) }
     }
 }

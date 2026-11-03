@@ -36,7 +36,15 @@ A tiny app that lives in the menu bar on macOS and in the tray on Windows and Li
 
 Choose Mode › Autumn Leaves and leaves fall instead of snow. They turn and swing on the way down, settle in heaps you can see are made of leaves, scatter under the cursor and come off a window you shake or drag. Melt Snow, Snow on Windows and Clear Snow become Wither Leaves, Leaves on Windows and Clear Leaves.
 
-Everything else lives in the menu bar: Intensity (Off, Light, Steady, Heavy, Variable), Mode (Snow or Autumn Leaves), Accumulate, Melt Snow, Snow on Windows, Clear Snow, Behind Windows, Show in Screenshots and Open at Login. On Windows, Behind Taskbar lets the snow settle at the bottom of the screen under a see-through taskbar, such as one made clear with TranslucentTB.
+## Rain
+
+Choose Mode › Rain and rain beats down instead of snow, splashing where it lands. On the tops of your windows, the Dock and the taskbar it spatters the glass with spray and sets drops running down it like beads of water on a window: they catch on specks, gather the spray they meet and lurch on, leaving a wet film and a trail of droplets. Others hang under bottom edges until they grow heavy enough to let go. Drag the cursor through them to smear them, or shake or drag a window to throw them off. Rain doesn't pile up, so Accumulate, Melt Snow and Clear Snow step aside, and Snow on Windows becomes Rain on Windows.
+
+## Halloween
+
+From October 30 until dawn on November 1 the snow turns spooky: jack-o'-lanterns glow in the drift and ghosts pop up out of it with signs. Choose Mode › Halloween to have it any other day, as long as snow is falling.
+
+Everything else lives in the menu bar: Intensity (Off, Light, Steady, Heavy, Variable), Mode (Snow, Autumn Leaves, Rain, and Halloween on top of snow), Performance (Default, or Max to draw every frame at the display's full rate), Accumulate, Melt Snow, Snow on Windows, Clear Snow, Behind Windows, Show over Full Screen, Show in Screenshots and Open at Login. On Windows, Behind Taskbar lets the snow settle at the bottom of the screen under a see-through taskbar, such as one made clear with TranslucentTB.
 
 ## Building
 

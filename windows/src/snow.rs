@@ -15,7 +15,7 @@ use windows::core::{HSTRING, PCWSTR, Result, w};
 
 use snowhush_core::geometry::V2;
 use snowhush_core::halloween::Choice;
-use snowhush_core::simulation::{ScatterPiece, SnowSimulation, Snowfall};
+use snowhush_core::simulation::{Mode, ScatterPiece, SnowSimulation, Snowfall};
 
 use crate::desktop::{self, DesktopLayer};
 use crate::halloween;
@@ -41,6 +41,8 @@ pub enum Command {
     SnowOnWindows(bool),
     BehindWindows(bool),
     OverFullScreen(bool),
+    /// Every frame at the display's highest rate, or as fast as what moves needs.
+    Performance(bool),
     BehindTaskbar(bool),
     /// Explorer started again, taking the desktop's wallpaper layer with it.
     ShellRestarted,
@@ -54,10 +56,10 @@ pub enum Command {
     ClearSnow(bool),
     /// Halloween turned on or off from the menu.
     Halloween(Choice),
-    /// Leaves fall instead of snow, or snow instead of leaves, once a gust has blown what is there away; when calm, for
-    /// less motion, it melts where it lies instead.
+    /// Another kind falls, once a gust has blown what is there away; when calm, for less motion, it melts where it
+    /// lies instead.
     SwitchMode {
-        autumn: bool,
+        mode: Mode,
         calm: bool,
     },
     Quit,
@@ -140,6 +142,10 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                     screens = sync_screens(&gpu, &settings, screens, layer, true);
                 }
                 Command::OverFullScreen(on) => settings.over_full_screen = on,
+                Command::Performance(max) => {
+                    settings.max_performance = max;
+                    screens.iter_mut().for_each(|screen| screen.max_rate = max);
+                }
                 Command::BehindTaskbar(on) => {
                     settings.behind_taskbar = on;
                     screens = sync_screens(&gpu, &settings, screens, layer, true);
@@ -178,13 +184,13 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                     chores_at = 0;
                     light_at = 0;
                 }
-                Command::SwitchMode { autumn, calm } => {
-                    settings.autumn = autumn;
+                Command::SwitchMode { mode, calm } => {
+                    settings.mode = mode;
                     light_at = 0;
                     let direction = screens.first().map_or(-1.0, |screen| screen.simulation.breeze_direction());
                     let now = Clock::now();
                     screens.iter_mut().for_each(|screen| {
-                        screen.simulation.switch_mode(autumn, direction, calm);
+                        screen.simulation.switch_mode(mode, direction, calm);
                         screen.wake(now);
                     });
                 }
@@ -231,7 +237,7 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
             chores_at = now + clock.frequency;
             clock.refresh();
             // In case a display change went unannounced.
-            let current = monitors(settings.behind_taskbar);
+            let current = monitors(over_taskbar(&settings, &screens));
             if current.len() != screens.len() || screens.iter().any(|screen| !current.contains(&screen.monitor)) {
                 DISPLAYS_CHANGED.set(true);
             }
@@ -345,9 +351,16 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
 /// One overlay per display: new displays get snow, removed ones lose theirs, and a display that changed
 /// size keeps its snow in a fresh overlay. `rebuild` gives every display a fresh overlay, as when the snow
 /// moves behind windows or back.
+/// Whether the overlays reach down over the taskbar: behind it, or while it rains, which runs down the taskbar as down a
+/// window. Snow and leaves lie on its top edge. What falls is what the screens show, the switch to another kind
+/// coming only once the gust has cleared the screen.
+fn over_taskbar(settings: &Settings, screens: &[Screen]) -> bool {
+    settings.behind_taskbar || screens.first().map_or(settings.mode, |screen| screen.simulation.mode()) == Mode::Rain
+}
+
 fn sync_screens(gpu: &Gpu, settings: &Settings, mut current: Vec<Screen>, layer: Option<DesktopLayer>, rebuild: bool) -> Vec<Screen> {
     let mut result = Vec::new();
-    let displays = monitors(settings.behind_taskbar);
+    let displays = monitors(over_taskbar(settings, &current));
     for monitor in displays.iter().cloned() {
         let kept = current.iter().position(|screen| screen.monitor.name == monitor.name);
         let simulation = match kept.map(|i| current.swap_remove(i)) {
@@ -396,7 +409,7 @@ fn new_simulation(monitor: &Monitor, settings: &Settings) -> SnowSimulation {
     simulation.accumulates = settings.accumulate;
     simulation.set_snowfall_held(!settings.welcomed);
     simulation.set_halloween(halloween::shows(settings));
-    simulation.set_autumn(settings.autumn);
+    simulation.set_mode(settings.mode);
     simulation
 }
 

@@ -8,9 +8,10 @@ use windows::Win32::UI::WindowsAndMessaging::{SPI_GETCLIENTAREAANIMATION, SYSTEM
 use windows::core::{BOOL, PCWSTR, w};
 
 use snowhush_core::halloween::Choice;
-use snowhush_core::simulation::Snowfall;
+use snowhush_core::simulation::{Mode, Snowfall};
 
 const KEY: PCWSTR = w!("Software\\Snowhush");
+const MODES: [Mode; 3] = [Mode::Snow, Mode::Autumn, Mode::Rain];
 const RUN: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
 const RUN_VALUE: PCWSTR = w!("Snowhush");
 
@@ -28,8 +29,10 @@ pub struct Settings {
     pub show_in_screenshots: bool,
     pub welcomed: bool,
     pub halloween: Choice,
-    /// Whether leaves fall instead of snow.
-    pub autumn: bool,
+    /// What falls: snow, leaves or rain.
+    pub mode: Mode,
+    /// Drawn at the display's highest rate all the time, instead of only while something is pushed around.
+    pub max_performance: bool,
 }
 
 impl Settings {
@@ -47,7 +50,13 @@ impl Settings {
             show_in_screenshots: read(w!("showInScreenshots")).is_some_and(|v| v != 0),
             welcomed: read(w!("welcomed")).is_some_and(|v| v != 0),
             halloween: Choice { on: read(w!("halloweenOn")).is_some_and(|v| v != 0), skipped: read(w!("halloweenSkipped")).unwrap_or(0) },
-            autumn: read(w!("autumn")).is_some_and(|v| v != 0),
+            // Before rain there was only a switch for leaves.
+            max_performance: read(w!("performance")).is_some_and(|v| v == 1),
+            mode: read(w!("mode")).and_then(|i| MODES.get(i as usize).copied()).unwrap_or(if read(w!("autumn")).is_some_and(|v| v != 0) {
+                Mode::Autumn
+            } else {
+                Mode::Snow
+            }),
         }
     }
 
@@ -64,7 +73,9 @@ impl Settings {
         write(w!("welcomed"), self.welcomed as u32);
         write(w!("halloweenOn"), self.halloween.on as u32);
         write(w!("halloweenSkipped"), self.halloween.skipped);
-        write(w!("autumn"), self.autumn as u32);
+        write(w!("mode"), MODES.iter().position(|&m| m == self.mode).unwrap_or(0) as u32);
+        write(w!("autumn"), (self.mode == Mode::Autumn) as u32);
+        write(w!("performance"), self.max_performance as u32);
     }
 }
 

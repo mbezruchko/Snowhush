@@ -17,8 +17,17 @@ final class SnowLayer {
     private(set) var top: Float = 0
     private(set) var bedDepth: Float = 0
     var occluders: [SIMD4<Float>] = []
+    /// Windows in front of any part of the window it lies on, which hide a drop running down it.
+    var faceOccluders: [SIMD4<Float>] = []
     /// Lies on the Dock's shelf, and so is drawn below the Dock.
     var isDock = false
+    /// How far the window it lies on reaches down from its top edge: as far as a drop can run down it.
+    var face: Float = 200
+    /// Rain's spray on the window's glass: each droplet from the left end of its top edge, and how big it is.
+    var spray: [(offset: SIMD2<Float>, radius: Float)] = []
+    /// The film of water running drops leave on the glass, piece by piece as they ran: each piece from where to where,
+    /// how wide, how old and how long it takes to dry.
+    var film: [(from: SIMD2<Float>, to: SIMD2<Float>, width: Float, age: Float, life: Float)] = []
     var movedAt: Double = -1
     /// Brought where it is by a switch between Spaces: past the screen's edge, no wall scrapes its snow off.
     var carried = false
@@ -31,6 +40,8 @@ final class SnowLayer {
     /// Smoothed path of the supporting edge; the snow reacts to its accelerations, not to raw jittery samples.
     var track: SIMD2<Float>
     var trackVelocity = SIMD2<Float>(repeating: 0)
+    /// How hard the window was jerked this step: its acceleration.
+    var jolt = SIMD2<Float>(repeating: 0)
     /// The snow body's displacement from its support: x slides along it, y lifts off it.
     var offset = SIMD2<Float>(repeating: 0)
     var offsetVelocity = SIMD2<Float>(repeating: 0)

@@ -2,6 +2,24 @@ use crate::geometry::V2;
 
 /// A height field of snow columns lying on a bed: the screen bottom, or the top edge of a window
 /// whose rounded corners curve the bed down at both ends.
+/// A droplet of rain's spray on a window's glass: from the left end of its top edge, and how big it is.
+#[derive(Clone, Copy)]
+pub struct Droplet {
+    pub offset: V2,
+    pub radius: f32,
+}
+
+/// A piece of the film of water a running drop leaves on a window's glass: from where to where, from the left end of
+/// its top edge, how wide, how old and how long it takes to dry.
+#[derive(Clone, Copy)]
+pub struct FilmPiece {
+    pub from: V2,
+    pub to: V2,
+    pub width: f32,
+    pub age: f32,
+    pub life: f32,
+}
+
 pub struct SnowLayer {
     pub column_width: f32,
     pub opens_at_edges: bool,
@@ -15,6 +33,13 @@ pub struct SnowLayer {
     pub top: f32,
     pub bed_depth: f32,
     pub occluders: Vec<[f32; 4]>,
+    /// How far the window it lies on reaches down from its top edge: as far as a drop can run down it.
+    pub face: f32,
+    /// Windows in front of any part of the window it lies on, which hide a drop running down it.
+    pub face_occluders: Vec<[f32; 4]>,
+    /// Rain's spray on the window's glass, and the film running drops leave on it.
+    pub spray: Vec<Droplet>,
+    pub film: Vec<FilmPiece>,
     pub moved_at: f64,
     /// When the snow came back onto its window from elsewhere, to grow back into shape rather than appear at once.
     pub returned_at: f64,
@@ -67,6 +92,10 @@ impl SnowLayer {
             top: 0.0,
             bed_depth: 0.0,
             occluders: Vec::new(),
+            face: 200.0,
+            face_occluders: Vec::new(),
+            spray: Vec::new(),
+            film: Vec::new(),
             moved_at: -1.0,
             returned_at: -10.0,
             spill_left: 0.0,

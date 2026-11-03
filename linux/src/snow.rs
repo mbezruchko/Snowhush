@@ -20,7 +20,7 @@ use zbus::blocking::Connection as Bus;
 
 use snowhush_core::geometry::V2;
 use snowhush_core::halloween::{Choice, Today};
-use snowhush_core::simulation::{SnowSimulation, Snowfall};
+use snowhush_core::simulation::{Mode, SnowSimulation, Snowfall};
 
 use crate::chores;
 use crate::kwin;
@@ -40,6 +40,8 @@ pub enum Command {
     SnowOnWindows(bool),
     BehindWindows(bool),
     OverFullScreen(bool),
+    /// Every frame at the display's highest rate, or as fast as what moves needs.
+    Performance(bool),
     ShowInScreenshots(bool),
     /// Halloween turned on or off from the menu.
     Halloween(Choice),
@@ -47,9 +49,9 @@ pub enum Command {
     Locked(bool),
     /// Blows all the snow away; when calm, for less motion, melts it where it lies instead.
     ClearSnow(bool),
-    /// Leaves fall instead of snow, or snow instead of leaves, once what lies is cleared away as `ClearSnow` clears it.
+    /// Another kind falls, once what lies is cleared away as `ClearSnow` clears it.
     Mode {
-        autumn: bool,
+        mode: Mode,
         calm: bool,
     },
     Power(PowerBudget),
@@ -253,6 +255,10 @@ impl App {
                 let over = self.settings.over_full_screen;
                 self.screens.iter_mut().for_each(|screen| screen.set_layer(on, over));
             }
+            Command::Performance(max) => {
+                self.settings.max_performance = max;
+                self.screens.iter_mut().for_each(|screen| screen.max_rate = max);
+            }
             Command::OverFullScreen(on) => {
                 self.settings.over_full_screen = on;
                 let behind = self.settings.behind_windows;
@@ -270,12 +276,12 @@ impl App {
                 let direction = self.screens.first().map_or(-1.0, |screen| screen.simulation.breeze_direction());
                 self.screens.iter_mut().for_each(|screen| screen.simulation.blow_away(direction, calm));
             }
-            Command::Mode { autumn, calm } => {
-                self.settings.autumn = autumn;
+            Command::Mode { mode, calm } => {
+                self.settings.mode = mode;
                 let direction = self.screens.first().map_or(-1.0, |screen| screen.simulation.breeze_direction());
                 let now = Instant::now();
                 self.screens.iter_mut().for_each(|screen| {
-                    screen.simulation.switch_mode(autumn, direction, calm);
+                    screen.simulation.switch_mode(mode, direction, calm);
                     screen.wake(now);
                 });
                 self.update_light();
@@ -398,7 +404,7 @@ impl App {
                 tray.update(|tray| tray.today = today);
             }
         }
-        let halloween = !self.settings.autumn && self.settings.halloween.wanted(today);
+        let halloween = self.settings.mode == Mode::Snow && self.settings.halloween.wanted(today);
         if halloween != self.halloween {
             self.halloween = halloween;
             log!("halloween: {halloween}");
@@ -429,7 +435,7 @@ impl App {
             log!("display {name}: {bounds:?}, scale {}, {refresh} Hz", info.scale_factor);
             let mut simulation = new_simulation(&bounds, &self.settings, self.budget);
             simulation.set_halloween(self.halloween);
-            let screen = Screen::new(
+            let mut screen = Screen::new(
                 (&self.compositor, &self.layer_shell, &self.qh),
                 output.clone(),
                 name,
@@ -438,6 +444,7 @@ impl App {
                 simulation,
                 screen::layer_for(self.settings.behind_windows, self.settings.over_full_screen),
             );
+            screen.max_rate = self.settings.max_performance;
             self.screens.push(screen);
         }
         for screen in current {
@@ -476,7 +483,7 @@ fn new_simulation(bounds: &Area, settings: &Settings, budget: PowerBudget) -> Sn
     let mut simulation = SnowSimulation::new(bounds.w as f32, bounds.h as f32, settings.snowfall);
     simulation.thaws = settings.melt;
     simulation.accumulates = settings.accumulate;
-    simulation.set_autumn(settings.autumn);
+    simulation.set_mode(settings.mode);
     simulation.set_density(density(budget));
     simulation
 }

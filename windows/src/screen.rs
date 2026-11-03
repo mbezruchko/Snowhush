@@ -21,14 +21,14 @@ use windows::core::{BOOL, Error, PCWSTR, Result, w};
 
 use snowhush_core::geometry::V2;
 use snowhush_core::halloween::moonlit;
-use snowhush_core::simulation::{Pace, SnowSimulation, WindowId, WindowSurface};
+use snowhush_core::simulation::{Mode, Pace, SnowSimulation, WindowId, WindowSurface};
 
 use crate::desktop::DesktopLayer;
 use crate::light::{Backdrop, Sky, Wallpapers};
 use crate::log;
 use crate::prefs::Settings;
 use crate::render::{Ambient, Gpu, LANTERN_REACH, Surface};
-use crate::tracker::{COVER_ONLY, Tracker, class_name, cloaked, process_name};
+use crate::tracker::{COVER_ONLY, Tracker, class_name, cloaked, local_frame, process_name};
 
 const CLASS: PCWSTR = w!("SnowhushOverlay");
 /// Seconds the snow takes to fade out of a full-screen app's way, and back in once it goes.
@@ -58,7 +58,8 @@ pub enum PowerBudget {
 pub struct Monitor {
     pub name: String,
     /// The work area in physical pixels: the taskbar is the ground the snow settles on, so it is left out,
-    /// unless the snow goes behind the taskbar, which it then reaches down past to the bottom of the display.
+    /// unless the snow goes behind the taskbar, or rain runs down it, which it then reaches down past to the bottom of
+    /// the display.
     pub rect: RECT,
     /// The whole display in physical pixels.
     pub bounds: RECT,
@@ -66,7 +67,7 @@ pub struct Monitor {
     pub refresh: u32,
 }
 
-pub fn monitors(behind_taskbar: bool) -> Vec<Monitor> {
+pub fn monitors(over_taskbar: bool) -> Vec<Monitor> {
     unsafe extern "system" fn collect(monitor: HMONITOR, _: HDC, _: *mut RECT, list: LPARAM) -> BOOL {
         let list = unsafe { &mut *(list.0 as *mut Vec<HMONITOR>) };
         list.push(monitor);
@@ -96,7 +97,7 @@ pub fn monitors(behind_taskbar: bool) -> Vec<Monitor> {
             let (work, bounds) = (info.monitorInfo.rcWork, info.monitorInfo.rcMonitor);
             Some(Monitor {
                 name: String::from_utf16_lossy(&info.szDevice[..length]),
-                rect: if behind_taskbar { RECT { bottom: bounds.bottom, ..work } } else { work },
+                rect: if over_taskbar { RECT { bottom: bounds.bottom, ..work } } else { work },
                 bounds: info.monitorInfo.rcMonitor,
                 dpi,
                 refresh,
@@ -220,7 +221,15 @@ pub struct Screen {
     last_step: i64,
     idle_frames: u32,
     interactive_rate: u32,
+    /// Every frame at `interactive_rate`, whatever the snow is doing and whatever the power.
+    pub max_rate: bool,
     surfaces: Vec<WindowSurface>,
+    /// The taskbar's ledge while it rains, as last seen: one that hides itself slides in and out with no window
+    /// changing, so it is looked at every frame.
+    taskbar: Option<WindowSurface>,
+    /// Whether the simulation has had this overlay's windows at least once: one made anew for a change of settings
+    /// carries on a simulation with the old overlay's, which might be gone, as the taskbar's are behind it.
+    synced: bool,
     windows_seen: u64,
     windows_changed_at: i64,
     covered: bool,
@@ -251,6 +260,7 @@ impl Screen {
         };
         Ok(Screen {
             interactive_rate: monitor.refresh.clamp(60, 120),
+            max_rate: settings.max_performance,
             monitor,
             simulation,
             next_due: 0,
@@ -260,6 +270,8 @@ impl Screen {
             last_step: 0,
             idle_frames: 0,
             surfaces: Vec::new(),
+            taskbar: None,
+            synced: false,
             windows_seen: 0,
             windows_changed_at: 0,
             covered: false,
@@ -322,7 +334,13 @@ impl Screen {
             Pace::Lively => fastest.min(60),
             Pace::Interactive => fastest,
         };
-        let rate = if lantern_moved || fading { rate.max(fastest.min(60)) } else { rate };
+        let rate = if self.max_rate {
+            self.interactive_rate
+        } else if lantern_moved || fading {
+            rate.max(fastest.min(60))
+        } else {
+            rate
+        };
         self.next_due = clock.schedule(now, rate);
         self.idle_frames = if changed || lantern_moved { 0 } else { self.idle_frames + 1 };
         // A still pile only needs a slow refresh for its glints.
@@ -348,15 +366,19 @@ impl Screen {
 
     /// Hands the simulation the windows on this display when they changed.
     fn follow(&mut self, tracker: &Tracker, clock: &Clock, now: i64) {
-        if tracker.generation == self.windows_seen {
+        let taskbar = self.taskbar_surface();
+        if tracker.generation == self.windows_seen && taskbar == self.taskbar {
             return;
         }
         self.windows_seen = tracker.generation;
+        self.taskbar = taskbar;
         self.simulation.covers = tracker.covers(&self.monitor.rect, self.size);
-        let surfaces = tracker.surfaces(&self.monitor.rect, self.size);
-        if surfaces == self.surfaces {
+        let mut surfaces = tracker.surfaces(&self.monitor.rect, self.size);
+        surfaces.extend(self.taskbar.clone());
+        if self.synced && surfaces == self.surfaces {
             return;
         }
+        self.synced = true;
         let since = clock.seconds(now - self.windows_changed_at) as f32;
         // A window that moves outside a drag, as when it is maximized or snapped, jumps there in one go:
         // its snow is left behind instead of being carried along.
@@ -371,6 +393,30 @@ impl Screen {
         self.simulation.update_windows(&surfaces, interval, &HashSet::new(), &elsewhere, false);
         self.surfaces = surfaces;
         self.windows_changed_at = now;
+    }
+
+    /// While it rains over a taskbar along the bottom of the display, the taskbar is a ledge, as the Dock is on the Mac:
+    /// rain bursts on its top edge and runs down over its icons.
+    fn taskbar_surface(&self) -> Option<WindowSurface> {
+        let bounds = &self.monitor.bounds;
+        if self.behind_taskbar || self.simulation.mode() != Mode::Rain || self.monitor.rect.bottom != bounds.bottom {
+            return None;
+        }
+        let mut rect = RECT::default();
+        unsafe { GetWindowRect(taskbar(bounds)?, &mut rect) }.ok()?;
+        // Only one along the bottom, and only while it shows: a hidden one leaves a sliver on the screen.
+        let showing = rect.bottom.min(bounds.bottom) - rect.top.max(bounds.top);
+        if rect.bottom < bounds.bottom || rect.right - rect.left < (bounds.right - bounds.left) / 2 || showing < 16 {
+            return None;
+        }
+        Some(WindowSurface {
+            id: TASKBAR,
+            frame: local_frame(&rect, &self.monitor.rect, self.size)?,
+            blockers: Vec::new(),
+            cover: Vec::new(),
+            corner_radius: 0.0,
+            corner_exponent: 2.0,
+        })
     }
 
     pub fn drop_window_snow(&mut self) {
@@ -539,8 +585,8 @@ pub fn watch_taskbar(wake: isize) {
     });
 }
 
-/// The overlays above windows on displays whose taskbar hides itself, with each display's bounds.
-/// The hidden listener has the same class, but it isn't click-through.
+/// The overlays above windows that reach over their display's taskbar, as on displays whose taskbar hides itself and
+/// while it rains, with each display's bounds. The hidden listener has the same class, but it isn't click-through.
 fn overlays_over_hiding_taskbars() -> impl Iterator<Item = (HWND, RECT)> {
     let next = |previous: Option<HWND>| unsafe { FindWindowExW(None, previous, CLASS, None) }.ok();
     std::iter::successors(next(None), move |&window| next(Some(window))).filter_map(|window| unsafe {
@@ -549,7 +595,9 @@ fn overlays_over_hiding_taskbars() -> impl Iterator<Item = (HWND, RECT)> {
         }
         let mut info = MONITORINFO { cbSize: size_of::<MONITORINFO>() as u32, ..Default::default() };
         let found = GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST), &mut info).as_bool();
-        (found && info.rcWork == info.rcMonitor).then_some((window, info.rcMonitor))
+        let mut rect = RECT::default();
+        let reaches = GetWindowRect(window, &mut rect).is_ok() && rect.bottom >= info.rcMonitor.bottom;
+        (found && (info.rcWork == info.rcMonitor || reaches)).then_some((window, info.rcMonitor))
     })
 }
 
@@ -617,6 +665,9 @@ fn taskbar_above(overlay: HWND, bounds: &RECT) -> bool {
     }
     false
 }
+
+/// The taskbar's ledge while it rains, apart from any window's.
+const TASKBAR: WindowId = -2;
 
 /// The taskbar on the display with these bounds, if it has one.
 fn taskbar(bounds: &RECT) -> Option<HWND> {
