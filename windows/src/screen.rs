@@ -506,6 +506,14 @@ impl Screen {
             (None, Some(taskbar)) => taskbar,
             (None, None) => lowest_open_popup().unwrap_or(HWND_TOPMOST),
         };
+        // Several monitors share Progman: only one overlay can sit immediately under the icons. Raising every
+        // overlay to that slot each second makes them shove each other and the snow blinks on one display or
+        // another. Skip when we already hang under the icons with only our own overlays in between.
+        if let Some(layer) = self.layer
+            && !behind_needs_raise(self.overlay.0, layer.icons)
+        {
+            return;
+        }
         unsafe {
             let _ = SetWindowPos(self.overlay.0, Some(above), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
         }
@@ -647,6 +655,29 @@ fn lowest_open_popup() -> Option<HWND> {
         }
     });
     lowest
+}
+
+/// Whether a behind-windows overlay must move: something other than our own overlays sits above it
+/// before the desktop icons (a live wallpaper, a stray WorkerW, …), or the icons are not above it at all.
+fn behind_needs_raise(overlay: HWND, icons: Option<HWND>) -> bool {
+    unsafe {
+        match icons {
+            Some(icons) => {
+                let mut window = overlay;
+                while let Ok(above) = GetWindow(window, GW_HWNDPREV) {
+                    if above == icons {
+                        return false;
+                    }
+                    if class_name(above) != "SnowhushOverlay" {
+                        return true;
+                    }
+                    window = above;
+                }
+                true
+            }
+            None => GetWindow(overlay, GW_HWNDPREV).is_ok(),
+        }
+    }
 }
 
 /// Whether the taskbar on the display with these bounds stands above the overlay.
