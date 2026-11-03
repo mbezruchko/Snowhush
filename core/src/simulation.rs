@@ -167,9 +167,13 @@ pub struct Sprite {
     /// How fast a leaf turns and tumbles, a second: it blurs over the exposure, as it moves.
     pub spin: [f32; 2],
     /// Draws rain instead, when the first is above zero: one for a raindrop's streak or a droplet it throws up, two
-    /// for a drop on the glass, three for one hanging under a window's edge, the second then how far along it is.
+    /// for a drop running down the glass or a bead it left, three for one hanging under a window's edge, the second
+    /// then how far along it is, four for spray on the glass and five for a piece of the film a running drop leaves.
     /// A drop's `soft` is one when it is on a panel's shelf, which it shows in front of.
     pub rain: [f32; 2],
+    /// A drop running down the glass or a bead: the seed of its outline, how its outline has turned as it ran, how far
+    /// it bulges forward, held back, and how far it is squashed or stretched after a jolt.
+    pub drop: [f32; 4],
 }
 
 /// A Halloween sign a ghost holds up, or lets fall: the picture of `SIGN_CAPTIONS[caption]`, its stick's foot at
@@ -574,6 +578,7 @@ impl SnowSimulation {
             + self.air.motes.len()
             + self.haunting.sprite_count()
             + self.rain.sprite_count()
+            + self.layers.iter().map(|layer| layer.spray.len() + layer.film.len()).sum::<usize>()
     }
 
     /// Floats the renderer needs per frame: each layer's surface and bed.
@@ -617,6 +622,7 @@ impl SnowSimulation {
         self.air.advance_motes(dt);
         self.advance_splashes(dt);
         self.run_glass_drops(dt);
+        self.tend_glass(dt);
         self.haunt(dt);
         self.settle(dt);
         self.tend_leaves(dt);

@@ -725,6 +725,33 @@ fn rain_runs_down_a_window_and_hangs_under_its_bottom_edge() {
 }
 
 #[test]
+fn rain_spatters_the_glass_and_leaves_wet_uneven_trails() {
+    let none = HashSet::new();
+    let mut simulation = SnowSimulation::new(1200.0, 900.0, Snowfall::Heavy);
+    simulation.set_mode(Mode::Rain);
+    simulation.update_windows(&[surface(1, 200.0, 700.0, 800.0)], 0.2, &none, &none, false);
+    let mut filmed = false;
+    let mut beads: Vec<f32> = Vec::new();
+    for _ in 0..(30.0 / DT) as usize {
+        simulation.step(DT, AWAY);
+        filmed |= !rain_sprites(&simulation, 5.0).is_empty();
+        beads.extend(rain_sprites(&simulation, 2.0).iter().filter(|drop| drop.velocity == V2::ZERO).map(|bead| bead.size));
+    }
+    let spray = rain_sprites(&simulation, 4.0);
+    assert!(spray.len() > 200, "only {} droplets of spray", spray.len());
+    for droplet in &spray {
+        assert!((660.0..700.0).contains(&droplet.position.y), "spray at {}, not just under the top edge", droplet.position.y);
+    }
+    assert!(filmed, "no drop left a film behind it");
+    let smallest = beads.iter().copied().fold(f32::MAX, f32::min);
+    let biggest = beads.iter().copied().fold(0.0, f32::max);
+    assert!(biggest > smallest * 2.0, "beads all about one size, {smallest} to {biggest}");
+    assert!(rain_sprites(&simulation, 2.0).iter().all(|drop| drop.drop[0] > 0.0), "a drop on the glass without an outline of its own");
+    assert!(simulation.has_glass_drops(), "nothing on the glass to draw as glass");
+    assert_finite(&simulation);
+}
+
+#[test]
 fn switching_to_rain_clears_the_snow_first() {
     let mut simulation = SnowSimulation::new(800.0, 600.0, Snowfall::Heavy);
     run(&mut simulation, 30.0, AWAY);

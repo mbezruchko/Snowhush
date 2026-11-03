@@ -5,8 +5,8 @@ use std::mem::{offset_of, size_of};
 use windows::Win32::Foundation::{HMODULE, HWND};
 use windows::Win32::Graphics::Direct3D::Fxc::{D3DCOMPILE_OPTIMIZATION_LEVEL3, D3DCompile};
 use windows::Win32::Graphics::Direct3D::{
-    D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL_10_0, D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_11_0, D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP,
-    D3D_SRV_DIMENSION_BUFFER, ID3DBlob,
+    D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL_10_0, D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_11_0, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
+    D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP, D3D_SRV_DIMENSION_BUFFER, ID3DBlob,
 };
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::DirectComposition::{
@@ -14,8 +14,8 @@ use windows::Win32::Graphics::DirectComposition::{
     IDCompositionVisual,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R32_FLOAT,
-    DXGI_FORMAT_R32G32_FLOAT, DXGI_FORMAT_R32G32B32_FLOAT, DXGI_FORMAT_R32G32B32A32_FLOAT, DXGI_SAMPLE_DESC,
+    DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R16G16_FLOAT,
+    DXGI_FORMAT_R32_FLOAT, DXGI_FORMAT_R32G32_FLOAT, DXGI_FORMAT_R32G32B32_FLOAT, DXGI_FORMAT_R32G32B32A32_FLOAT, DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::{
     DXGI_PRESENT, DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIAdapter,
@@ -35,7 +35,7 @@ const SHADERS: &str = include_str!("shaders.hlsl");
 /// How far the cursor's candlelight reaches, in points.
 pub const LANTERN_REACH: f32 = 130.0;
 
-// The sprites' input layout reads a ghost's, a leaf's and rain's parts at these offsets.
+// The sprites' input layout reads a ghost's, a leaf's, rain's and a drop's parts at these offsets.
 const _: () = assert!(
     offset_of!(Sprite, ghost) == 48
         && offset_of!(Sprite, pose) == 64
@@ -43,7 +43,8 @@ const _: () = assert!(
         && offset_of!(Sprite, leaf) == 88
         && offset_of!(Sprite, spin) == 100
         && offset_of!(Sprite, rain) == 108
-        && size_of::<Sprite>() == 116
+        && offset_of!(Sprite, drop) == 116
+        && size_of::<Sprite>() == 132
 );
 
 #[repr(C)]
@@ -138,6 +139,11 @@ pub struct Gpu {
     sign_fragment: ID3D11PixelShader,
     pumpkin_vertex: ID3D11VertexShader,
     pumpkin_fragment: ID3D11PixelShader,
+    /// Drops on the glass: their bumps added up into a field, and the glass drawn from it.
+    field_fragment: ID3D11PixelShader,
+    glass_vertex: ID3D11VertexShader,
+    glass_fragment: ID3D11PixelShader,
+    adding: ID3D11BlendState,
     sampler: ID3D11SamplerState,
     /// Clear past the picture's edges, for the pumpkins' glow around them.
     bordered: ID3D11SamplerState,
@@ -188,6 +194,9 @@ impl Gpu {
             let sign_fragment = pixel_shader(&device, &compile(s!("signFragment"), s!("ps_4_0"))?)?;
             let pumpkin_vertex = vertex_shader(&device, &compile(s!("pumpkinVertex"), s!("vs_4_0"))?)?;
             let pumpkin_fragment = pixel_shader(&device, &compile(s!("pumpkinFragment"), s!("ps_4_0"))?)?;
+            let field_fragment = pixel_shader(&device, &compile(s!("fieldFragment"), s!("ps_4_0"))?)?;
+            let glass_vertex = vertex_shader(&device, &compile(s!("glassVertex"), s!("vs_4_0"))?)?;
+            let glass_fragment = pixel_shader(&device, &compile(s!("glassFragment"), s!("ps_4_0"))?)?;
 
             let element = |name: PCSTR, format: DXGI_FORMAT, offset: u32| D3D11_INPUT_ELEMENT_DESC {
                 SemanticName: name,
@@ -213,6 +222,7 @@ impl Gpu {
                 element(s!("LEAF"), DXGI_FORMAT_R32G32B32_FLOAT, 88),
                 element(s!("SPIN"), DXGI_FORMAT_R32G32_FLOAT, 100),
                 element(s!("RAIN"), DXGI_FORMAT_R32G32_FLOAT, 108),
+                element(s!("DROP"), DXGI_FORMAT_R32G32B32A32_FLOAT, 116),
             ];
             let mut sprite_layout = None;
             device.CreateInputLayout(&elements, blob_bytes(&sprite_code), Some(&mut sprite_layout))?;
@@ -230,6 +240,9 @@ impl Gpu {
             let blend_desc = D3D11_BLEND_DESC { RenderTarget: [target; 8], ..Default::default() };
             let mut blend = None;
             device.CreateBlendState(&blend_desc, Some(&mut blend))?;
+            let adding_target = D3D11_RENDER_TARGET_BLEND_DESC { DestBlend: D3D11_BLEND_ONE, DestBlendAlpha: D3D11_BLEND_ONE, ..target };
+            let mut adding = None;
+            device.CreateBlendState(&D3D11_BLEND_DESC { RenderTarget: [adding_target; 8], ..Default::default() }, Some(&mut adding))?;
 
             let raster_desc =
                 D3D11_RASTERIZER_DESC { FillMode: D3D11_FILL_SOLID, CullMode: D3D11_CULL_NONE, DepthClipEnable: true.into(), ..Default::default() };
@@ -276,6 +289,10 @@ impl Gpu {
                 sign_fragment,
                 pumpkin_vertex,
                 pumpkin_fragment,
+                field_fragment,
+                glass_vertex,
+                glass_fragment,
+                adding: adding.ok_or_else(Error::empty)?,
                 sampler: sampler.ok_or_else(Error::empty)?,
                 bordered: bordered.ok_or_else(Error::empty)?,
                 blend: blend.ok_or_else(Error::empty)?,
@@ -383,6 +400,8 @@ pub struct Surface {
     sprite_capacity: usize,
     heights: Option<(ID3D11Buffer, ID3D11ShaderResourceView)>,
     height_capacity: usize,
+    /// The field drops on the glass add up into, as big as the swap chain; made while there are any.
+    field: Option<(ID3D11RenderTargetView, ID3D11ShaderResourceView)>,
 }
 
 impl Surface {
@@ -429,6 +448,7 @@ impl Surface {
                 sprite_capacity: 0,
                 heights: None,
                 height_capacity: 0,
+                field: None,
             })
         }
     }
@@ -442,6 +462,12 @@ impl Surface {
 
     pub fn draw(&mut self, gpu: &Gpu, simulation: &SnowSimulation, ambient: Ambient, time: f32) -> Result<()> {
         self.reserve(gpu, simulation.sprite_count(), simulation.column_count())?;
+        let glass = if simulation.has_glass_drops() {
+            Some(self.field(gpu)?)
+        } else {
+            self.field = None;
+            None
+        };
         let (Some(sprite_buffer), Some((height_buffer, height_view))) = (&self.sprites, &self.heights) else {
             return Ok(());
         };
@@ -555,11 +581,62 @@ impl Surface {
                 context.IASetInputLayout(&gpu.sprite_layout);
                 context.IASetVertexBuffers(0, 1, Some(&Some(sprite_buffer.clone())), Some(&stride), Some(&offset));
                 context.VSSetShader(&gpu.sprite_vertex, None);
+                // Drops on the glass first add up into their field.
+                if let Some((field_target, _)) = &glass {
+                    context.OMSetRenderTargets(Some(&[Some(field_target.clone())]), None);
+                    context.ClearRenderTargetView(field_target, &[0.0; 4]);
+                    context.OMSetBlendState(&gpu.adding, None, u32::MAX);
+                    context.PSSetShader(&gpu.field_fragment, None);
+                    context.DrawInstanced(4, sprites as u32, 0, 0);
+                    context.OMSetRenderTargets(Some(&[Some(self.target_view.clone())]), None);
+                    context.OMSetBlendState(&gpu.blend, None, u32::MAX);
+                }
                 context.PSSetShader(&gpu.sprite_fragment, None);
                 context.DrawInstanced(4, sprites as u32, 0, 0);
+                if let Some((_, field)) = &glass {
+                    context.IASetInputLayout(None);
+                    context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+                    context.VSSetShader(&gpu.glass_vertex, None);
+                    context.PSSetShader(&gpu.glass_fragment, None);
+                    context.PSSetShaderResources(4, Some(&[Some(field.clone())]));
+                    context.Draw(3, 0);
+                    // Unbound, it can be drawn into again next frame.
+                    context.PSSetShaderResources(4, Some(&[None]));
+                }
             }
             self.swap_chain.Present(1, DXGI_PRESENT(0)).ok()
         }
+    }
+
+    /// The field drops on the glass add up into, made the first time it is needed.
+    fn field(&mut self, gpu: &Gpu) -> Result<(ID3D11RenderTargetView, ID3D11ShaderResourceView)> {
+        if let Some(field) = &self.field {
+            return Ok(field.clone());
+        }
+        let desc = D3D11_TEXTURE2D_DESC {
+            Width: self.width,
+            Height: self.height,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT_R16G16_FLOAT,
+            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            Usage: D3D11_USAGE_DEFAULT,
+            BindFlags: (D3D11_BIND_SHADER_RESOURCE.0 | D3D11_BIND_RENDER_TARGET.0) as u32,
+            CPUAccessFlags: 0,
+            MiscFlags: 0,
+        };
+        let mut texture = None;
+        let mut target = None;
+        let mut view = None;
+        unsafe {
+            gpu.device.CreateTexture2D(&desc, None, Some(&mut texture))?;
+            let texture = texture.ok_or_else(Error::empty)?;
+            gpu.device.CreateRenderTargetView(&texture, None, Some(&mut target))?;
+            gpu.device.CreateShaderResourceView(&texture, None, Some(&mut view))?;
+        }
+        let field = (target.ok_or_else(Error::empty)?, view.ok_or_else(Error::empty)?);
+        self.field = Some(field.clone());
+        Ok(field)
     }
 
     fn reserve(&mut self, gpu: &Gpu, sprites: usize, columns: usize) -> Result<()> {

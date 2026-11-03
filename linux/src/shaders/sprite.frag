@@ -12,6 +12,8 @@ uniform vec4 rim;
 uniform vec4 panel;
 // One while leaves fall instead of snow.
 uniform float autumn;
+// One while running drops and beads are drawn as glass, from their field; without it, they are drawn here.
+uniform float glass;
 
 in vec2 vCoord;
 in float vAlpha;
@@ -28,6 +30,7 @@ flat in vec4 vMood;
 flat in vec4 vLeaf;
 flat in vec4 vSmear;
 flat in vec4 vRain;
+flat in vec4 vDrop;
 
 out vec4 fragment;
 
@@ -289,13 +292,15 @@ vec4 hangingAt(vec2 p) {
     return lensColor(darkA, clamp(crescent + glint + sheen, 0.0, 1.0), inside, vAlpha);
 }
 
+#include "drop.glsl"
+
 // A drop on the glass works as a little lens: darker toward its rim, most of all along its foot, where it bends the
 // light from above into a bright crescent, and a glint near its top. Its head leads, at `head`; the tail it draws out
 // behind it as it runs, `run` long along `axis`, narrows away.
 vec4 glassDropAt(vec2 p, vec2 head, vec2 axis, float run) {
     float along = run > 0.001 ? clamp(dot(p - head, axis) / run, 0.0, 1.0) : 0.0;
     float width = vRadius * mix(1.0, 0.3, along);
-    float d = length(p - head - axis * along * run) / max(width, 0.001);
+    float d = dropDistance(p, head, axis, run);
     float aa = 1.2 / max(width * vRain.w, 0.5);
     float inside = 1.0 - smoothstep(1.0 - aa, 1.0, d);
     if (inside < 0.002) return vec4(0.0);
@@ -304,15 +309,37 @@ vec4 glassDropAt(vec2 p, vec2 head, vec2 axis, float run) {
     // A bead only a few pixels across shows mostly as its dark rim and its glint; drawn as faint as a big drop, a
     // trail of them would vanish.
     float tiny = 1.0 - smoothstep(3.0, 9.0, vRain.z);
-    float darkA = (0.07 + 0.38 * rim * (0.55 + 0.45 * clamp(-q.y, 0.0, 1.0)) + 0.22 * tiny) * (1.0 - along * 0.5);
+    // Spray is finer still: its glint shows on a dark window, its rim hardly on a light one.
+    float rimmed = vRain.x > 3.5 ? 0.4 : 1.0;
+    float darkA = (0.07 + 0.38 * rim * (0.55 + 0.45 * clamp(-q.y, 0.0, 1.0)) + 0.22 * tiny) * (1.0 - along * 0.5) * rimmed;
     float crescent = (1.0 - smoothstep(0.55, 0.92, d)) * smoothstep(-0.05, -0.7, q.y) * smoothstep(0.75, 0.2, abs(q.x)) * 0.5;
     vec2 g = q - vec2(-0.3, 0.38);
     float glint = exp(-dot(g, g) / 0.035) * 0.95;
     return lensColor(darkA, clamp(crescent * (1.0 - along) + glint, 0.0, 1.0), inside, vAlpha);
 }
 
+// The film of water a running drop leaves on the glass: all but clear, but for its edges, where it bends the light,
+// and a sheen along the side the light comes from. A piece ends square, so where one meets the next nothing doubles.
+vec4 filmAt(vec2 p) {
+    vec2 halfStreak = vStreak * 0.5;
+    float reach = length(halfStreak);
+    vec2 axis = reach > 0.0 ? halfStreak / reach : vec2(0.0, -1.0);
+    if (abs(dot(p, axis)) > reach) return vec4(0.0);
+    float side = dot(p, vec2(-axis.y, axis.x)) / max(vRadius, 0.001);
+    float d = abs(side);
+    float aa = 1.2 / max(vRain.z * 0.5, 0.5);
+    float inside = 1.0 - smoothstep(1.0 - aa, 1.0, d);
+    if (inside < 0.002) return vec4(0.0);
+    float darkA = 0.04 + 0.16 * smoothstep(0.5, 1.0, d);
+    float sheen = 0.22 * exp(-(side + 0.6) * (side + 0.6) / 0.05);
+    return lensColor(darkA, clamp(0.06 * (1.0 - d * d) + sheen, 0.0, 1.0), inside, vAlpha);
+}
+
 vec4 rainAt(vec2 p) {
-    if (vRain.x > 2.5) return hangingAt(p);
+    if (vRain.x > 4.5) return filmAt(p);
+    if (vRain.x > 2.5 && vRain.x < 3.5) return hangingAt(p);
+    // A running drop or a bead is drawn with the glass, from the field.
+    if (vRain.x > 1.5 && vRain.x < 2.5 && glass > 0.5) return vec4(0.0);
     vec2 halfStreak = vStreak * 0.5;
     float span = dot(halfStreak, halfStreak);
     if (vRain.x < 1.5) {

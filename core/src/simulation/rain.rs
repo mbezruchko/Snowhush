@@ -1,13 +1,14 @@
-//! Rain: raindrops bursting on the windows and the bottom of the screen, and drops gathering on a window's top edge
-//! to run down its glass. A running drop leaves a trail of beads, hangs under the window's bottom edge until it is
-//! heavy enough to fall, and can be smeared or knocked off by the cursor or shaken off with its window.
+//! Rain: raindrops bursting on the windows and the bottom of the screen, spattering spray on the glass under a window's
+//! top edge, and drops gathering on that edge to run down its glass. A running drop catches on specks and takes in the
+//! spray it touches, leaves a film and a trail of beads, hangs under the window's bottom edge until it is heavy enough
+//! to fall, and can be smeared or knocked off by the cursor or shaken off with its window.
 //! The same as the Mac app's.
 
 use std::collections::HashMap;
 
 use super::{Air, CURSOR_RADIUS, Flake, SnowSimulation, Sprite, WindowId};
 use crate::geometry::{V2, smoothstep};
-use crate::layer::SnowLayer;
+use crate::layer::{Droplet, FilmPiece, SnowLayer};
 
 const RAIN_GRAVITY: f32 = 900.0;
 const MAX_SPLASHES: usize = 1500;
@@ -18,14 +19,33 @@ const BEAD_DRYING: f32 = 0.3;
 const SMALLEST_RUNNING: f32 = 1.6;
 /// Drops on the glass are drawn this much bigger than the water they hold.
 const GLASS_SCALE: f32 = 1.6;
+/// Drawn as glass, lit along its rim and with a shadow below, a running drop or a bead looks bigger than drawn flat:
+/// it is drawn this much smaller, and a running drop reaches no further each way than the widest.
+const GLASSY: f32 = 0.75;
+const WIDEST_RUNNING: f32 = 3.5;
 /// A drop running down the glass is drawn bigger still than the beads it leaves and the drops hanging below; the
 /// biggest no bigger than they were, or they would stand out.
 fn running_scale(radius: f32) -> f32 {
     1.2 - 0.2 * smoothstep(3.0, 4.6, radius)
 }
-/// How far a drop of `radius` reaches each way as drawn: one running down the glass, unless `still`, a little further.
+/// How far a drop of `radius` reaches each way as drawn: one hanging, if `still`, or one running down the glass.
 fn half_width(radius: f32, still: bool) -> f32 {
-    radius.max(1.2) * GLASS_SCALE * if still { 1.0 } else { running_scale(radius) }
+    let flat = radius.max(1.2) * GLASS_SCALE;
+    if still {
+        return flat;
+    }
+    // Past a size, bigger ones grow ever less, nearing the widest but still each its own size.
+    const KNEE: f32 = 2.5;
+    let half = flat * running_scale(radius) * GLASSY;
+    if half <= KNEE {
+        return half;
+    }
+    KNEE + (WIDEST_RUNNING - KNEE) * (1.0 - (-(half - KNEE) / (WIDEST_RUNNING - KNEE) * 0.8).exp())
+}
+/// How far a bead reaches each way as drawn: a small one bigger than its water, or it would be lost, the smallest
+/// smaller still and a big one bigger, up to the size of a drop of its water.
+fn bead_width(radius: f32) -> f32 {
+    radius.max((radius * 2.4).min(1.2 + (radius - 0.5) * 0.5)) * GLASS_SCALE * GLASSY
 }
 
 /// How hard a window has to be shaken back and forth, in its swings against gravity, to shake off a drop of radius
@@ -39,6 +59,27 @@ const HANGING_DRYING: f32 = 0.1;
 /// A hanging drop pinches off far faster than it fills: only a few frames show it stretch. Not all of it falls.
 const PINCHING: f32 = 0.06;
 const FALLING_SHARE: f32 = 0.6;
+
+/// Droplets of spray on all the windows at most, and on one for each point of its top edge.
+const MAX_SPRAY: usize = 6000;
+const SPRAY_ALONG: f32 = 3.0;
+/// How far below a window's top edge its spray lands: most of it within the first, none past the second.
+const SPRAY_REACH: f32 = 9.0;
+const SPRAY_DEEPEST: f32 = 36.0;
+const LARGEST_SPRAY: f32 = 0.9;
+const SPRAY_DRYING: f32 = 0.003;
+/// How much of the spray a running drop runs into it keeps: the rest it leaves on the glass behind it.
+const SPRAY_KEPT: f32 = 0.35;
+/// A running drop lays down its film in pieces this long, as wide as this share of the drop, that dry in a few seconds.
+const FILM_PIECE: f32 = 4.0;
+const FILM_SHARE: f32 = 0.4;
+const FILM_LIFE: (f32, f32) = (2.0, 3.5);
+const MAX_FILM: usize = 4000;
+/// Specks that catch a running drop for a moment: one patch of glass this big in this many has one.
+const SPECK_SPACING: f32 = 6.0;
+const SPECK_SHARE: f32 = 0.05;
+/// How far a running drop turns toward the water that joins it from one side, for the share of it that water is.
+const TURNING: f32 = 1.0;
 
 /// A droplet thrown up where a raindrop bursts on a window's edge or the bottom of the screen.
 #[derive(Clone, Copy)]
@@ -75,6 +116,16 @@ struct GlassDrop {
     lets_go: f32,
     /// Left behind by a running drop, or run out of water: it holds still and dries up.
     bead: bool,
+    /// Where the film it leaves behind as it runs was last laid down to.
+    mark: V2,
+    /// Caught on a speck on the glass: how much longer it holds there, and the patch of glass it last ran onto.
+    held: f32,
+    patch: (i32, i32),
+    /// Picks its outline: where its edge clings to the glass, it is never quite round.
+    seed: f32,
+    /// How hard it squashed and stretched when it last ran into more water or broke free, and when.
+    jiggle: f32,
+    jolted: f32,
 }
 
 impl GlassDrop {
@@ -94,11 +145,17 @@ impl GlassDrop {
             fill: 0.0,
             lets_go: f32::INFINITY,
             bead: false,
+            mark: offset,
+            held: 0.0,
+            patch: (i32::MIN, i32::MIN),
+            seed: 0.0,
+            jiggle: 0.0,
+            jolted: 0.0,
         }
     }
 
-    fn bead(layer: WindowId, offset: V2, face: f32, radius: f32) -> GlassDrop {
-        GlassDrop { bead: true, ..GlassDrop::new(layer, offset, face, radius) }
+    fn bead(layer: WindowId, offset: V2, face: f32, radius: f32, seed: f32) -> GlassDrop {
+        GlassDrop { bead: true, seed, ..GlassDrop::new(layer, offset, face, radius) }
     }
 
     /// How far along a hanging drop is, as the shader draws it: up to one it fills, from a flat cap under the edge to
@@ -126,13 +183,22 @@ impl Rain {
 }
 
 impl SnowSimulation {
-    /// A raindrop landing at `x` on layer `li`: it bursts into a droplet or two, and now and then, on a window's top
-    /// edge, gathers into a drop that runs down its face. A drop come off the glass above, carrying `water`, always
-    /// runs on down the window it lands on.
+    /// Whether any drop runs down the glass, or any bead lies on it: those are drawn as glass, from a field the
+    /// renderer adds them up into.
+    pub fn has_glass_drops(&self) -> bool {
+        self.rain.drops.iter().any(|drop| !drop.hanging)
+    }
+
+    /// A raindrop landing at `x` on layer `li`: it bursts into a droplet or two, spatters a window's glass with spray
+    /// and now and then, on a window's top edge, gathers into a drop that runs down its face. A drop come off the glass
+    /// above, carrying `water`, always runs on down the window it lands on.
     pub(super) fn rain_landed(&mut self, li: usize, x: f32, surface: f32, depth: f32, water: f32) {
         self.splash(V2::new(x, surface), depth);
-        if li > 0 && (water > 0.0 || self.air.random.next() < RUN_SHARE) {
-            self.run_down(li, x, water);
+        if li > 0 {
+            self.spray(li, x, depth);
+            if water > 0.0 || self.air.random.next() < RUN_SHARE {
+                self.run_down(li, x, water);
+            }
         }
     }
 
@@ -156,27 +222,64 @@ impl SnowSimulation {
         }
     }
 
+    /// Rain bursting on a window's top edge spatters its face with spray: most right under the edge, less and less
+    /// further down. A droplet landing on one already there runs together with it; on a window with all the spray it
+    /// holds, it takes the place of another.
+    fn spray(&mut self, li: usize, x: f32, depth: f32) {
+        let total: usize = self.layers.iter().map(|layer| layer.spray.len()).sum();
+        let random = &mut self.air.random;
+        let count = (random.next() * (4.0 + 16.0 * depth)) as usize;
+        if count == 0 {
+            return;
+        }
+        let ledge = &mut self.layers[li];
+        let width = ledge.width();
+        let deepest = SPRAY_DEEPEST.min(ledge.face * 0.4);
+        let room = total < MAX_SPRAY && (ledge.spray.len() as f32) < width * SPRAY_ALONG;
+        for _ in 0..count {
+            let along = x - ledge.origin.x + random.range(-1.0, 1.0) * (8.0 + 16.0 * depth);
+            let below = -(1.0 - random.next() * 0.999).ln() * SPRAY_REACH;
+            if along <= 2.0 || along >= width - 2.0 || below >= deepest {
+                continue;
+            }
+            let u = random.next();
+            let radius = 0.3 + 0.5 * u * u;
+            let offset = V2::new(along, -corner(ledge, along) - below - radius * GLASS_SCALE);
+            if let Some(near) = ledge.spray.iter_mut().find(|near| (near.offset - offset).length() < (near.radius + radius) * GLASS_SCALE) {
+                let area = near.radius * near.radius;
+                let added = radius * radius;
+                near.offset = (near.offset * area + offset * added) / (area + added);
+                near.radius = (area + added).sqrt().min(LARGEST_SPRAY);
+            } else if room {
+                ledge.spray.push(Droplet { offset, radius });
+            } else if !ledge.spray.is_empty() {
+                let k = (random.next() * ledge.spray.len() as f32) as usize % ledge.spray.len();
+                ledge.spray[k] = Droplet { offset, radius };
+            }
+        }
+    }
+
     fn run_down(&mut self, li: usize, x: f32, water: f32) {
         if self.rain.drops.len() >= MAX_GLASS_DROPS {
             return;
         }
         let ledge = &self.layers[li];
         let random = &mut self.air.random;
-        // A short face like the Dock's or a taskbar's takes smaller drops: the biggest would loom over it.
-        let largest = (ledge.face / 32.0).clamp(HEAVY_HANGING, 4.6);
         let radius = if water > 0.0 {
             water.max(SMALLEST_RUNNING)
         } else {
             let u = random.next();
             if random.next() < 0.1 { random.range(3.8, 4.6) } else { 2.2 + 2.2 * u * u }
         }
-        .min(largest);
+        .min(largest_running(ledge.face));
         let along = x - ledge.origin.x;
         // It gathers right under the edge: its top, once it has swelled to its size, at the edge.
-        let top = -corner(ledge, along) - half_width(radius, false);
-        let mut drop = GlassDrop::new(self.ids[li], V2::new(along, top), ledge.face, radius);
+        let edge = -corner(ledge, along);
+        let mut drop = GlassDrop::new(self.ids[li], V2::new(along, edge - half_width(radius, false)), ledge.face, radius);
         drop.slope = random.range(-0.12, 0.12);
-        drop.spacing = trail_spacing(random.range(4.0, 9.0), radius);
+        drop.spacing = trail_spacing(random.next(), radius);
+        drop.mark = V2::new(along, edge);
+        drop.seed = random.next().max(0.001);
         self.rain.drops.push(drop);
     }
 
@@ -198,6 +301,7 @@ impl SnowSimulation {
         }
         let shown: HashMap<WindowId, usize> = self.ids.iter().enumerate().skip(1).map(|(li, &id)| (id, li)).collect();
         let shaking = self.air.clock - self.space_changed_at > 0.6;
+        let mut film: usize = self.layers.iter().map(|layer| layer.film.len()).sum();
         let air = &mut self.air;
         let drops = &mut self.rain.drops;
         let mut i = drops.len();
@@ -213,7 +317,7 @@ impl SnowSimulation {
                 drops.swap_remove(i);
                 continue;
             };
-            let layer = &self.layers[li];
+            let layer = &mut self.layers[li];
             drop.age += dt;
             if !drop.hanging
                 && let Some(point) = air.cursor
@@ -233,14 +337,57 @@ impl SnowSimulation {
             } else if drop.bead {
                 drop.radius -= BEAD_DRYING * dt;
             } else {
-                run(air, &mut drop, i, layer, dt, drops);
+                run(air, &mut drop, i, layer, dt, drops, &mut film);
             }
-            let gone = drop.radius < 0.25 || (!drop.hanging && -drop.offset.y > drop.face) || drop.offset.x < 0.0 || drop.offset.x > layer.width();
+            let smallest = if drop.bead { 0.15 } else { 0.25 };
+            let gone =
+                drop.radius < smallest || (!drop.hanging && -drop.offset.y > drop.face) || drop.offset.x < 0.0 || drop.offset.x > layer.width();
             if gone {
                 drops.swap_remove(i);
             } else {
                 drops[i] = drop;
             }
+        }
+    }
+
+    /// Spray dries up slowly in the rain and soon once it stops, a running drop's film in a few seconds, and both fast
+    /// once the rain stops. The cursor moving over the glass wipes them off where it passes, as a finger would.
+    pub(super) fn tend_glass(&mut self, dt: f32) {
+        let hurry = if self.air.rain { 1.0 } else { 12.0 };
+        let velocity = self.air.cursor_velocity;
+        let wiping = self.air.cursor.filter(|_| velocity.length() > 40.0).map(|point| (point - velocity * dt, point));
+        let reach = CURSOR_RADIUS * 0.8;
+        for ledge in self.layers.iter_mut().skip(1) {
+            if ledge.spray.is_empty() && ledge.film.is_empty() {
+                continue;
+            }
+            let (width, face, origin) = (ledge.width(), ledge.face, ledge.origin);
+            let near = wiping.filter(|&(from, to)| {
+                from.y.min(to.y) - reach < origin.y
+                    && from.y.max(to.y) + reach > origin.y - face
+                    && from.x.min(to.x) - reach < origin.x + width
+                    && from.x.max(to.x) + reach > origin.x
+            });
+            let covers = &ledge.face_occluders;
+            let off = |offset: V2| offset.x < 0.0 || offset.x > width || -offset.y > face;
+            let wiped = |offset: V2, margin: f32| {
+                let Some((from, to)) = near else { return false };
+                let position = origin + offset;
+                let path = to - from;
+                let along = ((position - from).dot(path) / path.length_squared().max(0.0001)).clamp(0.0, 1.0);
+                (position - (from + path * along)).length() < reach + margin
+                    && !covers.iter().any(|o| o[0] < position.x && o[2] > position.x && o[1] < position.y && o[3] > position.y)
+            };
+            let drying = SPRAY_DRYING * dt * hurry;
+            ledge.spray.retain_mut(|droplet| {
+                droplet.radius -= drying;
+                droplet.radius >= 0.2 && !off(droplet.offset) && !wiped(droplet.offset, 0.0)
+            });
+            ledge.film.retain_mut(|piece| {
+                piece.age += dt * hurry;
+                let middle = (piece.from + piece.to) * 0.5;
+                piece.age < piece.life && !off(middle) && !wiped(middle, piece.width * 0.5)
+            });
         }
     }
 
@@ -254,6 +401,41 @@ impl SnowSimulation {
             rain: [1.0, 0.0],
             ..Sprite::default()
         });
+        let wet = self.layers.iter().zip(&self.ids).skip(1).flat_map(move |(layer, &id)| {
+            let soft = if self.shelf == Some(id) { 1.0 } else { 0.0 };
+            // It dries from its edges in, thinning as it fades.
+            let film = layer.film.iter().filter_map(move |piece: &FilmPiece| {
+                let position = layer.origin + (piece.from + piece.to) * 0.5;
+                if hidden(layer, position) {
+                    return None;
+                }
+                let dry = piece.age / piece.life;
+                Some(Sprite {
+                    position,
+                    velocity: piece.to - piece.from,
+                    size: piece.width * (1.0 - 0.45 * dry),
+                    alpha: (1.0 - dry).powf(1.5),
+                    soft,
+                    rain: [5.0, 0.0],
+                    ..Sprite::default()
+                })
+            });
+            let spray = layer.spray.iter().filter_map(move |droplet: &Droplet| {
+                let position = layer.origin + droplet.offset;
+                if hidden(layer, position) {
+                    return None;
+                }
+                Some(Sprite {
+                    position,
+                    size: droplet.radius * 2.0 * GLASS_SCALE,
+                    alpha: 0.8 * ((droplet.radius - 0.2) / 0.15).min(1.0),
+                    soft,
+                    rain: [4.0, 0.0],
+                    ..Sprite::default()
+                })
+            });
+            film.chain(spray)
+        });
         let shown: HashMap<WindowId, usize> = self.ids.iter().enumerate().skip(1).map(|(li, &id)| (id, li)).collect();
         let drops = self.rain.drops.iter().filter_map(move |drop| {
             let layer = &self.layers[*shown.get(&drop.layer)?];
@@ -265,8 +447,12 @@ impl SnowSimulation {
             // It swells out of nothing as it gathers on the edge, down from the edge, its top staying where it gathers.
             let still = drop.hanging || drop.bead;
             let grown = if drop.bead { 1.0 } else { (drop.age / 0.15).sqrt().min(1.0) };
-            let half = half_width(drop.radius, still);
+            let half = if drop.bead { bead_width(drop.radius) } else { half_width(drop.radius, still) };
             let swelling = if still { 0.0 } else { half * (1.0 - grown) };
+            // Held back, a running drop's water piles up in its front; jolted, it squashes and stretches for a moment.
+            let since = drop.age - drop.jolted;
+            let bulge = if still { 0.0 } else { 0.16 * (1.0 - smoothstep(0.0, 40.0, drop.speed)) };
+            let jiggle = if still { 0.0 } else { drop.jiggle * (-since / 0.15).exp() * (since * std::f32::consts::TAU * 11.0).cos() };
             Some(Sprite {
                 position: position + V2::new(0.0, swelling),
                 velocity: if still { V2::ZERO } else { V2::new(drop.slope, -1.0) * drop.speed },
@@ -275,33 +461,65 @@ impl SnowSimulation {
                 alpha: (drop.radius / if drop.hanging { 1.2 } else { 0.35 }).min(1.0),
                 soft: if self.shelf == Some(drop.layer) { 1.0 } else { 0.0 },
                 rain: if drop.hanging { [3.0, drop.stage()] } else { [2.0, 0.0] },
+                drop: [drop.seed, drop.offset.y * 0.06, bulge, jiggle],
                 ..Sprite::default()
             })
         });
-        splashes.chain(drops)
+        splashes.chain(wet).chain(drops)
     }
 }
 
-fn run(air: &mut Air, drop: &mut GlassDrop, index: usize, layer: &SnowLayer, dt: f32, drops: &mut Vec<GlassDrop>) {
-    let random = &mut air.random;
+/// The way a drop running with `slope` goes, one point long.
+fn heading(slope: f32) -> V2 {
+    V2::new(slope, -1.0) / (1.0 + slope * slope).sqrt()
+}
+
+fn run(air: &mut Air, drop: &mut GlassDrop, index: usize, layer: &mut SnowLayer, dt: f32, drops: &mut Vec<GlassDrop>, film: &mut usize) {
     let excess = (drop.radius - 1.2).max(0.0);
-    drop.speed += ((60.0 + 45.0 * excess.powf(1.4)).min(700.0) * grip(drop.offset) - drop.speed) * (dt * 5.0).min(1.0);
+    let pull = (60.0 + 45.0 * excess.powf(1.4)).min(700.0) * grip(drop.offset);
+    if drop.held > 0.0 {
+        // Caught on a speck, its front holds while its water piles up behind it, until it breaks free with a lurch,
+        // leaving a lump of it behind where its rear was held.
+        drop.held -= dt;
+        drop.speed *= (1.0 - dt * 25.0).max(0.0);
+        if drop.held <= 0.0 {
+            drop.speed = pull * 1.3;
+            drop.jiggle = 0.12;
+            drop.jolted = drop.age;
+            let left = drop.radius * air.random.range(0.22, 0.32);
+            leave(air, drop, left, heading(drop.slope), drops);
+        }
+    } else {
+        drop.speed += (pull - drop.speed) * (dt * 5.0).min(1.0);
+    }
     // A window dragged along under it leaves it trailing a little behind; its own wandering stays within less.
     let trail = -layer.track_velocity.x * 0.0006;
-    let wander = (drop.slope + (random.range(-1.0, 1.0) * 1.6 + trail) * dt) * (1.0 - dt * 0.8);
+    let wander = (drop.slope + (air.random.range(-1.0, 1.0) * 1.6 + trail) * dt) * (1.0 - dt * 0.8);
     drop.slope = wander.clamp(-0.45, 0.45);
-    let heading = V2::new(drop.slope, -1.0) / (1.0 + drop.slope * drop.slope).sqrt();
+    let heading = heading(drop.slope);
     let advance = drop.speed * dt;
+    let from = drop.offset;
     drop.offset += V2::new(drop.slope, -1.0) * advance;
+    gather(drop, from, layer);
+    catches(drop);
 
+    // The film behind it breaks up into beads at no even pace: mostly small, now and then a big one, bunched up in
+    // places and gone for a stretch in others. A fast drop leaves fewer and smaller, its film too thin for more.
     drop.travelled += advance;
     if drop.travelled >= drop.spacing {
         drop.travelled = 0.0;
-        drop.spacing = trail_spacing(random.range(4.0, 9.0), drop.radius);
-        let left = drop.radius * random.range(0.15, 0.25);
-        drop.radius = (drop.radius * drop.radius - left * left).max(0.0).sqrt();
-        if drops.len() < MAX_GLASS_DROPS {
-            drops.push(GlassDrop::bead(drop.layer, drop.offset - heading * (drop.radius * 0.95 + left * 0.4), drop.face, left));
+        let haste = smoothstep(80.0, 450.0, drop.speed);
+        drop.spacing = trail_spacing(air.random.next(), drop.radius) * (1.0 + 0.6 * haste);
+        if air.random.next() < 0.9 {
+            let kind = air.random.next();
+            let share = if kind < 0.2 {
+                air.random.range(0.06, 0.12)
+            } else if kind < 0.9 {
+                air.random.range(0.13, 0.24)
+            } else {
+                air.random.range(0.26, 0.34)
+            };
+            leave(air, drop, drop.radius * share * (1.2 - 0.5 * haste), heading, drops);
         }
     }
 
@@ -318,7 +536,18 @@ fn run(air: &mut Air, drop: &mut GlassDrop, index: usize, layer: &SnowLayer, dt:
         if other.hanging {
             hanging = Some(*other);
         }
-        drop.radius = (drop.radius * drop.radius + other.radius * other.radius).sqrt().min(LARGEST_DROP);
+        // Joined, the water gathers round the middle of the two and runs on as one: it sets the other's water moving,
+        // or carries on with it if it was running too, and the drop turns a little its way.
+        let area = drop.radius * drop.radius;
+        let added = other.radius * other.radius;
+        let share = added / (area + added);
+        drop.offset += offset * share;
+        drop.jiggle = (0.6 * share).min(0.25);
+        drop.jolted = drop.age;
+        let carried = if other.bead || other.hanging { 0.0 } else { other.speed };
+        drop.speed = drop.speed * (1.0 - share) + carried * share;
+        drop.slope = (drop.slope + offset.x / (drop.radius + other.radius) * share * TURNING).clamp(-0.45, 0.45);
+        drop.radius = (area + added).sqrt().min(LARGEST_DROP);
         other.radius = 0.0;
     }
     // Run into a drop hanging under the edge, it flows down into it.
@@ -330,6 +559,93 @@ fn run(air: &mut Air, drop: &mut GlassDrop, index: usize, layer: &SnowLayer, dt:
     } else if drop.radius < SMALLEST_RUNNING {
         drop.bead = true;
     }
+    // Behind it the glass stays wet: a film down to where it is now, or to where it came to rest.
+    let stopped = drop.hanging || drop.bead;
+    if (drop.mark - drop.offset).length() >= if stopped { 0.5 } else { FILM_PIECE } {
+        if *film < MAX_FILM {
+            layer.film.push(FilmPiece {
+                from: drop.mark,
+                to: drop.offset,
+                width: half_width(drop.radius, false) * 2.0 * FILM_SHARE,
+                age: 0.0,
+                life: air.random.range(FILM_LIFE.0, FILM_LIFE.1),
+            });
+            *film += 1;
+        }
+        drop.mark = drop.offset;
+    }
+}
+
+/// A bead of `left` a running drop leaves behind it, from the rear of the drop, off to one side or the other.
+fn leave(air: &mut Air, drop: &mut GlassDrop, left: f32, heading: V2, drops: &mut Vec<GlassDrop>) {
+    drop.radius = (drop.radius * drop.radius - left * left).max(0.0).sqrt();
+    if drops.len() >= MAX_GLASS_DROPS || left < 0.15 {
+        return;
+    }
+    let across = V2::new(-heading.y, heading.x) * (air.random.range(-0.4, 0.4) * half_width(drop.radius, false));
+    let seed = air.random.next().max(0.001);
+    drops.push(GlassDrop::bead(drop.layer, drop.offset - heading * (drop.radius * 0.95 + left * 0.4) + across, drop.face, left, seed));
+}
+
+/// Spray in a running drop's way joins it as the drop touches it: the drop takes in its water and gathers round the
+/// middle of it all, so it lurches toward where it joined, slows for the moment it takes to set the water moving, and
+/// turns a little that way. The more water it gathers, the faster it runs; behind it the glass is clear.
+fn gather(drop: &mut GlassDrop, from: V2, layer: &mut SnowLayer) {
+    let reach = half_width(drop.radius, false);
+    if -drop.offset.y - reach >= SPRAY_DEEPEST + 2.0 || layer.spray.is_empty() {
+        return;
+    }
+    let path = drop.offset - from;
+    let length = path.length_squared().max(0.0001);
+    let start = drop.radius * drop.radius;
+    let mut area = start;
+    let mut turn = 0.0;
+    let mut shift = 0.0;
+    layer.spray.retain(|droplet| {
+        let along = ((droplet.offset - from).dot(path) / length).clamp(0.0, 1.0);
+        let toward = droplet.offset - (from + path * along);
+        if toward.length() >= reach + droplet.radius * GLASS_SCALE * 0.5 {
+            return true;
+        }
+        let added = droplet.radius * droplet.radius * SPRAY_KEPT;
+        turn += toward.x / reach * added;
+        shift += toward.x * added;
+        area += added;
+        false
+    });
+    if area <= start {
+        return;
+    }
+    drop.offset.x += shift / area;
+    drop.speed *= start / area;
+    drop.slope = (drop.slope + turn / area * TURNING).clamp(-0.45, 0.45);
+    drop.radius = drop.radius.max(area.sqrt().min(largest_running(layer.face)));
+}
+
+/// A running drop come onto a patch of glass with a speck of dust or grease on it is caught there for a moment: the
+/// smaller the drop, the longer.
+fn catches(drop: &mut GlassDrop) {
+    let patch = ((drop.offset.x / SPECK_SPACING).floor() as i32, (drop.offset.y / SPECK_SPACING).floor() as i32);
+    if patch == drop.patch {
+        return;
+    }
+    drop.patch = patch;
+    let mut n = (patch.0 as u32).wrapping_mul(2_654_435_761).wrapping_add((patch.1 as u32).wrapping_mul(2_246_822_519));
+    n = (n ^ (n >> 15)).wrapping_mul(3_266_489_917);
+    let speck = ((n ^ (n >> 13)) & 0xFFFF) as f32 / 65536.0;
+    if speck >= SPECK_SHARE {
+        return;
+    }
+    let hold = speck / SPECK_SHARE * 0.5 * (HEAVY_HANGING / drop.radius).powi(2);
+    if hold > 0.05 {
+        drop.held = hold.min(0.7);
+    }
+}
+
+/// The biggest drop a window's face takes running down it: a short one, like the Dock's or a taskbar's, smaller ones,
+/// or the biggest would loom over it.
+fn largest_running(face: f32) -> f32 {
+    (face / 32.0).clamp(HEAVY_HANGING, 4.6)
 }
 
 /// Run down to the window's bottom edge, a drop wraps round it and hangs under it, settling into the shape its water
@@ -447,7 +763,8 @@ fn smear(air: &mut Air, drop: &GlassDrop, layer: &SnowLayer, point: V2, drops: &
             break;
         }
         let offset = drop.offset + direction * length * spot + across * random.range(-1.2, 1.2);
-        drops.push(GlassDrop::bead(drop.layer, offset, drop.face, (water * (1.15 - spot) / total).sqrt().max(0.3)));
+        let seed = random.next().max(0.001);
+        drops.push(GlassDrop::bead(drop.layer, offset, drop.face, (water * (1.15 - spot) / total).sqrt().max(0.3), seed));
     }
 }
 
@@ -497,8 +814,10 @@ enum Throw {
     Shaken(V2),
 }
 
-fn trail_spacing(random: f32, radius: f32) -> f32 {
-    random * radius / 4.0
+/// How far a running drop of `radius` goes before it leaves its next bead, for `u` drawn evenly from zero to one: as
+/// often a short way as a long one, now and then far.
+fn trail_spacing(u: f32, radius: f32) -> f32 {
+    (2.0 - 4.0 * (1.0 - u * 0.98).ln()) * radius / 4.0
 }
 
 /// How far the window's rounded corners bring its edges in at `x` along it: its top edge down, its bottom edge up.
