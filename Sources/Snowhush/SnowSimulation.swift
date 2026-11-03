@@ -754,7 +754,7 @@ final class SnowSimulation {
             // It swells out of nothing as it gathers on the edge, down from the edge, its top staying where it gathers.
             let still = drop.hanging || drop.bead
             let grown = drop.bead ? 1 : min(1, (drop.age / 0.15).squareRoot())
-            let half = halfWidth(drop.radius, still: still)
+            let half = drop.bead ? beadWidth(drop.radius) : halfWidth(drop.radius, still: still)
             buffer[count] = Sprite(
                 position: position + SIMD2(0, still ? 0 : half * (1 - grown)),
                 velocity: still ? .zero : SIMD2(drop.slope, -1) * drop.speed,
@@ -2409,7 +2409,7 @@ final class SnowSimulation {
             } else {
                 run(&drop, index: i, dt: dt)
             }
-            let gone = drop.radius < 0.25 || (!drop.hanging && -drop.offset.y > drop.face) || drop.offset.x < 0 || drop.offset.x > drop.layer.width
+            let gone = drop.radius < (drop.bead ? 0.15 : 0.25) || (!drop.hanging && -drop.offset.y > drop.face) || drop.offset.x < 0 || drop.offset.x > drop.layer.width
                 || !layers.contains { $0 === drop.layer }
             if gone {
                 glassDrops.swapAt(i, glassDrops.count - 1)
@@ -2425,10 +2425,14 @@ final class SnowSimulation {
         let excess = max(drop.radius - 1.2, 0)
         let pull = min(700, 60 + 45 * pow(excess, 1.4)) * grip(at: drop.offset)
         if drop.held > 0 {
-            // Caught on a speck, its front holds while its water piles up behind it, until it breaks free with a lurch.
+            // Caught on a speck, its front holds while its water piles up behind it, until it breaks free with a lurch,
+            // leaving a lump of it behind where its rear was held.
             drop.held -= dt
             drop.speed *= max(0, 1 - dt * 25)
-            if drop.held <= 0 { drop.speed = pull * 1.3 }
+            if drop.held <= 0 {
+                drop.speed = pull * 1.3
+                leave(&drop, radius: drop.radius * random.range(0.22, 0.32), heading: simd_normalize(SIMD2(drop.slope, -1)))
+            }
         } else {
             drop.speed += (pull - drop.speed) * min(1, dt * 5)
         }
@@ -2443,20 +2447,17 @@ final class SnowSimulation {
         gather(&drop, from: from)
         catches(&drop)
 
+        // The film behind it breaks up into beads at no even pace: mostly small, now and then a big one, bunched up in
+        // places and gone for a stretch in others. A fast drop leaves fewer and smaller, its film too thin for more.
         drop.travelled += advance
         if drop.travelled >= drop.spacing {
             drop.travelled = 0
-            drop.spacing = trailSpacing(for: drop.radius)
-            let left = drop.radius * random.range(0.15, 0.25)
-            drop.radius = max(0, drop.radius * drop.radius - left * left).squareRoot()
-            if glassDrops.count < maxGlassDrops {
-                glassDrops.append(GlassDrop(
-                    layer: drop.layer,
-                    offset: drop.offset - heading * (drop.radius * 0.95 + left * 0.4),
-                    face: drop.face,
-                    radius: left,
-                    bead: true
-                ))
+            let haste = smoothstep(80, 450, drop.speed)
+            drop.spacing = trailSpacing(for: drop.radius) * (1 + 0.6 * haste)
+            if random.next() < 0.9 {
+                let kind = random.next()
+                let share = kind < 0.2 ? random.range(0.06, 0.12) : kind < 0.9 ? random.range(0.13, 0.24) : random.range(0.26, 0.34)
+                leave(&drop, radius: drop.radius * share * (1.2 - 0.5 * haste), heading: heading)
             }
         }
 
@@ -2794,7 +2795,27 @@ final class SnowSimulation {
     }
 
     private func trailSpacing(for radius: Float) -> Float {
-        random.range(4, 9) * radius / 4
+        (2 - 4 * log(1 - random.next() * 0.98)) * radius / 4
+    }
+
+    /// A bead of `left` a running drop leaves behind it, from the rear of the drop, off to one side or the other.
+    private func leave(_ drop: inout GlassDrop, radius left: Float, heading: SIMD2<Float>) {
+        drop.radius = max(0, drop.radius * drop.radius - left * left).squareRoot()
+        guard glassDrops.count < maxGlassDrops, left >= 0.15 else { return }
+        let across = SIMD2(-heading.y, heading.x) * random.range(-0.4, 0.4) * halfWidth(drop.radius, still: false)
+        glassDrops.append(GlassDrop(
+            layer: drop.layer,
+            offset: drop.offset - heading * (drop.radius * 0.95 + left * 0.4) + across,
+            face: drop.face,
+            radius: left,
+            bead: true
+        ))
+    }
+
+    /// How far a bead reaches each way as drawn: a small one bigger than its water, or it would be lost, the
+    /// smallest smaller still and a big one bigger, up to the size of a drop of its water.
+    private func beadWidth(_ radius: Float) -> Float {
+        max(radius, min(radius * 2.4, 1.2 + (radius - 0.5) * 0.5)) * glassScale
     }
 
     /// Clean and greasy patches on a window: drops hurry across some and hesitate on others.
