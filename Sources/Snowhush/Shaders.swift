@@ -240,6 +240,28 @@ vertex SpriteOut spriteVertex(uint vid [[vertex_id]],
         out.rain = 0.0;
         return out;
     }
+    if (s.rain > 4.5) {
+        // A piece of the film a running drop leaves behind: `velocity` from one end to the other, `size` wide.
+        SpriteOut out;
+        float pixels = max(s.size * u.scale, 1.0);
+        float2 piece = s.velocity * u.scale;
+        float extent = length(piece) + pixels + 2.0;
+        out.position = float4((s.position + u.shake.xy) / u.viewSize * 2.0 - 1.0, 0.0, 1.0);
+        out.pointSize = extent;
+        out.streak = piece / extent;
+        out.radius = pixels / extent * 0.5;
+        out.alpha = s.alpha;
+        out.soft = 0.0;
+        out.light = u.light.rgb;
+        out.warm = 0.0;
+        out.ghost = 0.0;
+        out.leaf = 0.0;
+        out.lump = 0.0;
+        out.rain = s.rain;
+        out.size = pixels;
+        out.blur = 0.0;
+        return out;
+    }
     if (s.rain != 0.0) {
         SpriteOut out;
         float pixels = max(s.size * u.scale, 1.5);
@@ -385,7 +407,30 @@ static float4 glassDropAt(SpriteOut in, float2 p, float2 head, float2 axis, floa
     return float4(premultiplied, a);
 }
 
+/// The film of water a running drop leaves on the glass: all but clear, but for its edges, where it bends the light,
+/// and a sheen along the side the light comes from. A piece ends square, so where one meets the next nothing doubles.
+static float4 filmAt(SpriteOut in, float2 p) {
+    float2 half_ = in.streak * 0.5;
+    float reach = length(half_);
+    float2 axis = reach > 0.0 ? half_ / reach : float2(0.0, -1.0);
+    if (abs(dot(p, axis)) > reach) return float4(0.0);
+    float side = dot(p, float2(-axis.y, axis.x)) / max(in.radius, 0.001);
+    float d = abs(side);
+    float aa = 1.2 / max(in.size * 0.5, 0.5);
+    float inside = 1.0 - smoothstep(1.0 - aa, 1.0, d);
+    if (inside < 0.002) return float4(0.0);
+    float darkA = 0.04 + 0.16 * smoothstep(0.5, 1.0, d);
+    float sheen = 0.22 * exp(-(side + 0.6) * (side + 0.6) / 0.05);
+    float lightA = saturate(0.06 * (1.0 - d * d) + sheen);
+    float3 dark = float3(0.03, 0.04, 0.06);
+    float3 bright = float3(0.93, 0.96, 1.0) * in.light;
+    float a = (darkA + lightA - darkA * lightA) * inside * in.alpha;
+    float3 premultiplied = (dark * darkA * (1.0 - lightA) + bright * lightA) * inside * in.alpha;
+    return float4(premultiplied, a);
+}
+
 static float4 rainAt(SpriteOut in, float2 p) {
+    if (in.rain > 4.5) return filmAt(in, p);
     if (in.rain > 2.5 && in.rain < 3.5) return hangingAt(in, p);
     float2 half_ = in.streak * 0.5;
     float span = dot(half_, half_);

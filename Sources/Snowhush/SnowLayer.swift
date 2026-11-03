@@ -25,6 +25,9 @@ final class SnowLayer {
     var face: Float = 200
     /// Rain's spray on the window's glass: each droplet from the left end of its top edge, and how big it is.
     var spray: [(offset: SIMD2<Float>, radius: Float)] = []
+    /// The film of water running drops leave on the glass, piece by piece as they ran: each piece from where to where,
+    /// how wide, how old and how long it takes to dry.
+    var film: [(from: SIMD2<Float>, to: SIMD2<Float>, width: Float, age: Float, life: Float)] = []
     var movedAt: Double = -1
     /// Brought where it is by a switch between Spaces: past the screen's edge, no wall scrapes its snow off.
     var carried = false
