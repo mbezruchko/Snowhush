@@ -65,6 +65,10 @@ final class Renderer: NSObject, MTKViewDelegate {
     private let pilePipeline: MTLRenderPipelineState
     private let signPipeline: MTLRenderPipelineState
     private let pumpkinPipeline: MTLRenderPipelineState
+    /// Drops on the glass: their bumps added up into a field, and the glass drawn from it.
+    private let fieldPipeline: MTLRenderPipelineState
+    private let glassPipeline: MTLRenderPipelineState
+    private var field: MTLTexture?
     /// The pumpkin's shell and its face, drawn the first time it is needed.
     private var pumpkinPictures: (shell: MTLTexture, face: MTLTexture)?
     /// Each caption's sign, drawn the first time a ghost holds it up, and its size in points.
@@ -108,6 +112,18 @@ final class Renderer: NSObject, MTKViewDelegate {
         self.pilePipeline = try pipeline("pileVertex", "pileFragment")
         self.signPipeline = try pipeline("signVertex", "signFragment")
         self.pumpkinPipeline = try pipeline("pumpkinVertex", "pumpkinFragment")
+        self.glassPipeline = try pipeline("glassVertex", "glassFragment")
+        let field = MTLRenderPipelineDescriptor()
+        field.vertexFunction = library.makeFunction(name: "spriteVertex")
+        field.fragmentFunction = library.makeFunction(name: "fieldFragment")
+        let adding = field.colorAttachments[0]!
+        adding.pixelFormat = .rg16Float
+        adding.isBlendingEnabled = true
+        adding.sourceRGBBlendFactor = .one
+        adding.destinationRGBBlendFactor = .one
+        adding.sourceAlphaBlendFactor = .one
+        adding.destinationAlphaBlendFactor = .one
+        self.fieldPipeline = try device.makeRenderPipelineState(descriptor: field)
         super.init()
     }
 
@@ -224,8 +240,7 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     func encode(into commandBuffer: MTLCommandBuffer, pass: MTLRenderPassDescriptor, scale: Float, time: Float) {
         reserve(sprites: simulation.spriteCount, columns: simulation.columnCount)
-        guard spriteBuffers.count == framesInFlight, heightBuffers.count == framesInFlight,
-              let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return }
+        guard spriteBuffers.count == framesInFlight, heightBuffers.count == framesInFlight else { return }
 
         let index = slot % framesInFlight
         slot += 1
@@ -263,6 +278,9 @@ final class Renderer: NSObject, MTKViewDelegate {
         if candles.count > 2 { uniforms.pumpkins.2 = candles[2] }
         let uniformsLength = MemoryLayout<Uniforms>.stride
 
+        let glass = sprites > 0 && simulation.hasGlassDrops ? encodeField(sprites: spriteBuffer, count: sprites, into: commandBuffer, matching: pass, uniforms: uniforms) : nil
+        if !simulation.hasGlassDrops { field = nil }
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return }
         drawPumpkins(pumpkins, with: encoder, uniforms: uniforms)
         drawPiles(piles.filter { !$0.isDock }, with: encoder, uniforms: uniforms, heights: heightBuffer)
         drawSigns(simulation.signs, with: encoder, uniforms: uniforms)
@@ -273,8 +291,41 @@ final class Renderer: NSObject, MTKViewDelegate {
             encoder.setFragmentBytes(&uniforms, length: uniformsLength, index: 1)
             encoder.drawPrimitives(type: .point, vertexStart: 0, vertexCount: sprites)
         }
+        if let glass {
+            encoder.setRenderPipelineState(glassPipeline)
+            encoder.setFragmentTexture(glass, index: 0)
+            encoder.setFragmentBytes(&uniforms, length: uniformsLength, index: 1)
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        }
         encoder.endEncoding()
         encodeDock(piles.filter(\.isDock), into: commandBuffer, uniforms: uniforms, heights: heightBuffer)
+    }
+
+    /// Adds up the bumps of the drops on the glass into the field, as big as the frame drawn, for the glass to be drawn
+    /// from.
+    private func encodeField(sprites: MTLBuffer, count: Int, into commandBuffer: MTLCommandBuffer, matching pass: MTLRenderPassDescriptor, uniforms: Uniforms) -> MTLTexture? {
+        guard let target = pass.colorAttachments[0].texture else { return nil }
+        if field?.width != target.width || field?.height != target.height {
+            let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rg16Float, width: target.width, height: target.height, mipmapped: false)
+            descriptor.usage = [.renderTarget, .shaderRead]
+            descriptor.storageMode = .private
+            field = device.makeTexture(descriptor: descriptor)
+        }
+        guard let field else { return nil }
+        let fieldPass = MTLRenderPassDescriptor()
+        fieldPass.colorAttachments[0].texture = field
+        fieldPass.colorAttachments[0].loadAction = .clear
+        fieldPass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0)
+        fieldPass.colorAttachments[0].storeAction = .store
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: fieldPass) else { return nil }
+        var uniforms = uniforms
+        encoder.setRenderPipelineState(fieldPipeline)
+        encoder.setVertexBuffer(sprites, offset: 0, index: 0)
+        encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+        encoder.setFragmentBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+        encoder.drawPrimitives(type: .point, vertexStart: 0, vertexCount: count)
+        encoder.endEncoding()
+        return field
     }
 
     /// Draws the Dock's snow into its own strip below the Dock, and clears the strip once after the snow is gone.

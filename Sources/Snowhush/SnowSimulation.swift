@@ -451,8 +451,19 @@ final class SnowSimulation {
     /// How far a drop of `radius` reaches each way as drawn: one running down the glass, unless `still`, a little
     /// further.
     private func halfWidth(_ radius: Float, still: Bool) -> Float {
-        max(radius, 1.2) * glassScale * (still ? 1 : runningScale(radius))
+        let flat = max(radius, 1.2) * glassScale
+        if still { return flat }
+        // Past a size, bigger ones grow ever less, nearing the widest but still each its own size.
+        let half = flat * runningScale(radius) * glassy
+        let knee: Float = 2.5
+        guard half > knee else { return half }
+        return knee + (widestRunning - knee) * (1 - exp(-(half - knee) / (widestRunning - knee) * 0.8))
     }
+
+    /// Drawn as glass, lit along its rim and with a shadow below, a running drop or a bead looks bigger than drawn
+    /// flat: it is drawn this much smaller, and a running drop reaches no further each way than the widest.
+    private let glassy: Float = 0.75
+    private let widestRunning: Float = 3.5
 
     private func runningScale(_ radius: Float) -> Float {
         1.2 - 0.2 * smoothstep(3, 4.6, radius)
@@ -604,6 +615,8 @@ final class SnowSimulation {
             && splashes.isEmpty && glassDrops.isEmpty && !wet
             && !layers.contains { $0.top > 0 }
     }
+    /// Running drops or beads on the glass, drawn from a field of their own.
+    var hasGlassDrops: Bool { glassDrops.contains { !$0.hanging } }
     var spriteCount: Int {
         lying.count + flakes.count + grains.count + motes.count + ghosts.count * 2 + snowballs.count + splashes.count + glassDrops.count
             + ledgeList.reduce(0) { $0 + $1.spray.count + $1.film.count }
@@ -2833,7 +2846,7 @@ final class SnowSimulation {
     /// How far a bead reaches each way as drawn: a small one bigger than its water, or it would be lost, the
     /// smallest smaller still and a big one bigger, up to the size of a drop of its water.
     private func beadWidth(_ radius: Float) -> Float {
-        max(radius, min(radius * 2.4, 1.2 + (radius - 0.5) * 0.5)) * glassScale
+        max(radius, min(radius * 2.4, 1.2 + (radius - 0.5) * 0.5)) * glassScale * glassy
     }
 
     /// Clean and greasy patches on a window: drops hurry across some and hesitate on others.

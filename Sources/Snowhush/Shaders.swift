@@ -274,7 +274,9 @@ vertex SpriteOut spriteVertex(uint vid [[vertex_id]],
         float smear = speed * 0.024;
         float2 travel = !glass ? s.velocity * 0.028 : speed > 0.0 ? -s.velocity / speed * (tail + smear) : float2(0.0);
         float2 streak = travel * u.scale;
-        float extent = max(pixels * (glass ? 1.4 : 1.0) + length(streak) + (glass ? 2.0 : 0.0), 2.0);
+        // A running drop or a bead reaches past its outline into the field the glass is drawn from.
+        float reach = s.rain > 1.5 && s.rain < 2.5 ? 2.2 : glass ? 1.4 : 1.0;
+        float extent = max(pixels * reach + length(streak) + (glass ? 2.0 : 0.0), 2.0);
         float2 center = s.position - (glass ? -travel : travel) * 0.5;
         // A drop hanging under an edge clings at `position`; `soft` is how far along it is, as `hangingAt` reads it.
         if (s.rain > 2.5 && s.rain < 3.5) {
@@ -402,7 +404,9 @@ static float smoothUnion(float a, float b, float k) {
     return mix(b, a, h) - k * h * (1.0 - h);
 }
 
-static float4 glassDropAt(SpriteOut in, float2 p, float2 head, float2 axis, float length) {
+/// How far out a drop on the glass `p` is, from its middle at zero to its outline at one: its head, round but for its
+/// outline's quirks, and the tail it draws out behind it as it runs, `length` long along `axis`.
+static float dropDistance(SpriteOut in, float2 p, float2 head, float2 axis, float length) {
     float along = length > 0.001 ? clamp(dot(p - head, axis) / length, 0.0, 1.0) : 0.0;
     float width = in.radius * mix(1.0, 0.3, along);
     float2 r = (p - head) / max(in.radius, 0.001);
@@ -410,7 +414,13 @@ static float4 glassDropAt(SpriteOut in, float2 p, float2 head, float2 axis, floa
     float c = reach > 0.0 ? dot(r, -axis) / reach : 1.0;
     float s = reach > 0.0 ? (r.x * axis.y - r.y * axis.x) / reach : 0.0;
     float body = reach / outline(in, c, s);
-    float d = along > 0.0 ? smoothUnion(body, metal::length(p - head - axis * along * length) / max(width, 0.001), 0.2) : body;
+    return along > 0.0 ? smoothUnion(body, metal::length(p - head - axis * along * length) / max(width, 0.001), 0.2) : body;
+}
+
+static float4 glassDropAt(SpriteOut in, float2 p, float2 head, float2 axis, float length) {
+    float along = length > 0.001 ? clamp(dot(p - head, axis) / length, 0.0, 1.0) : 0.0;
+    float width = in.radius * mix(1.0, 0.3, along);
+    float d = dropDistance(in, p, head, axis, length);
     // Smoothed over a pixel, worked out from its size: it is drawn several times over in a loop.
     float aa = 1.2 / max(width / max(in.radius, 0.001) * in.size * 0.5, 0.5);
     float inside = 1.0 - smoothstep(1.0 - aa, 1.0, d);
@@ -476,6 +486,8 @@ static float4 rainAt(SpriteOut in, float2 p) {
         float3 bright = float3(0.86, 0.9, 0.97) * in.light;
         return float4(dark * sheath * (1.0 - core) + bright * core, a);
     }
+    // A running drop or a bead is drawn with the glass, from the field.
+    if (in.rain < 2.5) return float4(0.0);
     // The drop at every moment of the exposure, from where it is back to where it was, each with its tail.
     float2 axis = span > 0.0 ? half_ / sqrt(span) : float2(0.0, 1.0);
     float total = 2.0 * sqrt(span);
@@ -489,6 +501,81 @@ static float4 rainAt(SpriteOut in, float2 p) {
         sum += glassDropAt(in, p, -half_ + axis * smear * back, axis, total - smear);
     }
     return sum / float(moments);
+}
+
+/// A running drop or a bead as a smooth bump in the field the glass is drawn from, reaching half as far again as its
+/// outline: where drops come close, their bumps add up and they run together into one, as water does. The bump is the
+/// field's first channel, and the bump times how big the drop is, how high the water stands, its second.
+fragment half2 fieldFragment(SpriteOut in [[stage_in]], float2 coord [[point_coord]], constant Uniforms &u [[buffer(1)]]) {
+    if (in.rain < 1.5 || in.rain > 2.5) discard_fragment();
+    float2 p = float2(coord.x - 0.5, 0.5 - coord.y);
+    float2 half_ = in.streak * 0.5;
+    float span = dot(half_, half_);
+    float2 axis = span > 0.0 ? half_ / sqrt(span) : float2(0.0, 1.0);
+    float total = 2.0 * sqrt(span);
+    float smear = total * in.blur;
+    float extent = in.size / max(2.0 * in.radius, 0.001);
+    int moments = clamp(int(ceil(smear * extent / 0.75)), 1, 16);
+    float bump = 0.0;
+    for (int k = 0; k < moments; k++) {
+        float back = moments > 1 ? float(k) / float(moments - 1) : 0.0;
+        float d = dropDistance(in, p, -half_ + axis * smear * back, axis, total - smear);
+        float q = saturate(1.0 - d * d / 2.25);
+        bump += q * q;
+    }
+    bump *= in.alpha / float(moments);
+    if (bump < 0.001) discard_fragment();
+    return half2(bump, bump * in.size * 0.5 / u.scale);
+}
+
+struct GlassOut {
+    float4 position [[position]];
+};
+
+vertex GlassOut glassVertex(uint vid [[vertex_id]]) {
+    float2 p = float2(float((vid << 1) & 2), float(vid & 2));
+    GlassOut out;
+    out.position = float4(p * 2.0 - 1.0, 0.0, 1.0);
+    return out;
+}
+
+/// The drops on the glass and their beads, drawn from the field they make together as Liquid Glass is drawn: all but
+/// clear inside, lit along the rim on the side the light comes from and faintly on the other, a glint near the top, a
+/// faint crescent of light gathered at the foot, and a soft shadow just below.
+fragment float4 glassFragment(GlassOut in [[stage_in]], texture2d<half, access::read> field [[texture(0)]], constant Uniforms &u [[buffer(1)]]) {
+    // The field at a lone drop's outline: a bump reaches 1.5 times as far, and (1 - 1/1.5²)² is about this.
+    const float threshold = 0.3086;
+    int2 size = int2(field.get_width(), field.get_height());
+    int2 c = int2(in.position.xy);
+    float f = float(field.read(uint2(c)).r);
+    float edge = max(fwidth(f), 0.002);
+    float above = float(field.read(uint2(clamp(c - int2(0, max(1, int(2.0 * u.scale + 0.5))), int2(0), size - 1))).r);
+    if (max(f, above) < threshold * 0.55) discard_fragment();
+
+    float gl = float(field.read(uint2(clamp(c - int2(1, 0), int2(0), size - 1))).g);
+    float gr = float(field.read(uint2(clamp(c + int2(1, 0), int2(0), size - 1))).g);
+    float gu = float(field.read(uint2(clamp(c - int2(0, 1), int2(0), size - 1))).g);
+    float gd = float(field.read(uint2(clamp(c + int2(0, 1), int2(0), size - 1))).g);
+    // Screen space, y down: the slope points away from the drop's crest, toward its rim.
+    float2 slope = -float2(gr - gl, gd - gu) * 0.5 * u.scale * 1.1;
+    float3 n = normalize(float3(slope, 1.0));
+    float2 light = normalize(float2(-0.55, -0.83));
+    float tilt = saturate(length(n.xy) / 0.72);
+    float side = dot(n.xy, light) / 0.72;
+
+    float mask = smoothstep(threshold - edge, threshold + edge, f);
+    float shadow = smoothstep(threshold * 0.55, threshold * 1.2, above) * (1.0 - mask) * 0.1;
+    float rim = smoothstep(0.62, 1.0, tilt);
+    float rimLight = rim * (0.1 + 0.6 * pow(saturate(side), 1.5) + 0.3 * pow(saturate(-side), 1.5));
+    float3 h = normalize(float3(light * 0.5, 0.87));
+    float specular = pow(saturate(dot(n, h)), 80.0) * 0.8;
+    float crescent = 0.16 * saturate(-side) * smoothstep(0.25, 0.8, tilt) * (1.0 - rim);
+    // Its rim bends the darker world around it in, most of all along its foot.
+    float shade = 0.04 + 0.32 * rim * rim * (0.6 + 0.4 * saturate(-side));
+
+    float glow = (rimLight + specular + crescent + 0.01) * mask;
+    float alpha = shade * mask + shadow;
+    return float4(float3(0.95, 0.975, 1.0) * u.light.rgb * min(glow, 1.0), alpha);
 }
 
 fragment float4 spriteFragment(SpriteOut in [[stage_in]], float2 coord [[point_coord]], constant Uniforms &u [[buffer(1)]]) {
