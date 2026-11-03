@@ -274,7 +274,7 @@ vertex SpriteOut spriteVertex(uint vid [[vertex_id]],
         float smear = speed * 0.024;
         float2 travel = !glass ? s.velocity * 0.028 : speed > 0.0 ? -s.velocity / speed * (tail + smear) : float2(0.0);
         float2 streak = travel * u.scale;
-        float extent = max(pixels + length(streak) + (glass ? 2.0 : 0.0), 2.0);
+        float extent = max(pixels * (glass ? 1.4 : 1.0) + length(streak) + (glass ? 2.0 : 0.0), 2.0);
         float2 center = s.position - (glass ? -travel : travel) * 0.5;
         // A drop hanging under an edge clings at `position`; `soft` is how far along it is, as `hangingAt` reads it.
         if (s.rain > 2.5 && s.rain < 3.5) {
@@ -294,10 +294,15 @@ vertex SpriteOut spriteVertex(uint vid [[vertex_id]],
         out.warm = 0.0;
         out.ghost = 0.0;
         out.leaf = 0.0;
-        out.lump = 0.0;
         out.rain = s.rain;
         out.size = pixels;
         out.blur = glass && tail + smear > 0.0 ? smear / (tail + smear) : 0.0;
+        // A drop on the glass: its outline's seed, how it has turned as it ran, how far it bulges forward, held back,
+        // and how far it is squashed or stretched.
+        out.lump = s.lump;
+        out.turn = s.turn;
+        out.tint = float4(0.0, 0.0, 0.0, s.tintAmount);
+        out.turnSmear = s.turnSpeed;
         return out;
     }
     float pixels = s.size * u.scale;
@@ -381,10 +386,31 @@ static float4 hangingAt(SpriteOut in, float2 p) {
 /// A drop on the glass works as a little lens: darker toward its rim, most of all along its foot, where it bends the
 /// light from above into a bright crescent, and a glint near its top. Its head leads, at `head`; the tail it draws out
 /// behind it as it runs, `length` long along `axis`, narrows away.
+/// How far a drop's outline reaches, at the angle whose cosine and sine from the way it runs are `c` and `s`: never
+/// quite round, its edge held to the glass in places, bulging forward while it is held back, and squashed or stretched
+/// for a moment after a jolt.
+static float outline(SpriteOut in, float c, float s) {
+    if (in.lump == 0.0) return 1.0;
+    float a = atan2(s, c);
+    float seed = in.lump * 6.2832;
+    float wobble = 0.07 * cos(2.0 * a + seed * 3.0 + in.turn) + 0.045 * cos(3.0 * a + seed * 7.0 - in.turn * 1.3);
+    return 1.0 + wobble + in.tint.w * max(c, 0.0) * max(c, 0.0) + in.turnSmear * cos(2.0 * a);
+}
+
+static float smoothUnion(float a, float b, float k) {
+    float h = saturate(0.5 + 0.5 * (b - a) / k);
+    return mix(b, a, h) - k * h * (1.0 - h);
+}
+
 static float4 glassDropAt(SpriteOut in, float2 p, float2 head, float2 axis, float length) {
     float along = length > 0.001 ? clamp(dot(p - head, axis) / length, 0.0, 1.0) : 0.0;
     float width = in.radius * mix(1.0, 0.3, along);
-    float d = metal::length(p - head - axis * along * length) / max(width, 0.001);
+    float2 r = (p - head) / max(in.radius, 0.001);
+    float reach = metal::length(r);
+    float c = reach > 0.0 ? dot(r, -axis) / reach : 1.0;
+    float s = reach > 0.0 ? (r.x * axis.y - r.y * axis.x) / reach : 0.0;
+    float body = reach / outline(in, c, s);
+    float d = along > 0.0 ? smoothUnion(body, metal::length(p - head - axis * along * length) / max(width, 0.001), 0.2) : body;
     // Smoothed over a pixel, worked out from its size: it is drawn several times over in a loop.
     float aa = 1.2 / max(width / max(in.radius, 0.001) * in.size * 0.5, 0.5);
     float inside = 1.0 - smoothstep(1.0 - aa, 1.0, d);

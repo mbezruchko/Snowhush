@@ -155,6 +155,11 @@ private struct GlassDrop {
     /// Caught on a speck on the glass: how much longer it holds there, and the patch of glass it last ran onto.
     var held: Float = 0
     var patch = SIMD2<Int32>(repeating: .min)
+    /// Picks its outline: where its edge clings to the glass, it is never quite round.
+    var seed: Float = 0
+    /// How hard it squashed and stretched when it last ran into more water or broke free, and when.
+    var jiggle: Float = 0
+    var jolted: Float = 0
 }
 
 private struct Grain {
@@ -755,6 +760,8 @@ final class SnowSimulation {
             let still = drop.hanging || drop.bead
             let grown = drop.bead ? 1 : min(1, (drop.age / 0.15).squareRoot())
             let half = drop.bead ? beadWidth(drop.radius) : halfWidth(drop.radius, still: still)
+            // Held back, a running drop's water piles up in its front; jolted, it squashes and stretches for a moment.
+            let since = drop.age - drop.jolted
             buffer[count] = Sprite(
                 position: position + SIMD2(0, still ? 0 : half * (1 - grown)),
                 velocity: still ? .zero : SIMD2(drop.slope, -1) * drop.speed,
@@ -762,6 +769,10 @@ final class SnowSimulation {
                 // Drying up, a hanging drop fades rather than shrinking past the smallest drawn.
                 alpha: min(1, drop.radius / (drop.hanging ? 1.2 : 0.35)),
                 soft: drop.hanging ? hangingStage(of: drop) : 0,
+                tintAmount: still ? 0 : 0.16 * (1 - smoothstep(0, 40, drop.speed)),
+                lump: drop.seed,
+                turn: drop.offset.y * 0.06,
+                turnSpeed: still ? 0 : drop.jiggle * exp(-since / 0.15) * cos(since * 2 * .pi * 11),
                 rain: drop.hanging ? 3 : 2
             )
             count += 1
@@ -2375,7 +2386,8 @@ final class SnowSimulation {
             radius: radius,
             slope: random.range(-0.12, 0.12),
             spacing: trailSpacing(for: radius),
-            mark: SIMD2(along, edge)
+            mark: SIMD2(along, edge),
+            seed: max(random.next(), 0.001)
         ))
     }
 
@@ -2431,6 +2443,8 @@ final class SnowSimulation {
             drop.speed *= max(0, 1 - dt * 25)
             if drop.held <= 0 {
                 drop.speed = pull * 1.3
+                drop.jiggle = 0.12
+                drop.jolted = drop.age
                 leave(&drop, radius: drop.radius * random.range(0.22, 0.32), heading: simd_normalize(SIMD2(drop.slope, -1)))
             }
         } else {
@@ -2472,6 +2486,8 @@ final class SnowSimulation {
             // or carries on with it if it was running too, and the drop turns a little its way.
             let area = drop.radius * drop.radius, added = other.radius * other.radius
             drop.offset += offset * added / (area + added)
+            drop.jiggle = min(0.25, 0.6 * added / (area + added))
+            drop.jolted = drop.age
             drop.speed = (drop.speed * area + (other.bead || other.hanging ? 0 : other.speed) * added) / (area + added)
             drop.slope = min(max(drop.slope + offset.x / (drop.radius + other.radius) * added / (area + added) * turning, -0.45), 0.45)
             drop.radius = min((area + added).squareRoot(), largestDrop)
@@ -2736,7 +2752,8 @@ final class SnowSimulation {
                 offset: drop.offset + direction * length * spot + across * random.range(-1.2, 1.2),
                 face: drop.face,
                 radius: max(0.3, (water * weight / total).squareRoot()),
-                bead: true
+                bead: true,
+                seed: max(random.next(), 0.001)
             ))
         }
     }
@@ -2808,7 +2825,8 @@ final class SnowSimulation {
             offset: drop.offset - heading * (drop.radius * 0.95 + left * 0.4) + across,
             face: drop.face,
             radius: left,
-            bead: true
+            bead: true,
+            seed: max(random.next(), 0.001)
         ))
     }
 
