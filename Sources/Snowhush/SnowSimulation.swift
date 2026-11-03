@@ -152,6 +152,9 @@ private struct GlassDrop {
     var bead = false
     /// Where the film it leaves behind as it runs was last laid down to.
     var mark = SIMD2<Float>(repeating: 0)
+    /// Caught on a speck on the glass: how much longer it holds there, and the patch of glass it last ran onto.
+    var held: Float = 0
+    var patch = SIMD2<Int32>(repeating: .min)
 }
 
 private struct Grain {
@@ -475,6 +478,13 @@ final class SnowSimulation {
     private let filmShare: Float = 0.4
     private let filmLife: ClosedRange<Float> = 2...3.5
     private let maxFilm = 4000
+    /// Specks that catch a running drop for a moment: one patch of glass this big in this many has one.
+    private let speckSpacing: Float = 6
+    private let speckShare: Float = 0.05
+    /// How far a running drop turns toward the water that joins it from one side, for the share of it that water is.
+    private let turning: Float = 1
+    /// How much of the spray a running drop runs into it keeps: the rest it leaves on the glass behind it.
+    private let sprayKept: Float = 0.35
     private var wet: Bool { ledgeList.contains { !$0.spray.isEmpty || !$0.film.isEmpty } }
 
     private let ground: SnowLayer
@@ -2347,8 +2357,7 @@ final class SnowSimulation {
     /// Now and then rain caught on the top edge of a window or the Dock gathers into a drop that runs down its face.
     private func runDown(_ ledge: SnowLayer, from x: Float, water: Float = 0) {
         guard glassDrops.count < maxGlassDrops else { return }
-        // A short face like the Dock's takes smaller drops: the biggest would loom over it.
-        let largest = min(max(ledge.face / 32, heavyHanging), 4.6)
+        let largest = largestRunning(on: ledge.face)
         var radius: Float
         if water > 0 {
             radius = max(water, smallestRunning)
@@ -2414,7 +2423,15 @@ final class SnowSimulation {
 
     private func run(_ drop: inout GlassDrop, index: Int, dt: Float) {
         let excess = max(drop.radius - 1.2, 0)
-        drop.speed += (min(700, 60 + 45 * pow(excess, 1.4)) * grip(at: drop.offset) - drop.speed) * min(1, dt * 5)
+        let pull = min(700, 60 + 45 * pow(excess, 1.4)) * grip(at: drop.offset)
+        if drop.held > 0 {
+            // Caught on a speck, its front holds while its water piles up behind it, until it breaks free with a lurch.
+            drop.held -= dt
+            drop.speed *= max(0, 1 - dt * 25)
+            if drop.held <= 0 { drop.speed = pull * 1.3 }
+        } else {
+            drop.speed += (pull - drop.speed) * min(1, dt * 5)
+        }
         // A window dragged along under it leaves it trailing a little behind; its own wandering stays within less.
         let trail = -drop.layer.trackVelocity.x * 0.0006
         let wander = (drop.slope + (random.range(-1, 1) * 1.6 + trail) * dt) * (1 - dt * 0.8)
@@ -2423,7 +2440,8 @@ final class SnowSimulation {
         let advance = drop.speed * dt
         let from = drop.offset
         drop.offset += SIMD2(drop.slope, -1) * advance
-        sweep(drop.layer, from: from, to: drop.offset, reach: halfWidth(drop.radius, still: false))
+        gather(&drop, from: from)
+        catches(&drop)
 
         drop.travelled += advance
         if drop.travelled >= drop.spacing {
@@ -2447,8 +2465,15 @@ final class SnowSimulation {
         for j in glassDrops.indices where j != index && glassDrops[j].layer === drop.layer && glassDrops[j].radius > 0 {
             let offset = glassDrops[j].offset - drop.offset
             guard simd_dot(offset, heading) > -drop.radius * 0.2, simd_length(offset) < (drop.radius + glassDrops[j].radius) * 0.9 else { continue }
-            if glassDrops[j].hanging { hanging = glassDrops[j] }
-            drop.radius = min((drop.radius * drop.radius + glassDrops[j].radius * glassDrops[j].radius).squareRoot(), largestDrop)
+            let other = glassDrops[j]
+            if other.hanging { hanging = other }
+            // Joined, the water gathers round the middle of the two and runs on as one: it sets the other's water moving,
+            // or carries on with it if it was running too, and the drop turns a little its way.
+            let area = drop.radius * drop.radius, added = other.radius * other.radius
+            drop.offset += offset * added / (area + added)
+            drop.speed = (drop.speed * area + (other.bead || other.hanging ? 0 : other.speed) * added) / (area + added)
+            drop.slope = min(max(drop.slope + offset.x / (drop.radius + other.radius) * added / (area + added) * turning, -0.45), 0.45)
+            drop.radius = min((area + added).squareRoot(), largestDrop)
             glassDrops[j].radius = 0
         }
         // Run into a drop hanging under the edge, it flows down into it.
@@ -2498,15 +2523,55 @@ final class SnowSimulation {
         }
     }
 
-    /// A drop running down through the spray takes it in: behind it the glass is clear.
-    private func sweep(_ layer: SnowLayer, from: SIMD2<Float>, to: SIMD2<Float>, reach: Float) {
-        guard -to.y - reach < sprayDeepest + 2, !layer.spray.isEmpty else { return }
-        let path = to - from
+    /// Spray in a running drop's way joins it as the drop touches it: the drop takes in its water and gathers round
+    /// the middle of it all, so it lurches toward where it joined, slows for the moment it takes to set the water
+    /// moving, and turns a little that way. The more water it gathers, the faster it runs; behind it the glass is
+    /// clear.
+    private func gather(_ drop: inout GlassDrop, from: SIMD2<Float>) {
+        let layer = drop.layer
+        let reach = halfWidth(drop.radius, still: false)
+        guard -drop.offset.y - reach < sprayDeepest + 2, !layer.spray.isEmpty else { return }
+        let path = drop.offset - from
         let length = max(simd_length_squared(path), 0.0001)
+        let start = drop.radius * drop.radius
+        var area = start
+        var turn: Float = 0
+        var shift: Float = 0
         layer.spray.removeAll { droplet in
             let along = min(max(simd_dot(droplet.offset - from, path) / length, 0), 1)
-            return simd_distance(droplet.offset, from + path * along) < reach + droplet.radius * glassScale * 0.5
+            let toward = droplet.offset - (from + path * along)
+            guard simd_length(toward) < reach + droplet.radius * glassScale * 0.5 else { return false }
+            let added = droplet.radius * droplet.radius * sprayKept
+            turn += toward.x / reach * added
+            shift += toward.x * added
+            area += added
+            return true
         }
+        guard area > start else { return }
+        drop.offset.x += shift / area
+        drop.speed *= start / area
+        drop.slope = min(max(drop.slope + turn / area * turning, -0.45), 0.45)
+        drop.radius = max(drop.radius, min(area.squareRoot(), largestRunning(on: layer.face)))
+    }
+
+    /// A running drop come onto a patch of glass with a speck of dust or grease on it is caught there for a moment:
+    /// the smaller the drop, the longer.
+    private func catches(_ drop: inout GlassDrop) {
+        let patch = SIMD2<Int32>(Int32((drop.offset.x / speckSpacing).rounded(.down)), Int32((drop.offset.y / speckSpacing).rounded(.down)))
+        guard patch != drop.patch else { return }
+        drop.patch = patch
+        var n = UInt32(bitPattern: patch.x) &* 2_654_435_761 &+ UInt32(bitPattern: patch.y) &* 2_246_822_519
+        n = (n ^ (n >> 15)) &* 3_266_489_917
+        let speck = Float((n ^ (n >> 13)) & 0xFFFF) / 65536
+        guard speck < speckShare else { return }
+        let hold = speck / speckShare * 0.5 * pow(heavyHanging / drop.radius, 2)
+        if hold > 0.05 { drop.held = min(hold, 0.7) }
+    }
+
+    /// The biggest drop a window's face takes running down it: a short one, like the Dock's, smaller ones, or the
+    /// biggest would loom over it.
+    private func largestRunning(on face: Float) -> Float {
+        min(max(face / 32, heavyHanging), 4.6)
     }
 
     /// Spray dries up slowly in the rain and soon once it stops, a running drop's film in a few seconds, and both fast
