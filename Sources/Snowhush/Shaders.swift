@@ -193,7 +193,7 @@ static float4 over(float4 top, float4 under) {
 /// A cherry blossom petal tumbling about its length, `r` running along it from base to tip and across it on the screen.
 /// It curves across like a spoon: turned edge on it shows as a bowed sliver, and turned further, the inside of the
 /// curve. `sense` is which way it is tumbling, and so which way the curve bows.
-static float4 curledPetalAt(float2 r, float seed, float flip, float sense, float alpha, float3 light, float warm, float wither) {
+static float4 curledPetalAt(float2 r, float seed, float turn, float flip, float sense, float alpha, float3 light, float warm, float wither) {
     const float curl = 0.35;
     float c = flip >= 0.0 ? max(flip, 0.2) : min(flip, -0.2);
     float s = sense * sqrt(saturate(1.0 - c * c));
@@ -211,7 +211,15 @@ static float4 curledPetalAt(float2 r, float seed, float flip, float sense, float
         // Which side of the petal shows there, and how squarely.
         float facing = clamp(c - 2.0 * curl * y * s, -1.0, 1.0);
         float hit = step(0.0, disc) * step(abs(y), 1.2);
-        color = over(color, petalAt(float2(r.x, y), seed, facing, alpha, light, warm, wither) * hit);
+        float4 piece = petalAt(float2(r.x, y), seed, facing, alpha, light, warm, wither);
+        // The side turned to the light is brighter, the other in shade, and the light moves over it as it tumbles;
+        // lit from behind, the thin petal glows pink.
+        float across = -2.0 * curl * y * c - s;
+        float3 normal = normalize(float3(across * float2(-sin(turn), cos(turn)), c - 2.0 * curl * y * s));
+        float lit = dot(normal.z >= 0.0 ? normal : -normal, normalize(float3(-0.35, 0.75, 0.55)));
+        piece.rgb *= mix(float3(0.88, 0.78, 0.86), float3(1.06, 1.04, 1.05), saturate(lit));
+        piece.rgb = mix(piece.rgb, float3(1.0, 0.62, 0.78) * piece.a, saturate(-lit) * 0.3);
+        color = over(color, piece * hit);
     }
     return color;
 }
@@ -303,7 +311,7 @@ static float4 leafAt(float2 p, float seed, float turn, float flip, float alpha, 
                      float direction, float sense) {
     if (blossom > 0.5 && fract(seed * 23.3) < 0.035) return flowerAt(p * 2.0, seed, turn, flip, direction, alpha, light, warm, wither);
     float2 r = float2(cos(turn) * p.x + sin(turn) * p.y, -sin(turn) * p.x + cos(turn) * p.y) * 2.0;
-    if (blossom > 0.5) return curledPetalAt(r, seed, flip, sense, alpha, light, warm, wither);
+    if (blossom > 0.5) return curledPetalAt(r, seed, turn, flip, sense, alpha, light, warm, wither);
     float across = max(abs(flip), 0.35);
     r.y /= across;
     float inside;
