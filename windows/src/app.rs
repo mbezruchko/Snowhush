@@ -52,6 +52,7 @@ const ID_RAIN: u32 = 213;
 const ID_PERFORMANCE: u32 = 214;
 const ID_MAX_PERFORMANCE: u32 = 215;
 const ID_DEEP: u32 = 216;
+const ID_BLOSSOM: u32 = 217;
 const TIMER_WELCOME: usize = 1;
 const TIMER_UPDATES: usize = 2;
 const TIMER_HALLOWEEN: usize = 3;
@@ -86,15 +87,18 @@ const PUMPKIN_WHITE: Glyph = glyph!("pumpkin-white");
 const PUMPKIN_BLACK: Glyph = glyph!("pumpkin-black");
 const RAIN_WHITE: Glyph = glyph!("rain-white");
 const RAIN_BLACK: Glyph = glyph!("rain-black");
+const BLOSSOM_WHITE: Glyph = glyph!("blossom-white");
+const BLOSSOM_BLACK: Glyph = glyph!("blossom-black");
 
-/// What the tray shows: a snowflake, a jack-o'-lantern while it is Halloween and wanted, a leaf while leaves fall, or
-/// a rain cloud while it rains.
+/// What the tray shows: a snowflake, a jack-o'-lantern while it is Halloween and wanted, a leaf while leaves fall, a
+/// rain cloud while it rains, or a cherry blossom while its petals fall.
 #[derive(Clone, Copy, PartialEq)]
 enum Emblem {
     Snowflake,
     Pumpkin,
     Leaf,
     Rain,
+    Blossom,
 }
 
 impl Emblem {
@@ -106,6 +110,7 @@ impl Emblem {
                 Mode::Snow => Emblem::Snowflake,
                 Mode::Autumn => Emblem::Leaf,
                 Mode::Rain => Emblem::Rain,
+                Mode::Blossom => Emblem::Blossom,
             }
         }
     }
@@ -121,6 +126,8 @@ impl Emblem {
             (Emblem::Pumpkin, true) => &PUMPKIN_BLACK,
             (Emblem::Rain, false) => &RAIN_WHITE,
             (Emblem::Rain, true) => &RAIN_BLACK,
+            (Emblem::Blossom, false) => &BLOSSOM_WHITE,
+            (Emblem::Blossom, true) => &BLOSSOM_BLACK,
         }
     }
 }
@@ -339,6 +346,7 @@ fn show_menu(window: HWND, x: i32, y: i32) {
 fn entries(settings: &Settings, login: bool) -> Vec<Entry> {
     let mode = settings.mode;
     let autumn = mode == Mode::Autumn;
+    let blossom = mode == Mode::Blossom;
     let snowfall = Snowfall::ALL
         .iter()
         .enumerate()
@@ -348,6 +356,7 @@ fn entries(settings: &Settings, login: bool) -> Vec<Entry> {
         Entry::choice(ID_SNOW, "Snow", mode == Mode::Snow),
         Entry::choice(ID_AUTUMN, "Autumn Leaves", autumn),
         Entry::choice(ID_RAIN, "Rain", mode == Mode::Rain),
+        Entry::choice(ID_BLOSSOM, "Cherry Blossom", blossom),
         Entry::Separator,
         Entry::item(ID_HALLOWEEN, "Halloween", halloween::wanted(settings.halloween), mode == Mode::Snow),
     ];
@@ -366,17 +375,32 @@ fn entries(settings: &Settings, login: bool) -> Vec<Entry> {
     // Rain doesn't lie anywhere: nothing to keep, melt or clear.
     if mode != Mode::Rain {
         entries.push(Entry::item(ID_ACCUMULATE, "Accumulate", settings.accumulate, true));
-        entries.push(Entry::item(ID_MELT, if autumn { "Wither Leaves" } else { "Melt Snow" }, settings.melt, settings.accumulate));
+        let melt = if autumn {
+            "Wither Leaves"
+        } else if blossom {
+            "Wilt Petals"
+        } else {
+            "Melt Snow"
+        };
+        entries.push(Entry::item(ID_MELT, melt, settings.melt, settings.accumulate));
     }
     let windows = match mode {
         Mode::Snow => "Snow on Windows",
         Mode::Autumn => "Leaves on Windows",
         Mode::Rain => "Rain on Windows",
+        Mode::Blossom => "Petals on Windows",
     };
     entries.push(Entry::item(ID_WINDOWS, windows, settings.snow_on_windows, true));
     entries.push(Entry::item(ID_DEEP, "Deep Interaction", settings.deep_interaction, settings.snow_on_windows));
     if mode != Mode::Rain {
-        entries.push(Entry::item(ID_CLEAR, if autumn { "Clear Leaves" } else { "Clear Snow" }, false, true));
+        let clear = if autumn {
+            "Clear Leaves"
+        } else if blossom {
+            "Clear Petals"
+        } else {
+            "Clear Snow"
+        };
+        entries.push(Entry::item(ID_CLEAR, clear, false, true));
     }
     entries.extend([
         Entry::Separator,
@@ -454,10 +478,11 @@ fn choose(window: HWND, chosen: u32, login: bool) {
             });
             refresh_icon(window);
         }
-        ID_SNOW | ID_AUTUMN | ID_RAIN => {
+        ID_SNOW | ID_AUTUMN | ID_RAIN | ID_BLOSSOM => {
             let mode = match chosen {
                 ID_AUTUMN => Mode::Autumn,
                 ID_RAIN => Mode::Rain,
+                ID_BLOSSOM => Mode::Blossom,
                 _ => Mode::Snow,
             };
             APP.with_borrow_mut(|app| {

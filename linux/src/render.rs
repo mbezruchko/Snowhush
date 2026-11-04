@@ -168,7 +168,22 @@ impl Gpu {
                 &gl,
                 SPRITE_VERTEX,
                 &included(SPRITE_FRAGMENT),
-                &["viewSize", "scale", "time", "light", "shadowTint", "rim", "lantern", "pumpkins", "shake", "panel", "autumn", "glass"],
+                &[
+                    "viewSize",
+                    "scale",
+                    "time",
+                    "light",
+                    "shadowTint",
+                    "rim",
+                    "lantern",
+                    "pumpkins",
+                    "shake",
+                    "panel",
+                    "autumn",
+                    "blossom",
+                    "wilt",
+                    "glass",
+                ],
             )?;
             let field =
                 program(&gl, SPRITE_VERTEX, &included(FIELD_FRAGMENT), &["viewSize", "scale", "time", "lantern", "pumpkins", "shake", "panel"])?;
@@ -200,6 +215,8 @@ impl Gpu {
                     "heights",
                     "panel",
                     "autumn",
+                    "blossom",
+                    "wilt",
                     "drift",
                 ],
             )?;
@@ -365,7 +382,9 @@ impl Gpu {
         let shake = [shake.x, shake.y];
         // An empty rectangle hides nothing.
         let panel = panel.unwrap_or([0.0; 4]);
-        let autumn = if simulation.autumn() { 1.0 } else { 0.0 };
+        let autumn = if simulation.leafy() { 1.0 } else { 0.0 };
+        let blossom = if simulation.blossom() { 1.0 } else { 0.0 };
+        let wilt = if simulation.wilts() { 1.0 } else { 0.0 };
         unsafe {
             gl.viewport(0, 0, surface.width, surface.height);
             gl.clear_color(0.0, 0.0, 0.0, 0.0);
@@ -427,6 +446,8 @@ impl Gpu {
                 gl.uniform_1_i32(pile.location("heights"), 0);
                 gl.uniform_4_f32_slice(pile.location("panel"), &panel);
                 gl.uniform_1_f32(pile.location("autumn"), autumn);
+                gl.uniform_1_f32(pile.location("blossom"), blossom);
+                gl.uniform_1_f32(pile.location("wilt"), wilt);
                 for layer in &piles {
                     let count = layer.occluders.len().min(OCCLUDERS);
                     let occluders: Vec<f32> = layer.occluders[..count].iter().flatten().copied().collect();
@@ -537,6 +558,8 @@ impl Gpu {
                 gl.uniform_2_f32_slice(sprite.location("shake"), &shake);
                 gl.uniform_4_f32_slice(sprite.location("panel"), &panel);
                 gl.uniform_1_f32(sprite.location("autumn"), autumn);
+                gl.uniform_1_f32(sprite.location("blossom"), blossom);
+                gl.uniform_1_f32(sprite.location("wilt"), wilt);
                 gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, 4, sprites as i32);
                 if let Some((texture, _)) = field {
                     let program = &self.glass;

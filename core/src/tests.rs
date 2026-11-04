@@ -578,6 +578,24 @@ fn leaves_lie_where_they_land() {
 }
 
 #[test]
+fn cherry_blossom_petals_fall_and_lie_as_leaves_do() {
+    let mut simulation = SnowSimulation::new(800.0, 600.0, Snowfall::Heavy);
+    simulation.set_mode(Mode::Blossom);
+    assert_eq!(simulation.mode(), Mode::Blossom);
+    assert!(simulation.leafy() && simulation.blossom());
+    simulation.thaws = true;
+    run(&mut simulation, 240.0, AWAY);
+    assert_finite(&simulation);
+    assert!(simulation.has_snow(), "no petals lying");
+    let mut sprites = vec![Sprite::default(); simulation.sprite_count()];
+    let count = simulation.write_sprites(&mut sprites);
+    assert!(sprites[..count].iter().all(|sprite| sprite.leaf[0] > 0.0), "snow among the petals");
+    assert!(sprites[..count].iter().any(|sprite| sprite.tint_amount > 0.0), "no petal withering");
+    simulation.set_mode(Mode::Autumn);
+    assert!(simulation.leafy() && !simulation.blossom());
+}
+
+#[test]
 fn unwithered_leaves_heap_no_deeper_than_snow() {
     let mut simulation = SnowSimulation::new(800.0, 600.0, Snowfall::Heavy);
     simulation.set_mode(Mode::Autumn);
@@ -621,9 +639,9 @@ fn switching_modes_clears_the_screen_first() {
     run(&mut simulation, 30.0, AWAY);
     simulation.switch_mode(Mode::Autumn, 1.0, false);
     run(&mut simulation, 0.5, AWAY);
-    assert!(!simulation.autumn(), "switched before the gust cleared the screen");
+    assert!(!simulation.leafy(), "switched before the gust cleared the screen");
     run(&mut simulation, 8.0, AWAY);
-    assert!(simulation.autumn(), "never switched");
+    assert!(simulation.leafy(), "never switched");
     run(&mut simulation, 10.0, AWAY);
     assert!(leaf_sprites(&simulation) > 0, "no leaves falling");
     assert_eq!(leaf_sprites(&simulation), simulation.sprite_count(), "snow left over");

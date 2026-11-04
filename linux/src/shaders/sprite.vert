@@ -173,6 +173,8 @@ void main() {
         vLeaf = vec4(leaf, extent / pixels);
         vSmear = vec4(smear, clamp(ceil(motion / 1.2), 1.0, 8.0), 0.0);
         vAlpha = alpha;
+        vTint = vec4(0.0, 0.0, 0.0, tintAmount);
+        vPose = pose;
         return;
     }
     vLeaf = vec4(0.0);

@@ -26,19 +26,21 @@ macro_rules! glyph {
     };
 }
 
-/// The snowflake, the leaf while leaves fall and the jack-o'-lantern while Halloween is on, each white then black.
-const GLYPHS: [[[&[u8]; 7]; 2]; 4] = [
+/// The snowflake, the leaf while leaves fall, the jack-o'-lantern while Halloween is on, the rain cloud and the cherry
+/// blossom, each white then black.
+const GLYPHS: [[[&[u8]; 7]; 2]; 5] = [
     [glyph!("snowflake-white"), glyph!("snowflake-black")],
     [glyph!("leaf-white"), glyph!("leaf-black")],
     [glyph!("pumpkin-white"), glyph!("pumpkin-black")],
     [glyph!("rain-white"), glyph!("rain-black")],
+    [glyph!("blossom-white"), glyph!("blossom-black")],
 ];
-const MODES: [Mode; 3] = [Mode::Snow, Mode::Autumn, Mode::Rain];
+const MODES: [Mode; 4] = [Mode::Snow, Mode::Autumn, Mode::Rain, Mode::Blossom];
 
 pub struct Tray {
     settings: Settings,
     commands: Sender<Command>,
-    glyphs: [[Vec<ksni::Icon>; 2]; 4],
+    glyphs: [[Vec<ksni::Icon>; 2]; 5],
     /// The year and whether it is Halloween: the snow loop keeps it up to date.
     pub today: Today,
     /// Whether the desktop is light, so the panel wants a black glyph: the snow loop keeps it up to date.
@@ -85,6 +87,7 @@ impl ksni::Tray for Tray {
                 Mode::Snow => 0,
                 Mode::Autumn => 1,
                 Mode::Rain => 3,
+                Mode::Blossom => 4,
             }
         };
         self.glyphs[glyph][usize::from(self.light)].clone()
@@ -99,6 +102,7 @@ impl ksni::Tray for Tray {
         let current = Snowfall::ALL.iter().position(|&s| s == settings.snowfall).unwrap_or(0);
         let mode = settings.mode;
         let autumn = mode == Mode::Autumn;
+        let blossom = mode == Mode::Blossom;
         // Rain doesn't lie anywhere: nothing to keep, melt or clear.
         let lies = mode != Mode::Rain;
         vec![
@@ -137,7 +141,7 @@ impl ksni::Tray for Tray {
                                 Command::Mode { mode, calm: !prefs::animations_enabled() }
                             });
                         }),
-                        options: ["Snow", "Autumn Leaves", "Rain"]
+                        options: ["Snow", "Autumn Leaves", "Rain", "Cherry Blossom"]
                             .iter()
                             .map(|&label| RadioItem { label: label.into(), ..Default::default() })
                             .collect(),
@@ -198,7 +202,14 @@ impl ksni::Tray for Tray {
             }
             .into(),
             CheckmarkItem {
-                label: if autumn { "Wither Leaves" } else { "Melt Snow" }.into(),
+                label: if autumn {
+                    "Wither Leaves"
+                } else if blossom {
+                    "Wilt Petals"
+                } else {
+                    "Melt Snow"
+                }
+                .into(),
                 checked: settings.melt,
                 enabled: settings.accumulate,
                 visible: lies,
@@ -216,6 +227,7 @@ impl ksni::Tray for Tray {
                     Mode::Snow => "Snow on Windows",
                     Mode::Autumn => "Leaves on Windows",
                     Mode::Rain => "Rain on Windows",
+                    Mode::Blossom => "Petals on Windows",
                 }
                 .into(),
                 checked: settings.snow_on_windows,
@@ -229,7 +241,14 @@ impl ksni::Tray for Tray {
             }
             .into(),
             StandardItem {
-                label: if autumn { "Clear Leaves" } else { "Clear Snow" }.into(),
+                label: if autumn {
+                    "Clear Leaves"
+                } else if blossom {
+                    "Clear Petals"
+                } else {
+                    "Clear Snow"
+                }
+                .into(),
                 visible: lies,
                 activate: Box::new(|tray: &mut Tray| {
                     let _ = tray.commands.send(Command::ClearSnow(!prefs::animations_enabled()));
