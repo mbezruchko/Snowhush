@@ -185,36 +185,101 @@ static float4 petalAt(float2 r, float seed, float flip, float alpha, float3 ligh
     return float4(color * a, a);
 }
 
-/// A whole cherry blossom, as `petalAt` draws a petal: five petals round a pink heart ringed with yellow stamens,
-/// or from behind, round its dark calyx.
-static float4 flowerAt(float2 r, float seed, float flip, float alpha, float3 light, float warm, float wither) {
-    float a = atan2(r.y, r.x);
+/// Lays `top` over `under`, both premultiplied.
+static float4 over(float4 top, float4 under) {
+    return top + under * (1.0 - top.a);
+}
+
+/// One side of a whole cherry blossom's cup, at `uv` across it: a petal, or on its face the deep pink heart, pink stamens
+/// and orange anthers, on its back the calyx; lit by how the cup there turns to the light.
+static float4 blossomAt(float2 uv, float3 normal, float seed, float spin, float nz, float alpha, float3 light, float warm, float wither) {
+    float2 l = float2(cos(spin) * uv.x + sin(spin) * uv.y, -sin(spin) * uv.x + cos(spin) * uv.y);
+    float a = atan2(l.y, l.x);
     float k = round(a / 1.2566);
-    float2 q = float2(cos(k * 1.2566) * r.x + sin(k * 1.2566) * r.y, -sin(k * 1.2566) * r.x + cos(k * 1.2566) * r.y);
-    float4 color = petalAt((q - float2(0.56, 0.0)) * float2(2.2, 1.75), seed, flip, alpha, light, warm, wither);
-    float d = length(r);
+    float2 q = float2(cos(k * 1.2566) * l.x + sin(k * 1.2566) * l.y, -sin(k * 1.2566) * l.x + cos(k * 1.2566) * l.y);
+    float front = normal.z >= 0.0 ? 1.0 : -1.0;
+    float4 color = petalAt((q - float2(0.5, 0.0)) * float2(2.5, 2.0), seed, front * abs(nz), alpha, light, warm, wither);
+    float facing = dot(normal * front, normalize(float3(-0.35, 0.75, 0.55)));
+    // Deep in the cup, round the heart, little light reaches; where light comes through from behind, it glows.
+    color.rgb *= (0.74 + 0.36 * saturate(facing)) * (0.82 + 0.18 * smoothstep(0.1, 0.55, length(uv)));
+    color.rgb = mix(color.rgb, float3(1.0, 0.62, 0.78) * color.a, saturate(-facing) * 0.35);
+
+    float d = length(l);
     float edge = max(fwidth(d), 1e-4);
-    float3 lit = (0.86 + 0.14 * abs(flip)) * mix(float3(1.0), light, 0.4);
-    if (flip >= 0.0) {
-        float dots = smoothstep(0.55, 0.9, 0.5 + 0.5 * cos(a * 8.0 + seed * 30.0));
-        float anthers = smoothstep(0.065, 0.03, abs(d - 0.25)) * dots * alpha;
-        float3 yellow = mix(float3(0.98, 0.84, 0.42), float3(0.68, 0.54, 0.36), wither) * lit;
-        color = float4(yellow * anthers, anthers) + color * (1.0 - anthers);
+    float3 lit = (0.86 + 0.14 * abs(nz)) * mix(float3(1.0), light, 0.4);
+    if (front > 0.0) {
+        float ray = cos(a * 16.0 + seed * 13.0);
+        float stamens = smoothstep(0.75, 1.0, ray) * smoothstep(0.38, 0.3, d) * smoothstep(0.06, 0.1, d) * 0.7 * alpha;
+        color = over(float4(mix(float3(0.93, 0.46, 0.62), float3(0.66, 0.42, 0.36), wither) * lit * stamens, stamens), color);
+        float tip = 0.3 + 0.1 * fract(sin(floor(a * 16.0 / 6.2832 + 0.5) * 12.9898 + seed * 78.2) * 43758.5);
+        float anthers = smoothstep(0.92, 1.0, ray) * smoothstep(0.05, 0.02, abs(d - tip)) * alpha;
+        color = over(float4(mix(float3(0.97, 0.62, 0.22), float3(0.66, 0.5, 0.32), wither) * lit * anthers, anthers), color);
     }
-    float heart = smoothstep(edge, -edge, d - (flip >= 0.0 ? 0.13 : 0.11)) * alpha;
-    float3 middle = (flip >= 0.0 ? mix(float3(0.88, 0.4, 0.54), float3(0.62, 0.36, 0.3), wither) : float3(0.52, 0.28, 0.26)) * lit;
-    color = float4(mix(middle, candle, warm * 0.45) * heart, heart) + color * (1.0 - heart);
-    return color;
+    float heart = smoothstep(edge, -edge, d - (front > 0.0 ? 0.1 : 0.14)) * alpha;
+    float3 middle = front > 0.0 ? mix(float3(0.78, 0.2, 0.42), float3(0.55, 0.3, 0.26), wither) : float3(0.5, 0.18, 0.2);
+    return over(float4(mix(middle * lit, candle, warm * 0.45) * heart, heart), color);
+}
+
+/// A whole cherry blossom on its stalk, `p` running across it from -1 to 1. Its five petals curve up into a cup,
+/// tilted so its face looks `face` toward us, below zero away, with the face's normal pointing `direction` on the
+/// screen; `spin` turns it about that normal. Through the gaps between the near petals the far side of the cup shows.
+static float4 flowerAt(float2 p, float seed, float spin, float face, float direction, float alpha, float3 light, float warm, float wither) {
+    float nz = face >= 0.0 ? max(face, 0.12) : min(face, -0.12);
+    float side = sqrt(saturate(1.0 - nz * nz));
+    float2 along = float2(cos(direction), sin(direction));
+    float2 across = float2(-along.y, along.x);
+    float3 n = float3(along * side, nz);
+    float3 e1 = float3(across, 0.0);
+    float3 e2 = float3(-nz * along, side);
+    float3 lit = (0.86 + 0.14 * abs(nz)) * mix(float3(1.0), light, 0.4);
+
+    // Where the line of sight here meets the cup, nearest first: its height above the face's plane is `cup` times
+    // the square of how far out from the middle it is.
+    const float cup = 0.42;
+    float s = dot(p, along);
+    float u = dot(p, across);
+    float A = cup * side * side;
+    float B = -(2.0 * cup * nz * s * side + nz);
+    float C = cup * (u * u + nz * nz * s * s) - side * s;
+    // Every pixel works through both, masking what misses, so the edges' smoothing sees its neighbours alike.
+    float disc = B * B - 4.0 * A * C;
+    float root = sqrt(max(disc, 0.0));
+    float2 ts = A > 1e-4 ? float2(-B + root, -B - root) / (2.0 * A) : float2(-C / B, 1e3);
+    float4 color = float4(0.0);
+    for (int i = 0; i < 2; i++) {
+        float2 uv = float2(u, -nz * s + side * ts[i]);
+        float3 normal = normalize(-2.0 * cup * uv.x * e1 - 2.0 * cup * uv.y * e2 + n);
+        float hit = step(0.0, disc) * step(dot(uv, uv), 1.0);
+        color = over(color, blossomAt(uv, normal, seed, spin, nz, alpha, light, warm, wither) * hit);
+    }
+
+    // The stalk runs back from the calyx, bending a little: behind the flower while its face is toward us.
+    float2 end = -n.xy * 0.75 + across * 0.08;
+    float2 bend = -n.xy * 0.4;
+    float stalk = 1e3;
+    float2 previous = float2(0.0);
+    for (int i = 1; i <= 4; i++) {
+        float t = float(i) / 4.0;
+        float2 knot = 2.0 * t * (1.0 - t) * bend + t * t * end;
+        float2 segment = knot - previous;
+        float h = saturate(dot(p - previous, segment) / max(dot(segment, segment), 1e-6));
+        stalk = min(stalk, length(p - previous - segment * h));
+        previous = knot;
+    }
+    float stalkEdge = max(fwidth(stalk), 1e-4);
+    float stem = smoothstep(0.06 + stalkEdge, 0.06 - stalkEdge, stalk) * alpha * smoothstep(0.02, 0.15, length(end));
+    float4 stalkColor = float4(mix(mix(float3(0.66, 0.24, 0.28), float3(0.5, 0.34, 0.26), wither) * lit, candle, warm * 0.45) * stem, stem);
+    return nz > 0.0 ? over(color, stalkColor) : over(stalkColor, color);
 }
 
 /// A leaf at one moment, `p` running across it from -0.5 to 0.5: its colour, premultiplied.
-static float4 leafAt(float2 p, float seed, float turn, float flip, float alpha, float3 light, float warm, float blossom, float wither) {
+static float4 leafAt(float2 p, float seed, float turn, float flip, float alpha, float3 light, float warm, float blossom, float wither,
+                     float direction) {
+    if (blossom > 0.5 && fract(seed * 23.3) < 0.035) return flowerAt(p * 2.0, seed, turn, flip, direction, alpha, light, warm, wither);
     float across = max(abs(flip), 0.35);
     float2 r = float2(cos(turn) * p.x + sin(turn) * p.y, -sin(turn) * p.x + cos(turn) * p.y) * 2.0;
     r.y /= across;
-    if (blossom > 0.5) {
-        return fract(seed * 23.3) < 0.035 ? flowerAt(r, seed, flip, alpha, light, warm, wither) : petalAt(r, seed, flip, alpha, light, warm, wither);
-    }
+    if (blossom > 0.5) return petalAt(r, seed, flip, alpha, light, warm, wither);
     float inside;
     if (fract(seed * 13.7) < 0.4) {
         // A maple leaf: five pointed lobes around the stem.
@@ -307,6 +372,7 @@ vertex SpriteOut spriteVertex(uint vid [[vertex_id]],
         out.warm = candlelight(u, s.position);
         out.leaf = s.leaf;
         out.tint = float4(0.0, 0.0, 0.0, s.tintAmount);
+        out.armAngle = s.armAngle;
         out.turn = s.turn;
         out.flip = s.flip;
         out.ghost = 0.0;
@@ -667,7 +733,7 @@ fragment float4 spriteFragment(SpriteOut in [[stage_in]], float2 coord [[point_c
             float along = (float(k) + 0.5) / float(n) - 0.5;
             float back = along - 0.5;
             sum += leafAt(p * in.reach - in.streak * along, in.leaf, in.turn + in.turnSmear * back,
-                          clamp(in.flip + in.flipSmear * back, -1.0, 1.0), in.alpha, in.light, in.warm, u.blossom, in.tint.a);
+                          clamp(in.flip + in.flipSmear * back, -1.0, 1.0), in.alpha, in.light, in.warm, u.blossom, in.tint.a, in.armAngle);
         }
         sum /= float(n);
         if (sum.a < 0.002) discard_fragment();

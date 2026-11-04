@@ -708,6 +708,7 @@ final class SnowSimulation {
                 alpha: leaf.fade,
                 soft: 0,
                 tintAmount: blossom ? smoothstep(0.3, 1, leaf.age / leaf.life) : 0,
+                armAngle: isFlower(leaf.seed) ? .pi / 2 : 0,
                 leaf: leaf.seed,
                 turn: leaf.fromTurn + (target - leaf.fromTurn) * ease,
                 flip: leaf.fromFlip + ((leaf.fromFlip < 0 ? -0.7 : 0.7) - leaf.fromFlip) * ease
@@ -715,6 +716,7 @@ final class SnowSimulation {
             count += 1
         }
         for flake in flakes where count < capacity {
+            let tilt = isFlower(flake.leaf) ? flowerTilt(seed: flake.leaf, phase: flake.phase) : nil
             buffer[count] = Sprite(
                 position: flake.position,
                 velocity: flake.leaf != 0 ? motion(of: flake) : flake.velocity,
@@ -725,11 +727,12 @@ final class SnowSimulation {
                 tintRed: flake.tint.x,
                 tintGreen: flake.tint.y,
                 tintBlue: flake.tint.z,
+                armAngle: tilt?.direction ?? 0,
                 leaf: flake.leaf,
                 turn: turn(of: flake),
-                flip: tumble(flake.leaf),
+                flip: tilt?.face ?? tumble(flake.leaf),
                 turnSpeed: flake.leaf != 0 ? cos(flake.phase) * 0.6 * flake.swayRate + spinRate(flake.leaf) : 0,
-                flipSpeed: flake.leaf != 0 ? tumbleSpeed(flake.leaf) : 0,
+                flipSpeed: flake.leaf != 0 && tilt == nil ? tumbleSpeed(flake.leaf) : 0,
                 rain: flake.rain ? 1 : 0
             )
             count += 1
@@ -795,17 +798,19 @@ final class SnowSimulation {
         }
         for grain in grains where count < capacity && !grain.bulk {
             if leafy {
+                let tilt = isFlower(grain.seed) ? flowerTilt(seed: grain.seed, phase: spin(1.7) + grain.seed * 30) : nil
                 buffer[count] = Sprite(
                     position: grain.position,
                     velocity: grain.velocity,
                     size: drawnSize(grain.size >= 5.5 ? grain.size : 6 + grain.seed * 4.5, seed: grain.seed),
                     alpha: 0.95,
                     soft: 0,
+                    armAngle: tilt?.direction ?? 0,
                     leaf: grain.seed,
                     turn: turn(of: grain),
-                    flip: tumble(grain.seed),
+                    flip: tilt?.face ?? tumble(grain.seed),
                     turnSpeed: (grain.seed - 0.5) * 9,
-                    flipSpeed: tumbleSpeed(grain.seed)
+                    flipSpeed: tilt == nil ? tumbleSpeed(grain.seed) : 0
                 )
             } else {
                 buffer[count] = Sprite(
@@ -1696,7 +1701,8 @@ final class SnowSimulation {
                     if flake.leaf > 0 {
                         let bulk = hit.layer.fill(hit.index) > 0 ? flake.size * leafBulk : 0
                         lay(size: flake.size, seed: flake.leaf, area: bulk, at: flake.position.x, on: hit.layer,
-                            turn: turn(of: flake), flip: tumble(flake.leaf), drift: flake.velocity.x)
+                            turn: turn(of: flake), flip: isFlower(flake.leaf) ? flowerTilt(seed: flake.leaf, phase: flake.phase).face : tumble(flake.leaf),
+                            drift: flake.velocity.x)
                     } else {
                         hit.layer.deposit(flake.size * flake.size * deposition * flake.mass * hit.layer.fill(hit.index), at: flake.position.x, wide: true)
                     }
@@ -3123,6 +3129,11 @@ final class SnowSimulation {
     /// How a flake actually moves: carried along, swaying from side to side, and for a leaf, swinging like a
     /// pendulum, dropping fastest through the middle of each swing.
     private func motion(of flake: Flake) -> SIMD2<Float> {
+        if isFlower(flake.leaf) {
+            // A whole flower falls cup up and steadier than a leaf, rocking only a little as it spins.
+            let sway = cos(flake.phase) * flake.swayAmount * 0.3
+            return SIMD2(flake.velocity.x + sway, flake.velocity.y * (1 + 0.1 * sin(flake.phase * 2)))
+        }
         let sway = (cos(flake.phase) + 0.3 * cos(flake.phase * 2.3)) * flake.swayAmount
         let flutter = flake.leaf > 0 ? 0.3 + 1.1 * abs(cos(flake.phase)) : 1 + 0.12 * sin(flake.phase * 1.3)
         return SIMD2(flake.velocity.x + sway, flake.velocity.y * flutter)
@@ -3192,9 +3203,18 @@ final class SnowSimulation {
         blossom && (seed * 23.3).truncatingRemainder(dividingBy: 1) < 0.035
     }
 
-    /// A whole flower is drawn bigger than the petal it stands in for, though it falls and heaps up the same.
+    /// How a falling flower is tilted: cup up with its stalk hanging below, turned toward us more often than not, and
+    /// rocking a little as it falls. How far its face looks toward us, and which way on the screen its normal points.
+    private func flowerTilt(seed: Float, phase: Float) -> (face: Float, direction: Float) {
+        let tilt = 0.8 + 0.25 * sin(phase)
+        let around = Float.pi / 2 + 0.7 * sin(spin(0.35) + seed * 20)
+        let normal = SIMD3(sin(tilt) * cos(around), cos(tilt), sin(tilt) * sin(around))
+        return (normal.z, atan2(normal.y, normal.x))
+    }
+
+    /// A whole flower is drawn bigger than the petal it stands in for, though it heaps up the same.
     private func drawnSize(_ size: Float, seed: Float) -> Float {
-        isFlower(seed) ? size * 1.8 : size
+        isFlower(seed) ? size * 2.1 : size
     }
 
     /// How fast a falling leaf turns, a second; a whole flower spins round like a propeller.
