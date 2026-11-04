@@ -707,6 +707,7 @@ final class SnowSimulation {
                 size: leaf.size,
                 alpha: leaf.fade,
                 soft: 0,
+                tintAmount: blossom ? smoothstep(0.3, 1, leaf.age / leaf.life) : 0,
                 leaf: leaf.seed,
                 turn: leaf.fromTurn + (target - leaf.fromTurn) * ease,
                 flip: leaf.fromFlip + ((leaf.fromFlip < 0 ? -0.7 : 0.7) - leaf.fromFlip) * ease
