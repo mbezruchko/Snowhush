@@ -132,7 +132,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
 
     private func makeStatusItem() -> NSStatusItem {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        item.button?.image = Self.icon(halloween: false)
 
         let menu = NSMenu()
         menu.delegate = self
@@ -281,7 +280,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         guard mode != Preferences.mode else { return }
         Preferences.mode = mode
         refreshHalloween()
-        statusItem.button?.image = Self.icon(halloween: halloween)
+        updateStatusIcon()
         let direction = screens.first?.simulation.breezeDirection ?? -1
         let calm = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         for snow in screens { snow.simulation.switchMode(to: mode, direction: direction, calm: calm) }
@@ -298,19 +297,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     }
 
     private func updateStatusIcon() {
-        statusItem.button?.appearsDisabled = snowfall == .off
+        statusItem.button?.image = Self.icon(halloween: halloween, dimmed: snowfall == .off)
     }
 
     private static let symbol: [Mode: String] = [.snow: "snowflake", .autumn: "leaf", .rain: "cloud.rain"]
 
-    private static func icon(halloween: Bool) -> NSImage? {
-        halloween ? Halloween.icon : NSImage(systemSymbolName: Self.symbol[Preferences.mode] ?? "snowflake", accessibilityDescription: "Snowhush")
+    private static func icon(halloween: Bool, dimmed: Bool) -> NSImage? {
+        let image = halloween ? Halloween.icon : NSImage(systemSymbolName: Self.symbol[Preferences.mode] ?? "snowflake", accessibilityDescription: "Snowhush")
+        guard dimmed, let image else { return image }
+        // Dimmed by hand: the button's appearsDisabled also disables the slider in its menu, so Off could not be left.
+        let faded = NSImage(size: image.size, flipped: false) { rect in
+            image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 0.4)
+            return true
+        }
+        faded.isTemplate = image.isTemplate
+        faded.accessibilityDescription = image.accessibilityDescription
+        return faded
     }
 
     private func refreshHalloween() {
         guard Halloween.isOn != halloween else { return }
         halloween.toggle()
-        statusItem.button?.image = Self.icon(halloween: halloween)
+        updateStatusIcon()
         for snow in screens { snow.halloween = halloween }
     }
 
