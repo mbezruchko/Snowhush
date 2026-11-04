@@ -13,6 +13,7 @@ struct Uniforms {
     float2 origin;
     float pileBottom;
     float autumn;
+    float blossom;
     float4 light;
     float4 shadowTint;
     float4 rim;
@@ -110,39 +111,72 @@ static float3 leafColor(float seed) {
     return c * (0.86 + 0.24 * fract(seed * 31.7));
 }
 
+/// Blush, soft pink, pink or nearly white, a little lighter or darker.
+static float3 petalColor(float seed) {
+    float k = fract(seed * 7.13);
+    float3 c = k < 0.35 ? float3(1.0, 0.85, 0.89)
+        : k < 0.7 ? float3(0.99, 0.76, 0.84)
+        : k < 0.88 ? float3(0.97, 0.66, 0.78)
+        : float3(1.0, 0.93, 0.95);
+    return c * (0.94 + 0.08 * fract(seed * 31.7));
+}
+
 /// Fallen leaves lying every which way: the topmost at each point shows, the gaps between them in shadow.
-static float3 litter(float2 point) {
-    float2 cell = floor(point / 6.5);
+static float3 litter(float2 point, float blossom) {
+    float spacing = blossom > 0.5 ? 4.6 : 6.5;
+    float2 cell = floor(point / spacing);
     float top = -1.0;
     float rim = 0.0;
-    float3 color = float3(0.34, 0.19, 0.08);
+    float3 color = blossom > 0.5 ? float3(0.86, 0.68, 0.74) : float3(0.34, 0.19, 0.08);
     for (int j = -1; j <= 1; j++) {
         for (int i = -1; i <= 1; i++) {
             for (int k = 0; k < 3; k++) {
                 float2 c = cell + float2(i, j) + float(k) * 0.37;
-                float2 d = point - (cell + float2(i, j) + float2(hash(c + 7.1), hash(c + 3.3))) * 6.5;
+                float2 d = point - (cell + float2(i, j) + float2(hash(c + 7.1), hash(c + 3.3))) * spacing;
                 float angle = hash(c + 11.7) * 6.2832;
                 float2 q = float2(cos(angle) * d.x + sin(angle) * d.y, -sin(angle) * d.x + cos(angle) * d.y);
-                float size = 3.8 + 2.4 * hash(c + 2.9);
+                float size = blossom > 0.5 ? 3.2 + 1.6 * hash(c + 2.9) : 3.8 + 2.4 * hash(c + 2.9);
                 float t = q.x / size;
-                float inside = (1.0 - t * t) * size * 0.45 - abs(q.y);
+                float inside = (1.0 - t * t) * size * (blossom > 0.5 ? 0.62 : 0.45) - abs(q.y);
                 float z = hash(c + 5.9);
                 if (inside > 0.0 && z > top) {
                     top = z;
                     rim = inside;
-                    color = leafColor(hash(c + 0.5));
+                    color = blossom > 0.5 ? petalColor(hash(c + 0.5)) : leafColor(hash(c + 0.5));
                 }
             }
         }
     }
-    return color * (0.7 + 0.3 * smoothstep(0.0, 0.7, rim));
+    return color * ((blossom > 0.5 ? 0.86 : 0.7) + (blossom > 0.5 ? 0.14 : 0.3) * smoothstep(0.0, 0.7, rim));
+}
+
+/// A cherry blossom petal, as `leafAt` draws a leaf: narrow at its base, broadest near its rounded tip, which is
+/// notched in the middle, and pinker toward the base.
+static float4 petalAt(float2 r, float seed, float flip, float alpha, float3 light, float warm) {
+    float t = (r.x + 0.9) / 1.8;
+    float width = 0.84 * (0.9 + 0.2 * fract(seed * 5.3));
+    float halfWidth = width * pow(saturate(t), 0.5) * sqrt(saturate(1.0 - pow(saturate(t), 5.0)));
+    float notch = 0.9 - 0.16 * saturate(1.0 - abs(r.y) / (width * 0.3)) - r.x;
+    float inside = min(min(halfWidth - abs(r.y), notch), t * 0.5);
+    float edge = max(fwidth(inside), 1e-4);
+    float a = smoothstep(-edge, edge, inside) * alpha;
+    float3 color = petalColor(seed);
+    color = mix(color * float3(0.96, 0.8, 0.88), color, smoothstep(0.05, 0.6, t));
+    color *= 0.9 + 0.1 * smoothstep(0.0, 0.12, inside);
+    float vein = 0.5 + 0.5 * cos(atan2(r.y, r.x + 0.9) * 26.0);
+    color *= 1.0 - 0.035 * vein * smoothstep(0.1, 0.5, t);
+    if (flip < 0.0) color = mix(color, float3(0.98, 0.9, 0.92), 0.25) * 0.94;
+    color *= (0.86 + 0.14 * abs(flip)) * mix(float3(1.0), light, 0.4);
+    color = mix(color, candle, warm * 0.45);
+    return float4(color * a, a);
 }
 
 /// A leaf at one moment, `p` running across it from -0.5 to 0.5: its colour, premultiplied.
-static float4 leafAt(float2 p, float seed, float turn, float flip, float alpha, float3 light, float warm) {
+static float4 leafAt(float2 p, float seed, float turn, float flip, float alpha, float3 light, float warm, float blossom) {
     float across = max(abs(flip), 0.35);
     float2 r = float2(cos(turn) * p.x + sin(turn) * p.y, -sin(turn) * p.x + cos(turn) * p.y) * 2.0;
     r.y /= across;
+    if (blossom > 0.5) return petalAt(r, seed, flip, alpha, light, warm);
     float inside;
     if (fract(seed * 13.7) < 0.4) {
         // A maple leaf: five pointed lobes around the stem.
@@ -594,7 +628,7 @@ fragment float4 spriteFragment(SpriteOut in [[stage_in]], float2 coord [[point_c
             float along = (float(k) + 0.5) / float(n) - 0.5;
             float back = along - 0.5;
             sum += leafAt(p * in.reach - in.streak * along, in.leaf, in.turn + in.turnSmear * back,
-                          clamp(in.flip + in.flipSmear * back, -1.0, 1.0), in.alpha, in.light, in.warm);
+                          clamp(in.flip + in.flipSmear * back, -1.0, 1.0), in.alpha, in.light, in.warm, u.blossom);
         }
         sum /= float(n);
         if (sum.a < 0.002) discard_fragment();
@@ -671,7 +705,7 @@ fragment float4 spriteFragment(SpriteOut in [[stage_in]], float2 coord [[point_c
         color = mix(color, mix(drift, float3(0.975, 0.982, 0.995), exp(-below * 0.9) * 0.6), smoothstep(1.0, 4.0, below));
         if (u.autumn > 0.5) {
             float2 world = float2(in.position.x / u.scale, u.viewSize.y - in.position.y / u.scale);
-            color = litter(world) * (1.0 - saturate(shade) * 0.6);
+            color = litter(world, u.blossom) * (1.0 - saturate(shade) * 0.6);
         }
         color += (hash(floor(in.position.xy)) - 0.5) * 0.02;
         float glint = u.autumn > 0.5 ? 0.0 : hash(floor(in.position.xy * 0.5) + 31.7);
@@ -790,8 +824,9 @@ fragment float4 pileFragment(PileOut in [[stage_in]],
     float3 color;
     if (u.autumn > 0.5) {
         // Deeper in the heap the leaves lie in shadow.
-        color = litter(grain);
-        color = mix(color, color * float3(0.62, 0.54, 0.5), saturate(1.0 - exp(-depth / 18.0)) * 0.6);
+        color = litter(grain, u.blossom);
+        float3 deep = u.blossom > 0.5 ? float3(0.8, 0.66, 0.72) : float3(0.62, 0.54, 0.5);
+        color = mix(color, color * deep, saturate(1.0 - exp(-depth / 18.0)) * 0.6);
         color *= 0.84 + 0.2 * light;
     } else {
         float3 shadow = mix(float3(0.72, 0.78, 0.88), u.shadowTint.rgb, u.shadowTint.a);
