@@ -177,6 +177,9 @@ static float4 petalAt(float2 r, float seed, float flip, float alpha, float3 ligh
     float rim = 1.0 - smoothstep(0.0, 0.35, inside);
     color = mix(color, withered(seed) * (0.85 + 0.15 * smoothstep(0.0, 0.2, inside)), saturate(wither * (0.6 + rim)) * 0.9);
     if (flip < 0.0) color = mix(color, float3(0.98, 0.9, 0.92), 0.25) * 0.94;
+    // Turned to the light for a moment as it tumbles, the thin petal glows pink with the daylight through it.
+    float through = pow(saturate((-flip - 0.75) / 0.25), 2.0) * (1.0 - wither) * dot(light, float3(0.333));
+    color = mix(color, float3(1.0, 0.6, 0.76), through * 0.5) * (1.0 + 0.12 * through);
     color *= (0.86 + 0.14 * abs(flip)) * mix(float3(1.0), light, 0.4);
     color = mix(color, candle, warm * 0.45);
     return float4(color * a, a);
