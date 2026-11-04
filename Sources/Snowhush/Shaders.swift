@@ -185,12 +185,36 @@ static float4 petalAt(float2 r, float seed, float flip, float alpha, float3 ligh
     return float4(color * a, a);
 }
 
+/// A whole cherry blossom, as `petalAt` draws a petal: five petals round a pink heart ringed with yellow stamens,
+/// or from behind, round its dark calyx.
+static float4 flowerAt(float2 r, float seed, float flip, float alpha, float3 light, float warm, float wither) {
+    float a = atan2(r.y, r.x);
+    float k = round(a / 1.2566);
+    float2 q = float2(cos(k * 1.2566) * r.x + sin(k * 1.2566) * r.y, -sin(k * 1.2566) * r.x + cos(k * 1.2566) * r.y);
+    float4 color = petalAt((q - float2(0.56, 0.0)) * float2(2.2, 1.75), seed, flip, alpha, light, warm, wither);
+    float d = length(r);
+    float edge = max(fwidth(d), 1e-4);
+    float3 lit = (0.86 + 0.14 * abs(flip)) * mix(float3(1.0), light, 0.4);
+    if (flip >= 0.0) {
+        float dots = smoothstep(0.55, 0.9, 0.5 + 0.5 * cos(a * 8.0 + seed * 30.0));
+        float anthers = smoothstep(0.065, 0.03, abs(d - 0.25)) * dots * alpha;
+        float3 yellow = mix(float3(0.98, 0.84, 0.42), float3(0.68, 0.54, 0.36), wither) * lit;
+        color = float4(yellow * anthers, anthers) + color * (1.0 - anthers);
+    }
+    float heart = smoothstep(edge, -edge, d - (flip >= 0.0 ? 0.13 : 0.11)) * alpha;
+    float3 middle = (flip >= 0.0 ? mix(float3(0.88, 0.4, 0.54), float3(0.62, 0.36, 0.3), wither) : float3(0.52, 0.28, 0.26)) * lit;
+    color = float4(mix(middle, candle, warm * 0.45) * heart, heart) + color * (1.0 - heart);
+    return color;
+}
+
 /// A leaf at one moment, `p` running across it from -0.5 to 0.5: its colour, premultiplied.
 static float4 leafAt(float2 p, float seed, float turn, float flip, float alpha, float3 light, float warm, float blossom, float wither) {
     float across = max(abs(flip), 0.35);
     float2 r = float2(cos(turn) * p.x + sin(turn) * p.y, -sin(turn) * p.x + cos(turn) * p.y) * 2.0;
     r.y /= across;
-    if (blossom > 0.5) return petalAt(r, seed, flip, alpha, light, warm, wither);
+    if (blossom > 0.5) {
+        return fract(seed * 23.3) < 0.035 ? flowerAt(r, seed, flip, alpha, light, warm, wither) : petalAt(r, seed, flip, alpha, light, warm, wither);
+    }
     float inside;
     if (fract(seed * 13.7) < 0.4) {
         // A maple leaf: five pointed lobes around the stem.

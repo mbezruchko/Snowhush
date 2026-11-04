@@ -704,7 +704,7 @@ final class SnowSimulation {
             let sink = min(leafCover, max(0, rest - layer.bed[i]))
             buffer[count] = Sprite(
                 position: SIMD2(x, layer.base.y + rest + leaf.size * 0.2 - sink),
-                size: leaf.size,
+                size: drawnSize(leaf.size, seed: leaf.seed),
                 alpha: leaf.fade,
                 soft: 0,
                 tintAmount: blossom ? smoothstep(0.3, 1, leaf.age / leaf.life) : 0,
@@ -718,7 +718,7 @@ final class SnowSimulation {
             buffer[count] = Sprite(
                 position: flake.position,
                 velocity: flake.leaf != 0 ? motion(of: flake) : flake.velocity,
-                size: flake.size,
+                size: flake.leaf != 0 ? drawnSize(flake.size, seed: flake.leaf) : flake.size,
                 alpha: flake.alpha,
                 soft: flake.soft,
                 tintAmount: flake.tintAmount,
@@ -728,7 +728,7 @@ final class SnowSimulation {
                 leaf: flake.leaf,
                 turn: turn(of: flake),
                 flip: tumble(flake.leaf),
-                turnSpeed: flake.leaf != 0 ? cos(flake.phase) * 0.6 * flake.swayRate + flake.leaf - 0.5 : 0,
+                turnSpeed: flake.leaf != 0 ? cos(flake.phase) * 0.6 * flake.swayRate + spinRate(flake.leaf) : 0,
                 flipSpeed: flake.leaf != 0 ? tumbleSpeed(flake.leaf) : 0,
                 rain: flake.rain ? 1 : 0
             )
@@ -798,7 +798,7 @@ final class SnowSimulation {
                 buffer[count] = Sprite(
                     position: grain.position,
                     velocity: grain.velocity,
-                    size: grain.size >= 5.5 ? grain.size : 6 + grain.seed * 4.5,
+                    size: drawnSize(grain.size >= 5.5 ? grain.size : 6 + grain.seed * 4.5, seed: grain.seed),
                     alpha: 0.95,
                     soft: 0,
                     leaf: grain.seed,
@@ -3133,7 +3133,7 @@ final class SnowSimulation {
     }
 
     private func turn(of flake: Flake) -> Float {
-        flake.leaf * 40 + sin(flake.phase) * 0.6 + spin(flake.leaf - 0.5)
+        flake.leaf * 40 + sin(flake.phase) * 0.6 + spin(spinRate(flake.leaf))
     }
 
     private func turn(of grain: Grain) -> Float {
@@ -3185,6 +3185,21 @@ final class SnowSimulation {
         ))
         if lying.count > maxLying { lying.removeFirst() }
         heightsChanged = true
+    }
+
+    /// Now and then a whole cherry blossom falls instead of a petal: the shader picks it by its seed, the same way.
+    private func isFlower(_ seed: Float) -> Bool {
+        blossom && (seed * 23.3).truncatingRemainder(dividingBy: 1) < 0.035
+    }
+
+    /// A whole flower is drawn bigger than the petal it stands in for, though it falls and heaps up the same.
+    private func drawnSize(_ size: Float, seed: Float) -> Float {
+        isFlower(seed) ? size * 1.8 : size
+    }
+
+    /// How fast a falling leaf turns, a second; a whole flower spins round like a propeller.
+    private func spinRate(_ seed: Float) -> Float {
+        isFlower(seed) ? (seed < 0.5 ? -2.5 : 2.5) : seed - 0.5
     }
 
     /// A cherry blossom petal is drawn about as big as a small leaf: any smaller and its notch would not show.
