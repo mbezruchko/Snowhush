@@ -190,6 +190,32 @@ static float4 over(float4 top, float4 under) {
     return top + under * (1.0 - top.a);
 }
 
+/// A cherry blossom petal tumbling about its length, `r` running along it from base to tip and across it on the screen.
+/// It curves across like a spoon: turned edge on it shows as a bowed sliver, and turned further, the inside of the
+/// curve. `sense` is which way it is tumbling, and so which way the curve bows.
+static float4 curledPetalAt(float2 r, float seed, float flip, float sense, float alpha, float3 light, float warm, float wither) {
+    const float curl = 0.35;
+    float c = flip >= 0.0 ? max(flip, 0.2) : min(flip, -0.2);
+    float s = sense * sqrt(saturate(1.0 - c * c));
+    // The point `y` across the petal shows at y c - curl y² s: find the points that show here. Every pixel works
+    // through both, masking what misses, so the edges' smoothing sees its neighbours alike.
+    float A = curl * s;
+    float disc = c * c - 4.0 * A * r.y;
+    float root = sqrt(max(disc, 0.0));
+    float2 ys = abs(A) > 1e-4 ? float2(c + root, c - root) / (2.0 * A) : float2(r.y / c, 1e3);
+    float2 depth = ys * s + curl * ys * ys * c;
+    ys = depth.y > depth.x ? ys.yx : ys;
+    float4 color = float4(0.0);
+    for (int i = 0; i < 2; i++) {
+        float y = ys[i];
+        // Which side of the petal shows there, and how squarely.
+        float facing = clamp(c - 2.0 * curl * y * s, -1.0, 1.0);
+        float hit = step(0.0, disc) * step(abs(y), 1.2);
+        color = over(color, petalAt(float2(r.x, y), seed, facing, alpha, light, warm, wither) * hit);
+    }
+    return color;
+}
+
 /// One side of a whole cherry blossom's cup, at `uv` across it: a petal, or on its face the deep pink heart, pink stamens
 /// and orange anthers, on its back the calyx; lit by how the cup there turns to the light.
 static float4 blossomAt(float2 uv, float3 normal, float seed, float spin, float nz, float alpha, float3 light, float warm, float wither) {
@@ -274,12 +300,12 @@ static float4 flowerAt(float2 p, float seed, float spin, float face, float direc
 
 /// A leaf at one moment, `p` running across it from -0.5 to 0.5: its colour, premultiplied.
 static float4 leafAt(float2 p, float seed, float turn, float flip, float alpha, float3 light, float warm, float blossom, float wither,
-                     float direction) {
+                     float direction, float sense) {
     if (blossom > 0.5 && fract(seed * 23.3) < 0.035) return flowerAt(p * 2.0, seed, turn, flip, direction, alpha, light, warm, wither);
-    float across = max(abs(flip), 0.35);
     float2 r = float2(cos(turn) * p.x + sin(turn) * p.y, -sin(turn) * p.x + cos(turn) * p.y) * 2.0;
+    if (blossom > 0.5) return curledPetalAt(r, seed, flip, sense, alpha, light, warm, wither);
+    float across = max(abs(flip), 0.35);
     r.y /= across;
-    if (blossom > 0.5) return petalAt(r, seed, flip, alpha, light, warm, wither);
     float inside;
     if (fract(seed * 13.7) < 0.4) {
         // A maple leaf: five pointed lobes around the stem.
@@ -733,7 +759,8 @@ fragment float4 spriteFragment(SpriteOut in [[stage_in]], float2 coord [[point_c
             float along = (float(k) + 0.5) / float(n) - 0.5;
             float back = along - 0.5;
             sum += leafAt(p * in.reach - in.streak * along, in.leaf, in.turn + in.turnSmear * back,
-                          clamp(in.flip + in.flipSmear * back, -1.0, 1.0), in.alpha, in.light, in.warm, u.blossom, in.tint.a, in.armAngle);
+                          clamp(in.flip + in.flipSmear * back, -1.0, 1.0), in.alpha, in.light, in.warm, u.blossom, in.tint.a, in.armAngle,
+                          in.flipSmear > 0.0 ? -1.0 : 1.0);
         }
         sum /= float(n);
         if (sum.a < 0.002) discard_fragment();
