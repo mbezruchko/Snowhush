@@ -307,12 +307,7 @@ impl ksni::Tray for Tray {
                 ..Default::default()
             }
             .into(),
-            StandardItem {
-                label: "Support Snowhush…".into(),
-                activate: Box::new(|_: &mut Tray| open(SPONSORS)),
-                ..Default::default()
-            }
-            .into(),
+            StandardItem { label: "Support Snowhush…".into(), activate: Box::new(|_: &mut Tray| open(SPONSORS)), ..Default::default() }.into(),
             StandardItem {
                 label: "Quit".into(),
                 icon_name: "application-exit".into(),
