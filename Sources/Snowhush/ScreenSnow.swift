@@ -404,6 +404,7 @@ final class ScreenSnow {
     private func measure() {
         let primaryHeight = NSScreen.screens.first?.frame.height ?? screen.frame.height
         let frame = screen.frame
+        tracker.display = displayID
         tracker.screen = CGRect(x: frame.minX, y: primaryHeight - frame.maxY, width: frame.width, height: frame.height)
         tracker.primaryHeight = primaryHeight
         tracker.menuBarHeight = frame.maxY - screen.visibleFrame.maxY

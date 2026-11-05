@@ -47,10 +47,13 @@ struct WindowSurface: Equatable {
 final class WindowTracker {
     /// The display tracked, in the window list's global coordinates: origin at the top left of the primary display.
     var screen: CGRect = .zero
+    var display: CGDirectDisplayID?
     var menuBarHeight: CGFloat = 0
     /// The primary display's height, which turns AppKit's coordinates into the window list's.
     var primaryHeight: CGFloat = 0
 
+    private var currentSpace: UInt64?
+    private var currentSpaceRead = false
     private let ownPID = ProcessInfo.processInfo.processIdentifier
     private let maxLayer = Int(CGWindowLevelForKey(.screenSaverWindow))
     private let dockLevel = Int(CGWindowLevelForKey(.dockWindow))
@@ -346,16 +349,15 @@ final class WindowTracker {
     func missionControlShows(now: CFTimeInterval) -> Bool {
         Self.windowList(now: now).contains { entry in
             guard entry.owner == "WindowManager", let layer = entry.layer, layer > 0, let bounds = entry.bounds else { return false }
-            return isMissionControl(bounds)
+            return isMissionControl(bounds, layer: layer)
         }
     }
 
-    /// Mission Control and App Exposé lay a shield of their own over the screen, and Mission Control keeps its bar of
-    /// Spaces along the top, which stays while the shield drops out, as it does opening over a full-screen app and
-    /// between Spaces.
-    private func isMissionControl(_ bounds: CGRect) -> Bool {
+    /// Mission Control and App Exposé lay a shield just below the Dock, and Mission Control keeps its bar of Spaces
+    /// along the top, which stays while the shield drops out. Show Desktop and Spotlight use a lower full-screen window.
+    private func isMissionControl(_ bounds: CGRect, layer: Int) -> Bool {
         guard bounds.intersects(screen) else { return false }
-        let shield = bounds.width * bounds.height >= screen.width * screen.height * 0.9
+        let shield = layer >= dockLevel - 1 && bounds.width * bounds.height >= screen.width * screen.height * 0.9
         let bar = bounds.width >= screen.width * 0.9 && bounds.minY <= screen.minY + 1 && bounds.height < screen.height * 0.3
         return shield || bar
     }
@@ -425,6 +427,7 @@ final class WindowTracker {
     private func query(now: CFTimeInterval) -> [WindowSurface] {
         guard screen.width > 0 else { return [] }
         let list = Self.windowList(now: now)
+        currentSpaceRead = false
 
         var blockers: [CGRect] = []
         var surfaces: [WindowSurface] = []
@@ -475,12 +478,13 @@ final class WindowTracker {
             if layer < 0 { bounds = bounds.insetBy(dx: 8, dy: 8) }
             // Mission Control's shield, its bar of Spaces, their thumbnails and labels carry no snow.
             if owner == "WindowManager" && layer > 0 {
-                if isMissionControl(bounds) { exposing = true }
+                if isMissionControl(bounds, layer: layer) { exposing = true }
                 continue
             }
             guard bounds.intersects(screen) else { continue }
+            if !showsOnDisplay(id, bounds: bounds, layer: layer, shelf: shelf) { continue }
             // Screen-sized windows above the normal layer (Notification Center, Siri) are transparent overlays.
-            if layer > 0 && bounds.width * bounds.height >= screen.width * screen.height * 0.9 { continue }
+            if layer > 0 && fillsScreen(bounds) { continue }
 
             let frame = CGRect(x: bounds.minX - screen.minX, y: screen.maxY - bounds.maxY, width: bounds.width, height: bounds.height)
             let roomAbove = bounds.minY - screen.minY >= menuBarHeight + 6 && frame.maxY < screen.height
@@ -512,6 +516,23 @@ final class WindowTracker {
         }
         if !dockOut { dockShownAt = nil }
         return exposing ? [] : surfaces
+    }
+
+    /// With separate Spaces, a window reaching over from another display isn't shown here and can't hide snow.
+    private func showsOnDisplay(_ id: CGWindowID, bounds: CGRect, layer: Int, shelf: Bool) -> Bool {
+        guard layer == 0, !shelf, NSScreen.screensHaveSeparateSpaces, let display else { return true }
+        let reachesAnother = NSScreen.screens.contains { screen in
+            let frame = screen.frame
+            let other = CGRect(x: frame.minX, y: primaryHeight - frame.maxY, width: frame.width, height: frame.height)
+            return other != self.screen && other.intersects(bounds)
+        }
+        guard reachesAnother else { return true }
+        if !currentSpaceRead {
+            currentSpace = Spaces.current(on: display)
+            currentSpaceRead = true
+        }
+        guard let currentSpace, let spaces = Spaces.of(id) else { return true }
+        return spaces.contains(currentSpace)
     }
 
     private func isWidget(pid: Int32, layer: Int) -> Bool {
@@ -804,6 +825,17 @@ enum Spaces {
         // Type 4 is a full-screen app's Space; a desktop is type 0.
         let spaces = displays.flatMap { $0["Spaces"] as? [[String: Any]] ?? [] }
         return Set(spaces.filter { ($0["type"] as? NSNumber)?.intValue == 4 }.compactMap(id))
+    }
+
+    /// The Space showing on one display.
+    static func current(on display: CGDirectDisplayID) -> UInt64? {
+        guard let connection = SkyLight.connection,
+              let displays = displaySpaces?(connection)?.takeRetainedValue() as? [[String: Any]]
+        else { return nil }
+        let uuid = CGDisplayCreateUUIDFromDisplayID(display).map { CFUUIDCreateString(nil, $0.takeRetainedValue()) as String }
+        guard let entry = displays.first(where: { $0["Display Identifier"] as? String == uuid }) ?? (displays.count == 1 ? displays.first : nil)
+        else { return nil }
+        return (entry["Current Space"] as? [String: Any]).flatMap(id)
     }
 
     /// The Spaces of apps in full screen on a display, and whether one of them is showing.
