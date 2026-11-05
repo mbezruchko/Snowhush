@@ -19,7 +19,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var meltItem: NSMenuItem!
     private var snowOnWindowsItem: NSMenuItem!
     private var clearItem: NSMenuItem!
-    private var weatherHeader: NSMenuItem!
     private var halloweenItem: NSMenuItem!
     private var snowItem: NSMenuItem!
     private var autumnItem: NSMenuItem!
@@ -161,8 +160,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         menu.addItem(.separator())
         let settings = NSMenu()
         settings.autoenablesItems = false
-        weatherHeader = .sectionHeader(title: "Snow")
-        settings.addItem(weatherHeader)
+        settings.addItem(.sectionHeader(title: "Behavior"))
         accumulateItem = add("Accumulate", #selector(toggleAccumulate), to: settings)
         meltItem = add("Melt Snow", #selector(toggleMeltSnow), to: settings)
         snowOnWindowsItem = add("Snow on Windows", #selector(toggleSnowOnWindows), to: settings)
@@ -211,7 +209,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         meltItem.title = autumn ? "Wither Leaves" : blossom ? "Wilt Petals" : "Melt Snow"
         snowOnWindowsItem.title = autumn ? "Leaves on Windows" : blossom ? "Petals on Windows" : rain ? "Rain on Windows" : "Snow on Windows"
         clearItem.title = autumn ? "Clear Leaves" : blossom ? "Clear Petals" : "Clear Snow"
-        weatherHeader.title = autumn ? "Leaves" : blossom ? "Petals" : rain ? "Rain" : "Snow"
         meltItem.state = thaws ? .on : .off
         meltItem.isEnabled = accumulates
         snowOnWindowsItem.state = snowOnWindows ? .on : .off
