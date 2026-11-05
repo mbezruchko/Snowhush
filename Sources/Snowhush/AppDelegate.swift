@@ -31,6 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var loginItem: NSMenuItem!
     private var observers: [NSObjectProtocol] = []
     private var screensAsleep = false
+    private let screenshots = ScreenshotWatch()
     private var screenLocked = false
     private var sessionInactive = false
     private var updater: SPUStandardUpdaterController!
@@ -67,6 +68,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         refreshHalloween()
         halloweenTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in self?.refreshHalloween() }
         observeSystem()
+        screenshots.stepAside = { [weak self] aside in self?.screens.forEach { $0.stepAside(aside) } }
+        screenshots.start()
         if snowfallHeld {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in self?.showWelcome() }
         }

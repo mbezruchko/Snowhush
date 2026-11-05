@@ -387,6 +387,17 @@ final class ScreenSnow {
         dock.window.holdInPlace()
     }
 
+    /// Out of the screenshot tool's way, or back in place.
+    func stepAside(_ aside: Bool) {
+        if aside {
+            window.orderOut(nil)
+            dock.window.orderOut(nil)
+        } else {
+            window.orderFrontRegardless()
+            dock.window.orderFrontRegardless()
+        }
+    }
+
     func watchWindows() {
         tracker.watchClosely(now: CACurrentMediaTime())
     }
