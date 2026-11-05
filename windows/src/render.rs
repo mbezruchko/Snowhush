@@ -72,7 +72,11 @@ struct Uniforms {
     occluders: [[f32; 4]; 16],
     /// One while leaves fall instead of snow.
     autumn: f32,
-    padding: [f32; 3],
+    /// One while the leaves are cherry blossom petals.
+    blossom: f32,
+    /// One while fallen leaves wither away.
+    wilt: f32,
+    padding: f32,
 }
 
 /// Where a sign stands: its stick's foot, its size in points, how far it is turned and the drift's surface it comes up out of.
@@ -520,8 +524,10 @@ impl Surface {
                 shake: [shake.x, shake.y, 0.0, 0.0],
                 pumpkins: std::array::from_fn(|k| pumpkins.get(k).map_or([0.0; 4], |pumpkin| pumpkin.light(glow))),
                 occluders: [[0.0; 4]; 16],
-                autumn: if simulation.autumn() { 1.0 } else { 0.0 },
-                padding: [0.0; 3],
+                autumn: if simulation.leafy() { 1.0 } else { 0.0 },
+                blossom: if simulation.blossom() { 1.0 } else { 0.0 },
+                wilt: if simulation.wilts() { 1.0 } else { 0.0 },
+                padding: 0.0,
             };
 
             // The pumpkins go down before the snow, so the drift they sit in covers their bottoms.

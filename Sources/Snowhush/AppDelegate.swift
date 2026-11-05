@@ -23,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var snowItem: NSMenuItem!
     private var autumnItem: NSMenuItem!
     private var rainItem: NSMenuItem!
+    private var blossomItem: NSMenuItem!
     private var defaultPerformanceItem: NSMenuItem!
     private var maxPerformanceItem: NSMenuItem!
     private var behindWindowsItem: NSMenuItem!
@@ -153,6 +154,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         snowItem = add("Snow", #selector(chooseMode), to: modes)
         autumnItem = add("Autumn Leaves", #selector(chooseMode), to: modes)
         rainItem = add("Rain", #selector(chooseMode), to: modes)
+        blossomItem = add("Cherry Blossom", #selector(chooseMode), to: modes)
         modes.addItem(.separator())
         halloweenItem = add("Halloween", #selector(toggleHalloween), to: modes)
         menu.addItem(withTitle: "Mode", action: nil, keyEquivalent: "").submenu = modes
@@ -193,16 +195,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         let mode = Preferences.mode
         let autumn = mode == .autumn
         let rain = mode == .rain
+        let blossom = mode == .blossom
         snowItem.state = mode == .snow ? .on : .off
         autumnItem.state = autumn ? .on : .off
         rainItem.state = rain ? .on : .off
+        blossomItem.state = blossom ? .on : .off
         // Rain neither heaps up nor lies about to clear away.
         accumulateItem.isHidden = rain
         meltItem.isHidden = rain
         clearItem.isHidden = rain
-        meltItem.title = autumn ? "Wither Leaves" : "Melt Snow"
-        snowOnWindowsItem.title = autumn ? "Leaves on Windows" : rain ? "Rain on Windows" : "Snow on Windows"
-        clearItem.title = autumn ? "Clear Leaves" : "Clear Snow"
+        meltItem.title = autumn ? "Wither Leaves" : blossom ? "Wilt Petals" : "Melt Snow"
+        snowOnWindowsItem.title = autumn ? "Leaves on Windows" : blossom ? "Petals on Windows" : rain ? "Rain on Windows" : "Snow on Windows"
+        clearItem.title = autumn ? "Clear Leaves" : blossom ? "Clear Petals" : "Clear Snow"
         meltItem.state = thaws ? .on : .off
         meltItem.isEnabled = accumulates
         snowOnWindowsItem.state = snowOnWindows ? .on : .off
@@ -289,7 +293,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     }
 
     @objc private func chooseMode(_ sender: NSMenuItem) {
-        let mode: Mode = sender === autumnItem ? .autumn : sender === rainItem ? .rain : .snow
+        let mode: Mode = sender === autumnItem ? .autumn : sender === rainItem ? .rain : sender === blossomItem ? .blossom : .snow
         guard mode != Preferences.mode else { return }
         Preferences.mode = mode
         refreshHalloween()
@@ -316,7 +320,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private static let symbol: [Mode: String] = [.snow: "snowflake", .autumn: "leaf", .rain: "cloud.rain"]
 
     private static func icon(halloween: Bool, dimmed: Bool) -> NSImage? {
-        let image = halloween ? Halloween.icon : NSImage(systemSymbolName: Self.symbol[Preferences.mode] ?? "snowflake", accessibilityDescription: "Snowhush")
+        let image = halloween ? Halloween.icon : Preferences.mode == .blossom ? Blossom.icon
+            : NSImage(systemSymbolName: Self.symbol[Preferences.mode] ?? "snowflake", accessibilityDescription: "Snowhush")
         guard dimmed, let image else { return image }
         // Dimmed by hand: the button's appearsDisabled also disables the slider in its menu, so Off could not be left.
         let faded = NSImage(size: image.size, flipped: false) { rect in

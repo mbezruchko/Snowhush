@@ -12,6 +12,10 @@ uniform vec4 rim;
 uniform vec4 panel;
 // One while leaves fall instead of snow.
 uniform float autumn;
+// One while the leaves are cherry blossom petals.
+uniform float blossom;
+// One while fallen leaves wither away.
+uniform float wilt;
 // One while running drops and beads are drawn as glass, from their field; without it, they are drawn here.
 uniform float glass;
 
@@ -53,38 +57,212 @@ vec3 leafColor(float seed) {
     return c * (0.86 + 0.24 * fract(seed * 31.7));
 }
 
+float saturate(float x) {
+    return clamp(x, 0.0, 1.0);
+}
+
+/// Blush, soft pink, pink or nearly white, a little lighter or darker.
+vec3 petalColor(float seed) {
+    float k = fract(seed * 7.13);
+    vec3 c = k < 0.35 ? vec3(1.0, 0.85, 0.89)
+        : k < 0.7 ? vec3(0.99, 0.76, 0.84)
+        : k < 0.88 ? vec3(0.97, 0.66, 0.78)
+        : vec3(1.0, 0.93, 0.95);
+    return c * (0.94 + 0.08 * fract(seed * 31.7));
+}
+
+/// The tan a fallen petal turns as it withers.
+vec3 withered(float seed) {
+    return vec3(0.78, 0.6, 0.49) * (0.86 + 0.18 * fract(seed * 17.3));
+}
+
 /// Fallen leaves lying every which way: the topmost at each point shows, the gaps between them in shadow.
 vec3 litter(vec2 point) {
-    vec2 cell = floor(point / 6.5);
+    float spacing = blossom > 0.5 ? 4.6 : 6.5;
+    vec2 cell = floor(point / spacing);
     float top = -1.0;
     float rim = 0.0;
-    vec3 color = vec3(0.34, 0.19, 0.08);
+    vec3 color = blossom > 0.5 ? vec3(0.86, 0.68, 0.74) : vec3(0.34, 0.19, 0.08);
     for (int j = -1; j <= 1; j++) {
         for (int i = -1; i <= 1; i++) {
             for (int k = 0; k < 3; k++) {
                 vec2 c = cell + vec2(i, j) + float(k) * 0.37;
-                vec2 d = point - (cell + vec2(i, j) + vec2(hash(c + 7.1), hash(c + 3.3))) * 6.5;
+                vec2 d = point - (cell + vec2(i, j) + vec2(hash(c + 7.1), hash(c + 3.3))) * spacing;
                 float angle = hash(c + 11.7) * 6.2832;
                 vec2 q = vec2(cos(angle) * d.x + sin(angle) * d.y, -sin(angle) * d.x + cos(angle) * d.y);
-                float size = 3.8 + 2.4 * hash(c + 2.9);
+                float size = blossom > 0.5 ? 3.2 + 1.6 * hash(c + 2.9) : 3.8 + 2.4 * hash(c + 2.9);
                 float t = q.x / size;
-                float inside = (1.0 - t * t) * size * 0.45 - abs(q.y);
+                float inside = (1.0 - t * t) * size * (blossom > 0.5 ? 0.62 : 0.45) - abs(q.y);
                 float z = hash(c + 5.9);
                 if (inside > 0.0 && z > top) {
                     top = z;
                     rim = inside;
-                    color = leafColor(hash(c + 0.5));
+                    color = blossom > 0.5 ? petalColor(hash(c + 0.5)) : leafColor(hash(c + 0.5));
+                    // Petals that have lain a while are withering.
+                    if (blossom > 0.5 && hash(c + 9.1) < 0.35 * wilt) color = mix(color, withered(hash(c + 0.5)), 0.3 + 0.6 * hash(c + 4.4));
                 }
             }
         }
     }
-    return color * (0.7 + 0.3 * smoothstep(0.0, 0.7, rim));
+    return color * ((blossom > 0.5 ? 0.86 : 0.7) + (blossom > 0.5 ? 0.14 : 0.3) * smoothstep(0.0, 0.7, rim));
 }
 
-/// A leaf at one moment, `p` running across it from -0.5 to 0.5: its colour, premultiplied.
-vec4 leafAt(vec2 p, float seed, float turn, float flip) {
-    float across = max(abs(flip), 0.35);
+/// A cherry blossom petal, as `leafAt` draws a leaf: narrow at its base, broadest near its rounded tip, which is
+/// notched in the middle, and pinker toward the base.
+vec4 petalAt(vec2 r, float seed, float flip, float alpha, vec3 light, float warm, float wither) {
+    float t = (r.x + 0.9) / 1.8;
+    float width = 0.84 * (0.9 + 0.2 * fract(seed * 5.3));
+    float halfWidth = width * pow(saturate(t), 0.5) * sqrt(saturate(1.0 - pow(saturate(t), 5.0)));
+    float notch = 0.9 - 0.16 * saturate(1.0 - abs(r.y) / (width * 0.3)) - r.x;
+    float inside = min(min(halfWidth - abs(r.y), notch), t * 0.5);
+    float edge = max(fwidth(inside), 1e-4);
+    float a = smoothstep(-edge, edge, inside) * alpha;
+    vec3 color = petalColor(seed);
+    color = mix(color * vec3(0.96, 0.8, 0.88), color, smoothstep(0.05, 0.6, t));
+    color *= 0.9 + 0.1 * smoothstep(0.0, 0.12, inside);
+    float vein = 0.5 + 0.5 * cos(atan(r.y, r.x + 0.9) * 26.0);
+    color *= 1.0 - 0.035 * vein * smoothstep(0.1, 0.5, t);
+    // Withering, it browns from its edges in.
+    float rim = 1.0 - smoothstep(0.0, 0.35, inside);
+    color = mix(color, withered(seed) * (0.85 + 0.15 * smoothstep(0.0, 0.2, inside)), saturate(wither * (0.6 + rim)) * 0.9);
+    if (flip < 0.0) color = mix(color, vec3(0.98, 0.9, 0.92), 0.25) * 0.94;
+    // Turned to the light for a moment as it tumbles, the thin petal glows pink with the daylight through it.
+    float through = pow(saturate((-flip - 0.75) / 0.25), 2.0) * (1.0 - wither) * dot(light, vec3(0.333));
+    color = mix(color, vec3(1.0, 0.6, 0.76), through * 0.5) * (1.0 + 0.12 * through);
+    color *= (0.86 + 0.14 * abs(flip)) * mix(vec3(1.0), light, 0.4);
+    color = mix(color, candle, warm * 0.45);
+    return vec4(color * a, a);
+}
+
+/// Lays `top` over `under`, both premultiplied.
+vec4 over(vec4 top, vec4 under) {
+    return top + under * (1.0 - top.a);
+}
+
+/// A cherry blossom petal tumbling about its length, `r` running along it from base to tip and across it on the screen.
+/// It curves across like a spoon: turned edge on it shows as a bowed sliver, and turned further, the inside of the
+/// curve. `sense` is which way it is tumbling, and so which way the curve bows.
+vec4 curledPetalAt(vec2 r, float seed, float turn, float flip, float sense, float alpha, vec3 light, float warm, float wither) {
+    const float curl = 0.35;
+    float c = flip >= 0.0 ? max(flip, 0.2) : min(flip, -0.2);
+    float s = sense * sqrt(saturate(1.0 - c * c));
+    // The point `y` across the petal shows at y c - curl y² s: find the points that show here. Every pixel works
+    // through both, masking what misses, so the edges' smoothing sees its neighbours alike.
+    float A = curl * s;
+    float disc = c * c - 4.0 * A * r.y;
+    float root = sqrt(max(disc, 0.0));
+    vec2 ys = abs(A) > 1e-4 ? vec2(c + root, c - root) / (2.0 * A) : vec2(r.y / c, 1e3);
+    vec2 depth = ys * s + curl * ys * ys * c;
+    ys = depth.y > depth.x ? ys.yx : ys;
+    vec4 color = vec4(0.0);
+    for (int i = 0; i < 2; i++) {
+        float y = ys[i];
+        // Which side of the petal shows there, and how squarely.
+        float facing = clamp(c - 2.0 * curl * y * s, -1.0, 1.0);
+        float hit = step(0.0, disc) * step(abs(y), 1.2);
+        vec4 piece = petalAt(vec2(r.x, y), seed, facing, alpha, light, warm, wither);
+        // The side turned to the light is brighter, the other in shade, and the light moves over it as it tumbles;
+        // lit from behind, the thin petal glows pink.
+        float across = -2.0 * curl * y * c - s;
+        vec3 normal = normalize(vec3(across * vec2(-sin(turn), cos(turn)), c - 2.0 * curl * y * s));
+        float lit = dot(normal.z >= 0.0 ? normal : -normal, normalize(vec3(-0.35, 0.75, 0.55)));
+        piece.rgb *= mix(vec3(0.88, 0.78, 0.86), vec3(1.06, 1.04, 1.05), saturate(lit));
+        piece.rgb = mix(piece.rgb, vec3(1.0, 0.62, 0.78) * piece.a, saturate(-lit) * 0.3);
+        color = over(color, piece * hit);
+    }
+    return color;
+}
+
+/// One side of a whole cherry blossom's cup, at `uv` across it: a petal, or on its face the deep pink heart, pink stamens
+/// and orange anthers, on its back the calyx; lit by how the cup there turns to the light.
+vec4 blossomAt(vec2 uv, vec3 normal, float seed, float spin, float nz, float alpha, vec3 light, float warm, float wither) {
+    vec2 l = vec2(cos(spin) * uv.x + sin(spin) * uv.y, -sin(spin) * uv.x + cos(spin) * uv.y);
+    float a = atan(l.y, l.x);
+    float k = round(a / 1.2566);
+    vec2 q = vec2(cos(k * 1.2566) * l.x + sin(k * 1.2566) * l.y, -sin(k * 1.2566) * l.x + cos(k * 1.2566) * l.y);
+    float front = normal.z >= 0.0 ? 1.0 : -1.0;
+    vec4 color = petalAt((q - vec2(0.5, 0.0)) * vec2(2.5, 2.0), seed, front * abs(nz), alpha, light, warm, wither);
+    float facing = dot(normal * front, normalize(vec3(-0.35, 0.75, 0.55)));
+    // Deep in the cup, round the heart, little light reaches; where light comes through from behind, it glows.
+    color.rgb *= (0.74 + 0.36 * saturate(facing)) * (0.82 + 0.18 * smoothstep(0.1, 0.55, length(uv)));
+    color.rgb = mix(color.rgb, vec3(1.0, 0.62, 0.78) * color.a, saturate(-facing) * 0.35);
+
+    float d = length(l);
+    float edge = max(fwidth(d), 1e-4);
+    vec3 lit = (0.86 + 0.14 * abs(nz)) * mix(vec3(1.0), light, 0.4);
+    if (front > 0.0) {
+        float ray = cos(a * 16.0 + seed * 13.0);
+        float stamens = smoothstep(0.75, 1.0, ray) * smoothstep(0.38, 0.3, d) * smoothstep(0.06, 0.1, d) * 0.7 * alpha;
+        color = over(vec4(mix(vec3(0.93, 0.46, 0.62), vec3(0.66, 0.42, 0.36), wither) * lit * stamens, stamens), color);
+        float tip = 0.3 + 0.1 * fract(sin(floor(a * 16.0 / 6.2832 + 0.5) * 12.9898 + seed * 78.2) * 43758.5);
+        float anthers = smoothstep(0.92, 1.0, ray) * smoothstep(0.05, 0.02, abs(d - tip)) * alpha;
+        color = over(vec4(mix(vec3(0.97, 0.62, 0.22), vec3(0.66, 0.5, 0.32), wither) * lit * anthers, anthers), color);
+    }
+    float heart = smoothstep(edge, -edge, d - (front > 0.0 ? 0.1 : 0.14)) * alpha;
+    vec3 middle = front > 0.0 ? mix(vec3(0.78, 0.2, 0.42), vec3(0.55, 0.3, 0.26), wither) : vec3(0.5, 0.18, 0.2);
+    return over(vec4(mix(middle * lit, candle, warm * 0.45) * heart, heart), color);
+}
+
+/// A whole cherry blossom on its stalk, `p` running across it from -1 to 1. Its five petals curve up into a cup,
+/// tilted so its face looks `face` toward us, below zero away, with the face's normal pointing `direction` on the
+/// screen; `spin` turns it about that normal. Through the gaps between the near petals the far side of the cup shows.
+vec4 flowerAt(vec2 p, float seed, float spin, float face, float direction, float alpha, vec3 light, float warm, float wither) {
+    float nz = face >= 0.0 ? max(face, 0.12) : min(face, -0.12);
+    float side = sqrt(saturate(1.0 - nz * nz));
+    vec2 along = vec2(cos(direction), sin(direction));
+    vec2 across = vec2(-along.y, along.x);
+    vec3 n = vec3(along * side, nz);
+    vec3 e1 = vec3(across, 0.0);
+    vec3 e2 = vec3(-nz * along, side);
+    vec3 lit = (0.86 + 0.14 * abs(nz)) * mix(vec3(1.0), light, 0.4);
+
+    // Where the line of sight here meets the cup, nearest first: its height above the face's plane is `cup` times
+    // the square of how far out from the middle it is.
+    const float cup = 0.42;
+    float s = dot(p, along);
+    float u = dot(p, across);
+    float A = cup * side * side;
+    float B = -(2.0 * cup * nz * s * side + nz);
+    float C = cup * (u * u + nz * nz * s * s) - side * s;
+    // Every pixel works through both, masking what misses, so the edges' smoothing sees its neighbours alike.
+    float disc = B * B - 4.0 * A * C;
+    float root = sqrt(max(disc, 0.0));
+    vec2 ts = A > 1e-4 ? vec2(-B + root, -B - root) / (2.0 * A) : vec2(-C / B, 1e3);
+    vec4 color = vec4(0.0);
+    for (int i = 0; i < 2; i++) {
+        vec2 uv = vec2(u, -nz * s + side * ts[i]);
+        vec3 normal = normalize(-2.0 * cup * uv.x * e1 - 2.0 * cup * uv.y * e2 + n);
+        float hit = step(0.0, disc) * step(dot(uv, uv), 1.0);
+        color = over(color, blossomAt(uv, normal, seed, spin, nz, alpha, light, warm, wither) * hit);
+    }
+
+    // The stalk runs back from the calyx, bending a little: behind the flower while its face is toward us.
+    vec2 end = -n.xy * 0.75 + across * 0.08;
+    vec2 bend = -n.xy * 0.4;
+    float stalk = 1e3;
+    vec2 previous = vec2(0.0);
+    for (int i = 1; i <= 4; i++) {
+        float t = float(i) / 4.0;
+        vec2 knot = 2.0 * t * (1.0 - t) * bend + t * t * end;
+        vec2 segment = knot - previous;
+        float h = saturate(dot(p - previous, segment) / max(dot(segment, segment), 1e-6));
+        stalk = min(stalk, length(p - previous - segment * h));
+        previous = knot;
+    }
+    float stalkEdge = max(fwidth(stalk), 1e-4);
+    float stem = smoothstep(0.06 + stalkEdge, 0.06 - stalkEdge, stalk) * alpha * smoothstep(0.02, 0.15, length(end));
+    vec4 stalkColor = vec4(mix(mix(vec3(0.66, 0.24, 0.28), vec3(0.5, 0.34, 0.26), wither) * lit, candle, warm * 0.45) * stem, stem);
+    return nz > 0.0 ? over(color, stalkColor) : over(stalkColor, color);
+}
+
+/// A leaf at one moment, `p` running across it from -0.5 to 0.5: its colour, premultiplied. A cherry blossom petal
+/// browns as it withers by `wither`; a whole flower's face points `direction` on the screen, and a petal curves the way
+/// it tumbles, `sense`.
+vec4 leafAt(vec2 p, float seed, float turn, float flip, float wither, float direction, float sense) {
+    if (blossom > 0.5 && fract(seed * 23.3) < 0.035) return flowerAt(p * 2.0, seed, turn, flip, direction, vAlpha, light.rgb, vWarm, wither);
     vec2 r = vec2(cos(turn) * p.x + sin(turn) * p.y, -sin(turn) * p.x + cos(turn) * p.y) * 2.0;
+    if (blossom > 0.5) return curledPetalAt(r, seed, turn, flip, sense, vAlpha, light.rgb, vWarm, wither);
+    float across = max(abs(flip), 0.35);
     r.y /= across;
     float inside;
     if (fract(seed * 13.7) < 0.4) {
@@ -391,7 +569,8 @@ void main() {
         for (int k = 0; k < n; k++) {
             float along = (float(k) + 0.5) / float(n) - 0.5;
             float back = along - 0.5;
-            sum += leafAt(p * vLeaf.w - vStreak * along, vLeaf.x, vLeaf.y + vSmear.x * back, clamp(vLeaf.z + vSmear.y * back, -1.0, 1.0));
+            sum += leafAt(p * vLeaf.w - vStreak * along, vLeaf.x, vLeaf.y + vSmear.x * back, clamp(vLeaf.z + vSmear.y * back, -1.0, 1.0),
+                          vTint.a, vPose.y, vSmear.y > 0.0 ? -1.0 : 1.0);
         }
         sum /= float(n);
         // Dropped only once its edges are measured, as the ghost is: a dropped fragment would leave its neighbours without theirs.
