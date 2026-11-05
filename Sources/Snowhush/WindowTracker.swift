@@ -87,6 +87,12 @@ final class WindowTracker {
         if #available(macOS 27, *) { return 16 }
         return 18
     }()
+    /// A desktop widget's corners, which the window server doesn't round: measured off the widgets themselves, as the
+    /// superellipse the snow's bed takes. From macOS 27 they round off further.
+    private static let widgetRadius: CGFloat = {
+        if #available(macOS 27, *) { return 31 }
+        return 22
+    }()
     /// Where each window above the normal layer last showed smaller than the screen, and when.
     private var raised: [CGWindowID: (frame: CGRect, at: CFTimeInterval)] = [:]
     private var pressedMinimize: CGWindowID?
@@ -517,7 +523,7 @@ final class WindowTracker {
                 let capsule = !shelf && (owner.lowercased().contains("spotlight") || (bounds.height <= 90 && bounds.width >= bounds.height * 3))
                 let corner = shelf ? Dock.cornerRadius(height: bounds.height)
                     : capsule ? min(bounds.height / 2, 32)
-                    : layer < 0 ? 22 : radii[id] ?? Self.defaultRadius
+                    : layer < 0 ? Self.widgetRadius : radii[id] ?? Self.defaultRadius
                 let radius = min(corner, bounds.width / 2, bounds.height / 2)
                 let region = CGRect(x: frame.minX, y: frame.maxY - radius, width: frame.width, height: 40 + radius)
                 if layer > 0 && !shelf { panels[id] = panelsShownAt[id] ?? now }

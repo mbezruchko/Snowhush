@@ -247,12 +247,18 @@ final class SnowLayer {
         supportedRange = nil
     }
 
+    /// How steep a bed snow still clings to, as a rise over run: about 55 degrees.
+    static let clingSlope: Float = 1.4
+
     /// Slumps slopes steeper than the angle of repose and rounds crests, measured on the snow surface over the bed,
     /// so snow slides off rounded corners. Open layers shed what slides past their ends into `spill`.
     func relax(repose: Float, rounding: Float) -> Bool {
         let count = heights.count
         guard count > 1, top > 0 else { return false }
         let limit = repose * columnWidth
+        // Snow clings to its bed: a layer may follow the bed down a rounded corner as far as it is no steeper than
+        // `clingSlope`, on top of the angle of repose its own surface keeps.
+        let steepest = Self.clingSlope * columnWidth
         let forwardFirst = parity
         parity.toggle()
         var moved = false
@@ -279,12 +285,15 @@ final class SnowLayer {
                                 let i = forward ? k : count - 2 - k
                                 if held[i] || held[i + 1] { continue }
                                 let difference = (b[i] + h[i]) - (b[i + 1] + h[i + 1])
-                                if difference > limit + 0.01 {
-                                    let transfer = min((difference - limit) * 0.5, h[i])
+                                let fall = b[i] - b[i + 1]
+                                let ahead = limit + min(max(fall, 0), steepest)
+                                let behind = limit + min(max(-fall, 0), steepest)
+                                if difference > ahead + 0.01 {
+                                    let transfer = min((difference - ahead) * 0.5, h[i])
                                     shift(transfer, from: i, to: i + 1)
                                     if transfer > 0 { moved = true }
-                                } else if difference < -limit - 0.01 {
-                                    let transfer = min((-difference - limit) * 0.5, h[i + 1])
+                                } else if difference < -behind - 0.01 {
+                                    let transfer = min((-difference - behind) * 0.5, h[i + 1])
                                     shift(transfer, from: i + 1, to: i)
                                     if transfer > 0 { moved = true }
                                 }
