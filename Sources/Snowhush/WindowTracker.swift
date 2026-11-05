@@ -80,6 +80,13 @@ final class WindowTracker {
     /// Windows on their way out before the window list shows it, as during a minimize's genie animation;
     /// left out until they're gone or their time is up.
     private var leaving: [CGWindowID: CFTimeInterval] = [:]
+    /// The radius the window server rounds each window's corners with, learnt as the window shows up.
+    private var radii: [CGWindowID: CGFloat] = [:]
+    /// A window's corners when the window server can't tell: from macOS 27 every window has the same, tighter ones.
+    private static let defaultRadius: CGFloat = {
+        if #available(macOS 27, *) { return 16 }
+        return 18
+    }()
     /// Where each window above the normal layer last showed smaller than the screen, and when.
     private var raised: [CGWindowID: (frame: CGRect, at: CFTimeInterval)] = [:]
     private var pressedMinimize: CGWindowID?
@@ -431,6 +438,7 @@ final class WindowTracker {
         let list = Self.windowList(now: now)
         currentSpaceRead = false
         raised = raised.filter { now - $0.value.at < 2 }
+        learnRadii(of: list)
 
         var blockers: [CGRect] = []
         var surfaces: [WindowSurface] = []
@@ -507,7 +515,9 @@ final class WindowTracker {
                shelf || !isCard(id, bounds, into: &checked) {
                 // Search bars like Spotlight are capsules: low and wide, with fully rounded ends.
                 let capsule = !shelf && (owner.lowercased().contains("spotlight") || (bounds.height <= 90 && bounds.width >= bounds.height * 3))
-                let corner = shelf ? Dock.cornerRadius(height: bounds.height) : capsule ? min(bounds.height / 2, 32) : layer < 0 ? 22 : 18
+                let corner = shelf ? Dock.cornerRadius(height: bounds.height)
+                    : capsule ? min(bounds.height / 2, 32)
+                    : layer < 0 ? 22 : radii[id] ?? Self.defaultRadius
                 let radius = min(corner, bounds.width / 2, bounds.height / 2)
                 let region = CGRect(x: frame.minX, y: frame.maxY - radius, width: frame.width, height: 40 + radius)
                 if layer > 0 && !shelf { panels[id] = panelsShownAt[id] ?? now }
@@ -525,6 +535,22 @@ final class WindowTracker {
         }
         if !dockOut { dockShownAt = nil }
         return exposing ? [] : surfaces
+    }
+
+    /// Asks the window server, once for each window that has newly shown up, how round its corners are. A window it
+    /// gives no rounding, as one that draws its own frame, takes the system's.
+    private func learnRadii(of list: [ListedWindow]) {
+        let shown = Set(list.compactMap { entry -> CGWindowID? in
+            guard let layer = entry.layer, layer >= 0, layer < dockLevel else { return nil }
+            return entry.id
+        })
+        radii = radii.filter { shown.contains($0.key) }
+        let fresh = shown.subtracting(radii.keys)
+        guard !fresh.isEmpty else { return }
+        let found = Corners.radii(of: Array(fresh))
+        for id in fresh {
+            radii[id] = found[id].flatMap { $0 > 0 ? $0 : nil } ?? Self.defaultRadius
+        }
     }
 
     /// With separate Spaces, a window reaching over from another display isn't shown here and can't hide snow.
@@ -806,6 +832,35 @@ enum SkyLight {
         guard let connection, let windowBounds else { return nil }
         var bounds = CGRect.zero
         return windowBounds(connection, window, &bounds) == 0 ? bounds : nil
+    }
+}
+
+/// How round the window server makes windows' corners, through private SkyLight calls; without them, nothing is told.
+enum Corners {
+    private typealias Query = @convention(c) (Int32, CFArray, Int32) -> Unmanaged<CFTypeRef>?
+    private typealias Results = @convention(c) (CFTypeRef) -> Unmanaged<CFTypeRef>?
+    private typealias Advance = @convention(c) (CFTypeRef) -> Bool
+    private typealias Window = @convention(c) (CFTypeRef) -> UInt32
+    private typealias Radii = @convention(c) (CFTypeRef) -> Unmanaged<CFArray>?
+
+    private static let query = SkyLight.function("SLSWindowQueryWindows", as: Query.self)
+    private static let results = SkyLight.function("SLSWindowQueryResultCopyWindows", as: Results.self)
+    private static let advance = SkyLight.function("SLSWindowIteratorAdvance", as: Advance.self)
+    private static let window = SkyLight.function("SLSWindowIteratorGetWindowID", as: Window.self)
+    private static let resolved = SkyLight.function("SLSWindowIteratorGetResolvedCornerRadii", as: Radii.self)
+
+    /// Each window's corner radius. The query, its results and each window's radii come back owned by the caller.
+    static func radii(of windows: [CGWindowID]) -> [CGWindowID: CGFloat] {
+        guard let connection = SkyLight.connection, let query, let results, let advance, let window, let resolved,
+              let found = query(connection, windows.map { NSNumber(value: $0) } as CFArray, 0)?.takeRetainedValue(),
+              let iterator = results(found)?.takeRetainedValue()
+        else { return [:] }
+        var radii: [CGWindowID: CGFloat] = [:]
+        while advance(iterator) {
+            guard let corners = resolved(iterator)?.takeRetainedValue() as? [NSNumber], let top = corners.first else { continue }
+            radii[window(iterator)] = CGFloat(top.doubleValue)
+        }
+        return radii
     }
 }
 
