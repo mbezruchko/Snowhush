@@ -248,7 +248,19 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                 let density = if budget == PowerBudget::Saver { 0.75 } else { 1.0 };
                 screens.iter_mut().for_each(|screen| screen.simulation.set_density(density));
             }
-            screens.iter().for_each(Screen::raise);
+            // Behind windows, a yearly SetWindowPos on every monitor's child overlay restacks them under the
+            // icons and the desktop layer blinks — often on one display, then another. Raise only when the
+            // wallpaper layer's children change (a live wallpaper landing on top, Explorer rebuilding, …).
+            if settings.behind_windows {
+                let tree = desktop::tree();
+                if tree != desktop_logged {
+                    log!("desktop: {tree}");
+                    desktop_logged = tree;
+                    screens.iter().for_each(Screen::raise);
+                }
+            } else {
+                screens.iter().for_each(Screen::raise);
+            }
             // Behind windows, the overlays live inside Explorer's windows and vanish when it restarts; until the
             // wallpaper layer is found they wait on top of everything instead.
             if settings.behind_windows && (layer.is_none() || screens.iter().any(|screen| !screen.alive())) {
@@ -256,14 +268,6 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                 if found.is_some() || screens.iter().any(|screen| !screen.alive()) {
                     layer = found;
                     screens = sync_screens(&gpu, &settings, screens, layer, true);
-                }
-            }
-            // Wallpaper apps share the layer the snow goes into; how they settle around it tells what went wrong.
-            if settings.behind_windows {
-                let tree = desktop::tree();
-                if tree != desktop_logged {
-                    log!("desktop: {tree}");
-                    desktop_logged = tree;
                 }
             }
             if now >= light_at {
