@@ -3,14 +3,24 @@ import AppKit
 /// The screenshot tool, picking a window to capture after ⌘⇧4 and Space or in ⌘⇧5's window mode, takes the window
 /// drawn under the pointer, and to it the overlay, drawn with Metal, is drawn all over: it picks the snow instead of
 /// the window under it, and with the snow kept out of screenshots, captures nothing. So the overlays step aside while
-/// it is up. SystemUIServer starts `screencapture` for each screenshot shortcut, and its fork is caught as it happens.
+/// its crosshair is up, picking or about to, but not while a region is dragged out or the screen recorded, which take
+/// the snow in when it is shown in screenshots. SystemUIServer starts `screencapture` for each screenshot shortcut,
+/// and its fork is caught as it happens.
 final class ScreenshotWatch {
     /// Whether the overlays should be out of the screenshot tool's way.
     var stepAside: (Bool) -> Void = { _ in }
 
+    /// The tool's crosshair over the screen, two levels under the assistive-technology one.
+    private static let crosshairLevel = Int(CGWindowLevelForKey(.assistiveTechHighWindow)) - 2
+    /// A region being dragged out lies over everything, the pointer included.
+    private static let cursorLevel = Int(CGWindowLevelForKey(.cursorWindow))
+
     private var server: DispatchSourceProcess?
     private var capture: DispatchSourceProcess?
     private var lookout: Timer?
+    private var startedAt: CFTimeInterval = 0
+    private var crosshairSeen = false
+    private var aside = false
 
     func start() {
         guard let pid = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == "com.apple.systemuiserver" })?
@@ -48,33 +58,38 @@ final class ScreenshotWatch {
         source.setEventHandler { [weak self] in self?.end() }
         source.resume()
         capture = source
-        stepAside(true)
+        startedAt = CACurrentMediaTime()
+        crosshairSeen = false
+        set(aside: true)
         if kill(pid, 0) != 0 {
             end()
             return
         }
-        if Preferences.showInScreenshots { watchForSelection() }
-    }
-
-    /// Shown in screenshots, the snow comes back as soon as a region is dragged out, so the region takes it in: the
-    /// tool's selection then lies over everything, the pointer included.
-    private func watchForSelection() {
-        let cursor = Int(CGWindowLevelForKey(.cursorWindow))
-        let timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
-            let selecting = list.contains {
-                $0[kCGWindowOwnerName as String] as? String == "screencapture"
-                    && ($0[kCGWindowLayer as String] as? NSNumber)?.intValue ?? 0 > cursor
-            }
-            guard selecting else { return }
-            lookout?.invalidate()
-            lookout = nil
-            stepAside(false)
-        }
-        timer.tolerance = 0.01
+        let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in self?.look() }
+        timer.tolerance = 0.02
         RunLoop.main.add(timer, forMode: .common)
         lookout = timer
+    }
+
+    /// Out of the way until the crosshair is up, for a second at most, and then for as long as it is up with no region
+    /// being dragged out.
+    private func look() {
+        let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+        let layers = list.compactMap { window -> Int? in
+            guard window[kCGWindowOwnerName as String] as? String == "screencapture" else { return nil }
+            return (window[kCGWindowLayer as String] as? NSNumber)?.intValue
+        }
+        let crosshair = layers.contains(Self.crosshairLevel)
+        if crosshair { crosshairSeen = true }
+        let dragged = layers.contains { $0 > Self.cursorLevel }
+        let starting = !crosshairSeen && CACurrentMediaTime() - startedAt < 1
+        set(aside: starting || (crosshair && !dragged))
+    }
+
+    private func set(aside next: Bool) {
+        guard next != aside else { return }
+        aside = next
+        stepAside(next)
     }
 
     private func end() {
@@ -82,7 +97,7 @@ final class ScreenshotWatch {
         capture = nil
         lookout?.invalidate()
         lookout = nil
-        stepAside(false)
+        set(aside: false)
     }
 
     /// `screencapture` run for ⌘⇧4 (-i, interactive) or ⌘⇧5 (-U, its toolbar); for ⌘⇧3 it takes the screen as it is.
