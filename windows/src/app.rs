@@ -53,6 +53,9 @@ const ID_PERFORMANCE: u32 = 214;
 const ID_MAX_PERFORMANCE: u32 = 215;
 const ID_DEEP: u32 = 216;
 const ID_BLOSSOM: u32 = 217;
+const ID_SPONSOR: u32 = 218;
+
+const SPONSORS: &str = "https://github.com/sponsors/mbezruchko";
 const TIMER_WELCOME: usize = 1;
 const TIMER_UPDATES: usize = 2;
 const TIMER_HALLOWEEN: usize = 3;
@@ -411,6 +414,7 @@ fn entries(settings: &Settings, login: bool) -> Vec<Entry> {
         Entry::Separator,
         Entry::item(ID_LOGIN, "Open at Login", login, true),
         Entry::item(ID_UPDATES, "Check for Updates\u{2026}", false, true),
+        Entry::item(ID_SPONSOR, "Support Snowhush\u{2026}", false, true),
         Entry::item(ID_QUIT, "Quit", false, true),
     ]);
     entries
@@ -460,6 +464,7 @@ fn choose(window: HWND, chosen: u32, login: bool) {
         0 => {}
         ID_QUIT => quit(window),
         ID_UPDATES => check_for_updates(window, true),
+        ID_SPONSOR => update::open(SPONSORS),
         ID_CLEAR => APP.with_borrow(|app| {
             if let Some(app) = app {
                 send(app, Command::ClearSnow(!prefs::animations_enabled()));

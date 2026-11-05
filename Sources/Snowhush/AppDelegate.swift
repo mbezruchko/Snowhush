@@ -176,6 +176,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         loginItem = add("Open at Login", #selector(toggleOpenAtLogin), to: menu)
         let updates = menu.addItem(withTitle: "Check for Updates…", action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)), keyEquivalent: "")
         updates.target = updater
+        add("Support Snowhush…", #selector(openSponsors), to: menu)
         menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 
         item.menu = menu
@@ -277,6 +278,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
             snow.window.showsInScreenshots = Preferences.showInScreenshots
             snow.dock.window.showsInScreenshots = Preferences.showInScreenshots
         }
+    }
+
+    @objc private func openSponsors() {
+        NSWorkspace.shared.open(URL(string: "https://github.com/sponsors/mbezruchko")!)
     }
 
     @objc private func toggleOpenAtLogin() {
