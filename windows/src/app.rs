@@ -51,6 +51,7 @@ const ID_FULL_SCREEN: u32 = 212;
 const ID_RAIN: u32 = 213;
 const ID_PERFORMANCE: u32 = 214;
 const ID_MAX_PERFORMANCE: u32 = 215;
+const ID_DEEP: u32 = 216;
 const TIMER_WELCOME: usize = 1;
 const TIMER_UPDATES: usize = 2;
 const TIMER_HALLOWEEN: usize = 3;
@@ -373,6 +374,7 @@ fn entries(settings: &Settings, login: bool) -> Vec<Entry> {
         Mode::Rain => "Rain on Windows",
     };
     entries.push(Entry::item(ID_WINDOWS, windows, settings.snow_on_windows, true));
+    entries.push(Entry::item(ID_DEEP, "Deep Interaction", settings.deep_interaction, settings.snow_on_windows));
     if mode != Mode::Rain {
         entries.push(Entry::item(ID_CLEAR, if autumn { "Clear Leaves" } else { "Clear Snow" }, false, true));
     }
@@ -500,6 +502,10 @@ fn choose(window: HWND, chosen: u32, login: bool) {
                 ID_SCREENSHOTS => {
                     settings.show_in_screenshots = !settings.show_in_screenshots;
                     Command::ShowInScreenshots(settings.show_in_screenshots)
+                }
+                ID_DEEP => {
+                    settings.deep_interaction = !settings.deep_interaction;
+                    Command::DeepInteraction(settings.deep_interaction)
                 }
                 ID_PERFORMANCE | ID_MAX_PERFORMANCE => {
                     settings.max_performance = chosen == ID_MAX_PERFORMANCE;

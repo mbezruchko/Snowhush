@@ -28,6 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var behindWindowsItem: NSMenuItem!
     private var fullScreenItem: NSMenuItem!
     private var screenshotsItem: NSMenuItem!
+    private var deepInteractionItem: NSMenuItem!
     private var loginItem: NSMenuItem!
     private var observers: [NSObjectProtocol] = []
     private var screensAsleep = false
@@ -68,6 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         refreshHalloween()
         halloweenTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in self?.refreshHalloween() }
         observeSystem()
+        Marquee.enabled = Preferences.deepInteraction
         screenshots.stepAside = { [weak self] aside in self?.screens.forEach { $0.stepAside(aside) } }
         screenshots.start()
         if snowfallHeld {
@@ -162,6 +164,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         accumulateItem = add("Accumulate", #selector(toggleAccumulate), to: menu)
         meltItem = add("Melt Snow", #selector(toggleMeltSnow), to: menu)
         snowOnWindowsItem = add("Snow on Windows", #selector(toggleSnowOnWindows), to: menu)
+        deepInteractionItem = add("Deep Interaction", #selector(toggleDeepInteraction), to: menu)
         clearItem = add("Clear Snow", #selector(clearSnow), to: menu)
         menu.addItem(.separator())
         behindWindowsItem = add("Behind Windows", #selector(toggleBehindWindows), to: menu)
@@ -203,6 +206,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         meltItem.state = thaws ? .on : .off
         meltItem.isEnabled = accumulates
         snowOnWindowsItem.state = snowOnWindows ? .on : .off
+        deepInteractionItem.state = Preferences.deepInteraction ? .on : .off
+        deepInteractionItem.isEnabled = snowOnWindows
         clearItem.isEnabled = screens.contains { $0.simulation.hasSnow || $0.simulation.spriteCount > 0 }
         halloweenItem.state = Halloween.isWanted ? .on : .off
         halloweenItem.isEnabled = mode == .snow
@@ -238,6 +243,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         snowOnWindows.toggle()
         Preferences.snowOnWindows = snowOnWindows
         if !snowOnWindows { screens.forEach { $0.dropWindowSnow() } }
+    }
+
+    @objc private func toggleDeepInteraction() {
+        Preferences.deepInteraction.toggle()
+        Marquee.enabled = Preferences.deepInteraction
     }
 
     @objc private func clearSnow() {

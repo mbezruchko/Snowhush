@@ -534,6 +534,20 @@ final class WindowTracker {
             blockers.append(frame)
         }
         if !dockOut { dockShownAt = nil }
+        if let band = Marquee.rect(over: list), band.intersects(screen), band.width >= 16 {
+            // The rubber band lies on the desktop, behind every window, and hides nothing: it is see-through.
+            let frame = CGRect(x: band.minX - screen.minX, y: screen.maxY - band.maxY, width: band.width, height: band.height)
+            let region = CGRect(x: frame.minX, y: frame.maxY, width: frame.width, height: 40)
+            surfaces.append(WindowSurface(
+                id: Marquee.id,
+                frame: frame,
+                blockers: blockers.filter { $0.intersects(region) },
+                cover: blockers.filter { $0.intersects(frame) },
+                cornerRadius: 0,
+                cornerExponent: 2.5,
+                isDock: false
+            ))
+        }
         return exposing ? [] : surfaces
     }
 
@@ -861,6 +875,69 @@ enum Corners {
             radii[window(iterator)] = CGFloat(top.doubleValue)
         }
         return radii
+    }
+}
+
+/// The rubber band a drag across the desktop's empty space draws to select icons. Finder draws it into the desktop,
+/// with no window of its own, so it is followed from the mouse: from where the button went down on the desktop to the
+/// pointer, while the button is held. Dragging an icon instead shows the icon in a window at the dragging level.
+enum Marquee {
+    /// A window number no window has: the rubber band's.
+    static let id = CGWindowID.max - 1
+
+    /// Followed only with Deep Interaction on.
+    static var enabled = false {
+        didSet {
+            guard enabled != oldValue else { return }
+            if enabled {
+                monitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { _ in
+                    let point = pointer
+                    anchor = onDesktop(point) ? point : nil
+                }
+            } else {
+                if let monitor { NSEvent.removeMonitor(monitor) }
+                monitor = nil
+                anchor = nil
+            }
+        }
+    }
+
+    private static var monitor: Any?
+    /// Where the button went down on the desktop, in the window list's coordinates.
+    private static var anchor: CGPoint?
+    private static let draggingLevel = Int(CGWindowLevelForKey(.draggingWindow))
+    private static let desktopIconLevel = Int(CGWindowLevelForKey(.desktopIconWindow))
+    private static let desktopLevel = Int(CGWindowLevelForKey(.desktopWindow))
+
+    /// The pointer in the window list's coordinates.
+    private static var pointer: CGPoint {
+        let location = NSEvent.mouseLocation
+        return CGPoint(x: location.x, y: (NSScreen.screens.first?.frame.height ?? 0) - location.y)
+    }
+
+    /// The band, in the window list's coordinates, while one is being dragged out.
+    fileprivate static func rect(over list: [ListedWindow]) -> CGRect? {
+        guard enabled, let anchor else { return nil }
+        guard NSEvent.pressedMouseButtons & 1 != 0 else {
+            self.anchor = nil
+            return nil
+        }
+        let point = pointer
+        guard abs(point.x - anchor.x) > 3 || abs(point.y - anchor.y) > 3,
+              !list.contains(where: { $0.layer == draggingLevel })
+        else { return nil }
+        return CGRect(x: min(anchor.x, point.x), y: min(anchor.y, point.y), width: abs(point.x - anchor.x), height: abs(point.y - anchor.y))
+    }
+
+    /// Whether the first thing drawn at this point, front to back, is the desktop: Finder's icons or the wallpaper. The
+    /// window server's own clear strips over the desktop, as along the top of the screen, don't count.
+    private static func onDesktop(_ point: CGPoint) -> Bool {
+        let own = ProcessInfo.processInfo.processIdentifier
+        let windows = ListedWindow.all(in: CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID))
+        guard let hit = windows.first(where: { window in
+            window.pid != own && window.owner != "Window Server" && (window.alpha ?? 0) > 0 && window.bounds?.contains(point) == true
+        }), let layer = hit.layer else { return false }
+        return (layer == desktopIconLevel && hit.owner == "Finder") || layer <= desktopLevel
     }
 }
 

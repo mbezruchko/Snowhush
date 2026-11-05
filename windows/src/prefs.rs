@@ -27,6 +27,8 @@ pub struct Settings {
     /// The snow settles at the bottom of the screen, under the taskbar, for a taskbar made see-through, as by TranslucentTB.
     pub behind_taskbar: bool,
     pub show_in_screenshots: bool,
+    /// The snow also settles on what the desktop draws without a window of its own: a selection dragged across it.
+    pub deep_interaction: bool,
     pub welcomed: bool,
     pub halloween: Choice,
     /// What falls: snow, leaves or rain.
@@ -48,6 +50,7 @@ impl Settings {
             over_full_screen: read(w!("showOverFullScreen")).is_some_and(|v| v != 0),
             behind_taskbar: read(w!("behindTaskbar")).is_some_and(|v| v != 0),
             show_in_screenshots: read(w!("showInScreenshots")).is_some_and(|v| v != 0),
+            deep_interaction: read(w!("deepInteraction")).is_some_and(|v| v != 0),
             welcomed: read(w!("welcomed")).is_some_and(|v| v != 0),
             halloween: Choice { on: read(w!("halloweenOn")).is_some_and(|v| v != 0), skipped: read(w!("halloweenSkipped")).unwrap_or(0) },
             // Before rain there was only a switch for leaves.
@@ -70,6 +73,7 @@ impl Settings {
         write(w!("showOverFullScreen"), self.over_full_screen as u32);
         write(w!("behindTaskbar"), self.behind_taskbar as u32);
         write(w!("showInScreenshots"), self.show_in_screenshots as u32);
+        write(w!("deepInteraction"), self.deep_interaction as u32);
         write(w!("welcomed"), self.welcomed as u32);
         write(w!("halloweenOn"), self.halloween.on as u32);
         write(w!("halloweenSkipped"), self.halloween.skipped);
