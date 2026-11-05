@@ -7,13 +7,14 @@ final class MenuToggle: NSView {
     private weak var target: AnyObject?
     private var hovered = false
 
-    // Measured from a macOS 26 menu at 2x: rows 24 pt, titles and separators at 30 pt, checkmarks centred at 18 pt.
+    // Measured from a macOS 26 menu at 2x: rows 24 pt, titles and separators at 30 pt, checkmarks centred at 18 pt
+    // and matching a 10.5 pt bold SF checkmark, not the older, thinner menuOnStateTemplate.
     private static let modern = ProcessInfo.processInfo.isOperatingSystemAtLeast(OperatingSystemVersion(majorVersion: 26, minorVersion: 0, patchVersion: 0))
     private static let rowHeight: CGFloat = modern ? 24 : 22
     private static let titleX: CGFloat = modern ? 30 : 22
     private static let checkX: CGFloat = modern ? 18 : 12
     private static let highlightRadius: CGFloat = modern ? 8 : 4
-    private static let check = NSImage(named: NSImage.menuOnStateTemplateName)
+    private static let check = NSImage(systemSymbolName: "checkmark", accessibilityDescription: nil)
 
     init(action: Selector, target: AnyObject) {
         self.action = action
@@ -75,14 +76,8 @@ final class MenuToggle: NSView {
             NSBezierPath(roundedRect: bounds.insetBy(dx: 5, dy: 0), xRadius: Self.highlightRadius, yRadius: Self.highlightRadius).fill()
         }
         let color: NSColor = lit ? .selectedMenuItemTextColor : item.isEnabled ? .labelColor : .disabledControlTextColor
-        if item.state == .on, let check = Self.check {
-            let tinted = NSImage(size: check.size, flipped: false) { rect in
-                check.draw(in: rect)
-                color.set()
-                rect.fill(using: .sourceAtop)
-                return true
-            }
-            tinted.draw(in: NSRect(x: Self.checkX - check.size.width / 2, y: (bounds.height - check.size.height) / 2, width: check.size.width, height: check.size.height))
+        if item.state == .on, let check = Self.check?.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 10.5, weight: .bold).applying(.init(paletteColors: [color]))) {
+            check.draw(in: NSRect(x: Self.checkX - check.size.width / 2, y: (bounds.height - check.size.height) / 2, width: check.size.width, height: check.size.height))
         }
         let title = NSAttributedString(string: item.title, attributes: [.font: NSFont.menuFont(ofSize: 0), .foregroundColor: color])
         title.draw(at: NSPoint(x: Self.titleX, y: (bounds.height - title.size().height) / 2))
