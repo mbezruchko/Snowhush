@@ -36,6 +36,7 @@ const GLYPHS: [[[&[u8]; 7]; 2]; 5] = [
     [glyph!("blossom-white"), glyph!("blossom-black")],
 ];
 const MODES: [Mode; 4] = [Mode::Snow, Mode::Autumn, Mode::Rain, Mode::Blossom];
+const SPONSORS: &str = "https://github.com/sponsors/mbezruchko";
 
 pub struct Tray {
     settings: Settings,
@@ -306,6 +307,7 @@ impl ksni::Tray for Tray {
                 ..Default::default()
             }
             .into(),
+            StandardItem { label: "Support Snowhush…".into(), activate: Box::new(|_: &mut Tray| open(SPONSORS)), ..Default::default() }.into(),
             StandardItem {
                 label: "Quit".into(),
                 icon_name: "application-exit".into(),
@@ -316,6 +318,15 @@ impl ksni::Tray for Tray {
             }
             .into(),
         ]
+    }
+}
+
+fn open(url: &str) {
+    match std::process::Command::new("xdg-open").arg(url).spawn() {
+        Ok(mut child) => {
+            std::thread::spawn(move || child.wait());
+        }
+        Err(error) => log!("xdg-open {url}: {error}"),
     }
 }
 
