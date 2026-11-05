@@ -44,7 +44,7 @@ Choose Mode › Rain and rain beats down instead of snow, splashing where it lan
 
 From October 30 until dawn on November 1 the snow turns spooky: jack-o'-lanterns glow in the drift and ghosts pop up out of it with signs. Choose Mode › Halloween to have it any other day, as long as snow is falling.
 
-Everything else lives in the menu bar: Intensity (Off, Light, Steady, Heavy, Variable), Mode (Snow, Autumn Leaves, Rain, and Halloween on top of snow), Performance (Default, or Max to draw every frame at the display's full rate), Accumulate, Melt Snow, Snow on Windows, Clear Snow, Behind Windows, Show over Full Screen, Show in Screenshots and Open at Login. On Windows, Behind Taskbar lets the snow settle at the bottom of the screen under a see-through taskbar, such as one made clear with TranslucentTB.
+Everything else lives in the menu bar: Intensity (Off, Light, Steady, Heavy, Variable), Mode (Snow, Autumn Leaves, Rain, and Halloween on top of snow), Performance (Default, or Max to draw every frame at the display's full rate), Accumulate, Melt Snow, Snow on Windows, Clear Snow, Behind Windows, Show over Full Screen, Show in Screenshots and Open at Login. On Windows, Behind Taskbar lets the snow settle at the bottom of the screen under a see-through taskbar, such as one made clear with TranslucentTB, and Deep Interaction lets it settle on a selection dragged across the desktop.
 
 ## Building
 

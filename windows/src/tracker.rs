@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Once, OnceLock};
 use std::time::Duration;
 
-use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, RECT};
+use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, POINT, RECT};
 use windows::Win32::Graphics::Dwm::{
     DWM_WINDOW_CORNER_PREFERENCE, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND, DWMWCP_ROUNDSMALL,
     DwmGetWindowAttribute,
@@ -16,6 +16,7 @@ use windows::Win32::System::Registry::{HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RegGet
 use windows::Win32::System::Threading::{OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW};
 use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON};
 use windows::Win32::UI::Shell::{
     IVirtualDesktopManager, QUNS_BUSY, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN, SHQueryUserNotificationState, VirtualDesktopManager,
 };
@@ -23,7 +24,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{BOOL, PWSTR, w};
 
 use snowhush_core::geometry::Rect;
-use snowhush_core::simulation::WindowSurface;
+use snowhush_core::simulation::{COLUMN_WIDTH, WindowSurface};
 
 use crate::log;
 use crate::screen::Clock;
@@ -79,6 +80,18 @@ struct Window {
     zoomed: bool,
 }
 
+/// The rubber band a drag across the desktop's empty space draws to select icons. It has no window of its own, being
+/// drawn into the desktop's icon view, so it is followed from the mouse: from where the button went down to the pointer.
+#[derive(Default)]
+struct Marquee {
+    /// Where the button went down, and whether on the desktop's icon view.
+    pressed: Option<(POINT, bool)>,
+    rect: Option<RECT>,
+}
+
+/// A surface id no window has: the rubber band's.
+const MARQUEE: isize = isize::MIN + 1;
+
 /// The windows on screen, front to back, re-read when the system reports a window moving, showing, hiding,
 /// minimizing or changing desktops, and twice a second in case a report went missing.
 pub struct Tracker {
@@ -92,6 +105,7 @@ pub struct Tracker {
     busy: bool,
     pub generation: u64,
     seen: HashSet<isize>,
+    marquee: Marquee,
     pub listings: u32,
     pub cost: i64,
 }
@@ -123,6 +137,7 @@ impl Tracker {
             busy: false,
             generation: 0,
             seen: HashSet::new(),
+            marquee: Marquee::default(),
             listings: 0,
             cost: 0,
         }
@@ -143,6 +158,46 @@ impl Tracker {
         self.listed_at = now;
         self.generation += 1;
         true
+    }
+
+    /// Follows a rubber band being dragged out on the desktop, from the primary button and the pointer; returns whether
+    /// it changed. Dragging an icon instead shows the shell's drag image, and draws no band.
+    pub fn follow_marquee(&mut self) -> bool {
+        let primary = if unsafe { GetSystemMetrics(SM_SWAPBUTTON) } != 0 { VK_RBUTTON } else { VK_LBUTTON };
+        let held = unsafe { GetAsyncKeyState(primary.0 as i32) } as u16 & 0x8000 != 0;
+        let mut cursor = POINT::default();
+        if unsafe { GetCursorPos(&mut cursor) }.is_err() {
+            return false;
+        }
+        let before = self.marquee.rect;
+        match self.marquee.pressed {
+            _ if !held => self.marquee = Marquee::default(),
+            None => self.marquee.pressed = Some((cursor, on_desktop(cursor))),
+            Some((anchor, true)) => {
+                let slack = unsafe { (GetSystemMetrics(SM_CXDRAG), GetSystemMetrics(SM_CYDRAG)) };
+                let dragged = (cursor.x - anchor.x).abs() > slack.0 || (cursor.y - anchor.y).abs() > slack.1;
+                let icon = unsafe { FindWindowW(w!("SysDragImage"), None) }.is_ok_and(|image| unsafe { IsWindowVisible(image) }.as_bool());
+                self.marquee.rect = (dragged && !icon).then(|| RECT {
+                    left: anchor.x.min(cursor.x),
+                    top: anchor.y.min(cursor.y),
+                    right: anchor.x.max(cursor.x),
+                    bottom: anchor.y.max(cursor.y),
+                });
+            }
+            Some((_, false)) => {}
+        }
+        let changed = self.marquee.rect != before;
+        if changed {
+            self.generation += 1;
+        }
+        changed
+    }
+
+    /// Forgets the rubber band, as when it is no longer followed.
+    pub fn drop_marquee(&mut self) {
+        if std::mem::take(&mut self.marquee).rect.is_some() {
+            self.generation += 1;
+        }
     }
 
     /// Whether a window is being dragged or resized right now.
@@ -186,6 +241,22 @@ impl Tracker {
             if !(window.cover_only && fills_screen) {
                 blockers.push(frame);
             }
+        }
+        // The rubber band lies on the desktop, behind every window, and hides nothing: it is see-through. However thin,
+        // its top edge holds snow, as wide as the simulation keeps a ledge.
+        if let Some(frame) = self.marquee.rect.as_ref().and_then(|rect| local_frame(rect, area, size))
+            && frame.width >= 8.0 * COLUMN_WIDTH
+            && frame.max_y() < height
+        {
+            let region = Rect { x: frame.x, y: frame.max_y(), width: frame.width, height: 40.0 };
+            surfaces.push(WindowSurface {
+                id: MARQUEE,
+                frame,
+                blockers: blockers.iter().filter(|b| intersects(b, &region)).copied().collect(),
+                cover: blockers.iter().filter(|b| intersects(b, &frame)).copied().collect(),
+                corner_radius: 0.0,
+                corner_exponent: 2.0,
+            });
         }
         surfaces
     }
@@ -412,6 +483,19 @@ fn popup_panel(window: HWND, rect: RECT) -> RECT {
     let scale = unsafe { GetDpiForWindow(window) } as f32 / 96.0;
     let inset = |side: usize| (MARGIN[side] * scale).round() as i32;
     RECT { left: rect.left + inset(0), top: rect.top + inset(1), right: rect.right - inset(2), bottom: rect.bottom - inset(3) }
+}
+
+/// Whether the desktop's icon view is under this point, its empty space or an icon.
+fn on_desktop(point: POINT) -> bool {
+    unsafe {
+        let view = WindowFromPoint(point);
+        if view.is_invalid() || class_name(view) != "SysListView32" {
+            return false;
+        }
+        let Ok(shell) = GetParent(view) else { return false };
+        let Ok(host) = GetParent(shell) else { return false };
+        class_name(shell) == "SHELLDLL_DefView" && matches!(class_name(host).as_str(), "Progman" | "WorkerW")
+    }
 }
 
 fn frame(window: HWND) -> Option<RECT> {

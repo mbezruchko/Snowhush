@@ -34,6 +34,7 @@ enum Preferences {
     private static let snowOnWindowsKey = "snowOnWindows"
     private static let welcomedKey = "welcomed"
     private static let showInScreenshotsKey = "showInScreenshots"
+    private static let deepInteractionKey = "deepInteraction"
     private static let halloweenKey = "halloweenOn"
     private static let halloweenSkippedKey = "halloweenSkipped"
     private static let modeKey = "mode"
@@ -51,6 +52,7 @@ enum Preferences {
             accumulateKey: true,
             snowOnWindowsKey: true,
             showInScreenshotsKey: false,
+            deepInteractionKey: false,
             halloweenKey: false,
             halloweenSkippedKey: 0,
             autumnKey: false,
@@ -95,6 +97,12 @@ enum Preferences {
     static var showInScreenshots: Bool {
         get { defaults.bool(forKey: showInScreenshotsKey) }
         set { defaults.set(newValue, forKey: showInScreenshotsKey) }
+    }
+
+    /// The snow also settles on what the desktop draws without a window of its own: a selection dragged across it.
+    static var deepInteraction: Bool {
+        get { defaults.bool(forKey: deepInteractionKey) }
+        set { defaults.set(newValue, forKey: deepInteractionKey) }
     }
 
     /// Halloween turned on from the menu, for every day.

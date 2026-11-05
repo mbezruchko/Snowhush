@@ -47,6 +47,8 @@ pub enum Command {
     /// Explorer started again, taking the desktop's wallpaper layer with it.
     ShellRestarted,
     ShowInScreenshots(bool),
+    /// The snow settles on a selection dragged across the desktop too.
+    DeepInteraction(bool),
     /// Off while the screen is locked, asleep or the session is away.
     Active(bool),
     Scatter(Vec<Piece>),
@@ -142,6 +144,12 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                     screens = sync_screens(&gpu, &settings, screens, layer, true);
                 }
                 Command::OverFullScreen(on) => settings.over_full_screen = on,
+                Command::DeepInteraction(on) => {
+                    settings.deep_interaction = on;
+                    if !on {
+                        tracker.drop_marquee();
+                    }
+                }
                 Command::Performance(max) => {
                     settings.max_performance = max;
                     screens.iter_mut().for_each(|screen| screen.max_rate = max);
@@ -291,6 +299,10 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
         if active {
             // A drag starting is drawn right away instead of at the next calm frame.
             if tracker.take_started_moving() && settings.snow_on_windows {
+                screens.iter_mut().for_each(|screen| screen.wake(now));
+            }
+            // The desktop's rubber band moves with the pointer, so it is drawn right away too.
+            if settings.snow_on_windows && settings.deep_interaction && tracker.follow_marquee() {
                 screens.iter_mut().for_each(|screen| screen.wake(now));
             }
             if screens.iter().any(|screen| screen.next_due <= now + clock.tolerance()) {
