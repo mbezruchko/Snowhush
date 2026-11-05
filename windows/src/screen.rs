@@ -668,7 +668,7 @@ fn behind_needs_raise(overlay: HWND, icons: Option<HWND>) -> bool {
                     if above == icons {
                         return false;
                     }
-                    if class_name(above) != "SnowhushOverlay" {
+                    if !class_name(above).encode_utf16().eq(CLASS.as_wide().iter().copied()) {
                         return true;
                     }
                     window = above;
