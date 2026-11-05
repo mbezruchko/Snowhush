@@ -161,19 +161,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         let settings = NSMenu()
         settings.autoenablesItems = false
         settings.addItem(.sectionHeader(title: "Behavior"))
-        accumulateItem = add("Accumulate", #selector(toggleAccumulate), to: settings)
-        meltItem = add("Melt Snow", #selector(toggleMeltSnow), to: settings)
-        snowOnWindowsItem = add("Snow on Windows", #selector(toggleSnowOnWindows), to: settings)
-        deepInteractionItem = add("Deep Interaction", #selector(toggleDeepInteraction), to: settings)
+        accumulateItem = toggle("Accumulate", #selector(toggleAccumulate), to: settings)
+        meltItem = toggle("Melt Snow", #selector(toggleMeltSnow), to: settings)
+        snowOnWindowsItem = toggle("Snow on Windows", #selector(toggleSnowOnWindows), to: settings)
+        deepInteractionItem = toggle("Deep Interaction", #selector(toggleDeepInteraction), to: settings)
         settings.addItem(.separator())
         settings.addItem(.sectionHeader(title: "Display"))
-        behindWindowsItem = add("Behind Windows", #selector(toggleBehindWindows), to: settings)
-        fullScreenItem = add("Show over Full Screen", #selector(toggleFullScreen), to: settings)
-        screenshotsItem = add("Show in Screenshots", #selector(toggleScreenshots), to: settings)
-        maxPerformanceItem = add("Max Performance", #selector(toggleMaxPerformance), to: settings)
+        behindWindowsItem = toggle("Behind Windows", #selector(toggleBehindWindows), to: settings)
+        fullScreenItem = toggle("Show over Full Screen", #selector(toggleFullScreen), to: settings)
+        screenshotsItem = toggle("Show in Screenshots", #selector(toggleScreenshots), to: settings)
+        maxPerformanceItem = toggle("Max Performance", #selector(toggleMaxPerformance), to: settings)
         settings.addItem(.separator())
         settings.addItem(.sectionHeader(title: "General"))
-        loginItem = add("Open at Login", #selector(toggleOpenAtLogin), to: settings)
+        loginItem = toggle("Open at Login", #selector(toggleOpenAtLogin), to: settings)
         let updates = settings.addItem(withTitle: "Check for Updates…", action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)), keyEquivalent: "")
         updates.target = updater
         menu.addItem(withTitle: "Settings", action: nil, keyEquivalent: "").submenu = settings
@@ -188,6 +188,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private func add(_ title: String, _ action: Selector, to menu: NSMenu) -> NSMenuItem {
         let item = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
         item.target = self
+        return item
+    }
+
+    private func toggle(_ title: String, _ action: Selector, to menu: NSMenu) -> NSMenuItem {
+        let item = menu.addItem(withTitle: title, action: nil, keyEquivalent: "")
+        item.view = MenuToggle(action: action, target: self)
         return item
     }
 
