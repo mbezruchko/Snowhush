@@ -248,7 +248,7 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                 let density = if budget == PowerBudget::Saver { 0.75 } else { 1.0 };
                 screens.iter_mut().for_each(|screen| screen.simulation.set_density(density));
             }
-            // Behind windows, a yearly SetWindowPos on every monitor's child overlay restacks them under the
+            // Behind windows, a SetWindowPos every second on every monitor's child overlay restacks them under the
             // icons and the desktop layer blinks — often on one display, then another. Raise only when the
             // wallpaper layer's children change (a live wallpaper landing on top, Explorer rebuilding, …).
             if settings.behind_windows {
