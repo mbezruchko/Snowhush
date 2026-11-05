@@ -983,7 +983,12 @@ final class SnowSimulation {
 
         for id in ledges.keys where !seen.contains(id) {
             guard let ledge = ledges.removeValue(forKey: id) else { continue }
-            if elsewhere.contains(id) {
+            // Even snow kept for another Space leaves the renderer: its last frame must not stay on screen.
+            if ledge.top > 0.05 { windowsChanged = true }
+            // The Dock moving to another display isn't a window left on another Space: its snow falls here.
+            if ledge.isDock {
+                shed(ledge, share: 1, velocity: ledge.trackVelocity + ledge.offsetVelocity)
+            } else if elsewhere.contains(id) {
                 dormant[id] = ledge
             } else if !parked.contains(id) {
                 shed(ledge, share: 1, velocity: ledge.trackVelocity + ledge.offsetVelocity)

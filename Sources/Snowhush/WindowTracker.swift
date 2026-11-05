@@ -331,20 +331,28 @@ final class WindowTracker {
         return CGPoint(x: location.x, y: primaryHeight - location.y)
     }
 
-    /// The Dock's shelf while it is out, nil while it is away or leaving.
-    private func dockShelf(now: CFTimeInterval) -> CGRect? {
-        guard let reserved = Dock.reserved, abs(reserved.maxY - screen.maxY) < 2 else {
+    /// The Dock's shelf while it is out, nil while it is away or leaving. Its window picks the display: while the Dock
+    /// moves, the private call's reserved rect can still belong to the previous one.
+    private func dockShelf(now: CFTimeInterval, window: CGRect) -> CGRect? {
+        guard screen.contains(CGPoint(x: window.midX, y: window.midY)), let reserved = Dock.reserved else {
             dockShownAt = nil
             return nil
         }
-        if reserved.height > 0 {
+        let room: CGRect
+        if screen.contains(CGPoint(x: reserved.midX, y: reserved.midY)) {
+            room = reserved
+        } else {
+            let width = min(reserved.width, screen.width)
+            room = CGRect(x: screen.midX - width / 2, y: screen.maxY - reserved.height, width: width, height: reserved.height)
+        }
+        if room.height > 0 {
             dockShownAt = nil
-            return Dock.shelf(in: reserved)
+            return Dock.shelf(in: room)
         }
         // Auto-hidden: it stays out only while the pointer is on it, and leaves the moment the pointer does.
-        let shelf = Dock.shelf(in: CGRect(x: reserved.minX, y: screen.maxY - Dock.height, width: reserved.width, height: Dock.height))
+        let shelf = Dock.shelf(in: CGRect(x: room.minX, y: screen.maxY - Dock.height, width: room.width, height: Dock.height))
         let pointer = pointer
-        guard pointer.y >= shelf.minY, pointer.x >= reserved.minX - 8, pointer.x <= reserved.maxX + 8 else {
+        guard pointer.y >= shelf.minY, pointer.x >= room.minX - 8, pointer.x <= room.maxX + 8 else {
             dockShownAt = nil
             return nil
         }
@@ -487,7 +495,7 @@ final class WindowTracker {
                     continue
                 }
                 // The Dock's window spans the screen; only its shelf along the bottom catches snow.
-                guard let dock = dockShelf(now: now) else { continue }
+                guard let dock = dockShelf(now: now, window: bounds) else { continue }
                 bounds = dock
                 dockOut = true
             }

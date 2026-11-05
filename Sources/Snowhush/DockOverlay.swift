@@ -37,6 +37,7 @@ final class DockOverlay {
 
     /// The next frame to draw into, cleared, with the strip resized first to reach `top`.
     func nextFrame(reaching top: CGFloat) -> (drawable: CAMetalDrawable, pass: MTLRenderPassDescriptor)? {
+        window.orderFrontRegardless()
         // Steps of 64 points keep a growing drift from resizing the window every frame.
         let needed = min(screenFrame.height, (max(top, 1) / 64).rounded(.up) * 64 + 32)
         if needed > height || needed < height - 128 {
@@ -53,6 +54,11 @@ final class DockOverlay {
             place()
         }
         return frame()
+    }
+
+    /// Removes the last drawn snow at once, even if the layer can't hand out another drawable while off screen.
+    func hide() {
+        window.orderOut(nil)
     }
 
     private func frame() -> (drawable: CAMetalDrawable, pass: MTLRenderPassDescriptor)? {

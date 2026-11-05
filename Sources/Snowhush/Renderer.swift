@@ -201,6 +201,10 @@ final class Renderer: NSObject, MTKViewDelegate {
 
         ambient = sceneLight(now)
         if let update = windowSurfaces(now) {
+            if !update.surfaces.contains(where: \.isDock) {
+                dockOverlay?.hide()
+                dockDrawn = false
+            }
             simulation.updateWindows(update.surfaces, interval: update.interval, parked: update.parked, elsewhere: update.elsewhere, sliding: update.sliding)
             if update.slideVelocity != 0 { simulation.spaceSlid(velocity: update.slideVelocity) }
         }
@@ -334,25 +338,23 @@ final class Renderer: NSObject, MTKViewDelegate {
         return field
     }
 
-    /// Draws the Dock's snow into its own strip below the Dock, and clears the strip once after the snow is gone.
+    /// Draws the Dock's snow into its own strip below the Dock, hiding that strip as soon as the snow is gone.
     private func encodeDock(_ piles: [PileLayer], into commandBuffer: MTLCommandBuffer, uniforms: Uniforms, heights: MTLBuffer) {
-        guard let dockOverlay, !piles.isEmpty || dockDrawn else { return }
-        let top = piles.map { CGFloat($0.origin.y + $0.top + 2) }.max()
-        guard let frame = top.map({ dockOverlay.nextFrame(reaching: $0) }) ?? dockOverlay.emptyFrame(),
+        guard let dockOverlay else { return }
+        guard !piles.isEmpty else {
+            dockOverlay.hide()
+            dockDrawn = false
+            return
+        }
+        let top = piles.map { CGFloat($0.origin.y + $0.top + 2) }.max() ?? 1
+        guard let frame = dockOverlay.nextFrame(reaching: top),
               let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: frame.pass) else { return }
         var uniforms = uniforms
         uniforms.viewSize = SIMD2(simulation.width, Float(dockOverlay.height))
         drawPiles(piles, with: encoder, uniforms: uniforms, heights: heights)
         encoder.endEncoding()
         commandBuffer.present(frame.drawable)
-        dockDrawn = !piles.isEmpty
-        guard piles.isEmpty else { return }
-        // The strip shrank to a line; its larger frames go only once another is handed out.
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.handBack) { [weak self] in
-            guard let self, !dockDrawn, let commandBuffer = queue.makeCommandBuffer() else { return }
-            clearDock(into: commandBuffer)
-            commandBuffer.commit()
-        }
+        dockDrawn = true
     }
 
     private func drawPiles(_ piles: [PileLayer], with encoder: MTLRenderCommandEncoder, uniforms: Uniforms, heights: MTLBuffer) {
