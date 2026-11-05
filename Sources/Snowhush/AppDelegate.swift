@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var meltItem: NSMenuItem!
     private var snowOnWindowsItem: NSMenuItem!
     private var clearItem: NSMenuItem!
+    private var weatherHeader: NSMenuItem!
     private var halloweenItem: NSMenuItem!
     private var snowItem: NSMenuItem!
     private var autumnItem: NSMenuItem!
@@ -160,16 +161,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         menu.addItem(.separator())
         let settings = NSMenu()
         settings.autoenablesItems = false
+        weatherHeader = .sectionHeader(title: "Snow")
+        settings.addItem(weatherHeader)
         accumulateItem = add("Accumulate", #selector(toggleAccumulate), to: settings)
         meltItem = add("Melt Snow", #selector(toggleMeltSnow), to: settings)
         snowOnWindowsItem = add("Snow on Windows", #selector(toggleSnowOnWindows), to: settings)
         deepInteractionItem = add("Deep Interaction", #selector(toggleDeepInteraction), to: settings)
         settings.addItem(.separator())
+        settings.addItem(.sectionHeader(title: "Display"))
         behindWindowsItem = add("Behind Windows", #selector(toggleBehindWindows), to: settings)
         fullScreenItem = add("Show over Full Screen", #selector(toggleFullScreen), to: settings)
         screenshotsItem = add("Show in Screenshots", #selector(toggleScreenshots), to: settings)
         maxPerformanceItem = add("Max Performance", #selector(toggleMaxPerformance), to: settings)
         settings.addItem(.separator())
+        settings.addItem(.sectionHeader(title: "General"))
         loginItem = add("Open at Login", #selector(toggleOpenAtLogin), to: settings)
         let updates = settings.addItem(withTitle: "Check for Updates…", action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)), keyEquivalent: "")
         updates.target = updater
@@ -206,6 +211,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         meltItem.title = autumn ? "Wither Leaves" : blossom ? "Wilt Petals" : "Melt Snow"
         snowOnWindowsItem.title = autumn ? "Leaves on Windows" : blossom ? "Petals on Windows" : rain ? "Rain on Windows" : "Snow on Windows"
         clearItem.title = autumn ? "Clear Leaves" : blossom ? "Clear Petals" : "Clear Snow"
+        weatherHeader.title = autumn ? "Leaves" : blossom ? "Petals" : rain ? "Rain" : "Snow"
         meltItem.state = thaws ? .on : .off
         meltItem.isEnabled = accumulates
         snowOnWindowsItem.state = snowOnWindows ? .on : .off
