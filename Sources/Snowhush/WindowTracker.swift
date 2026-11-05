@@ -80,6 +80,8 @@ final class WindowTracker {
     /// Windows on their way out before the window list shows it, as during a minimize's genie animation;
     /// left out until they're gone or their time is up.
     private var leaving: [CGWindowID: CFTimeInterval] = [:]
+    /// Where each window above the normal layer last showed smaller than the screen, and when.
+    private var raised: [CGWindowID: (frame: CGRect, at: CFTimeInterval)] = [:]
     private var pressedMinimize: CGWindowID?
     private var buttonDown = false
     /// When a modifier of a window shortcut was last seen held.
@@ -428,6 +430,7 @@ final class WindowTracker {
         guard screen.width > 0 else { return [] }
         let list = Self.windowList(now: now)
         currentSpaceRead = false
+        raised = raised.filter { now - $0.value.at < 2 }
 
         var blockers: [CGRect] = []
         var surfaces: [WindowSurface] = []
@@ -483,8 +486,14 @@ final class WindowTracker {
             }
             guard bounds.intersects(screen) else { continue }
             if !showsOnDisplay(id, bounds: bounds, layer: layer, shelf: shelf) { continue }
-            // Screen-sized windows above the normal layer (Notification Center, Siri) are transparent overlays.
-            if layer > 0 && fillsScreen(bounds) { continue }
+            // Screen-sized windows above the normal layer (Notification Center, Siri) are transparent overlays. Spotlight's
+            // window turns into one for a moment on every keystroke, its bar still where it was, and keeps the bar meanwhile.
+            if layer > 0 && fillsScreen(bounds) {
+                guard let bar = raised[id] else { continue }
+                bounds = bar.frame
+            } else if layer > 0 {
+                raised[id] = (bounds, now)
+            }
 
             let frame = CGRect(x: bounds.minX - screen.minX, y: screen.maxY - bounds.maxY, width: bounds.width, height: bounds.height)
             let roomAbove = bounds.minY - screen.minY >= menuBarHeight + 6 && frame.maxY < screen.height
