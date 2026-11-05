@@ -24,7 +24,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var autumnItem: NSMenuItem!
     private var rainItem: NSMenuItem!
     private var blossomItem: NSMenuItem!
-    private var defaultPerformanceItem: NSMenuItem!
     private var maxPerformanceItem: NSMenuItem!
     private var behindWindowsItem: NSMenuItem!
     private var fullScreenItem: NSMenuItem!
@@ -148,7 +147,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         let sliderItem = NSMenuItem()
         sliderItem.view = snowfallSlider
         menu.addItem(sliderItem)
-        menu.addItem(.separator())
         let modes = NSMenu()
         modes.autoenablesItems = false
         snowItem = add("Snow", #selector(chooseMode), to: modes)
@@ -158,24 +156,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         modes.addItem(.separator())
         halloweenItem = add("Halloween", #selector(toggleHalloween), to: modes)
         menu.addItem(withTitle: "Mode", action: nil, keyEquivalent: "").submenu = modes
-        let performance = NSMenu()
-        performance.autoenablesItems = false
-        defaultPerformanceItem = add("Default", #selector(choosePerformance), to: performance)
-        maxPerformanceItem = add("Max", #selector(choosePerformance), to: performance)
-        menu.addItem(withTitle: "Performance", action: nil, keyEquivalent: "").submenu = performance
-        accumulateItem = add("Accumulate", #selector(toggleAccumulate), to: menu)
-        meltItem = add("Melt Snow", #selector(toggleMeltSnow), to: menu)
-        snowOnWindowsItem = add("Snow on Windows", #selector(toggleSnowOnWindows), to: menu)
-        deepInteractionItem = add("Deep Interaction", #selector(toggleDeepInteraction), to: menu)
         clearItem = add("Clear Snow", #selector(clearSnow), to: menu)
         menu.addItem(.separator())
-        behindWindowsItem = add("Behind Windows", #selector(toggleBehindWindows), to: menu)
-        fullScreenItem = add("Show over Full Screen", #selector(toggleFullScreen), to: menu)
-        screenshotsItem = add("Show in Screenshots", #selector(toggleScreenshots), to: menu)
-        menu.addItem(.separator())
-        loginItem = add("Open at Login", #selector(toggleOpenAtLogin), to: menu)
-        let updates = menu.addItem(withTitle: "Check for Updates…", action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)), keyEquivalent: "")
+        let settings = NSMenu()
+        settings.autoenablesItems = false
+        accumulateItem = add("Accumulate", #selector(toggleAccumulate), to: settings)
+        meltItem = add("Melt Snow", #selector(toggleMeltSnow), to: settings)
+        snowOnWindowsItem = add("Snow on Windows", #selector(toggleSnowOnWindows), to: settings)
+        deepInteractionItem = add("Deep Interaction", #selector(toggleDeepInteraction), to: settings)
+        settings.addItem(.separator())
+        behindWindowsItem = add("Behind Windows", #selector(toggleBehindWindows), to: settings)
+        fullScreenItem = add("Show over Full Screen", #selector(toggleFullScreen), to: settings)
+        screenshotsItem = add("Show in Screenshots", #selector(toggleScreenshots), to: settings)
+        maxPerformanceItem = add("Max Performance", #selector(toggleMaxPerformance), to: settings)
+        settings.addItem(.separator())
+        loginItem = add("Open at Login", #selector(toggleOpenAtLogin), to: settings)
+        let updates = settings.addItem(withTitle: "Check for Updates…", action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)), keyEquivalent: "")
         updates.target = updater
+        menu.addItem(withTitle: "Settings", action: nil, keyEquivalent: "").submenu = settings
         add("Support Snowhush…", #selector(openSponsors), to: menu)
         menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 
@@ -216,7 +214,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         clearItem.isEnabled = screens.contains { $0.simulation.hasSnow || $0.simulation.spriteCount > 0 }
         halloweenItem.state = Halloween.isWanted ? .on : .off
         halloweenItem.isEnabled = mode == .snow
-        defaultPerformanceItem.state = Preferences.maxPerformance ? .off : .on
         maxPerformanceItem.state = Preferences.maxPerformance ? .on : .off
         behindWindowsItem.state = behindWindows ? .on : .off
         fullScreenItem.state = Preferences.showOverFullScreen ? .on : .off
@@ -308,8 +305,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         for snow in screens { snow.simulation.switchMode(to: mode, direction: direction, calm: calm) }
     }
 
-    @objc private func choosePerformance(_ sender: NSMenuItem) {
-        Preferences.maxPerformance = sender === maxPerformanceItem
+    @objc private func toggleMaxPerformance() {
+        Preferences.maxPerformance.toggle()
         for snow in screens { snow.maxFrameRate = Preferences.maxPerformance }
     }
 
