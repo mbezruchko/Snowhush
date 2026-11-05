@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::Receiver;
 
 use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, WPARAM};
@@ -90,7 +91,11 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
     log!("adapter: {}", gpu.adapter);
     let _listener = listen()?;
     let mut layer = settings.behind_windows.then(find_layer).flatten();
-    let mut screens = sync_screens(&gpu, &settings, Vec::new(), layer, false);
+    // The displays whose taskbar a full-screen app the snow shows over has put away, and since when each display has
+    // been seen that way or not.
+    let mut full_screen: HashSet<String> = HashSet::new();
+    let mut full_screen_seen: HashMap<String, (bool, i64)> = HashMap::new();
+    let mut screens = sync_screens(&gpu, &settings, &full_screen, Vec::new(), layer, false);
     let timer = unsafe {
         CreateWaitableTimerExW(None, PCWSTR::null(), CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS.0)
             .or_else(|_| CreateWaitableTimerW(None, false, PCWSTR::null()))?
@@ -141,9 +146,15 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                 Command::BehindWindows(on) => {
                     settings.behind_windows = on;
                     layer = on.then(find_layer).flatten();
-                    screens = sync_screens(&gpu, &settings, screens, layer, true);
+                    screens = sync_screens(&gpu, &settings, &full_screen, screens, layer, true);
                 }
-                Command::OverFullScreen(on) => settings.over_full_screen = on,
+                Command::OverFullScreen(on) => {
+                    settings.over_full_screen = on;
+                    if !on && !full_screen.is_empty() {
+                        full_screen.clear();
+                        screens = sync_screens(&gpu, &settings, &full_screen, screens, layer, false);
+                    }
+                }
                 Command::DeepInteraction(on) => {
                     settings.deep_interaction = on;
                     if !on {
@@ -156,12 +167,12 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                 }
                 Command::BehindTaskbar(on) => {
                     settings.behind_taskbar = on;
-                    screens = sync_screens(&gpu, &settings, screens, layer, true);
+                    screens = sync_screens(&gpu, &settings, &full_screen, screens, layer, true);
                 }
                 Command::ShellRestarted => {
                     if settings.behind_windows {
                         layer = find_layer();
-                        screens = sync_screens(&gpu, &settings, screens, layer, true);
+                        screens = sync_screens(&gpu, &settings, &full_screen, screens, layer, true);
                     }
                 }
                 Command::ShowInScreenshots(on) => {
@@ -233,7 +244,7 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
             if settings.behind_windows {
                 layer = find_layer();
             }
-            screens = sync_screens(&gpu, &settings, screens, layer, false);
+            screens = sync_screens(&gpu, &settings, &full_screen, screens, layer, false);
             clock.refresh();
             light_at = 0;
         }
@@ -245,7 +256,7 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
             chores_at = now + clock.frequency;
             clock.refresh();
             // In case a display change went unannounced.
-            let current = monitors(over_taskbar(&settings, &screens));
+            let current = monitors(over_taskbar(&settings, &screens), &full_screen);
             if current.len() != screens.len() || screens.iter().any(|screen| !current.contains(&screen.monitor)) {
                 DISPLAYS_CHANGED.set(true);
             }
@@ -275,7 +286,7 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                 let found = find_layer();
                 if found.is_some() || screens.iter().any(|screen| !screen.alive()) {
                     layer = found;
-                    screens = sync_screens(&gpu, &settings, screens, layer, true);
+                    screens = sync_screens(&gpu, &settings, &full_screen, screens, layer, true);
                 }
             }
             if now >= light_at {
@@ -313,8 +324,34 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
             let time = (clock.seconds(now - started) % 1000.0) as f32;
             let mut lost = false;
             let mut released = false;
+            let mut reshaped = false;
             for screen in screens.iter_mut().filter(|screen| screen.next_due <= now + clock.tolerance()) {
-                let covering = if settings.over_full_screen { None } else { tracker.covering(&screen.monitor.bounds) };
+                let in_front = tracker.covering(&screen.monitor.bounds);
+                // Shown over a full-screen app, the snow reaches down to the bottom of the display while the app has put
+                // the taskbar away, so the drift lies along the bottom instead of over a taskbar no longer there; a
+                // change counts once it has lasted, as the app goes full screen or comes out of it in a few steps.
+                if settings.over_full_screen && !settings.behind_windows {
+                    let wanted = in_front.is_some();
+                    match full_screen_seen.get(&screen.monitor.name) {
+                        Some(&(state, _)) if state == wanted => {}
+                        _ => {
+                            full_screen_seen.insert(screen.monitor.name.clone(), (wanted, now));
+                        }
+                    }
+                    if let Some(&(state, since)) = full_screen_seen.get(&screen.monitor.name)
+                        && state != full_screen.contains(&screen.monitor.name)
+                        && clock.seconds(now - since) > 0.3
+                    {
+                        log!("{} {}", screen.monitor.name, if state { "taskbar put away by a full-screen app" } else { "taskbar back" });
+                        if state {
+                            full_screen.insert(screen.monitor.name.clone());
+                        } else {
+                            full_screen.remove(&screen.monitor.name);
+                        }
+                        reshaped = true;
+                    }
+                }
+                let covering = if settings.over_full_screen { None } else { in_front };
                 if covering.is_some() != screen.covered() {
                     log!("{} {}", screen.monitor.name, covering.map_or("uncovered".to_string(), |class| format!("covered by {class}")));
                     screen.set_covered(&gpu, covering.is_some());
@@ -343,7 +380,9 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
             if lost {
                 screens.clear();
                 gpu = Gpu::new()?;
-                screens = sync_screens(&gpu, &settings, Vec::new(), layer, false);
+                screens = sync_screens(&gpu, &settings, &full_screen, Vec::new(), layer, false);
+            } else if reshaped {
+                screens = sync_screens(&gpu, &settings, &full_screen, screens, layer, false);
             }
             now = Clock::now();
             stats.report(&clock, now, &mut tracker);
@@ -374,9 +413,16 @@ fn over_taskbar(settings: &Settings, screens: &[Screen]) -> bool {
     settings.behind_taskbar || screens.first().map_or(settings.mode, |screen| screen.simulation.mode()) == Mode::Rain
 }
 
-fn sync_screens(gpu: &Gpu, settings: &Settings, mut current: Vec<Screen>, layer: Option<DesktopLayer>, rebuild: bool) -> Vec<Screen> {
+fn sync_screens(
+    gpu: &Gpu,
+    settings: &Settings,
+    full_screen: &HashSet<String>,
+    mut current: Vec<Screen>,
+    layer: Option<DesktopLayer>,
+    rebuild: bool,
+) -> Vec<Screen> {
     let mut result = Vec::new();
-    let displays = monitors(over_taskbar(settings, &current));
+    let displays = monitors(over_taskbar(settings, &current), full_screen);
     for monitor in displays.iter().cloned() {
         let kept = current.iter().position(|screen| screen.monitor.name == monitor.name);
         let simulation = match kept.map(|i| current.swap_remove(i)) {
@@ -387,7 +433,18 @@ fn sync_screens(gpu: &Gpu, settings: &Settings, mut current: Vec<Screen>, layer:
             Some(screen) => {
                 let mut simulation = screen.simulation;
                 let (width, height) = dip_size(&monitor);
-                simulation.resize(width as f32, height as f32);
+                // Reaching further down, as over a taskbar a full-screen app has put away, the drift falls from
+                // where it lay onto the new bottom; stopping short again, what lay along the bottom is under the
+                // taskbar. Everything else stays where it is on the screen.
+                let drop = monitor.rect.bottom - screen.monitor.rect.bottom;
+                let scale = monitor.dpi.max(96) as f32 / 96.0;
+                if drop > 0 && monitor.rect.top == screen.monitor.rect.top {
+                    simulation.lower_ground(width as f32, height as f32, drop as f32 / scale);
+                } else if drop < 0 && monitor.rect.top == screen.monitor.rect.top {
+                    simulation.raise_ground(width as f32, height as f32, -drop as f32 / scale);
+                } else {
+                    simulation.resize(width as f32, height as f32);
+                }
                 simulation
             }
             None => new_simulation(&monitor, settings),

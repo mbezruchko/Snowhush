@@ -263,6 +263,9 @@ impl App {
                 self.settings.over_full_screen = on;
                 let behind = self.settings.behind_windows;
                 self.screens.iter_mut().for_each(|screen| screen.set_layer(behind, on));
+                if !on && self.screens.iter_mut().fold(false, |left, screen| screen.leave_full_screen() || left) {
+                    self.place_screens();
+                }
             }
             Command::ShowInScreenshots(on) => {
                 self.settings.show_in_screenshots = on;
@@ -368,7 +371,14 @@ impl App {
         let report = self.report.1.clone();
         let windows = report.as_deref().map(|report| (report, self.report.0, report.moving));
         let mut released = false;
+        let mut reshaped = false;
         for screen in self.screens.iter_mut().filter(|screen| screen.next_due <= now) {
+            // Shown over a full-screen app, the snow reaches the display's edges while the app has put the panels away,
+            // so the drift lies along the bottom instead of over a panel no longer there. An overview isn't an app.
+            if self.settings.over_full_screen && !self.settings.behind_windows {
+                let in_front = report.as_deref().filter(|report| !report.hidden).and_then(|report| windows::covering(report, &screen.bounds));
+                reshaped |= screen.follow_full_screen(in_front.is_some(), now);
+            }
             let covering =
                 if self.settings.over_full_screen { None } else { report.as_deref().and_then(|report| windows::covering(report, &screen.bounds)) };
             if covering.is_some() != screen.covered() {
@@ -390,6 +400,9 @@ impl App {
         }
         if released {
             self.screens.iter_mut().for_each(|screen| screen.simulation.set_snowfall_held(false));
+        }
+        if reshaped {
+            self.place_screens();
         }
         self.stats.report(Instant::now());
         Ok(())
