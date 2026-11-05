@@ -5,15 +5,14 @@ import AppKit
 final class MenuToggle: NSView {
     private let action: Selector
     private weak var target: AnyObject?
-    private var hovered = false
 
     // Measured from a macOS 26 menu at 2x: rows 24 pt, titles and separators at 30 pt, checkmarks centred at 18 pt
-    // and matching a 10.5 pt bold SF checkmark, not the older, thinner menuOnStateTemplate.
+    // and matching a 10.5 pt bold SF checkmark, not the older, thinner menuOnStateTemplate; lit in the accent colour.
     private static let modern = ProcessInfo.processInfo.isOperatingSystemAtLeast(OperatingSystemVersion(majorVersion: 26, minorVersion: 0, patchVersion: 0))
     private static let rowHeight: CGFloat = modern ? 24 : 22
     private static let titleX: CGFloat = modern ? 30 : 22
     private static let checkX: CGFloat = modern ? 18 : 12
-    private static let highlightRadius: CGFloat = modern ? 8 : 4
+    private static let highlightRadius: CGFloat = modern ? 7 : 4
     private static let check = NSImage(systemSymbolName: "checkmark", accessibilityDescription: nil)
 
     init(action: Selector, target: AnyObject) {
@@ -35,14 +34,14 @@ final class MenuToggle: NSView {
         addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
     }
 
-    override func mouseEntered(with event: NSEvent) {
-        hovered = true
-        needsDisplay = true
-    }
+    // The menu moves its highlight without always telling a row the pointer left, so every row redraws from the
+    // item the menu has lit.
+    override func mouseEntered(with event: NSEvent) { redrawRows() }
 
-    override func mouseExited(with event: NSEvent) {
-        hovered = false
-        needsDisplay = true
+    override func mouseExited(with event: NSEvent) { redrawRows() }
+
+    private func redrawRows() {
+        enclosingMenuItem?.menu?.items.forEach { $0.view?.needsDisplay = true }
     }
 
     override func mouseUp(with event: NSEvent) {
@@ -65,14 +64,14 @@ final class MenuToggle: NSView {
         var root = item.menu
         while let parent = root?.supermenu { root = parent }
         if let root { root.delegate?.menuNeedsUpdate?(root) }
-        item.menu?.items.forEach { $0.view?.needsDisplay = true }
+        redrawRows()
     }
 
     override func draw(_ dirtyRect: NSRect) {
         guard let item = enclosingMenuItem else { return }
-        let lit = item.isEnabled && (item.isHighlighted || hovered)
+        let lit = item.isEnabled && item.isHighlighted
         if lit {
-            NSColor.selectedContentBackgroundColor.setFill()
+            NSColor.controlAccentColor.setFill()
             NSBezierPath(roundedRect: bounds.insetBy(dx: 5, dy: 0), xRadius: Self.highlightRadius, yRadius: Self.highlightRadius).fill()
         }
         let color: NSColor = lit ? .selectedMenuItemTextColor : item.isEnabled ? .labelColor : .disabledControlTextColor
