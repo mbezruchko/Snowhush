@@ -375,11 +375,7 @@ impl Screen {
         let since = clock.seconds(now - self.windows_changed_at) as f32;
         // A window that moves outside a drag, as when it is maximized or snapped, jumps there in one go:
         // its snow is left behind instead of being carried along.
-        let interval = if tracker.moving() || tracker.animating() || since < 0.1 {
-            since.min(0.25).max(1.0 / 120.0)
-        } else {
-            1.0 / 60.0
-        };
+        let interval = if tracker.moving() || tracker.animating() || since < 0.1 { since.min(0.25).max(1.0 / 120.0) } else { 1.0 / 60.0 };
         if gen_changed {
             self.windows_seen = tracker.generation;
             self.taskbar = taskbar;
@@ -393,7 +389,9 @@ impl Screen {
                     .surfaces
                     .iter()
                     .map(|surface| surface.id)
-                    .filter(|&id| !surfaces.iter().any(|surface| surface.id == id) && (tracker.elsewhere(id) || tracker.fills(id, &self.monitor.rect)))
+                    .filter(|&id| {
+                        !surfaces.iter().any(|surface| surface.id == id) && (tracker.elsewhere(id) || tracker.fills(id, &self.monitor.rect))
+                    })
                     .collect();
                 self.simulation.update_windows(&surfaces, interval, &HashSet::new(), &elsewhere, false);
                 self.surfaces = surfaces;

@@ -1547,16 +1547,7 @@ impl SnowSimulation {
         if self.air.grains.len() >= MAX_GRAINS {
             return;
         }
-        self.air.grains.push(Grain {
-            position,
-            velocity,
-            area: 0.0,
-            size: leaf.size,
-            lump: 0.0,
-            blown,
-            seed: leaf.seed,
-            bulk: false,
-        });
+        self.air.grains.push(Grain { position, velocity, area: 0.0, size: leaf.size, lump: 0.0, blown, seed: leaf.seed, bulk: false });
     }
 
     /// Lying leaves fly up when the cursor kicks them or the heap under them comes off, sink with it as it settles,

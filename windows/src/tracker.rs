@@ -11,10 +11,10 @@ use windows::Win32::Graphics::Dwm::{
     DWM_WINDOW_CORNER_PREFERENCE, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND, DWMWCP_ROUNDSMALL,
     DwmGetWindowAttribute,
 };
+use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow};
 use windows::Win32::System::Com::{CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx};
 use windows::Win32::System::Registry::{HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RegGetValueW};
 use windows::Win32::System::Threading::{OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW};
-use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow};
 use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON};
@@ -778,12 +778,7 @@ fn toast_card(frame: Rect) -> Rect {
     const SIDE: f32 = 8.0;
     const CAP: f32 = 120.0;
     let top = frame.max_y().min(CAP).max(frame.min_y() + 40.0);
-    Rect {
-        x: frame.x + SIDE,
-        y: 0.0,
-        width: (frame.width - 2.0 * SIDE).max(80.0),
-        height: top,
-    }
+    Rect { x: frame.x + SIDE, y: 0.0, width: (frame.width - 2.0 * SIDE).max(80.0), height: top }
 }
 
 fn near_right(window: HWND, rect: &RECT) -> bool {
