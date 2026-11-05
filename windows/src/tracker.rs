@@ -15,6 +15,7 @@ use windows::Win32::System::Com::{CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInst
 use windows::Win32::System::Registry::{HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RegGetValueW};
 use windows::Win32::System::Threading::{OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW};
 use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
+use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Shell::{
     IVirtualDesktopManager, QUNS_BUSY, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN, SHQueryUserNotificationState, VirtualDesktopManager,
 };
@@ -285,7 +286,10 @@ impl Tracker {
             if IGNORED.contains(&class.as_str()) {
                 return None;
             }
-            let rect = frame(window)?;
+            let mut rect = frame(window)?;
+            if class == POPUP_BRIDGE {
+                rect = popup_panel(window, rect);
+            }
             if rect.right - rect.left < 2 || rect.bottom - rect.top < 2 {
                 return None;
             }
@@ -396,6 +400,18 @@ pub fn watch_shell_state(on: bool) {
 pub fn cloaked(window: HWND) -> bool {
     let mut cloaked = 0u32;
     unsafe { DwmGetWindowAttribute(window, DWMWA_CLOAKED, (&raw mut cloaked).cast(), 4) }.is_ok() && cloaked != 0
+}
+
+/// Explorer's menus on the Windows App SDK: their window takes in a clear margin around the panel for its shadow, and
+/// neither the window nor any child of it tells where the panel is.
+const POPUP_BRIDGE: &str = "Microsoft.UI.Content.PopupWindowSiteBridge";
+
+/// The panel inside such a menu's window, its margin measured at 100% (left, top, right, bottom) and scaled to the window's.
+fn popup_panel(window: HWND, rect: RECT) -> RECT {
+    const MARGIN: [f32; 4] = [10.0, 3.0, 10.0, 10.0];
+    let scale = unsafe { GetDpiForWindow(window) } as f32 / 96.0;
+    let inset = |side: usize| (MARGIN[side] * scale).round() as i32;
+    RECT { left: rect.left + inset(0), top: rect.top + inset(1), right: rect.right - inset(2), bottom: rect.bottom - inset(3) }
 }
 
 fn frame(window: HWND) -> Option<RECT> {
