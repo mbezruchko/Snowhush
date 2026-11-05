@@ -50,6 +50,17 @@ pub struct Screen {
     margins: (i32, i32, i32, i32),
     /// The bottom panel's visible part, which the snow lies on; the ground is then the display's bottom edge.
     shelf: Option<Shelf>,
+    /// Placed once already: a change of margins after that moves the ground.
+    placed: bool,
+    /// A full-screen app the snow shows over has put the panels away: the snow takes the whole display.
+    full_screen: bool,
+    /// Whether a full-screen app was last seen in front, and since when.
+    full_screen_seen: (bool, Instant),
+    /// The panel's shelf a full-screen app put away, which takes up the drift under it when it comes back.
+    shelf_put_away: bool,
+    /// How far the bottom of the overlay was last moved down, in logical pixels, up if negative: the size the
+    /// compositor settles on next comes with the ground moving that far.
+    ground_moved: Option<f32>,
     size: (u32, u32),
     last_step: Option<Instant>,
     idle_frames: u32,
@@ -107,6 +118,11 @@ impl Screen {
             surface: None,
             margins: (0, 0, 0, 0),
             shelf: None,
+            placed: false,
+            full_screen: false,
+            full_screen_seen: (false, Instant::now()),
+            shelf_put_away: false,
+            ground_moved: None,
             size: (bounds.w as u32, bounds.h as u32),
             last_step: None,
             idle_frames: 0,
@@ -148,16 +164,53 @@ impl Screen {
             log!("{}: {width}x{height}", self.name);
         }
         self.size = (width, height);
-        self.simulation.resize(width as f32, height as f32);
+        // Reaching further down, as over a panel a full-screen app has put away, the drift falls from where it lay onto
+        // the new bottom; stopping short again, it comes up onto the panel. Everything else stays where it is.
+        match self.ground_moved.take() {
+            Some(by) if by > 0.0 => self.simulation.lower_ground(width as f32, height as f32, by),
+            Some(by) if by < 0.0 => self.simulation.raise_ground(width as f32, height as f32, -by),
+            _ => self.simulation.resize(width as f32, height as f32),
+        }
         self.resume();
+    }
+
+    /// Follows a full-screen app the snow shows over putting the panels away, or bringing them back, once the change has
+    /// lasted, as the app goes full screen or comes out of it in a few steps; returns whether to place the overlay again.
+    pub fn follow_full_screen(&mut self, in_front: bool, now: Instant) -> bool {
+        if self.full_screen_seen.0 != in_front {
+            self.full_screen_seen = (in_front, now);
+        }
+        if in_front == self.full_screen || now - self.full_screen_seen.1 < Duration::from_millis(300) {
+            return false;
+        }
+        log!("{}: {}", self.name, if in_front { "panels put away by a full-screen app" } else { "panels back" });
+        self.full_screen = in_front;
+        true
+    }
+
+    /// Back to the work area, as when the snow no longer shows over full-screen apps; returns whether it took more.
+    pub fn leave_full_screen(&mut self) -> bool {
+        std::mem::take(&mut self.full_screen)
     }
 
     /// Fits the snow to the display's work area, so the ground lies on top of the panel; with the bottom
     /// panel as a shelf, the snow reaches down to the display's edge instead, around and behind the panel.
     pub fn place(&mut self, bounds: Area, work: Area, shelf: Option<Shelf>) {
         self.bounds = bounds;
+        // Under a full-screen app the snow shows over, the panels are out of sight: no work area left out, and no
+        // panel for the snow to lie on, whose snow falls to the bottom of the display as off a window closing.
+        let work = if self.full_screen { bounds } else { work };
+        let shelf = if self.full_screen { None } else { shelf };
         if shelf != self.shelf {
             log!("{}: panel {shelf:?}", self.name);
+            // Given back, the panel comes up over the drift that fell from it and takes it up again.
+            if self.full_screen && self.shelf.is_some() {
+                self.shelf_put_away = true;
+            } else if let Some(back) = shelf
+                && std::mem::take(&mut self.shelf_put_away)
+            {
+                self.simulation.lift_onto(back.id);
+            }
             self.shelf = shelf;
             self.simulation.shelf = shelf.map(|shelf| shelf.id);
             self.windows_seen = 0;
@@ -172,6 +225,10 @@ impl Screen {
             return;
         }
         log!("{}: work area {work:?}", self.name);
+        if self.placed && margins.0 == self.margins.0 && margins.2 != self.margins.2 {
+            self.ground_moved = Some((self.margins.2 - margins.2) as f32);
+        }
+        self.placed = true;
         self.margins = margins;
         self.layer.set_margin(margins.0, margins.1, margins.2, margins.3);
         self.layer.commit();

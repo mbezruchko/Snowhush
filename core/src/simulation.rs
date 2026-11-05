@@ -395,6 +395,9 @@ pub struct SnowSimulation {
     pub covers: Vec<[f32; 4]>,
     /// The window that is a panel's shelf along the bottom of the screen, if any: pumpkins over it sit in its snow.
     pub shelf: Option<WindowId>,
+    /// A window about to come back over the ground, as a panel a full-screen app gave back: the drift under it rides up
+    /// on it as it comes.
+    lift_onto: Option<WindowId>,
     haunting: Haunting,
     lanterns: Pumpkins,
     lying: Vec<LyingLeaf>,
@@ -432,6 +435,7 @@ impl SnowSimulation {
             next_shift: 0.0,
             covers: Vec::new(),
             shelf: None,
+            lift_onto: None,
             haunting: Haunting::new(),
             lanterns: Pumpkins::default(),
             lying: Vec::new(),
@@ -595,6 +599,53 @@ impl SnowSimulation {
         self.height = height;
         self.air.jolt_scale = jolt_scale(height);
         self.update_target();
+    }
+
+    /// The ground drops `by` points as the snow comes to reach further down, as when a full-screen app puts the taskbar
+    /// away: what lay on the ground falls from where it lay, as off a window closing, onto the new ground below.
+    /// Everything else stays where it is on the screen, `by` points further up from the new ground.
+    pub fn lower_ground(&mut self, width: f32, height: f32, by: f32) {
+        let up = V2::new(0.0, by);
+        self.air.flakes.iter_mut().for_each(|flake| flake.position += up);
+        self.air.grains.iter_mut().for_each(|grain| grain.position += up);
+        self.air.motes.iter_mut().for_each(|mote| mote.position += up);
+        self.layers.iter_mut().skip(1).for_each(|ledge| ledge.raise(by));
+        self.dormant.values_mut().for_each(|ledge| ledge.raise(by));
+        self.parking.iter_mut().for_each(|(_, ledge, _)| ledge.raise(by));
+        let ground = &mut self.layers[0];
+        let count = ground.count();
+        let mut fallen = SnowLayer::new(V2::new(0.0, by), count, COLUMN_WIDTH, GROUND_DEPTH, true, (0.0, 0.0));
+        fallen.replace(std::mem::replace(&mut ground.heights, vec![0.0; count]));
+        ground.replace(vec![0.0; count]);
+        ground.refresh_top();
+        self.resize(width, height);
+        // As off a window closing: the leaves lying on top fall as themselves, the heap under them unseen.
+        self.drop_leaves(0, V2::new(0.0, by));
+        self.air.shed(&mut fallen, 1.0, V2::ZERO, false);
+    }
+
+    /// The ground rises `by` points as the snow stops short of where it reached, as when the taskbar comes back over the
+    /// bottom of the display: the drift comes up with it onto the taskbar, what was falling below the new ground is out
+    /// of view under the taskbar, and everything else stays where it is on the screen, `by` points nearer the ground.
+    pub fn raise_ground(&mut self, width: f32, height: f32, by: f32) {
+        let down = V2::new(0.0, -by);
+        self.air.flakes.iter_mut().for_each(|flake| flake.position += down);
+        self.air.grains.iter_mut().for_each(|grain| grain.position += down);
+        self.air.motes.iter_mut().for_each(|mote| mote.position += down);
+        self.air.flakes.retain(|flake| flake.position.y >= 0.0);
+        self.air.grains.retain(|grain| grain.position.y >= 0.0);
+        self.air.motes.retain(|mote| mote.position.y >= 0.0);
+        self.layers.iter_mut().skip(1).for_each(|ledge| ledge.raise(-by));
+        self.dormant.values_mut().for_each(|ledge| ledge.raise(-by));
+        self.parking.iter_mut().for_each(|(_, ledge, _)| ledge.raise(-by));
+        self.air.heights_changed = true;
+        self.resize(width, height);
+    }
+
+    /// The window with this id, when it next comes, comes back over the ground and takes up the drift lying under it, as
+    /// a panel does that a full-screen app gave back, instead of hiding it.
+    pub fn lift_onto(&mut self, id: WindowId) {
+        self.lift_onto = Some(id);
     }
 
     /// Returns whether anything visible changed.
@@ -892,7 +943,25 @@ impl SnowSimulation {
                 };
                 self.layers.push(ledge);
                 self.ids.push(surface.id);
-                self.layers.len() - 1
+                let li = self.layers.len() - 1;
+                if self.lift_onto == Some(surface.id) {
+                    self.lift_onto = None;
+                    let (ground, ledges) = self.layers.split_at_mut(1);
+                    let (ground, ledge) = (&mut ground[0], &mut ledges[li - 1]);
+                    for i in 0..ledge.count() {
+                        let column = (ledge.center_x(i) / COLUMN_WIDTH).floor();
+                        if column < 0.0 || column as usize >= ground.count() {
+                            continue;
+                        }
+                        let column = column as usize;
+                        ledge.set(i, ground.heights[column]);
+                        ground.set(column, 0.0);
+                    }
+                    ground.refresh_top();
+                    ledge.refresh_top();
+                    self.air.heights_changed = true;
+                }
+                li
             };
             let ledge = &mut self.layers[li];
             ledge.right = right;
