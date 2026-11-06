@@ -4,37 +4,40 @@ Snowhush rain sounds
 Drop audio files in this folder, then run ./build.sh (or build in Xcode).
 build.sh copies this folder into Snowhush.app/Contents/Resources/Sounds.
 Accepted extensions: .wav .aiff .aif .m4a .mp3 .caf .aac
-Non-audio files (like this one) are ignored. The app reads this folder when
-it launches, so restart Snowhush after adding or removing sounds.
+Non-audio files (like this one) are ignored, and only files directly in
+this folder are read — subfolders are ignored, so spare recordings can be
+kept in one. The app reads the folder at launch, so restart Snowhush after
+adding, removing or replacing sounds.
 
 --- The simple setup: one combined file ---------------------------------
 
-Put a single rain-and-thunder file in here, under any name, for example:
+Put a single rain-and-thunder file in here, under any name. It is looped
+forever while Rain mode is on. The volume slider, the Rain Sounds toggle,
+Intensity and the sleep/lock muting all apply to it, and the thunder baked
+into the file comes round again on each loop. With no separate thunder
+clips the "Thunder" menu item stays hidden.
 
-  rain-and-thunder.mp3
+--- The fuller setup: one rain bed + separate thunder -------------------
 
-It is looped forever while Rain mode is on, and the volume slider, the
-Rain Sounds toggle, Intensity and the sleep/lock muting all apply to it.
-The thunder baked into the file comes round again on each loop, and the
-"Thunder" menu item stays hidden because there is nothing separate to
-switch off.
+  rain.wav             ONE rain recording, looped forever.
+  thunder-1.wav        One-shot claps. Any number may be added; one is
+  thunder-2.wav        picked at random every 20-75 seconds (more often
+  thunder-3.wav        in heavy rain, less in a light shower). Anything
+                       whose name starts with "thunder" counts.
 
-For a perfectly seamless join, WAV, AIFF or CAF is best: MP3 often carries
-a fraction of a second of encoder padding at the start and end, which can
-be audible at the loop point. If you hear a seam, convert the file.
-
---- The fuller setup: a rain bed plus separate thunder ------------------
-
-  rain.mp3             A rain-only bed, looped forever.
-  thunder-1.mp3        One-shot claps. Any number may be added; one is
-  thunder-2.mp3        picked at random every 20-75 seconds (more often
-  thunder-3.mp3        in heavy rain, less in a light shower). A few at
-                       different distances keep repeats from standing out.
-                       Anything whose name starts with "thunder" counts.
+Keep the bed to a single, consistent rain recording. Mixing several
+different rain recordings in sequence is easy to hear and breaks the flow;
+if you want to compare a few, keep them in a subfolder and copy one over
+rain.wav at a time.
 
 With separate thunder files present, the menu bar menu gains a "Thunder"
-on/off toggle alongside "Rain Sounds" and the volume slider. Otherwise the
-single combined file above is used as the loop.
+on/off toggle alongside "Rain Sounds" and the volume slider.
+
+--- Loop quality ---------------------------------------------------------
+
+WAV, AIFF or CAF is best: MP3 often carries a fraction of a second of
+encoder padding at the start and end, which can be audible at the loop
+point. If you hear a seam, convert the file.
 
 --- Menu -----------------------------------------------------------------
 
