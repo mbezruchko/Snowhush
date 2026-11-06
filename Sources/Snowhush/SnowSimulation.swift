@@ -522,6 +522,8 @@ final class SnowSimulation {
     private var lastCursorPush: Double = -10
     /// Snow on windows that left the screen for another Space, kept until the window shows up again.
     private var dormant: [CGWindowID: SnowLayer] = [:]
+    /// Where the left edge of each notification banner was at the last update.
+    private var bannerEdges: [CGWindowID: Float] = [:]
     /// Windows that went off screen without a word yet on why; a Space switch keeps their snow, anything else drops it.
     private var parking: [(id: CGWindowID, ledge: SnowLayer, since: Double)] = []
     private var spaceChangedAt: Double = -10
@@ -940,12 +942,22 @@ final class SnowSimulation {
     func updateWindows(_ surfaces: [WindowSurface], interval: Float, parked: Set<CGWindowID> = [], elsewhere: Set<CGWindowID> = [], sliding: Bool = false) {
         leafBudget = nil
         var seen = Set<CGWindowID>()
+        var edges: [CGWindowID: Float] = [:]
+        defer { bannerEdges = edges }
         for surface in surfaces {
             let left = Float(surface.frame.minX) + ledgeInset
             let top = Float(surface.frame.maxY)
             let right = Float(surface.frame.maxX) - ledgeInset
             let columns = Int((Float(surface.frame.width) - 2 * ledgeInset) / columnWidth)
             guard columns >= 8 else { continue }
+            // A banner carries no snow: sliding in, it only pushes the snow in its way aside.
+            if NotificationBanner.ids.contains(surface.id) {
+                if surface.sweeps {
+                    sweep(from: bannerEdges[surface.id] ?? width, to: left, bottom: Float(surface.frame.minY), top: top, interval: interval)
+                }
+                edges[surface.id] = left
+                continue
+            }
             seen.insert(surface.id)
 
             let ledge: SnowLayer
@@ -1285,6 +1297,67 @@ final class SnowSimulation {
             )
         }
         ledge.heap(area - crumbled, against: edge, inward: Int(inward), slope: repose * columnWidth)
+    }
+
+    /// A notification banner sliding in, its left edge moving from `from` to `to` over the band from `bottom` to `top`:
+    /// it scrapes the snow, or the leaves, off the windows it passes over, which fly off ahead of it, and pushes the falling
+    /// snow along.
+    private func sweep(from: Float, to: Float, bottom: Float, top: Float, interval: Float) {
+        guard to < from - 0.5 else { return }
+        let speed = (from - to) / max(interval, 1.0 / 120)
+        let thrown = SIMD2(-min(speed * 0.3, 900), 60)
+        for ledge in ledges.values where ledge.top > 0.01 && ledge.base.x < from && ledge.base.x + ledge.width > to {
+            let lower = max(0, Int(((to - ledge.base.x) / columnWidth).rounded(.down)))
+            let upper = min(ledge.count, Int(((from - ledge.base.x) / columnWidth).rounded(.up)))
+            var start = lower
+            while start < upper {
+                // A few columns at a time hold together, as snow shed off a window does.
+                let end = min(upper, start + Int(random.range(2, 7)))
+                var area: Float = 0
+                var seen: Float = 0
+                var highest = bottom
+                for i in start..<end {
+                    let floor = ledge.floor(i)
+                    let surface = floor + ledge.heights[i]
+                    // Only snow on a window whose top the banner covers, and of that only what the banner reaches.
+                    guard floor <= top, surface > bottom + 0.01 else { continue }
+                    let removed = surface - max(floor, bottom)
+                    ledge.set(i, ledge.heights[i] - removed)
+                    area += removed * columnWidth
+                    seen += max(removed - leafCover, 0) * columnWidth
+                    highest = max(highest, surface)
+                }
+                if area > 0.02 {
+                    let position = SIMD2(to - columnWidth, (max(bottom, ledge.base.y) + highest) / 2)
+                    let cohesion = area > 14 && !leafy ? random.range(0.4, 0.7) : 0
+                    release(
+                        area * (1 - cohesion),
+                        at: position,
+                        velocity: thrown,
+                        spread: SIMD2(columnWidth, (highest - position.y) + 1),
+                        scatter: 0.5,
+                        leaves: seen / area
+                    )
+                    if cohesion > 0 { throwLump(area * cohesion, at: position, velocity: thrown) }
+                    heightsChanged = true
+                }
+                start = end
+            }
+            // The leaves lying on top fly off ahead of it with the rest.
+            for k in lying.indices.reversed() where lying[k].layer === ledge {
+                let x = ledge.heapX + lying[k].x
+                let y = ledge.base.y + lying[k].rest
+                guard x >= to, x < from, y > bottom, let i = ledge.index(at: x), ledge.floor(i) <= top else { continue }
+                fly(k, velocity: thrown + SIMD2(random.range(-40, 40), random.range(10, 60)), from: SIMD2(to - columnWidth, y))
+            }
+        }
+        for i in flakes.indices where flakes[i].position.x >= to && flakes[i].position.x < from
+            && flakes[i].position.y >= bottom && flakes[i].position.y <= top {
+            flakes[i].position.x = to - 1
+            flakes[i].velocity.x = min(flakes[i].velocity.x, thrown.x)
+        }
+        lastWindowMotion = clock
+        windowsChanged = true
     }
 
     /// Turns part of a ledge's snow into falling snow where it lies: a few columns at a time hold together
@@ -3246,12 +3319,12 @@ final class SnowSimulation {
     }
 
     /// A lying leaf taken up into the air; its bulk stays in the heap, whatever takes the heap takes it.
-    private func fly(_ k: Int, velocity: SIMD2<Float>, blown: Bool = false) {
+    private func fly(_ k: Int, velocity: SIMD2<Float>, blown: Bool = false, from position: SIMD2<Float>? = nil) {
         let leaf = lying.remove(at: k)
         heightsChanged = true
         guard grains.count < maxGrains else { return }
         grains.append(Grain(
-            position: SIMD2(leaf.layer.heapX + leaf.x, leaf.layer.base.y + leaf.rest + 1),
+            position: position ?? SIMD2(leaf.layer.heapX + leaf.x, leaf.layer.base.y + leaf.rest + 1),
             velocity: velocity,
             area: 0,
             size: leaf.size,
