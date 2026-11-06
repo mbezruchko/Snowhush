@@ -83,8 +83,9 @@ struct Window {
     sweeps: bool,
     hold: bool,
     slide: f32,
+    /// The toast card in a toast's window, which is all of the window that shows.
+    card: RECT,
     travel: f32,
-    near_right: bool,
 }
 
 struct Arrival {
@@ -259,6 +260,11 @@ impl Tracker {
             let room_above = (r.top - area.top) as f32 * sy >= 6.0 && frame.max_y() < height;
             let on_screen = frame.max_x() > 0.0 && frame.min_x() < width && frame.max_y() > 0.0;
             let fills_screen = frame.width * frame.height >= width * height * 0.9;
+            // A toast carries no snow; only its card hides what lies behind it.
+            if window.toast {
+                blockers.extend(local_frame(&window.card, area, size));
+                continue;
+            }
             if room_above && on_screen && !fills_screen && !window.cover_only && frame.width >= 80.0 && frame.height >= 40.0 {
                 let radius = window.radius.min(frame.width / 2.0).min(frame.height / 2.0);
                 let region = Rect { x: frame.x, y: frame.max_y() - radius, width: frame.width, height: 40.0 + radius };
@@ -269,9 +275,6 @@ impl Tracker {
                     cover: blockers.iter().filter(|b| intersects(b, &frame)).copied().collect(),
                     corner_radius: radius,
                     corner_exponent: 2.0,
-                    sweeps: false,
-                    sweep_left: frame.min_x(),
-                    sweep_only: false,
                 });
             }
             // Alt+Tab's switcher sits in a clear window the size of the display; it doesn't hide the snow on windows.
@@ -293,38 +296,23 @@ impl Tracker {
                 cover: blockers.iter().filter(|b| intersects(b, &frame)).copied().collect(),
                 corner_radius: 0.0,
                 corner_exponent: 2.0,
-                sweeps: false,
-                sweep_left: frame.min_x(),
-                sweep_only: false,
             });
         }
         surfaces
     }
 
-    /// Modelled slide-in sweep for notification banners only; no ledge on the toast.
-    pub fn toast_sweeps(&self, area: &RECT, size: (u32, u32)) -> Vec<WindowSurface> {
+    /// The cards of the toasts sliding in on one display, in its overlay coordinates.
+    pub fn toast_sweeps(&self, area: &RECT, size: (u32, u32)) -> Vec<(isize, Rect)> {
         let sx = size.0 as f32 / (area.right - area.left).max(1) as f32;
-        let mut out = Vec::new();
-        for window in &self.windows {
-            if !window.toast || window.hold || !window.sweeps {
-                continue;
-            }
-            let Some(frame) = local_frame(&window.rect, area, size) else { continue };
-            let frame = toast_card(frame);
-            let sweep_left = frame.min_x() + window.slide * sx;
-            out.push(WindowSurface {
-                id: window.id,
-                frame,
-                blockers: Vec::new(),
-                cover: Vec::new(),
-                corner_radius: 0.0,
-                corner_exponent: 2.0,
-                sweeps: true,
-                sweep_left,
-                sweep_only: true,
-            });
-        }
-        out
+        self.windows
+            .iter()
+            .filter(|window| window.toast && window.sweeps)
+            .filter_map(|window| {
+                let card = local_frame(&window.card, area, size)?;
+                // Windows puts the toast's window where it ends up at once, so its slide in is modelled.
+                Some((window.id, Rect { x: card.x + window.slide * sx, ..card }))
+            })
+            .collect()
     }
 
     /// Every app window on one display, maximized and full-screen ones too, left, bottom, right, top in its overlay
@@ -443,8 +431,8 @@ impl Tracker {
             if self.seen.len() > 4096 {
                 self.seen.clear();
             }
+            let toast = self.toast_banner(window, &class, process, &rect) && near_right(window, &rect);
             if self.seen.insert(id) {
-                let toast = self.toast_banner(window, &class, process, &rect);
                 log!(
                     "window {class} of {}: {}x{} at {},{}{}",
                     process_name(process),
@@ -457,8 +445,7 @@ impl Tracker {
             }
             let zoomed = IsZoomed(window).as_bool();
             let radius = if self.rounded && !zoomed { corner_radius(window) } else { 0.0 };
-            let toast = self.toast_banner(window, &class, process, &rect);
-            let dpi = if toast { GetDpiForWindow(window).max(96) as f32 } else { 96.0 };
+            let scale = if toast { GetDpiForWindow(window).max(96) as f32 / 96.0 } else { 1.0 };
             Some(Window {
                 id,
                 cover_only: COVER_ONLY.contains(&class.as_str()),
@@ -471,8 +458,8 @@ impl Tracker {
                 sweeps: false,
                 hold: false,
                 slide: 0.0,
-                travel: if toast { (rect.right - rect.left) as f32 + 16.0 * dpi / 96.0 } else { 0.0 },
-                near_right: toast && near_right(window, &rect),
+                card: if toast { toast_card(&rect, scale) } else { rect },
+                travel: if toast { (rect.right - rect.left) as f32 + TOAST_MARGIN.0 * scale } else { 0.0 },
             })
         }
     }
@@ -514,7 +501,6 @@ impl Tracker {
             let id = self.windows[i].id;
             let rect = self.windows[i].rect;
             let travel = self.windows[i].travel;
-            let near = self.windows[i].near_right;
             alive.insert(id);
             let (hold, slide, sweeps) = {
                 let arrival = self.arrivals.entry(id).or_insert(Arrival {
@@ -532,12 +518,13 @@ impl Tracker {
                     // Windows usually parks the toast at its final rect; always model a slide when motion is on
                     // so the shove spreads instead of dumping one cliff against the left edge.
                     arrival.model = animate;
-                    arrival.travel = if near { travel } else { travel.max((rect.right - rect.left) as f32) };
+                    arrival.travel = travel;
                     arrival.left = rect.left;
                     arrival.right = rect.right;
                 }
                 arrival.samples = arrival.samples.saturating_add(1);
-                if (rect.left - arrival.left).abs() > 2 || (rect.right - arrival.right).abs() > 2 {
+                let shifted = (rect.left - arrival.left).abs() > 2 || (rect.right - arrival.right).abs() > 2;
+                if shifted {
                     arrival.moved = true;
                     arrival.left = rect.left;
                     arrival.right = rect.right;
@@ -563,7 +550,7 @@ impl Tracker {
                     if pending {
                         arrival.swept = true;
                     }
-                    (false, 0.0, pending)
+                    (false, 0.0, pending || shifted)
                 }
             };
             self.windows[i].hold = hold;
@@ -605,7 +592,7 @@ unsafe extern "system" fn on_event(_: HWINEVENTHOOK, event: u32, window: HWND, o
             if class_name(window) == "Windows.UI.Core.CoreWindow" {
                 NOTICED.with(|noticed| {
                     let mut noticed = noticed.borrow_mut();
-                    if !noticed.iter().any(|w| *w == window) {
+                    if !noticed.contains(&window) {
                         noticed.push(window);
                     }
                 });
@@ -772,13 +759,19 @@ fn intersects(a: &Rect, b: &Rect) -> bool {
     a.min_x() < b.max_x() && b.min_x() < a.max_x() && a.min_y() < b.max_y() && b.min_y() < a.max_y()
 }
 
-/// ShellExperienceHost's CoreWindow is larger than the toast card; sweep the card down to the ground
-/// so a drift behind the banner is scraped off, not left as a mound under it.
-fn toast_card(frame: Rect) -> Rect {
-    const SIDE: f32 = 8.0;
-    const CAP: f32 = 120.0;
-    let top = frame.max_y().min(CAP).max(frame.min_y() + 40.0);
-    Rect { x: frame.x + SIDE, y: 0.0, width: (frame.width - 2.0 * SIDE).max(80.0), height: top }
+/// The room ShellExperienceHost's window leaves around the toast card in it, at the sides, above and below, in pixels
+/// at 96 dpi: measured on Windows 11.
+const TOAST_MARGIN: (f32, f32, f32) = (16.0, 30.0, 15.0);
+
+fn toast_card(rect: &RECT, scale: f32) -> RECT {
+    let (side, above, below) = TOAST_MARGIN;
+    let side = (side * scale).round() as i32;
+    RECT {
+        left: rect.left + side,
+        top: rect.top + (above * scale).round() as i32,
+        right: rect.right - side,
+        bottom: rect.bottom - (below * scale).round() as i32,
+    }
 }
 
 fn near_right(window: HWND, rect: &RECT) -> bool {

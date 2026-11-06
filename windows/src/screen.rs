@@ -369,16 +369,15 @@ impl Screen {
     /// Hands the simulation the windows on this display when they changed.
     fn follow(&mut self, tracker: &Tracker, clock: &Clock, now: i64) {
         let taskbar = self.taskbar_surface();
-        let gen_changed = tracker.generation != self.windows_seen || taskbar != self.taskbar;
-        if !gen_changed && !tracker.animating() {
+        let changed = tracker.generation != self.windows_seen || taskbar != self.taskbar;
+        if !changed && !tracker.animating() {
             return;
         }
-        let sweeps = tracker.toast_sweeps(&self.monitor.rect, self.size);
         let since = clock.seconds(now - self.windows_changed_at) as f32;
         // A window that moves outside a drag, as when it is maximized or snapped, jumps there in one go:
         // its snow is left behind instead of being carried along.
-        let interval = if tracker.moving() || tracker.animating() || since < 0.1 { since.min(0.25).max(1.0 / 120.0) } else { 1.0 / 60.0 };
-        if gen_changed {
+        let interval = if tracker.moving() || tracker.animating() || since < 0.1 { since.clamp(1.0 / 120.0, 0.25) } else { 1.0 / 60.0 };
+        if changed {
             self.windows_seen = tracker.generation;
             self.taskbar = taskbar;
             self.simulation.covers = tracker.covers(&self.monitor.rect, self.size);
@@ -400,9 +399,9 @@ impl Screen {
                 self.windows_changed_at = now;
             }
         }
-        // Toast slide must not rewrite every app ledge each frame — only the sweep band.
-        if tracker.animating() || !sweeps.is_empty() {
-            self.simulation.sweep_toasts(&sweeps, interval);
+        // A toast sliding in only sweeps the snow: the windows' ledges aren't rewritten every frame for it.
+        if tracker.animating() {
+            self.simulation.sweep_toasts(&tracker.toast_sweeps(&self.monitor.rect, self.size), interval);
             self.windows_changed_at = now;
         }
     }
@@ -421,17 +420,13 @@ impl Screen {
         if rect.bottom < bounds.bottom || rect.right - rect.left < (bounds.right - bounds.left) / 2 || showing < 16 {
             return None;
         }
-        let frame = local_frame(&rect, &self.monitor.rect, self.size)?;
         Some(WindowSurface {
             id: TASKBAR,
-            frame,
+            frame: local_frame(&rect, &self.monitor.rect, self.size)?,
             blockers: Vec::new(),
             cover: Vec::new(),
             corner_radius: 0.0,
             corner_exponent: 2.0,
-            sweeps: false,
-            sweep_left: frame.min_x(),
-            sweep_only: false,
         })
     }
 

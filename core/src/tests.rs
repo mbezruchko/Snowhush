@@ -20,9 +20,6 @@ fn surface(id: isize, x: f32, top: f32, width: f32) -> WindowSurface {
         cover: Vec::new(),
         corner_radius: 8.0,
         corner_exponent: 2.5,
-        sweeps: false,
-        sweep_left: x,
-        sweep_only: false,
     }
 }
 
@@ -499,9 +496,6 @@ fn step_cost() {
         cover: Vec::new(),
         corner_radius: 8.0,
         corner_exponent: 2.5,
-        sweeps: false,
-        sweep_left: 200.0,
-        sweep_only: false,
     }];
     simulation.update_windows(&window, 0.2, &none, &none, false);
     for _ in 0..60 * 30 {

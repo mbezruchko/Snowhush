@@ -131,9 +131,6 @@ mod tests {
             cover: Vec::new(),
             corner_radius: 8.0,
             corner_exponent: 2.0,
-            sweeps: false,
-            sweep_left: 8.0,
-            sweep_only: false,
         };
         simulation.update_windows(&[shelf], 0.1, &HashSet::new(), &HashSet::new(), false);
         simulation.shelf = Some(7);

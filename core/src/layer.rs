@@ -65,8 +65,6 @@ pub struct SnowLayer {
     /// The window's right edge, where the snow ends short of a whole column: which edge moved tells a resize from a
     /// move.
     pub right: f32,
-    /// Slides off the right edge of the screen; that edge scrapes its snow like a wall.
-    pub banner: bool,
     /// How many leaves lie on this heap, as of the last step.
     pub lying_leaves: f32,
     /// How fast the heap was going as it came off its window at this step, for the leaves lying on it to go along.
@@ -114,7 +112,6 @@ impl SnowLayer {
             agitation: 0.0,
             drift: 0.0,
             right: 0.0,
-            banner: false,
             lying_leaves: 0.0,
             thrown: None,
             swing_direction: V2::ZERO,
