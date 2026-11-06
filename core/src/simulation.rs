@@ -1821,7 +1821,7 @@ impl SnowSimulation {
                     // Scatter ahead of the edge so one frame doesn't stack a cliff at `to`.
                     let land_x = to - self.air.random.range(COLUMN_WIDTH, 88.0);
                     let position = V2::new(land_x, (bottom.max(base_y) + highest) / 2.0);
-                    let cohesion = if area > 18.0 && !self.air.autumn { self.air.random.range(0.15, 0.35) } else { 0.0 };
+                    let cohesion = if area > 18.0 && !self.air.leafy { self.air.random.range(0.15, 0.35) } else { 0.0 };
                     let spread = V2::new(self.air.random.range(24.0, 64.0), (highest - position.y) + 1.0);
                     let kick = thrown + V2::new(self.air.random.range(-80.0, 40.0), self.air.random.range(-20.0, 80.0));
                     self.air.release_leaves(area * (1.0 - cohesion), seen / area, position, kick, spread, 0.5);
