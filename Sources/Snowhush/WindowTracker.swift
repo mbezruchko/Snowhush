@@ -571,6 +571,10 @@ final class WindowTracker {
                 banner.notice(id, level: layer, pid: pid)
                 guard let bar = raised[id] else { continue }
                 bounds = bar.frame
+            } else if layer > 0 && !shelf && bounds.minY <= screen.minY && bounds.width >= screen.width * 0.9 {
+                // Notch and menu bar apps (Sapphire) lay a clear canvas across the top of the screen, from over the menu
+                // bar down: it hides nothing, and the windows under it still catch snow.
+                continue
             } else if layer > 0 {
                 raised[id] = (bounds, now)
             }
