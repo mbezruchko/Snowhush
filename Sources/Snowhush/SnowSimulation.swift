@@ -986,7 +986,10 @@ final class SnowSimulation {
             if elsewhere.contains(id) {
                 dormant[id] = ledge
             } else if !parked.contains(id) {
-                shed(ledge, share: 1, velocity: ledge.trackVelocity + ledge.offsetVelocity)
+                // The Dock slides down out of sight, about its height in a fifth of a second: its snow drops along with
+                // it instead of hanging behind while gravity picks it up.
+                let sink = ledge.isDock ? SIMD2<Float>(0, -450) : .zero
+                shed(ledge, share: 1, velocity: ledge.trackVelocity + ledge.offsetVelocity + sink)
             } else if clock - spaceChangedAt < 0.6 {
                 dormant[id] = ledge
             } else {
