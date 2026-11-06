@@ -41,6 +41,9 @@ enum Preferences {
     /// Before rain, the mode was only whether leaves fell.
     private static let autumnKey = "autumn"
     private static let performanceKey = "performance"
+    private static let rainSoundsKey = "rainSounds"
+    private static let thunderKey = "thunder"
+    private static let rainVolumeKey = "rainVolume"
 
     static func registerDefaults() {
         let calm = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
@@ -56,6 +59,9 @@ enum Preferences {
             halloweenKey: false,
             halloweenSkippedKey: 0,
             autumnKey: false,
+            rainSoundsKey: true,
+            thunderKey: true,
+            rainVolumeKey: 0.5,
         ])
     }
 
@@ -129,5 +135,23 @@ enum Preferences {
     static var maxPerformance: Bool {
         get { defaults.integer(forKey: performanceKey) == 1 }
         set { defaults.set(newValue ? 1 : 0, forKey: performanceKey) }
+    }
+
+    /// Play a rain bed and thunder while Rain is the chosen mode.
+    static var rainSounds: Bool {
+        get { defaults.bool(forKey: rainSoundsKey) }
+        set { defaults.set(newValue, forKey: rainSoundsKey) }
+    }
+
+    /// Let thunder break now and then over the rain.
+    static var thunder: Bool {
+        get { defaults.bool(forKey: thunderKey) }
+        set { defaults.set(newValue, forKey: thunderKey) }
+    }
+
+    /// How loud the rain and thunder are, from silent to full.
+    static var rainVolume: Float {
+        get { min(max(defaults.float(forKey: rainVolumeKey), 0), 1) }
+        set { defaults.set(newValue, forKey: rainVolumeKey) }
     }
 }

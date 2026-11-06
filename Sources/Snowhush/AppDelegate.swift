@@ -31,6 +31,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var screenshotsItem: NSMenuItem!
     private var deepInteractionItem: NSMenuItem!
     private var loginItem: NSMenuItem!
+    private var rainSeparator: NSMenuItem!
+    private var rainHeader: NSMenuItem!
+    private var rainSoundsItem: NSMenuItem!
+    private var thunderItem: NSMenuItem!
+    private var volumeItem: NSMenuItem!
     private var observers: [NSObjectProtocol] = []
     private var screensAsleep = false
     private let screenshots = ScreenshotWatch()
@@ -39,6 +44,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var updater: SPUStandardUpdaterController!
     private var welcome: WelcomeController?
     private let power = PowerMonitor()
+    private let rainSound = RainSoundController()
+    private let rainVolumeSlider = RainVolumeSlider()
     private var halloweenTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -58,6 +65,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         snowOnWindows = Preferences.snowOnWindows
         behindWindows = Preferences.behindWindows
         snowfallHeld = !Preferences.welcomed
+        rainSound.mode = Preferences.mode
+        rainSound.enabled = Preferences.rainSounds
+        rainSound.thunderEnabled = Preferences.thunder
+        rainSound.volume = Preferences.rainVolume
+        rainSound.intensity = snowfall
+        rainSound.powerBudget = power.budget
         syncScreens()
         guard !screens.isEmpty else {
             NSApp.terminate(nil)
@@ -168,6 +181,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         snowOnWindowsItem = add("Snow on Windows", #selector(toggleSnowOnWindows), to: menu)
         deepInteractionItem = add("Deep Interaction", #selector(toggleDeepInteraction), to: menu)
         clearItem = add("Clear Snow", #selector(clearSnow), to: menu)
+        rainSeparator = NSMenuItem.separator()
+        menu.addItem(rainSeparator)
+        rainHeader = NSMenuItem.sectionHeader(title: "Rain Sounds")
+        menu.addItem(rainHeader)
+        rainSoundsItem = add("Rain Sounds", #selector(toggleRainSounds), to: menu)
+        thunderItem = add("Thunder", #selector(toggleThunder), to: menu)
+        rainVolumeSlider.changed = { [unowned self] in setRainVolume($0) }
+        volumeItem = NSMenuItem()
+        volumeItem.view = rainVolumeSlider
+        menu.addItem(volumeItem)
         menu.addItem(.separator())
         behindWindowsItem = add("Behind Windows", #selector(toggleBehindWindows), to: menu)
         fullScreenItem = add("Show over Full Screen", #selector(toggleFullScreen), to: menu)
@@ -214,6 +237,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         deepInteractionItem.state = Preferences.deepInteraction ? .on : .off
         deepInteractionItem.isEnabled = snowOnWindows
         clearItem.isEnabled = screens.contains { $0.simulation.hasSnow || $0.simulation.spriteCount > 0 }
+        // Rain sounds only have a say while rain is falling.
+        rainSeparator.isHidden = !rain
+        rainHeader.isHidden = !rain
+        rainSoundsItem.isHidden = !rain
+        // With one combined file the thunder is part of the loop; there is nothing separate to toggle.
+        thunderItem.isHidden = !rain || !rainSound.hasThunderOneShots
+        volumeItem.isHidden = !rain
+        rainSoundsItem.state = Preferences.rainSounds ? .on : .off
+        thunderItem.state = Preferences.thunder ? .on : .off
+        thunderItem.isEnabled = Preferences.rainSounds
+        rainVolumeSlider.volume = Preferences.rainVolume
+        rainVolumeSlider.enabled = Preferences.rainSounds
         halloweenItem.state = Halloween.isWanted ? .on : .off
         halloweenItem.isEnabled = mode == .snow
         defaultPerformanceItem.state = Preferences.maxPerformance ? .off : .on
@@ -229,6 +264,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         self.snowfall = snowfall
         Preferences.snowfall = snowfall
         for snow in screens { snow.simulation.snowfall = snowfall }
+        rainSound.intensity = snowfall
+        rainSound.update()
         updateStatusIcon()
     }
 
@@ -253,6 +290,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     @objc private func toggleDeepInteraction() {
         Preferences.deepInteraction.toggle()
         Marquee.enabled = Preferences.deepInteraction
+    }
+
+    @objc private func toggleRainSounds() {
+        Preferences.rainSounds.toggle()
+        rainSound.enabled = Preferences.rainSounds
+        rainSound.update()
+    }
+
+    @objc private func toggleThunder() {
+        Preferences.thunder.toggle()
+        rainSound.thunderEnabled = Preferences.thunder
+        rainSound.update()
+    }
+
+    private func setRainVolume(_ volume: Float) {
+        Preferences.rainVolume = volume
+        rainSound.volume = volume
+        rainSound.update()
     }
 
     @objc private func clearSnow() {
@@ -301,6 +356,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         let mode: Mode = sender === autumnItem ? .autumn : sender === rainItem ? .rain : sender === blossomItem ? .blossom : .snow
         guard mode != Preferences.mode else { return }
         Preferences.mode = mode
+        rainSound.mode = mode
+        rainSound.update()
         refreshHalloween()
         updateStatusIcon()
         let direction = screens.first?.simulation.breezeDirection ?? -1
@@ -348,7 +405,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     // MARK: - System
 
     private func observeSystem() {
-        power.changed = { [unowned self] in screens.forEach { $0.apply(power.budget) } }
+        power.changed = { [unowned self] in
+            screens.forEach { $0.apply(power.budget) }
+            rainSound.powerBudget = power.budget
+            rainSound.update()
+        }
         let workspace = NSWorkspace.shared.notificationCenter
         let distributed = DistributedNotificationCenter.default()
 
@@ -383,5 +444,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
             snow.occlusionChanged()
             snow.setActive(awake && !snow.givesWay && (snow.window.occlusionState.contains(.visible) || snow.fading), asleep: !awake)
         }
+        // Nothing is heard while the snow is hidden or the Mac is asleep, locked or switched away.
+        rainSound.audible = awake && screens.contains { !$0.givesWay }
+        rainSound.update()
     }
 }
