@@ -48,7 +48,7 @@ Choose Mode › Cherry Blossom and pink petals fall instead of snow. Curved like
 
 From October 30 until dawn on November 1 the snow turns spooky: jack-o'-lanterns glow in the drift and ghosts pop up out of it with signs. Choose Mode › Halloween to have it any other day, as long as snow is falling.
 
-Everything else lives in the menu bar: Intensity (Off, Light, Steady, Heavy, Variable), Mode (Snow, Autumn Leaves, Rain, Cherry Blossom, and Halloween on top of snow), Performance (Default, or Max to draw every frame at the display's full rate), Accumulate, Melt Snow, Snow on Windows, Deep Interaction (on Windows and the Mac, the snow also settles on a selection dragged across the desktop), Clear Snow, Behind Windows, Show over Full Screen, Show in Screenshots and Open at Login. On Windows, Behind Taskbar lets the snow settle at the bottom of the screen under a see-through taskbar, such as one made clear with TranslucentTB.
+Everything else lives in the menu bar: Intensity (Off, Light, Steady, Heavy, Variable), Mode (Snow, Autumn Leaves, Rain, Cherry Blossom, and Halloween on top of snow) and Clear Snow, with the rest under Settings: Accumulate, Melt Snow, Snow on Windows, Deep Interaction (on Windows and the Mac, the snow also settles on a selection dragged across the desktop), Behind Windows, Show over Full Screen, Show in Screenshots, Max Performance (draws every frame at the display's full rate) and Open at Login. On Windows and the Mac, Settings stays open while you switch its options. On Windows, Behind Taskbar lets the snow settle at the bottom of the screen under a see-through taskbar, such as one made clear with TranslucentTB.
 
 ## Building
 

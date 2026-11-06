@@ -126,7 +126,6 @@ impl ksni::Tray for Tray {
                 ..Default::default()
             }
             .into(),
-            MenuItem::Separator,
             SubMenu {
                 label: "Mode".into(),
                 submenu: vec![
@@ -167,80 +166,6 @@ impl ksni::Tray for Tray {
                 ..Default::default()
             }
             .into(),
-            SubMenu {
-                label: "Performance".into(),
-                submenu: vec![
-                    RadioGroup {
-                        selected: usize::from(settings.max_performance),
-                        select: Box::new(|tray: &mut Tray, index| {
-                            let max = index == 1;
-                            if max == tray.settings.max_performance {
-                                return;
-                            }
-                            tray.change(|settings| {
-                                settings.max_performance = max;
-                                Command::Performance(max)
-                            });
-                        }),
-                        options: ["Default", "Max"].iter().map(|&label| RadioItem { label: label.into(), ..Default::default() }).collect(),
-                    }
-                    .into(),
-                ],
-                ..Default::default()
-            }
-            .into(),
-            CheckmarkItem {
-                label: "Accumulate".into(),
-                checked: settings.accumulate,
-                visible: lies,
-                activate: Box::new(|tray: &mut Tray| {
-                    tray.change(|settings| {
-                        settings.accumulate = !settings.accumulate;
-                        Command::Accumulate(settings.accumulate)
-                    })
-                }),
-                ..Default::default()
-            }
-            .into(),
-            CheckmarkItem {
-                label: if autumn {
-                    "Wither Leaves"
-                } else if blossom {
-                    "Wilt Petals"
-                } else {
-                    "Melt Snow"
-                }
-                .into(),
-                checked: settings.melt,
-                enabled: settings.accumulate,
-                visible: lies,
-                activate: Box::new(|tray: &mut Tray| {
-                    tray.change(|settings| {
-                        settings.melt = !settings.melt;
-                        Command::Melt(settings.melt)
-                    })
-                }),
-                ..Default::default()
-            }
-            .into(),
-            CheckmarkItem {
-                label: match mode {
-                    Mode::Snow => "Snow on Windows",
-                    Mode::Autumn => "Leaves on Windows",
-                    Mode::Rain => "Rain on Windows",
-                    Mode::Blossom => "Petals on Windows",
-                }
-                .into(),
-                checked: settings.snow_on_windows,
-                activate: Box::new(|tray: &mut Tray| {
-                    tray.change(|settings| {
-                        settings.snow_on_windows = !settings.snow_on_windows;
-                        Command::SnowOnWindows(settings.snow_on_windows)
-                    })
-                }),
-                ..Default::default()
-            }
-            .into(),
             StandardItem {
                 label: if autumn {
                     "Clear Leaves"
@@ -258,52 +183,127 @@ impl ksni::Tray for Tray {
             }
             .into(),
             MenuItem::Separator,
-            CheckmarkItem {
-                label: "Behind Windows".into(),
-                checked: settings.behind_windows,
-                activate: Box::new(|tray: &mut Tray| {
-                    tray.change(|settings| {
-                        settings.behind_windows = !settings.behind_windows;
-                        Command::BehindWindows(settings.behind_windows)
-                    })
-                }),
-                ..Default::default()
-            }
-            .into(),
-            CheckmarkItem {
-                label: "Show over Full Screen".into(),
-                checked: settings.over_full_screen,
-                enabled: !settings.behind_windows,
-                activate: Box::new(|tray: &mut Tray| {
-                    tray.change(|settings| {
-                        settings.over_full_screen = !settings.over_full_screen;
-                        Command::OverFullScreen(settings.over_full_screen)
-                    })
-                }),
-                ..Default::default()
-            }
-            .into(),
-            CheckmarkItem {
-                label: "Show in Screenshots".into(),
-                checked: settings.show_in_screenshots,
-                activate: Box::new(|tray: &mut Tray| {
-                    tray.change(|settings| {
-                        settings.show_in_screenshots = !settings.show_in_screenshots;
-                        Command::ShowInScreenshots(settings.show_in_screenshots)
-                    })
-                }),
-                ..Default::default()
-            }
-            .into(),
-            MenuItem::Separator,
-            CheckmarkItem {
-                label: "Open at Login".into(),
-                checked: prefs::opens_at_login(),
-                activate: Box::new(|_: &mut Tray| {
-                    let on = !prefs::opens_at_login();
-                    let status = prefs::set_opens_at_login(on);
-                    log!("open at login {on}: {status:?}");
-                }),
+            SubMenu {
+                label: "Settings".into(),
+                submenu: vec![
+                    StandardItem { label: "Behavior".into(), enabled: false, ..Default::default() }.into(),
+                    CheckmarkItem {
+                        label: "Accumulate".into(),
+                        checked: settings.accumulate,
+                        visible: lies,
+                        activate: Box::new(|tray: &mut Tray| {
+                            tray.change(|settings| {
+                                settings.accumulate = !settings.accumulate;
+                                Command::Accumulate(settings.accumulate)
+                            })
+                        }),
+                        ..Default::default()
+                    }
+                    .into(),
+                    CheckmarkItem {
+                        label: if autumn {
+                            "Wither Leaves"
+                        } else if blossom {
+                            "Wilt Petals"
+                        } else {
+                            "Melt Snow"
+                        }
+                        .into(),
+                        checked: settings.melt,
+                        enabled: settings.accumulate,
+                        visible: lies,
+                        activate: Box::new(|tray: &mut Tray| {
+                            tray.change(|settings| {
+                                settings.melt = !settings.melt;
+                                Command::Melt(settings.melt)
+                            })
+                        }),
+                        ..Default::default()
+                    }
+                    .into(),
+                    CheckmarkItem {
+                        label: match mode {
+                            Mode::Snow => "Snow on Windows",
+                            Mode::Autumn => "Leaves on Windows",
+                            Mode::Rain => "Rain on Windows",
+                            Mode::Blossom => "Petals on Windows",
+                        }
+                        .into(),
+                        checked: settings.snow_on_windows,
+                        activate: Box::new(|tray: &mut Tray| {
+                            tray.change(|settings| {
+                                settings.snow_on_windows = !settings.snow_on_windows;
+                                Command::SnowOnWindows(settings.snow_on_windows)
+                            })
+                        }),
+                        ..Default::default()
+                    }
+                    .into(),
+                    MenuItem::Separator,
+                    StandardItem { label: "Display".into(), enabled: false, ..Default::default() }.into(),
+                    CheckmarkItem {
+                        label: "Behind Windows".into(),
+                        checked: settings.behind_windows,
+                        activate: Box::new(|tray: &mut Tray| {
+                            tray.change(|settings| {
+                                settings.behind_windows = !settings.behind_windows;
+                                Command::BehindWindows(settings.behind_windows)
+                            })
+                        }),
+                        ..Default::default()
+                    }
+                    .into(),
+                    CheckmarkItem {
+                        label: "Show over Full Screen".into(),
+                        checked: settings.over_full_screen,
+                        enabled: !settings.behind_windows,
+                        activate: Box::new(|tray: &mut Tray| {
+                            tray.change(|settings| {
+                                settings.over_full_screen = !settings.over_full_screen;
+                                Command::OverFullScreen(settings.over_full_screen)
+                            })
+                        }),
+                        ..Default::default()
+                    }
+                    .into(),
+                    CheckmarkItem {
+                        label: "Show in Screenshots".into(),
+                        checked: settings.show_in_screenshots,
+                        activate: Box::new(|tray: &mut Tray| {
+                            tray.change(|settings| {
+                                settings.show_in_screenshots = !settings.show_in_screenshots;
+                                Command::ShowInScreenshots(settings.show_in_screenshots)
+                            })
+                        }),
+                        ..Default::default()
+                    }
+                    .into(),
+                    CheckmarkItem {
+                        label: "Max Performance".into(),
+                        checked: settings.max_performance,
+                        activate: Box::new(|tray: &mut Tray| {
+                            tray.change(|settings| {
+                                settings.max_performance = !settings.max_performance;
+                                Command::Performance(settings.max_performance)
+                            })
+                        }),
+                        ..Default::default()
+                    }
+                    .into(),
+                    MenuItem::Separator,
+                    StandardItem { label: "General".into(), enabled: false, ..Default::default() }.into(),
+                    CheckmarkItem {
+                        label: "Open at Login".into(),
+                        checked: prefs::opens_at_login(),
+                        activate: Box::new(|_: &mut Tray| {
+                            let on = !prefs::opens_at_login();
+                            let status = prefs::set_opens_at_login(on);
+                            log!("open at login {on}: {status:?}");
+                        }),
+                        ..Default::default()
+                    }
+                    .into(),
+                ],
                 ..Default::default()
             }
             .into(),

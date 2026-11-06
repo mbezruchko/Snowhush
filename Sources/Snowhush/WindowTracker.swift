@@ -73,6 +73,12 @@ final class WindowTracker {
     private var lastChange: CFTimeInterval = -10
     /// When an auto-hidden Dock came out; nil while it is away.
     private var dockShownAt: CFTimeInterval?
+    /// Whether the Dock showing on this display hides by itself, so it is watched closely for when it starts to.
+    private var dockHides = false
+    /// Whether the Dock is out on this display and stays out, so it is watched for being turned to hide by itself.
+    private var dockStays = false
+    /// Whether the last look found the Dock's shelf out on this display.
+    private var dockWasOut = false
     /// The Dock's window while a full-screen app keeps the Dock away.
     private var sinkingDock: CGWindowID?
     /// A full-screen app shows on this display, from the moment its Space starts sliding in.
@@ -148,9 +154,11 @@ final class WindowTracker {
         // Panels like Spotlight vanish on a keystroke; once one has stayed a while it's more likely a long-lived floating window.
         let panelOpen = panelsShownAt.values.contains { now - $0 < 20 }
         // Even while windows move, 60 looks a second are plenty: the snow follows a smoothed path of the window anyway.
-        let closely = eager || now - lastChange < 0.6 || dockShownAt != nil || pointerAtBottomEdge || panelOpen || exposing || windowsMayChange(now: now)
+        let closely = eager || now - lastChange < 0.6 || dockShownAt != nil || dockHides || pointerAtBottomEdge || panelOpen || exposing || windowsMayChange(now: now)
         // A sliding Space is followed every frame, its snow riding on the windows with no smoothing.
-        guard minimizing || bannerMoving || now < slidingUntil || interval >= (closely ? 1.0 / 62 : 0.2) || watchedMoved() else { return nil }
+        // Turned to hide by itself, a Dock that stayed out slides away at once: the slow polls would let its snow hang.
+        let dockTurnedToHide = dockStays && Dock.autoHides
+        guard minimizing || bannerMoving || now < slidingUntil || interval >= (closely ? 1.0 / 62 : 0.2) || dockTurnedToHide || watchedMoved() else { return nil }
         lastQuery = now
         let before = windowFrames
         let surfaces = query(now: now)
@@ -174,6 +182,7 @@ final class WindowTracker {
         guard surfaces != previous || ahead != lead || shift != nil else { return nil }
         lead = ahead
         let vanished = Set(previous.map(\.id)).subtracting(surfaces.map(\.id))
+        let dockGone = vanished.intersection(previous.filter(\.isDock).map(\.id))
         previous = surfaces
         lastChange = now
         let away = offscreen(among: vanished)
@@ -182,9 +191,16 @@ final class WindowTracker {
         var elsewhere = sliding || exposing ? away.elsewhere.union(vanished.subtracting(away.parked)) : away.elsewhere
         // The Dock stays behind as a full-screen app's Space slides in, and its snow falls.
         if let dock = sinkingDock { elsewhere.remove(dock) }
+        // A Dock that hides or moves to another display drops its snow at once: its snow waits for it only while
+        // Mission Control shows or the Space slides.
+        var parked = away.parked
+        if !sliding && !exposing && sinkingDock == nil {
+            elsewhere.subtract(dockGone)
+            parked.subtract(dockGone)
+        }
         let shown = lead == 0 ? surfaces : surfaces.map { $0.isDock || NotificationBanner.ids.contains($0.id) || staying.contains($0.id) ? $0 : $0.shifted(by: lead) }
         let slideVelocity = shift.map { Float($0) / Float(max(interval, 1.0 / 120)) } ?? 0
-        return WindowUpdate(surfaces: shown, interval: Float(min(interval, 0.25)), parked: away.parked, elsewhere: elsewhere, sliding: sliding, slideVelocity: slideVelocity)
+        return WindowUpdate(surfaces: shown, interval: Float(min(interval, 0.25)), parked: parked, elsewhere: elsewhere, sliding: sliding, slideVelocity: slideVelocity)
     }
 
     /// How far each window carried by the sliding Space is from where it rests on its own Space: the window server keeps
@@ -351,24 +367,35 @@ final class WindowTracker {
         return CGPoint(x: location.x, y: primaryHeight - location.y)
     }
 
-    /// The Dock's shelf while it is out, nil while it is away or leaving.
-    private func dockShelf(now: CFTimeInterval) -> CGRect? {
-        guard let reserved = Dock.reserved, abs(reserved.maxY - screen.maxY) < 2 else {
+    /// The Dock's shelf while it is out, nil while it is away or leaving. `window` is the Dock's window.
+    private func dockShelf(now: CFTimeInterval, window: CGRect) -> CGRect? {
+        dockStays = false
+        guard let room = Dock.room(on: screen, window: window) else {
             dockShownAt = nil
             return nil
         }
-        if reserved.height > 0 {
+        if room.height > 0 { Dock.keep(room.height) }
+        // An auto-hidden Dock mostly keeps no room even while it is out, but at times keeps all of it until it starts
+        // to hide.
+        guard room.height == 0 || Dock.autoHides else {
             dockShownAt = nil
-            return Dock.shelf(in: reserved)
+            dockHides = false
+            dockStays = true
+            return Dock.shelf(in: room)
         }
-        // Auto-hidden: it stays out only while the pointer is on it, and leaves the moment the pointer does.
-        let shelf = Dock.shelf(in: CGRect(x: reserved.minX, y: screen.maxY - Dock.height, width: reserved.width, height: Dock.height))
+        // Auto-hidden: it stays out while the pointer is in a band along the bottom of the screen, a little taller than
+        // the Dock and as wide as the screen, and starts sliding away the moment the pointer leaves it. Its window
+        // stays listed until it has slid out, a quarter of a second later.
+        dockHides = true
+        let height = room.height > 0 ? room.height : Dock.height
+        let shelf = Dock.shelf(in: CGRect(x: room.minX, y: screen.maxY - height, width: room.width, height: height))
         let pointer = pointer
-        guard pointer.y >= shelf.minY, pointer.x >= reserved.minX - 8, pointer.x <= reserved.maxX + 8 else {
+        guard pointer.y >= screen.maxY - height - Dock.holdMargin, pointer.x >= screen.minX, pointer.x < screen.maxX else {
             dockShownAt = nil
             return nil
         }
-        let shownAt = dockShownAt ?? now
+        // Turned to hide by itself under the pointer, the Dock stays where it is rather than rising again.
+        let shownAt = dockShownAt ?? (dockWasOut ? now - Dock.revealTime : now)
         dockShownAt = shownAt
         let progress = min(1, (now - shownAt) / Dock.revealTime)
         let rise = 1 - pow(1 - progress, 3)
@@ -469,6 +496,7 @@ final class WindowTracker {
         var blockers: [CGRect] = []
         var surfaces: [WindowSurface] = []
         var dockOut = false
+        var dockListed = false
         // Notification banners are in front of every window.
         for (id, bounds, sweeps) in banner.surfaces(now: now, screen: screen, menuBarHeight: menuBarHeight) {
             let frame = CGRect(x: bounds.minX - screen.minX, y: screen.maxY - bounds.maxY, width: bounds.width, height: bounds.height)
@@ -521,8 +549,10 @@ final class WindowTracker {
                     sinkingDock = id
                     continue
                 }
-                // The Dock's window spans the screen; only its shelf along the bottom catches snow.
-                guard let dock = dockShelf(now: now) else { continue }
+                // The Dock's window spans the screen the Dock is on; only its shelf along the bottom catches snow.
+                if !bounds.insetBy(dx: 1, dy: 1).intersects(screen) { continue }
+                dockListed = true
+                guard let dock = dockShelf(now: now, window: bounds) else { continue }
                 bounds = dock
                 dockOut = true
             }
@@ -577,6 +607,11 @@ final class WindowTracker {
             blockers.append(frame)
         }
         if !dockOut { dockShownAt = nil }
+        if !dockListed {
+            dockHides = false
+            dockStays = false
+        }
+        dockWasOut = dockOut
         if let band = Marquee.rect(over: list), band.intersects(screen), band.width >= 16 {
             // The rubber band lies on the desktop, behind every window, and hides nothing: it is see-through.
             let frame = CGRect(x: band.minX - screen.minX, y: screen.maxY - band.maxY, width: band.width, height: band.height)
@@ -1057,6 +1092,8 @@ private enum Dock {
     private typealias GetRect = @convention(c) (Int32, UnsafeMutablePointer<CGRect>, UnsafeMutablePointer<Int32>) -> Int32
 
     static let revealTime: CFTimeInterval = 0.2
+    /// How far above its top an auto-hidden Dock keeps out for the pointer, measured on macOS 27.
+    static let holdMargin: CGFloat = 5
 
     private static let getRect = SkyLight.function("SLSGetDockRectWithReason", as: GetRect.self)
 
@@ -1070,10 +1107,43 @@ private enum Dock {
         return rect
     }
 
-    /// The room a Dock of the current icon size keeps when it stays out.
+    /// The room the Dock keeps along the bottom of `screen`, nil while it keeps none there. As the Dock moves to
+    /// another display its window moves at once, but the reserved room stays on the previous display for a while:
+    /// once the window covers this display alone, the Dock keeps the same room here, centred.
+    static func room(on screen: CGRect, window: CGRect) -> CGRect? {
+        guard let reserved else { return nil }
+        if abs(reserved.maxY - screen.maxY) < 2 && reserved.midX >= screen.minX && reserved.midX <= screen.maxX {
+            return reserved
+        }
+        guard reserved.width > reserved.height, screen.insetBy(dx: -2, dy: -2).contains(window) else { return nil }
+        let width = min(reserved.width, screen.width)
+        return CGRect(x: screen.midX - width / 2, y: screen.maxY - reserved.height, width: width, height: reserved.height)
+    }
+
+    private static let preferences = UserDefaults(suiteName: "com.apple.dock")
+
+    /// Whether the Dock is set to hide by itself. The setting reaches here within a frame or two of being changed.
+    static var autoHides: Bool {
+        preferences?.bool(forKey: "autohide") ?? false
+    }
+
+    /// The room the Dock last kept and its icon size then.
+    private static var kept: (tile: Double, height: CGFloat)?
+
+    private static var tile: Double {
+        preferences?.double(forKey: "tilesize") ?? 0
+    }
+
+    /// The room a Dock of the current icon size keeps when it stays out: as it last kept, or else reckoned from the
+    /// icon size, which comes out up to a point off.
     static var height: CGFloat {
-        let tile = UserDefaults(suiteName: "com.apple.dock")?.double(forKey: "tilesize") ?? 0
+        let tile = Self.tile
+        if let kept, kept.tile == tile { return kept.height }
         return (tile > 0 ? tile : 48) * 86 / 60
+    }
+
+    static func keep(_ height: CGFloat) {
+        kept = (tile, height)
     }
 
     /// The visible shelf within the room the Dock keeps: it floats a few points above the screen edge.
