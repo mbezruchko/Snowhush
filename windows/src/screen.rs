@@ -59,7 +59,7 @@ pub struct Monitor {
     pub name: String,
     /// The work area in physical pixels: the taskbar is the ground the snow settles on, so it is left out,
     /// unless the snow goes behind the taskbar, or rain runs down it, which it then reaches down past to the bottom of
-    /// the display.
+    /// the display; the whole display while a full-screen app the snow shows over has put the taskbar away.
     pub rect: RECT,
     /// The whole display in physical pixels.
     pub bounds: RECT,
@@ -67,7 +67,7 @@ pub struct Monitor {
     pub refresh: u32,
 }
 
-pub fn monitors(over_taskbar: bool) -> Vec<Monitor> {
+pub fn monitors(over_taskbar: bool, full_screen: &HashSet<String>) -> Vec<Monitor> {
     unsafe extern "system" fn collect(monitor: HMONITOR, _: HDC, _: *mut RECT, list: LPARAM) -> BOOL {
         let list = unsafe { &mut *(list.0 as *mut Vec<HMONITOR>) };
         list.push(monitor);
@@ -95,13 +95,15 @@ pub fn monitors(over_taskbar: bool) -> Vec<Monitor> {
             };
             let length = info.szDevice.iter().position(|&c| c == 0).unwrap_or(info.szDevice.len());
             let (work, bounds) = (info.monitorInfo.rcWork, info.monitorInfo.rcMonitor);
-            Some(Monitor {
-                name: String::from_utf16_lossy(&info.szDevice[..length]),
-                rect: if over_taskbar { RECT { bottom: bounds.bottom, ..work } } else { work },
-                bounds: info.monitorInfo.rcMonitor,
-                dpi,
-                refresh,
-            })
+            let name = String::from_utf16_lossy(&info.szDevice[..length]);
+            let rect = if full_screen.contains(&name) {
+                bounds
+            } else if over_taskbar {
+                RECT { bottom: bounds.bottom, ..work }
+            } else {
+                work
+            };
+            Some(Monitor { name, rect, bounds: info.monitorInfo.rcMonitor, dpi, refresh })
         })
         .collect()
 }

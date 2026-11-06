@@ -13,6 +13,10 @@ struct Uniforms {
     var pileBottom: Float = 0
     /// One while leaves fall instead of snow.
     var autumn: Float = 0
+    /// One while the leaves are cherry blossom petals.
+    var blossom: Float = 0
+    /// One while fallen leaves wither away.
+    var wilt: Float = 0
     var light = SIMD4<Float>(1, 1, 1, 1)
     var shadowTint = SIMD4<Float>(0, 0, 0, 0)
     var rim = SIMD4<Float>(0, 0, 0, 0)
@@ -266,7 +270,9 @@ final class Renderer: NSObject, MTKViewDelegate {
             lantern: SIMD4(lowHalf: lanternAt, highHalf: SIMD2(Self.lanternReach, ambient.lantern)),
             shake: SIMD4(lowHalf: simulation.shake, highHalf: .zero)
         )
-        uniforms.autumn = simulation.autumn ? 1 : 0
+        uniforms.autumn = simulation.leafy ? 1 : 0
+        uniforms.blossom = simulation.blossom ? 1 : 0
+        uniforms.wilt = simulation.thaws && simulation.accumulates ? 1 : 0
         let pumpkins = simulation.pumpkins
         let candles = pumpkins.prefix(3).map { pumpkin in
             let height = pumpkin.width * HalloweenPumpkin.aspect

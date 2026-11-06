@@ -167,7 +167,12 @@ pub fn covering<'a>(report: &'a Report, bounds: &Area) -> Option<&'a str> {
         if window.x + window.w <= bounds.x || window.x >= bounds.right() || window.y + window.h <= bounds.y || window.y >= bounds.bottom() {
             continue;
         }
-        let fills = window.x <= bounds.x && window.y <= bounds.y && window.x + window.w >= bounds.right() && window.y + window.h >= bounds.bottom();
+        // With fractional scaling a window's frame comes in fractional pixels while the display's is rounded: a
+        // full-screen one falls short of it by a fraction.
+        let fills = window.x <= bounds.x + 1.0
+            && window.y <= bounds.y + 1.0
+            && window.x + window.w >= bounds.right() - 1.0
+            && window.y + window.h >= bounds.bottom() - 1.0;
         if fills && window.full {
             return Some(&window.class);
         }

@@ -424,6 +424,69 @@ fn survives_a_long_chaotic_session() {
 }
 
 #[test]
+fn snow_falls_off_a_lowered_ground_and_rides_up_on_a_raised_one() {
+    let none = HashSet::new();
+    let mut simulation = SnowSimulation::new(800.0, 600.0, Snowfall::Heavy);
+    simulation.thaws = false;
+    simulation.update_windows(&[surface(1, 200.0, 400.0, 300.0)], 0.2, &none, &none, false);
+    run(&mut simulation, 90.0, AWAY);
+    simulation.set_snowfall(Snowfall::Off);
+    run(&mut simulation, 15.0, AWAY);
+    // An empty layer isn't drawn, so it isn't among the piles.
+    let ground = |simulation: &SnowSimulation| piles(simulation).iter().find(|pile| pile.0.y == 0.0).map_or(0.0, |pile| pile.1);
+    let window = |simulation: &SnowSimulation| piles(simulation).iter().find(|pile| pile.0.y > 0.0).map_or(0.0, |pile| pile.1);
+    let before = ground(&simulation);
+    let on_window = window(&simulation);
+    assert!(before > 500.0, "no drift on the ground: {before}");
+    assert!(on_window > 100.0, "no snow on the window: {on_window}");
+
+    simulation.lower_ground(800.0, 640.0, 40.0);
+    // The window stays where it was on the screen, now 40 points further up from the new ground, and its snow with it.
+    let lifted = piles(&simulation).iter().find(|pile| pile.0.y > 0.0).map(|pile| pile.0.y);
+    assert_eq!(lifted, Some(440.0), "the window's snow didn't stay where it was on the screen");
+    simulation.update_windows(&[surface(1, 200.0, 440.0, 300.0)], 1.0 / 60.0, &none, &none, false);
+    assert!(ground(&simulation) < 1.0, "the drift stayed on the ground as it dropped");
+    assert!(simulation.sprite_count() > 0, "nothing fell");
+    run(&mut simulation, 10.0, AWAY);
+    let after = ground(&simulation);
+    assert!(after > before * 0.6, "the snow didn't land on the new ground: {before} -> {after}");
+    let kept = window(&simulation);
+    assert!(kept > on_window * 0.9, "the window's snow went with the ground: {on_window} -> {kept}");
+
+    // And back: the drift comes up with the ground onto the taskbar, the window's snow staying put.
+    let landed = ground(&simulation);
+    simulation.raise_ground(800.0, 600.0, 40.0);
+    let lowered = piles(&simulation).iter().find(|pile| pile.0.y > 0.0).map(|pile| pile.0.y);
+    assert_eq!(lowered, Some(400.0), "the window's snow didn't stay where it was on the screen");
+    assert!(ground(&simulation) > landed * 0.99, "the drift didn't come up with the ground: {landed} -> {}", ground(&simulation));
+    simulation.update_windows(&[surface(1, 200.0, 400.0, 300.0)], 1.0 / 60.0, &none, &none, false);
+    run(&mut simulation, 5.0, AWAY);
+    assert!(window(&simulation) > kept * 0.9, "the window's snow went with the ground");
+    assert_finite(&simulation);
+}
+
+#[test]
+fn a_panel_given_back_takes_up_the_drift_under_it() {
+    let none = HashSet::new();
+    let mut simulation = SnowSimulation::new(800.0, 600.0, Snowfall::Heavy);
+    simulation.thaws = false;
+    run(&mut simulation, 90.0, AWAY);
+    simulation.set_snowfall(Snowfall::Off);
+    run(&mut simulation, 15.0, AWAY);
+    let lying = piles(&simulation)[0].1;
+    assert!(lying > 500.0, "no drift on the ground: {lying}");
+
+    // The panel comes back along the bottom, 40 points tall, over the drift.
+    simulation.lift_onto(9);
+    simulation.update_windows(&[surface(9, 0.0, 40.0, 800.0)], 1.0 / 60.0, &none, &none, false);
+    let on_panel = piles(&simulation).iter().find(|pile| pile.0.y > 0.0).map_or(0.0, |pile| pile.1);
+    let left = piles(&simulation).iter().find(|pile| pile.0.y == 0.0).map_or(0.0, |pile| pile.1);
+    assert!(on_panel > lying * 0.9, "the drift didn't come up on the panel: {lying} -> {on_panel}");
+    assert!(left < lying * 0.1, "the drift stayed under the panel: {left}");
+    assert_finite(&simulation);
+}
+
+#[test]
 #[ignore]
 fn step_cost() {
     let none = HashSet::new();
@@ -521,6 +584,24 @@ fn leaves_lie_where_they_land() {
 }
 
 #[test]
+fn cherry_blossom_petals_fall_and_lie_as_leaves_do() {
+    let mut simulation = SnowSimulation::new(800.0, 600.0, Snowfall::Heavy);
+    simulation.set_mode(Mode::Blossom);
+    assert_eq!(simulation.mode(), Mode::Blossom);
+    assert!(simulation.leafy() && simulation.blossom());
+    simulation.thaws = true;
+    run(&mut simulation, 240.0, AWAY);
+    assert_finite(&simulation);
+    assert!(simulation.has_snow(), "no petals lying");
+    let mut sprites = vec![Sprite::default(); simulation.sprite_count()];
+    let count = simulation.write_sprites(&mut sprites);
+    assert!(sprites[..count].iter().all(|sprite| sprite.leaf[0] > 0.0), "snow among the petals");
+    assert!(sprites[..count].iter().any(|sprite| sprite.tint_amount > 0.0), "no petal withering");
+    simulation.set_mode(Mode::Autumn);
+    assert!(simulation.leafy() && !simulation.blossom());
+}
+
+#[test]
 fn unwithered_leaves_heap_no_deeper_than_snow() {
     let mut simulation = SnowSimulation::new(800.0, 600.0, Snowfall::Heavy);
     simulation.set_mode(Mode::Autumn);
@@ -564,9 +645,9 @@ fn switching_modes_clears_the_screen_first() {
     run(&mut simulation, 30.0, AWAY);
     simulation.switch_mode(Mode::Autumn, 1.0, false);
     run(&mut simulation, 0.5, AWAY);
-    assert!(!simulation.autumn(), "switched before the gust cleared the screen");
+    assert!(!simulation.leafy(), "switched before the gust cleared the screen");
     run(&mut simulation, 8.0, AWAY);
-    assert!(simulation.autumn(), "never switched");
+    assert!(simulation.leafy(), "never switched");
     run(&mut simulation, 10.0, AWAY);
     assert!(leaf_sprites(&simulation) > 0, "no leaves falling");
     assert_eq!(leaf_sprites(&simulation), simulation.sprite_count(), "snow left over");

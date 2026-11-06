@@ -241,6 +241,14 @@ impl SnowLayer {
         }
     }
 
+    /// Moves the layer and what it remembers of its window's path up by `by`, as the screen's coordinates shift under
+    /// it, so it takes this for no motion of its window.
+    pub fn raise(&mut self, by: f32) {
+        self.origin.y += by;
+        self.track.y += by;
+        self.previous_base_y += by;
+    }
+
     pub fn refresh_top(&mut self) {
         self.top = self.heights.iter().copied().fold(0.0, f32::max);
     }

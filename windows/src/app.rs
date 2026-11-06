@@ -49,9 +49,12 @@ const ID_SNOW: u32 = 210;
 const ID_AUTUMN: u32 = 211;
 const ID_FULL_SCREEN: u32 = 212;
 const ID_RAIN: u32 = 213;
-const ID_PERFORMANCE: u32 = 214;
 const ID_MAX_PERFORMANCE: u32 = 215;
 const ID_DEEP: u32 = 216;
+const ID_BLOSSOM: u32 = 217;
+const ID_SPONSOR: u32 = 218;
+
+const SPONSORS: &str = "https://github.com/sponsors/mbezruchko";
 const TIMER_WELCOME: usize = 1;
 const TIMER_UPDATES: usize = 2;
 const TIMER_HALLOWEEN: usize = 3;
@@ -86,15 +89,18 @@ const PUMPKIN_WHITE: Glyph = glyph!("pumpkin-white");
 const PUMPKIN_BLACK: Glyph = glyph!("pumpkin-black");
 const RAIN_WHITE: Glyph = glyph!("rain-white");
 const RAIN_BLACK: Glyph = glyph!("rain-black");
+const BLOSSOM_WHITE: Glyph = glyph!("blossom-white");
+const BLOSSOM_BLACK: Glyph = glyph!("blossom-black");
 
-/// What the tray shows: a snowflake, a jack-o'-lantern while it is Halloween and wanted, a leaf while leaves fall, or
-/// a rain cloud while it rains.
+/// What the tray shows: a snowflake, a jack-o'-lantern while it is Halloween and wanted, a leaf while leaves fall, a
+/// rain cloud while it rains, or a cherry blossom while its petals fall.
 #[derive(Clone, Copy, PartialEq)]
 enum Emblem {
     Snowflake,
     Pumpkin,
     Leaf,
     Rain,
+    Blossom,
 }
 
 impl Emblem {
@@ -106,6 +112,7 @@ impl Emblem {
                 Mode::Snow => Emblem::Snowflake,
                 Mode::Autumn => Emblem::Leaf,
                 Mode::Rain => Emblem::Rain,
+                Mode::Blossom => Emblem::Blossom,
             }
         }
     }
@@ -121,6 +128,8 @@ impl Emblem {
             (Emblem::Pumpkin, true) => &PUMPKIN_BLACK,
             (Emblem::Rain, false) => &RAIN_WHITE,
             (Emblem::Rain, true) => &RAIN_BLACK,
+            (Emblem::Blossom, false) => &BLOSSOM_WHITE,
+            (Emblem::Blossom, true) => &BLOSSOM_BLACK,
         }
     }
 }
@@ -321,24 +330,29 @@ fn send(app: &App, command: Command) {
 }
 
 fn show_menu(window: HWND, x: i32, y: i32) {
-    let Some(settings) = APP.with_borrow(|app| app.as_ref().map(|app| app.settings)) else { return };
-    let login = prefs::opens_at_login();
-    let entries = entries(&settings, login);
+    let current = || APP.with_borrow(|app| app.as_ref().map(|app| app.settings));
+    let Some(settings) = current() else { return };
+    let listed = entries(&settings, prefs::opens_at_login());
+    let mut toggle = |id: u32| {
+        choose(window, id, prefs::opens_at_login());
+        entries(&current().unwrap_or(settings), prefs::opens_at_login())
+    };
     let chosen = if menu::available() {
-        menu::track(x, y, entries.clone(), light_taskbar()).unwrap_or_else(|error| {
+        menu::track(x, y, listed.clone(), light_taskbar(), &mut toggle).unwrap_or_else(|error| {
             log!("menu failed, using the system's: {error}");
-            native_menu(window, x, y, &entries)
+            native_menu(window, x, y, &listed)
         })
     } else {
-        native_menu(window, x, y, &entries)
+        native_menu(window, x, y, &listed)
     };
-    choose(window, chosen, login);
+    choose(window, chosen, prefs::opens_at_login());
 }
 
 /// What the tray menu lists, with what is on or off.
 fn entries(settings: &Settings, login: bool) -> Vec<Entry> {
     let mode = settings.mode;
     let autumn = mode == Mode::Autumn;
+    let blossom = mode == Mode::Blossom;
     let snowfall = Snowfall::ALL
         .iter()
         .enumerate()
@@ -348,45 +362,61 @@ fn entries(settings: &Settings, login: bool) -> Vec<Entry> {
         Entry::choice(ID_SNOW, "Snow", mode == Mode::Snow),
         Entry::choice(ID_AUTUMN, "Autumn Leaves", autumn),
         Entry::choice(ID_RAIN, "Rain", mode == Mode::Rain),
+        Entry::choice(ID_BLOSSOM, "Cherry Blossom", blossom),
         Entry::Separator,
         Entry::item(ID_HALLOWEEN, "Halloween", halloween::wanted(settings.halloween), mode == Mode::Snow),
     ];
-    let mut entries = vec![
-        Entry::Submenu { label: "Intensity".to_string(), entries: snowfall },
-        Entry::Submenu { label: "Mode".to_string(), entries: modes },
-        Entry::Submenu {
-            label: "Performance".to_string(),
-            entries: vec![
-                Entry::choice(ID_PERFORMANCE, "Default", !settings.max_performance),
-                Entry::choice(ID_MAX_PERFORMANCE, "Max", settings.max_performance),
-            ],
-        },
-        Entry::Separator,
-    ];
+    let mut behavior = vec![Entry::header("Behavior")];
     // Rain doesn't lie anywhere: nothing to keep, melt or clear.
     if mode != Mode::Rain {
-        entries.push(Entry::item(ID_ACCUMULATE, "Accumulate", settings.accumulate, true));
-        entries.push(Entry::item(ID_MELT, if autumn { "Wither Leaves" } else { "Melt Snow" }, settings.melt, settings.accumulate));
+        behavior.push(Entry::toggle(ID_ACCUMULATE, "Accumulate", settings.accumulate, true));
+        let melt = if autumn {
+            "Wither Leaves"
+        } else if blossom {
+            "Wilt Petals"
+        } else {
+            "Melt Snow"
+        };
+        behavior.push(Entry::toggle(ID_MELT, melt, settings.melt, settings.accumulate));
     }
     let windows = match mode {
         Mode::Snow => "Snow on Windows",
         Mode::Autumn => "Leaves on Windows",
         Mode::Rain => "Rain on Windows",
+        Mode::Blossom => "Petals on Windows",
     };
-    entries.push(Entry::item(ID_WINDOWS, windows, settings.snow_on_windows, true));
-    entries.push(Entry::item(ID_DEEP, "Deep Interaction", settings.deep_interaction, settings.snow_on_windows));
+    let mut options = behavior;
+    options.extend([
+        Entry::toggle(ID_WINDOWS, windows, settings.snow_on_windows, true),
+        Entry::toggle(ID_DEEP, "Deep Interaction", settings.deep_interaction, settings.snow_on_windows),
+        Entry::Separator,
+        Entry::header("Display"),
+        Entry::toggle(ID_BEHIND, "Behind Windows", settings.behind_windows, true),
+        Entry::toggle(ID_FULL_SCREEN, "Show over Full Screen", settings.over_full_screen, !settings.behind_windows),
+        Entry::toggle(ID_TASKBAR, "Behind Taskbar", settings.behind_taskbar, true),
+        Entry::toggle(ID_SCREENSHOTS, "Show in Screenshots", settings.show_in_screenshots, true),
+        Entry::toggle(ID_MAX_PERFORMANCE, "Max Performance", settings.max_performance, true),
+        Entry::Separator,
+        Entry::header("General"),
+        Entry::toggle(ID_LOGIN, "Open at Login", login, true),
+        Entry::item(ID_UPDATES, "Check for Updates\u{2026}", false, true),
+    ]);
+    let mut entries =
+        vec![Entry::Submenu { label: "Intensity".to_string(), entries: snowfall }, Entry::Submenu { label: "Mode".to_string(), entries: modes }];
     if mode != Mode::Rain {
-        entries.push(Entry::item(ID_CLEAR, if autumn { "Clear Leaves" } else { "Clear Snow" }, false, true));
+        let clear = if autumn {
+            "Clear Leaves"
+        } else if blossom {
+            "Clear Petals"
+        } else {
+            "Clear Snow"
+        };
+        entries.push(Entry::item(ID_CLEAR, clear, false, true));
     }
     entries.extend([
         Entry::Separator,
-        Entry::item(ID_BEHIND, "Behind Windows", settings.behind_windows, true),
-        Entry::item(ID_FULL_SCREEN, "Show over Full Screen", settings.over_full_screen, !settings.behind_windows),
-        Entry::item(ID_TASKBAR, "Behind Taskbar", settings.behind_taskbar, true),
-        Entry::item(ID_SCREENSHOTS, "Show in Screenshots", settings.show_in_screenshots, true),
-        Entry::Separator,
-        Entry::item(ID_LOGIN, "Open at Login", login, true),
-        Entry::item(ID_UPDATES, "Check for Updates\u{2026}", false, true),
+        Entry::Submenu { label: "Settings".to_string(), entries: options },
+        Entry::item(ID_SPONSOR, "Support Snowhush\u{2026}", false, true),
         Entry::item(ID_QUIT, "Quit", false, true),
     ]);
     entries
@@ -414,7 +444,10 @@ unsafe fn append(menu: HMENU, entries: &[Entry]) {
                 Entry::Separator => {
                     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
                 }
-                Entry::Item { id, label, checked, enabled, radio } => {
+                Entry::Header(label) => {
+                    let _ = AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, PCWSTR(text(label).as_ptr()));
+                }
+                Entry::Item { id, label, checked, enabled, radio, .. } => {
                     let flags = MF_STRING | if *checked { MF_CHECKED } else { MF_UNCHECKED } | if *enabled { MF_ENABLED } else { MF_GRAYED };
                     let _ = AppendMenuW(menu, flags, *id as usize, PCWSTR(text(label).as_ptr()));
                     if *radio && *checked {
@@ -436,6 +469,7 @@ fn choose(window: HWND, chosen: u32, login: bool) {
         0 => {}
         ID_QUIT => quit(window),
         ID_UPDATES => check_for_updates(window, true),
+        ID_SPONSOR => update::open(SPONSORS),
         ID_CLEAR => APP.with_borrow(|app| {
             if let Some(app) = app {
                 send(app, Command::ClearSnow(!prefs::animations_enabled()));
@@ -454,10 +488,11 @@ fn choose(window: HWND, chosen: u32, login: bool) {
             });
             refresh_icon(window);
         }
-        ID_SNOW | ID_AUTUMN | ID_RAIN => {
+        ID_SNOW | ID_AUTUMN | ID_RAIN | ID_BLOSSOM => {
             let mode = match chosen {
                 ID_AUTUMN => Mode::Autumn,
                 ID_RAIN => Mode::Rain,
+                ID_BLOSSOM => Mode::Blossom,
                 _ => Mode::Snow,
             };
             APP.with_borrow_mut(|app| {
@@ -507,8 +542,8 @@ fn choose(window: HWND, chosen: u32, login: bool) {
                     settings.deep_interaction = !settings.deep_interaction;
                     Command::DeepInteraction(settings.deep_interaction)
                 }
-                ID_PERFORMANCE | ID_MAX_PERFORMANCE => {
-                    settings.max_performance = chosen == ID_MAX_PERFORMANCE;
+                ID_MAX_PERFORMANCE => {
+                    settings.max_performance = !settings.max_performance;
                     Command::Performance(settings.max_performance)
                 }
                 _ => {

@@ -11,7 +11,7 @@ use snowhush_core::halloween::Choice;
 use snowhush_core::simulation::{Mode, Snowfall};
 
 const KEY: PCWSTR = w!("Software\\Snowhush");
-const MODES: [Mode; 3] = [Mode::Snow, Mode::Autumn, Mode::Rain];
+const MODES: [Mode; 4] = [Mode::Snow, Mode::Autumn, Mode::Rain, Mode::Blossom];
 const RUN: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
 const RUN_VALUE: PCWSTR = w!("Snowhush");
 

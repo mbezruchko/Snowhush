@@ -25,6 +25,10 @@ uniform sampler2D heights;
 uniform vec4 panel;
 // One while leaves fall instead of snow.
 uniform float autumn;
+// One while the leaves are cherry blossom petals.
+uniform float blossom;
+// One while fallen leaves wither away.
+uniform float wilt;
 // How far along its window the heap has drifted since it came, as the window's left edge was dragged under it.
 uniform float drift;
 
@@ -69,32 +73,54 @@ vec3 leafColor(float seed) {
     return c * (0.86 + 0.24 * fract(seed * 31.7));
 }
 
+float saturate(float x) {
+    return clamp(x, 0.0, 1.0);
+}
+
+/// Blush, soft pink, pink or nearly white, a little lighter or darker.
+vec3 petalColor(float seed) {
+    float k = fract(seed * 7.13);
+    vec3 c = k < 0.35 ? vec3(1.0, 0.85, 0.89)
+        : k < 0.7 ? vec3(0.99, 0.76, 0.84)
+        : k < 0.88 ? vec3(0.97, 0.66, 0.78)
+        : vec3(1.0, 0.93, 0.95);
+    return c * (0.94 + 0.08 * fract(seed * 31.7));
+}
+
+/// The tan a fallen petal turns as it withers.
+vec3 withered(float seed) {
+    return vec3(0.78, 0.6, 0.49) * (0.86 + 0.18 * fract(seed * 17.3));
+}
+
 /// Fallen leaves lying every which way: the topmost at each point shows, the gaps between them in shadow.
 vec3 litter(vec2 point) {
-    vec2 cell = floor(point / 6.5);
+    float spacing = blossom > 0.5 ? 4.6 : 6.5;
+    vec2 cell = floor(point / spacing);
     float top = -1.0;
     float rim = 0.0;
-    vec3 color = vec3(0.34, 0.19, 0.08);
+    vec3 color = blossom > 0.5 ? vec3(0.86, 0.68, 0.74) : vec3(0.34, 0.19, 0.08);
     for (int j = -1; j <= 1; j++) {
         for (int i = -1; i <= 1; i++) {
             for (int k = 0; k < 3; k++) {
                 vec2 c = cell + vec2(i, j) + float(k) * 0.37;
-                vec2 d = point - (cell + vec2(i, j) + vec2(hash(c + 7.1), hash(c + 3.3))) * 6.5;
+                vec2 d = point - (cell + vec2(i, j) + vec2(hash(c + 7.1), hash(c + 3.3))) * spacing;
                 float angle = hash(c + 11.7) * 6.2832;
                 vec2 q = vec2(cos(angle) * d.x + sin(angle) * d.y, -sin(angle) * d.x + cos(angle) * d.y);
-                float size = 3.8 + 2.4 * hash(c + 2.9);
+                float size = blossom > 0.5 ? 3.2 + 1.6 * hash(c + 2.9) : 3.8 + 2.4 * hash(c + 2.9);
                 float t = q.x / size;
-                float inside = (1.0 - t * t) * size * 0.45 - abs(q.y);
+                float inside = (1.0 - t * t) * size * (blossom > 0.5 ? 0.62 : 0.45) - abs(q.y);
                 float z = hash(c + 5.9);
                 if (inside > 0.0 && z > top) {
                     top = z;
                     rim = inside;
-                    color = leafColor(hash(c + 0.5));
+                    color = blossom > 0.5 ? petalColor(hash(c + 0.5)) : leafColor(hash(c + 0.5));
+                    // Petals that have lain a while are withering.
+                    if (blossom > 0.5 && hash(c + 9.1) < 0.35 * wilt) color = mix(color, withered(hash(c + 0.5)), 0.3 + 0.6 * hash(c + 4.4));
                 }
             }
         }
     }
-    return color * (0.7 + 0.3 * smoothstep(0.0, 0.7, rim));
+    return color * ((blossom > 0.5 ? 0.86 : 0.7) + (blossom > 0.5 ? 0.14 : 0.3) * smoothstep(0.0, 0.7, rim));
 }
 
 float flicker(float t, float seed) {
@@ -146,7 +172,8 @@ void main() {
     if (autumn > 0.5) {
         // Deeper in the heap the leaves lie in shadow.
         color = litter(grain);
-        color = mix(color, color * vec3(0.62, 0.54, 0.5), clamp(1.0 - exp(-depth / 18.0), 0.0, 1.0) * 0.6);
+        vec3 deep = blossom > 0.5 ? vec3(0.8, 0.66, 0.72) : vec3(0.62, 0.54, 0.5);
+        color = mix(color, color * deep, clamp(1.0 - exp(-depth / 18.0), 0.0, 1.0) * 0.6);
         color *= 0.84 + 0.2 * lit;
     } else {
         vec3 shadow = mix(vec3(0.72, 0.78, 0.88), shadowTint.rgb, shadowTint.a);
