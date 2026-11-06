@@ -19,6 +19,10 @@ vtool -set-build-version macos "$minimum" "$(xcrun --sdk macosx --show-sdk-versi
 ditto "$products/Sparkle.framework" "$app/Contents/Frameworks/Sparkle.framework"
 cp Resources/Info.plist "$app/Contents/"
 cp Resources/AppIcon.icns "$app/Contents/Resources/"
+# Rain sounds are optional, so the build works before any are added; Rain mode stays silent until then.
+if [[ -d Resources/Sounds ]]; then
+    ditto Resources/Sounds "$app/Contents/Resources/Sounds"
+fi
 
 if [[ -n "${IDENTITY:-}" ]]; then
     # Sparkle's helpers are signed inside out, each with the hardened runtime, as notarization requires.
