@@ -28,9 +28,6 @@ final class SnowLayer {
     /// The film of water running drops leave on the glass, piece by piece as they ran: each piece from where to where,
     /// how wide, how old and how long it takes to dry.
     var film: [(from: SIMD2<Float>, to: SIMD2<Float>, width: Float, age: Float, life: Float)] = []
-    /// Lies on a notification banner, which slides out past the screen's right edge but onto no display there: the edge
-    /// scrapes its snow off like a wall.
-    var isBanner = false
     var movedAt: Double = -1
     /// Brought where it is by a switch between Spaces: past the screen's edge, no wall scrapes its snow off.
     var carried = false

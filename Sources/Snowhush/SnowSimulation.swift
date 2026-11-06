@@ -522,6 +522,8 @@ final class SnowSimulation {
     private var lastCursorPush: Double = -10
     /// Snow on windows that left the screen for another Space, kept until the window shows up again.
     private var dormant: [CGWindowID: SnowLayer] = [:]
+    /// Where the left edge of each notification banner was at the last update.
+    private var bannerEdges: [CGWindowID: Float] = [:]
     /// Windows that went off screen without a word yet on why; a Space switch keeps their snow, anything else drops it.
     private var parking: [(id: CGWindowID, ledge: SnowLayer, since: Double)] = []
     private var spaceChangedAt: Double = -10
@@ -940,17 +942,24 @@ final class SnowSimulation {
     func updateWindows(_ surfaces: [WindowSurface], interval: Float, parked: Set<CGWindowID> = [], elsewhere: Set<CGWindowID> = [], sliding: Bool = false) {
         leafBudget = nil
         var seen = Set<CGWindowID>()
+        var edges: [CGWindowID: Float] = [:]
+        defer { bannerEdges = edges }
         for surface in surfaces {
             let left = Float(surface.frame.minX) + ledgeInset
             let top = Float(surface.frame.maxY)
             let right = Float(surface.frame.maxX) - ledgeInset
             let columns = Int((Float(surface.frame.width) - 2 * ledgeInset) / columnWidth)
             guard columns >= 8 else { continue }
+            // A banner carries no snow: sliding in, it only pushes the snow in its way aside.
+            if NotificationBanner.ids.contains(surface.id) {
+                if surface.sweeps {
+                    sweep(from: bannerEdges[surface.id] ?? width, to: left, bottom: Float(surface.frame.minY), top: top, interval: interval)
+                }
+                edges[surface.id] = left
+                continue
+            }
             seen.insert(surface.id)
 
-            if surface.sweeps {
-                sweep(from: ledges[surface.id]?.origin.x ?? width, to: left, bottom: Float(surface.frame.minY), top: top, interval: interval)
-            }
             let ledge: SnowLayer
             if let existing = ledges[surface.id] {
                 ledge = existing
@@ -981,7 +990,6 @@ final class SnowSimulation {
             ledge.faceOccluders = surface.cover.prefix(16).map { SIMD4<Float>(Float($0.minX), Float($0.minY), Float($0.maxX), Float($0.maxY)) }
             ledge.isDock = surface.isDock
             ledge.face = Float(surface.frame.height)
-            ledge.isBanner = NotificationBanner.ids.contains(surface.id)
             ledge.updateVisibility(screenWidth: width, blockers: blockers)
         }
 
@@ -1247,7 +1255,7 @@ final class SnowSimulation {
     private func confine(_ ledge: SnowLayer) {
         let count = ledge.count
         let first = walls.left ? min(max(0, Int((-ledge.base.x / columnWidth - 0.5).rounded(.up))), count) : 0
-        let last = walls.right || ledge.isBanner ? max(min(count - 1, Int(((width - ledge.base.x) / columnWidth - 0.5).rounded(.down))), -1) : count - 1
+        let last = walls.right ? max(min(count - 1, Int(((width - ledge.base.x) / columnWidth - 0.5).rounded(.down))), -1) : count - 1
         guard first > 0 || last < count - 1 else { return }
         guard first <= last else {
             // Nothing of the window is left this side of the wall: its snow falls down the wall.
@@ -1298,8 +1306,7 @@ final class SnowSimulation {
         guard to < from - 0.5 else { return }
         let speed = (from - to) / max(interval, 1.0 / 120)
         let thrown = SIMD2(-min(speed * 0.3, 900), 60)
-        // Banners, the one sliding in and one sliding out as it comes, pass each other by.
-        for (id, ledge) in ledges where !NotificationBanner.ids.contains(id) && ledge.top > 0.01 && ledge.base.x < from && ledge.base.x + ledge.width > to {
+        for ledge in ledges.values where ledge.top > 0.01 && ledge.base.x < from && ledge.base.x + ledge.width > to {
             let lower = max(0, Int(((to - ledge.base.x) / columnWidth).rounded(.down)))
             let upper = min(ledge.count, Int(((from - ledge.base.x) / columnWidth).rounded(.up)))
             var start = lower
