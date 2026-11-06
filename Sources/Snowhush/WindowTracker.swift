@@ -543,6 +543,8 @@ final class WindowTracker {
             let fading = alpha < 0.98 && alpha < (alphas[id] ?? 0) - 0.01
 
             let owner = entry.owner ?? ""
+            let pictureInPicture = owner.isEmpty && layer > 0
+                && NSRunningApplication(processIdentifier: pid)?.bundleIdentifier == "com.apple.PIPAgent"
             let shelf = owner == "Dock" && layer == dockLevel
             if shelf {
                 if fullScreenInView {
@@ -558,6 +560,8 @@ final class WindowTracker {
             }
             // A widget's window leaves room around it for its shadow.
             if layer < 0 { bounds = bounds.insetBy(dx: 8, dy: 8) }
+            // PiP's window adds a transparent margin around the video: 26 points at the sides and 5 at the top and bottom.
+            if pictureInPicture { bounds = bounds.insetBy(dx: 26, dy: 5) }
             // Mission Control's shield, its bar of Spaces, their thumbnails and labels carry no snow.
             if owner == "WindowManager" && layer > 0 {
                 if isMissionControl(bounds, layer: layer) { exposing = true }
