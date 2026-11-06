@@ -15,8 +15,9 @@ use windows::Win32::Graphics::Direct2D::{
     ID2D1Factory, ID2D1RenderTarget, ID2D1SolidColorBrush,
 };
 use windows::Win32::Graphics::DirectWrite::{
-    DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
-    DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_METRICS, DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, IDWriteTextLayout,
+    DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT, DWRITE_FONT_WEIGHT_NORMAL,
+    DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_METRICS, DWriteCreateFactory,
+    IDWriteFactory, IDWriteTextFormat, IDWriteTextLayout,
 };
 use windows::Win32::Graphics::Dwm::{
     DWMSBT_TRANSIENTWINDOW, DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
@@ -53,6 +54,7 @@ const BACKDROP_BUILD: u32 = 22621;
 const PAD: f32 = 4.0;
 const ROW: f32 = 28.0;
 const SEPARATOR: f32 = 7.0;
+const HEADER: f32 = 24.0;
 const ROW_RADIUS: f32 = 4.0;
 /// The centre of the marks and the start of the labels, from the panel's left edge.
 const MARK: f32 = 20.0;
@@ -62,6 +64,7 @@ const TRAILING: f32 = 40.0;
 const MIN_WIDTH: f32 = 160.0;
 const TEXT_SIZE: f32 = 14.0;
 const GLYPH_SIZE: f32 = 12.0;
+const HEADER_SIZE: f32 = 12.0;
 /// How far a submenu reaches back over the panel it opens from.
 const OVERLAP: f32 = 4.0;
 /// The tint over the blur, as 0xAABBGGRR: light enough to see through, yet dark or pale enough to read on.
@@ -80,7 +83,11 @@ pub enum Entry {
         enabled: bool,
         /// One of a group of which just one is on, marked with a dot.
         radio: bool,
+        /// Switches an option and leaves the menu open, so several can be changed in one go.
+        keep_open: bool,
     },
+    /// The title of the group of entries under it.
+    Header(String),
     Submenu {
         label: String,
         entries: Vec<Entry>,
@@ -90,16 +97,24 @@ pub enum Entry {
 
 impl Entry {
     pub fn item(id: u32, label: &str, checked: bool, enabled: bool) -> Entry {
-        Entry::Item { id, label: label.to_string(), checked, enabled, radio: false }
+        Entry::Item { id, label: label.to_string(), checked, enabled, radio: false, keep_open: false }
+    }
+
+    pub fn toggle(id: u32, label: &str, checked: bool, enabled: bool) -> Entry {
+        Entry::Item { id, label: label.to_string(), checked, enabled, radio: false, keep_open: true }
+    }
+
+    pub fn header(label: &str) -> Entry {
+        Entry::Header(label.to_string())
     }
 
     pub fn choice(id: u32, label: &str, chosen: bool) -> Entry {
-        Entry::Item { id, label: label.to_string(), checked: chosen, enabled: true, radio: true }
+        Entry::Item { id, label: label.to_string(), checked: chosen, enabled: true, radio: true, keep_open: false }
     }
 
     fn label(&self) -> Option<&str> {
         match self {
-            Entry::Item { label, .. } | Entry::Submenu { label, .. } => Some(label),
+            Entry::Item { label, .. } | Entry::Submenu { label, .. } | Entry::Header(label) => Some(label),
             Entry::Separator => None,
         }
     }
@@ -108,7 +123,15 @@ impl Entry {
         match self {
             Entry::Item { enabled, .. } => *enabled,
             Entry::Submenu { .. } => true,
-            Entry::Separator => false,
+            Entry::Separator | Entry::Header(_) => false,
+        }
+    }
+
+    fn height(&self) -> f32 {
+        match self {
+            Entry::Separator => SEPARATOR,
+            Entry::Header(_) => HEADER,
+            _ => ROW,
         }
     }
 
@@ -193,6 +216,7 @@ struct Menu {
     imaging: IWICImagingFactory,
     write: IDWriteFactory,
     text: IDWriteTextFormat,
+    heading: IDWriteTextFormat,
     glyphs: IDWriteTextFormat,
 }
 
@@ -200,11 +224,13 @@ thread_local! {
     static MENU: RefCell<Option<Menu>> = const { RefCell::new(None) };
     static CLOSED: Cell<bool> = const { Cell::new(false) };
     static CHOSEN: Cell<u32> = const { Cell::new(0) };
+    static TOGGLED: Cell<Option<u32>> = const { Cell::new(None) };
 }
 
 /// Shows the menu at `x`, `y` in screen pixels, the way the system places a menu there, runs it until it closes and
 /// returns the id of the item chosen, or 0. Fails if it can't be shown, so that the system's menu can take over.
-pub fn track(x: i32, y: i32, entries: Vec<Entry>, light: bool) -> Result<u32> {
+/// An item that keeps the menu open goes to `toggle` instead, which returns the entries as they now are.
+pub fn track(x: i32, y: i32, entries: Vec<Entry>, light: bool, toggle: &mut dyn FnMut(u32) -> Vec<Entry>) -> Result<u32> {
     if MENU.with_borrow(Option::is_some) {
         return Ok(0);
     }
@@ -223,6 +249,7 @@ pub fn track(x: i32, y: i32, entries: Vec<Entry>, light: bool) -> Result<u32> {
     });
     CLOSED.set(false);
     CHOSEN.set(0);
+    TOGGLED.set(None);
 
     let mut menu = Menu::new(POINT { x, y }, light)?;
     let mut panel = menu.panel(entries, 0)?;
@@ -251,6 +278,10 @@ pub fn track(x: i32, y: i32, entries: Vec<Entry>, light: bool) -> Result<u32> {
             }
             let _ = TranslateMessage(&message);
             DispatchMessageW(&message);
+            if let Some(id) = TOGGLED.take() {
+                let entries = toggle(id);
+                act(|menu| menu.refresh(entries));
+            }
         }
 
         let _ = KillTimer(Some(root), TIMER_SUBMENU);
@@ -469,20 +500,14 @@ impl Menu {
             let _ = SystemParametersInfoW(SPI_GETMENUSHOWDELAY, 0, Some((&raw mut delay).cast()), SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0));
 
             let write: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
-            let format = |family: PCWSTR, size: f32| {
-                write.CreateTextFormat(
-                    family,
-                    None,
-                    DWRITE_FONT_WEIGHT_NORMAL,
-                    DWRITE_FONT_STYLE_NORMAL,
-                    DWRITE_FONT_STRETCH_NORMAL,
-                    size,
-                    w!("en-us"),
-                )
+            let format = |family: PCWSTR, size: f32, weight: DWRITE_FONT_WEIGHT| {
+                write.CreateTextFormat(family, None, weight, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, size, w!("en-us"))
             };
-            let text = format(w!("Segoe UI Variable Text"), TEXT_SIZE)?;
+            let text = format(w!("Segoe UI Variable Text"), TEXT_SIZE, DWRITE_FONT_WEIGHT_NORMAL)?;
             text.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
-            let glyphs = format(w!("Segoe Fluent Icons"), GLYPH_SIZE)?;
+            let heading = format(w!("Segoe UI Variable Text"), HEADER_SIZE, DWRITE_FONT_WEIGHT_SEMI_BOLD)?;
+            heading.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
+            let glyphs = format(w!("Segoe Fluent Icons"), GLYPH_SIZE, DWRITE_FONT_WEIGHT_NORMAL)?;
             glyphs.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
             glyphs.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
             Ok(Menu {
@@ -497,6 +522,7 @@ impl Menu {
                 imaging: CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?,
                 write,
                 text,
+                heading,
                 glyphs,
             })
         }
@@ -514,7 +540,7 @@ impl Menu {
         let mut y = PAD;
         for entry in &entries {
             tops.push(y);
-            y += if matches!(entry, Entry::Separator) { SEPARATOR } else { ROW };
+            y += entry.height();
         }
         Ok(Panel {
             window: HWND::default(),
@@ -551,8 +577,7 @@ impl Menu {
             return None;
         }
         let i = panel.tops.iter().rposition(|&top| y >= top)?;
-        let height = if matches!(panel.entries[i], Entry::Separator) { SEPARATOR } else { ROW };
-        (y < panel.tops[i] + height && panel.entries[i].selectable()).then_some(i)
+        (y < panel.tops[i] + panel.entries[i].height() && panel.entries[i].selectable()).then_some(i)
     }
 
     fn set_hover(&mut self, p: usize, hover: Option<usize>) -> bool {
@@ -674,6 +699,10 @@ impl Menu {
     /// Chooses an item or opens a submenu.
     fn activate(&mut self, p: usize, i: usize, keyboard: bool) -> bool {
         match &self.panels[p].entries[i] {
+            Entry::Item { id, enabled: true, keep_open: true, .. } => {
+                TOGGLED.set(Some(*id));
+                false
+            }
             Entry::Item { id, enabled: true, .. } => {
                 CHOSEN.set(*id);
                 CLOSED.set(true);
@@ -691,6 +720,22 @@ impl Menu {
             }
             _ => false,
         }
+    }
+
+    /// Shows the entries as they are after an option was switched, in each panel still open. Should a panel's list have
+    /// changed shape, the menu closes, as it would after any other choice.
+    fn refresh(&mut self, entries: Vec<Entry>) -> bool {
+        let mut list = entries;
+        for p in 0..self.panels.len() {
+            if list.len() != self.panels[p].entries.len() {
+                CLOSED.set(true);
+                return false;
+            }
+            self.panels[p].entries = list;
+            let Some(Entry::Submenu { entries, .. }) = self.panels.get(p + 1).map(|next| self.panels[p].entries[next.from].clone()) else { break };
+            list = entries;
+        }
+        true
     }
 
     /// Handles a key in the deepest panel open.
@@ -791,6 +836,12 @@ impl Menu {
                     Entry::Separator => {
                         let y = top + SEPARATOR / 2.0;
                         target.DrawLine(Vector2 { X: PAD, Y: y }, Vector2 { X: panel.width - PAD, Y: y }, &line, 1.0, None);
+                        continue;
+                    }
+                    Entry::Header(label) => {
+                        let units: Vec<u16> = label.encode_utf16().collect();
+                        let layout = self.write.CreateTextLayout(&units, &self.heading, panel.width - LABEL, HEADER)?;
+                        target.DrawTextLayout(Vector2 { X: LABEL, Y: top }, &layout, &dim, D2D1_DRAW_TEXT_OPTIONS_NONE);
                         continue;
                     }
                     Entry::Item { label, checked, enabled, radio, .. } => (label.as_str(), *checked, *radio, *enabled),
