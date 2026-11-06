@@ -369,32 +369,41 @@ impl Screen {
     /// Hands the simulation the windows on this display when they changed.
     fn follow(&mut self, tracker: &Tracker, clock: &Clock, now: i64) {
         let taskbar = self.taskbar_surface();
-        if tracker.generation == self.windows_seen && taskbar == self.taskbar {
+        let changed = tracker.generation != self.windows_seen || taskbar != self.taskbar;
+        if !changed && !tracker.animating() {
             return;
         }
-        self.windows_seen = tracker.generation;
-        self.taskbar = taskbar;
-        self.simulation.covers = tracker.covers(&self.monitor.rect, self.size);
-        let mut surfaces = tracker.surfaces(&self.monitor.rect, self.size);
-        surfaces.extend(self.taskbar.clone());
-        if self.synced && surfaces == self.surfaces {
-            return;
-        }
-        self.synced = true;
         let since = clock.seconds(now - self.windows_changed_at) as f32;
         // A window that moves outside a drag, as when it is maximized or snapped, jumps there in one go:
         // its snow is left behind instead of being carried along.
-        let interval = if tracker.moving() || since < 0.1 { since.min(0.25) } else { 1.0 / 60.0 };
-        // Snow waits for a window gone to another desktop, or maximized or full screen and so without room for it.
-        let elsewhere: HashSet<WindowId> = self
-            .surfaces
-            .iter()
-            .map(|surface| surface.id)
-            .filter(|&id| !surfaces.iter().any(|surface| surface.id == id) && (tracker.elsewhere(id) || tracker.fills(id, &self.monitor.rect)))
-            .collect();
-        self.simulation.update_windows(&surfaces, interval, &HashSet::new(), &elsewhere, false);
-        self.surfaces = surfaces;
-        self.windows_changed_at = now;
+        let interval = if tracker.moving() || tracker.animating() || since < 0.1 { since.clamp(1.0 / 120.0, 0.25) } else { 1.0 / 60.0 };
+        if changed {
+            self.windows_seen = tracker.generation;
+            self.taskbar = taskbar;
+            self.simulation.covers = tracker.covers(&self.monitor.rect, self.size);
+            let mut surfaces = tracker.surfaces(&self.monitor.rect, self.size);
+            surfaces.extend(self.taskbar.clone());
+            if !(self.synced && surfaces == self.surfaces) {
+                self.synced = true;
+                // Snow waits for a window gone to another desktop, or maximized or full screen and so without room for it.
+                let elsewhere: HashSet<WindowId> = self
+                    .surfaces
+                    .iter()
+                    .map(|surface| surface.id)
+                    .filter(|&id| {
+                        !surfaces.iter().any(|surface| surface.id == id) && (tracker.elsewhere(id) || tracker.fills(id, &self.monitor.rect))
+                    })
+                    .collect();
+                self.simulation.update_windows(&surfaces, interval, &HashSet::new(), &elsewhere, false);
+                self.surfaces = surfaces;
+                self.windows_changed_at = now;
+            }
+        }
+        // A toast sliding in only sweeps the snow: the windows' ledges aren't rewritten every frame for it.
+        if tracker.animating() {
+            self.simulation.sweep_toasts(&tracker.toast_sweeps(&self.monitor.rect, self.size), interval);
+            self.windows_changed_at = now;
+        }
     }
 
     /// While it rains over a taskbar along the bottom of the display, the taskbar is a ledge, as the Dock is on the Mac:

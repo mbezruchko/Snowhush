@@ -317,7 +317,9 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                 screens.iter_mut().for_each(|screen| screen.wake(now));
             }
             if screens.iter().any(|screen| screen.next_due <= now + clock.tolerance()) {
-                tracker.refresh(&clock, now);
+                if tracker.refresh(&clock, now) && tracker.animating() {
+                    screens.iter_mut().for_each(|screen| screen.wake(now));
+                }
             }
             // Behind the windows the snow still settles on them: what lies on a window's top edge is above it, in plain view.
             let windows = settings.snow_on_windows.then_some(&tracker);

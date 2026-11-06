@@ -1,5 +1,5 @@
-use std::cell::Cell;
-use std::collections::HashSet;
+use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
 use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -11,6 +11,7 @@ use windows::Win32::Graphics::Dwm::{
     DWM_WINDOW_CORNER_PREFERENCE, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND, DWMWCP_ROUNDSMALL,
     DwmGetWindowAttribute,
 };
+use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow};
 use windows::Win32::System::Com::{CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx};
 use windows::Win32::System::Registry::{HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RegGetValueW};
 use windows::Win32::System::Threading::{OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW};
@@ -67,17 +68,37 @@ static SHELL_BUSY: AtomicBool = AtomicBool::new(false);
 
 thread_local! {
     static EVENTS: Cell<Events> = const { Cell::new(Events { changed: true, moving: false, started_moving: false }) };
+    static NOTICED: RefCell<Vec<HWND>> = const { RefCell::new(Vec::new()) };
 }
 
 struct Window {
     id: isize,
     class: String,
-    /// The visible frame in physical pixels, without the invisible resize border.
     rect: RECT,
     radius: f32,
     cover_only: bool,
     topmost: bool,
     zoomed: bool,
+    toast: bool,
+    sweeps: bool,
+    hold: bool,
+    slide: f32,
+    /// The toast card in a toast's window, which is all of the window that shows.
+    card: RECT,
+    travel: f32,
+}
+
+struct Arrival {
+    at: i64,
+    left: i32,
+    right: i32,
+    moved: bool,
+    model: bool,
+    travel: f32,
+    samples: u8,
+    started: bool,
+    /// One full scrape of the toast band has already run.
+    swept: bool,
 }
 
 /// The rubber band a drag across the desktop's empty space draws to select icons. It has no window of its own, being
@@ -106,6 +127,9 @@ pub struct Tracker {
     pub generation: u64,
     seen: HashSet<isize>,
     marquee: Marquee,
+    arrivals: HashMap<isize, Arrival>,
+    shells: HashMap<u32, bool>,
+    animating: bool,
     pub listings: u32,
     pub cost: i64,
 }
@@ -138,6 +162,9 @@ impl Tracker {
             generation: 0,
             seen: HashSet::new(),
             marquee: Marquee::default(),
+            arrivals: HashMap::new(),
+            shells: HashMap::new(),
+            animating: false,
             listings: 0,
             cost: 0,
         }
@@ -146,17 +173,21 @@ impl Tracker {
     /// Re-reads the window list if anything may have changed; returns whether it did.
     pub fn refresh(&mut self, clock: &Clock, now: i64) -> bool {
         let events = EVENTS.get();
-        if !events.changed && clock.seconds(now - self.listed_at) < 0.5 {
+        let due = events.changed || clock.seconds(now - self.listed_at) >= 0.5;
+        if !due && !self.animating {
             return false;
         }
         EVENTS.set(Events { changed: false, ..events });
-        let began = Clock::now();
-        self.windows = self.list();
-        self.busy = SHELL_BUSY.load(Ordering::Relaxed);
-        self.cost += Clock::now() - began;
-        self.listings += 1;
-        self.listed_at = now;
-        self.generation += 1;
+        if due {
+            let began = Clock::now();
+            self.windows = self.list();
+            self.busy = SHELL_BUSY.load(Ordering::Relaxed);
+            self.cost += Clock::now() - began;
+            self.listings += 1;
+            self.listed_at = now;
+            self.generation += 1;
+        }
+        self.note_toasts(clock, now);
         true
     }
 
@@ -200,6 +231,10 @@ impl Tracker {
         }
     }
 
+    pub fn animating(&self) -> bool {
+        self.animating
+    }
+
     /// Whether a window is being dragged or resized right now.
     pub fn moving(&self) -> bool {
         EVENTS.get().moving
@@ -225,6 +260,11 @@ impl Tracker {
             let room_above = (r.top - area.top) as f32 * sy >= 6.0 && frame.max_y() < height;
             let on_screen = frame.max_x() > 0.0 && frame.min_x() < width && frame.max_y() > 0.0;
             let fills_screen = frame.width * frame.height >= width * height * 0.9;
+            // A toast carries no snow; only its card hides what lies behind it.
+            if window.toast {
+                blockers.extend(local_frame(&window.card, area, size));
+                continue;
+            }
             if room_above && on_screen && !fills_screen && !window.cover_only && frame.width >= 80.0 && frame.height >= 40.0 {
                 let radius = window.radius.min(frame.width / 2.0).min(frame.height / 2.0);
                 let region = Rect { x: frame.x, y: frame.max_y() - radius, width: frame.width, height: 40.0 + radius };
@@ -259,6 +299,20 @@ impl Tracker {
             });
         }
         surfaces
+    }
+
+    /// The cards of the toasts sliding in on one display, in its overlay coordinates.
+    pub fn toast_sweeps(&self, area: &RECT, size: (u32, u32)) -> Vec<(isize, Rect)> {
+        let sx = size.0 as f32 / (area.right - area.left).max(1) as f32;
+        self.windows
+            .iter()
+            .filter(|window| window.toast && window.sweeps)
+            .filter_map(|window| {
+                let card = local_frame(&window.card, area, size)?;
+                // Windows puts the toast's window where it ends up at once, so its slide in is modelled.
+                Some((window.id, Rect { x: card.x + window.slide * sx, ..card }))
+            })
+            .collect()
     }
 
     /// Every app window on one display, maximized and full-screen ones too, left, bottom, right, top in its overlay
@@ -323,6 +377,15 @@ impl Tracker {
         unsafe {
             let _ = EnumWindows(Some(collect), LPARAM(&raw mut handles as isize));
         }
+        NOTICED.with(|noticed| {
+            let mut noticed = noticed.borrow_mut();
+            noticed.retain(|window| unsafe { IsWindow(Some(*window)).as_bool() });
+            for window in noticed.iter().rev() {
+                if !handles.contains(window) {
+                    handles.insert(0, *window);
+                }
+            }
+        });
         handles.into_iter().filter_map(|window| self.describe(window)).collect()
     }
 
@@ -368,18 +431,21 @@ impl Tracker {
             if self.seen.len() > 4096 {
                 self.seen.clear();
             }
+            let toast = self.toast_banner(window, &class, process, &rect) && near_right(window, &rect);
             if self.seen.insert(id) {
                 log!(
-                    "window {class} of {}: {}x{} at {},{}",
+                    "window {class} of {}: {}x{} at {},{}{}",
                     process_name(process),
                     rect.right - rect.left,
                     rect.bottom - rect.top,
                     rect.left,
-                    rect.top
+                    rect.top,
+                    if toast { " toast" } else { "" }
                 );
             }
             let zoomed = IsZoomed(window).as_bool();
             let radius = if self.rounded && !zoomed { corner_radius(window) } else { 0.0 };
+            let scale = if toast { GetDpiForWindow(window).max(96) as f32 / 96.0 } else { 1.0 };
             Some(Window {
                 id,
                 cover_only: COVER_ONLY.contains(&class.as_str()),
@@ -388,8 +454,113 @@ impl Tracker {
                 radius,
                 topmost: extended & WS_EX_TOPMOST.0 != 0,
                 zoomed,
+                toast,
+                sweeps: false,
+                hold: false,
+                slide: 0.0,
+                card: if toast { toast_card(&rect, scale) } else { rect },
+                travel: if toast { (rect.right - rect.left) as f32 + TOAST_MARGIN.0 * scale } else { 0.0 },
             })
         }
+    }
+
+    fn toast_banner(&mut self, window: HWND, class: &str, process: u32, rect: &RECT) -> bool {
+        if class != "Windows.UI.Core.CoreWindow" || !self.shell(process) {
+            return false;
+        }
+        let dpi = unsafe { GetDpiForWindow(window) }.max(96) as i32;
+        let width = (rect.right - rect.left) * 96 / dpi;
+        let height = (rect.bottom - rect.top) * 96 / dpi;
+        (200..=600).contains(&width) && (48..=440).contains(&height)
+    }
+
+    fn shell(&mut self, process: u32) -> bool {
+        if let Some(&known) = self.shells.get(&process) {
+            return known;
+        }
+        let name = process_name(process);
+        let shell = name.eq_ignore_ascii_case("ShellExperienceHost.exe") || name.eq_ignore_ascii_case("ShellHost.exe");
+        if self.shells.len() > 64 {
+            self.shells.clear();
+        }
+        self.shells.insert(process, shell);
+        shell
+    }
+
+    fn note_toasts(&mut self, clock: &Clock, now: i64) {
+        let animate = motion_enabled();
+        self.animating = false;
+        let mut alive = HashSet::new();
+        for i in 0..self.windows.len() {
+            if !self.windows[i].toast {
+                self.windows[i].sweeps = false;
+                self.windows[i].hold = false;
+                self.windows[i].slide = 0.0;
+                continue;
+            }
+            let id = self.windows[i].id;
+            let rect = self.windows[i].rect;
+            let travel = self.windows[i].travel;
+            alive.insert(id);
+            let (hold, slide, sweeps) = {
+                let arrival = self.arrivals.entry(id).or_insert(Arrival {
+                    at: now,
+                    left: rect.left,
+                    right: rect.right,
+                    moved: false,
+                    model: false,
+                    travel,
+                    samples: 0,
+                    started: false,
+                    swept: false,
+                });
+                if arrival.samples == 0 {
+                    // Windows usually parks the toast at its final rect; always model a slide when motion is on
+                    // so the shove spreads instead of dumping one cliff against the left edge.
+                    arrival.model = animate;
+                    arrival.travel = travel;
+                    arrival.left = rect.left;
+                    arrival.right = rect.right;
+                }
+                arrival.samples = arrival.samples.saturating_add(1);
+                let shifted = (rect.left - arrival.left).abs() > 2 || (rect.right - arrival.right).abs() > 2;
+                if shifted {
+                    arrival.moved = true;
+                    arrival.left = rect.left;
+                    arrival.right = rect.right;
+                }
+                if arrival.model && !arrival.moved {
+                    if arrival.samples < 2 {
+                        (true, 0.0, false)
+                    } else {
+                        if !arrival.started {
+                            arrival.started = true;
+                            arrival.at = now;
+                        }
+                        let offset = arrival.travel * (-(clock.seconds(now - arrival.at) as f32) / 0.064).exp();
+                        let slide = if offset < 0.5 { 0.0 } else { offset };
+                        if slide <= 0.5 {
+                            arrival.swept = true;
+                        }
+                        (false, slide, slide > 0.5)
+                    }
+                } else {
+                    // Toast already sitting still: scrape the whole band once so no drift stays behind it.
+                    let pending = !arrival.swept;
+                    if pending {
+                        arrival.swept = true;
+                    }
+                    (false, 0.0, pending || shifted)
+                }
+            };
+            self.windows[i].hold = hold;
+            self.windows[i].slide = slide;
+            self.windows[i].sweeps = sweeps;
+            if hold || slide > 0.0 || sweeps {
+                self.animating = true;
+            }
+        }
+        self.arrivals.retain(|id, _| alive.contains(id));
     }
 }
 
@@ -417,7 +588,15 @@ unsafe extern "system" fn on_event(_: HWINEVENTHOOK, event: u32, window: HWND, o
         }
         // A taskbar set to hide itself moves on every frame of its slide, and the list leaves it out anyway.
         _ if object == OBJID_WINDOW.0 && child == 0 && is_top_level(window, event) && !IGNORED.contains(&class_name(window).as_str()) => {
-            events.changed = true
+            events.changed = true;
+            if class_name(window) == "Windows.UI.Core.CoreWindow" {
+                NOTICED.with(|noticed| {
+                    let mut noticed = noticed.borrow_mut();
+                    if !noticed.contains(&window) {
+                        noticed.push(window);
+                    }
+                });
+            }
         }
         _ => return,
     }
@@ -578,4 +757,39 @@ pub fn local_frame(r: &RECT, area: &RECT, size: (u32, u32)) -> Option<Rect> {
 
 fn intersects(a: &Rect, b: &Rect) -> bool {
     a.min_x() < b.max_x() && b.min_x() < a.max_x() && a.min_y() < b.max_y() && b.min_y() < a.max_y()
+}
+
+/// The room ShellExperienceHost's window leaves around the toast card in it, at the sides, above and below, in pixels
+/// at 96 dpi: measured on Windows 11.
+const TOAST_MARGIN: (f32, f32, f32) = (16.0, 30.0, 15.0);
+
+fn toast_card(rect: &RECT, scale: f32) -> RECT {
+    let (side, above, below) = TOAST_MARGIN;
+    let side = (side * scale).round() as i32;
+    RECT {
+        left: rect.left + side,
+        top: rect.top + (above * scale).round() as i32,
+        right: rect.right - side,
+        bottom: rect.bottom - (below * scale).round() as i32,
+    }
+}
+
+fn near_right(window: HWND, rect: &RECT) -> bool {
+    unsafe {
+        let monitor = MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
+        let mut info = MONITORINFO { cbSize: size_of::<MONITORINFO>() as u32, ..Default::default() };
+        if !GetMonitorInfoW(monitor, &mut info).as_bool() {
+            return true;
+        }
+        let work = info.rcWork;
+        (work.right - rect.right).abs() <= 48
+    }
+}
+
+fn motion_enabled() -> bool {
+    unsafe {
+        let mut enabled = BOOL(0);
+        SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, Some((&raw mut enabled).cast()), SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0)).is_ok()
+            && enabled.as_bool()
+    }
 }
