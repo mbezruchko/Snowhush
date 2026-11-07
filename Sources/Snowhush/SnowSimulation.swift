@@ -369,18 +369,6 @@ final class SnowSimulation {
             }
         }
     }
-    /// Whether the snowfall rises and eases on its own over the day.
-    var variesIntensity = false {
-        didSet {
-            if variesIntensity && !oldValue { nextShift = clock }
-            if !variesIntensity {
-                strength = 1
-                strengthTarget = 1
-            }
-            updateTarget()
-            stirred()
-        }
-    }
     /// The flakes a megapoint of screen holds at an intensity from 0 to 1: a quarter of the way up is a light fall,
     /// halfway a steady one, three quarters a heavy one, and the top nearly twice that.
     private static func flakesPerMegapoint(_ intensity: Float) -> Float {
@@ -562,9 +550,6 @@ final class SnowSimulation {
     private var parking: [(id: CGWindowID, ledge: SnowLayer, since: Double)] = []
     private var spaceChangedAt: Double = -10
     private var scatteredUntil: Double = -10
-    private var strength: Float = 1
-    private var strengthTarget: Float = 1
-    private var nextShift: Double = 0
     /// A gust clearing the snow: its front sweeps across from the windward side, lifting the drifts behind it.
     private var gust: (start: Double, direction: Float, calm: Bool)?
     private var slideWind: Float = 0
@@ -678,7 +663,7 @@ final class SnowSimulation {
         heightsChanged = false
         leafBudget = nil
 
-        vary(dt: dt)
+        releaseScattered()
         slideWind = abs(slideWind) < 1 ? 0 : slideWind * exp(-dt / slideCalm)
         expireParking()
         for ledge in ledgeList { carry(ledge, dt: dt) }
@@ -2994,8 +2979,7 @@ final class SnowSimulation {
 
     private func breeze() -> Float {
         let t = clock
-        let breeze = Float(10 * sin(t * 0.07) + 6 * sin(t * 0.19 + 1.7) + 3 * sin(t * 0.43 + 4.1))
-        return breeze * (0.6 + 0.4 * strength)
+        return Float(10 * sin(t * 0.07) + 6 * sin(t * 0.19 + 1.7) + 3 * sin(t * 0.43 + 4.1))
     }
 
     private func gustSpeed() -> Float {
@@ -3004,25 +2988,12 @@ final class SnowSimulation {
         return gust.direction * gustWind * smoothstep(0, 0.12, age) * (1 - smoothstep(0.9, gustLength, age))
     }
 
-    /// Wanders between light lulls, steady snow and heavy flurries.
-    private func vary(dt: Float) {
-        // In case none of the scattered snow makes it to the bottom, say because it all came to rest on windows.
+    /// In case none of the scattered snow makes it to the bottom, say because it all came to rest on windows.
+    private func releaseScattered() {
         if snowfallHeld && scatteredUntil > 0 && clock > scatteredUntil {
             snowfallHeld = false
             snowfallReleased()
         }
-        if !variesIntensity {
-            strengthTarget = 1
-        } else if clock >= nextShift {
-            let roll = random.next()
-            strengthTarget = roll < 0.25 ? random.range(0.25, 0.5)
-                : roll < 0.75 ? random.range(0.7, 1.3)
-                : random.range(1.5, 2.1)
-            nextShift = clock + Double(random.range(60, 240))
-        }
-        guard abs(strengthTarget - strength) > 0.001 else { return }
-        strength += (strengthTarget - strength) * (1 - exp(-dt / 25))
-        updateTarget()
     }
 
     // MARK: - Gust
@@ -3442,7 +3413,7 @@ final class SnowSimulation {
     private func settle(dt: Float) {
         // Melting nearly keeps pace with the snowfall, so heavier snowfall builds drifts only a little higher, and the
         // far sparser leaves wither as slowly.
-        let falling = Self.flakesPerMegapoint(intensity) * strength * density * (leafy ? leafShare : 1)
+        let falling = Self.flakesPerMegapoint(intensity) * density * (leafy ? leafShare : 1)
         let meltPace = falling > 0 ? pow(falling / thawBalance, thawExponent) : 1
         for ledge in ledgeList { ledge.outside = (outside(of: ledge, left: true), outside(of: ledge, left: false)) }
         for layer in layers {
@@ -3468,7 +3439,7 @@ final class SnowSimulation {
 
     private func updateTarget() {
         let share: Float = leafy ? leafShare : rain ? rainShare : 1
-        targetFlakes = snowfallHeld ? 0 : Int(Self.flakesPerMegapoint(intensity) * share * strength * density * width * height / 1_000_000)
+        targetFlakes = snowfallHeld ? 0 : Int(Self.flakesPerMegapoint(intensity) * share * density * width * height / 1_000_000)
     }
 
     private static func columnCount(for width: Float, columnWidth: Float) -> Int {

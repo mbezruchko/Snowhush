@@ -38,7 +38,6 @@ const ID_SNOWFALL: u32 = 100;
 const INTENSITY_STEPS: u32 = 21;
 /// The system's menu can't hold a slider: its Intensity submenu offers these, in percent.
 const INTENSITY_STOPS: [u32; 5] = [0, 25, 50, 75, 100];
-const ID_VARY: u32 = 219;
 const ID_ACCUMULATE: u32 = 200;
 const ID_MELT: u32 = 201;
 const ID_SCREENSHOTS: u32 = 202;
@@ -371,7 +370,7 @@ fn entries(settings: &Settings, login: bool, sliders: bool) -> Vec<Entry> {
         Entry::Separator,
         Entry::item(ID_HALLOWEEN, "Halloween", halloween::wanted(settings.halloween), mode == Mode::Snow),
     ];
-    let mut behavior = vec![Entry::header("Behavior"), Entry::toggle(ID_VARY, "Vary Intensity", settings.varies, true)];
+    let mut behavior = vec![Entry::header("Behavior")];
     // Rain doesn't lie anywhere: nothing to keep, melt or clear.
     if mode != Mode::Rain {
         behavior.push(Entry::toggle(ID_ACCUMULATE, "Accumulate", settings.accumulate, true));
@@ -574,10 +573,6 @@ fn choose(window: HWND, chosen: u32, login: bool) {
                 ID_MAX_PERFORMANCE => {
                     settings.max_performance = !settings.max_performance;
                     Command::Performance(settings.max_performance)
-                }
-                ID_VARY => {
-                    settings.varies = !settings.varies;
-                    Command::VaryIntensity(settings.varies)
                 }
                 id if (ID_OPACITY..ID_OPACITY + OPACITY_STEPS).contains(&id) => {
                     settings.opacity = 10 + 5 * (id - ID_OPACITY);

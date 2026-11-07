@@ -38,8 +38,6 @@ pub struct Piece {
 pub enum Command {
     /// How much falls, 0 to 1.
     Intensity(f32),
-    /// Whether the snowfall rises and eases on its own over the day.
-    VaryIntensity(bool),
     /// How opaque what falls is drawn, 0.1 to 1.
     FallingOpacity(f32),
     Accumulate(bool),
@@ -133,10 +131,6 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                         screen.simulation.set_intensity(intensity);
                         screen.wake(now);
                     });
-                }
-                Command::VaryIntensity(on) => {
-                    settings.varies = on;
-                    screens.iter_mut().for_each(|screen| screen.simulation.set_varies(on));
                 }
                 Command::FallingOpacity(opacity) => {
                     settings.opacity = (opacity * 100.0).round() as u32;
@@ -493,7 +487,6 @@ fn find_layer() -> Option<DesktopLayer> {
 fn new_simulation(monitor: &Monitor, settings: &Settings) -> SnowSimulation {
     let (width, height) = dip_size(monitor);
     let mut simulation = SnowSimulation::new(width as f32, height as f32, settings.intensity as f32 / 100.0);
-    simulation.set_varies(settings.varies);
     simulation.thaws = settings.melt;
     simulation.accumulates = settings.accumulate;
     simulation.falling_opacity = settings.opacity as f32 / 100.0;

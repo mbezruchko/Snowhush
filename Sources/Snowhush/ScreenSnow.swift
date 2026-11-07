@@ -96,7 +96,6 @@ final class ScreenSnow {
             height: Float(screen.frame.height),
             intensity: Float(Preferences.intensity)
         )
-        simulation.variesIntensity = Preferences.variesIntensity
         simulation.thaws = Preferences.meltSnow
         simulation.accumulates = Preferences.accumulate
         simulation.fallingOpacity = Float(Preferences.fallingOpacity)

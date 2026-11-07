@@ -4,7 +4,6 @@ enum Preferences {
     private static let defaults = UserDefaults.standard
     static let opacityRange = 0.1...1.0
     private static let intensityKey = "intensity"
-    private static let varyIntensityKey = "variableIntensity"
     /// Before the slider, the intensity was one of Off, Light, Steady, Heavy and Variable.
     private static let snowfallKey = "snowfall"
     private static let behindWindowsKey = "behindWindows"
@@ -41,7 +40,6 @@ enum Preferences {
         ])
         if defaults.object(forKey: intensityKey) == nil, let stop = defaults.object(forKey: snowfallKey) as? Int {
             defaults.set([0, 0.25, 0.5, 0.75, 0.5][min(max(stop, 0), 4)], forKey: intensityKey)
-            defaults.set(stop == 4, forKey: varyIntensityKey)
         }
     }
 
@@ -49,12 +47,6 @@ enum Preferences {
     static var intensity: Double {
         get { min(max(defaults.double(forKey: intensityKey), 0), 1) }
         set { defaults.set(newValue, forKey: intensityKey) }
-    }
-
-    /// Whether the snowfall rises and eases on its own over the day.
-    static var variesIntensity: Bool {
-        get { defaults.bool(forKey: varyIntensityKey) }
-        set { defaults.set(newValue, forKey: varyIntensityKey) }
     }
 
     static var snowOnWindows: Bool {

@@ -374,7 +374,6 @@ fn compare_with_swift() {
 #[test]
 fn survives_a_long_chaotic_session() {
     let mut simulation = SnowSimulation::new(1920.0, 1080.0, 0.5);
-    simulation.set_varies(true);
     let none = HashSet::new();
     let mut seed = 12345u64;
     let mut next = move || {
