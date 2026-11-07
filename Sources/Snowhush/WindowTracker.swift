@@ -64,6 +64,8 @@ final class WindowTracker {
     /// Whether each process seen with a window just above the desktop's icons is Notification Center, which shows
     /// the desktop's widgets there.
     private var widgetHosts: [Int32: Bool] = [:]
+    /// Whether each process seen with a window above the normal layer is the one that shows Picture in Picture.
+    private var pipHosts: [Int32: Bool] = [:]
     /// CursorUIViewService draws the input source badge next to the text caret.
     private let ignoredOwners: Set<String> = ["Window Server", "CursorUIViewService"]
     /// The Dock's windows (the Dock itself, the ⌘Tab switcher) hide snow behind them but don't collect any.
@@ -543,8 +545,7 @@ final class WindowTracker {
             let fading = alpha < 0.98 && alpha < (alphas[id] ?? 0) - 0.01
 
             let owner = entry.owner ?? ""
-            let pictureInPicture = owner.isEmpty && layer > 0
-                && NSRunningApplication(processIdentifier: pid)?.bundleIdentifier == "com.apple.PIPAgent"
+            let pictureInPicture = layer > 0 && isPictureInPicture(pid: pid)
             let shelf = owner == "Dock" && layer == dockLevel
             if shelf {
                 if fullScreenInView {
@@ -560,8 +561,9 @@ final class WindowTracker {
             }
             // A widget's window leaves room around it for its shadow.
             if layer < 0 { bounds = bounds.insetBy(dx: 8, dy: 8) }
-            // PiP's window adds a transparent margin around the video: 26 points at the sides and 5 at the top and bottom.
-            if pictureInPicture { bounds = bounds.insetBy(dx: 26, dy: 5) }
+            // PiP's window leaves a clear margin around the video, whatever its size: 24 points at the sides, 4 at the top
+            // and bottom.
+            if pictureInPicture { bounds = bounds.insetBy(dx: 24, dy: 4) }
             // Mission Control's shield, its bar of Spaces, their thumbnails and labels carry no snow.
             if owner == "WindowManager" && layer > 0 {
                 if isMissionControl(bounds, layer: layer) { exposing = true }
@@ -597,7 +599,7 @@ final class WindowTracker {
                 let capsule = !shelf && (owner.lowercased().contains("spotlight") || (bounds.height <= 90 && bounds.width >= bounds.height * 3))
                 let corner = shelf ? Dock.cornerRadius(height: bounds.height)
                     : capsule ? min(bounds.height / 2, 32)
-                    : layer < 0 ? Self.widgetRadius : radii[id] ?? Self.defaultRadius
+                    : layer < 0 || pictureInPicture ? Self.widgetRadius : radii[id] ?? Self.defaultRadius
                 let radius = min(corner, bounds.width / 2, bounds.height / 2)
                 let region = CGRect(x: frame.minX, y: frame.maxY - radius, width: frame.width, height: 40 + radius)
                 if layer > 0 && !shelf { panels[id] = panelsShownAt[id] ?? now }
@@ -676,6 +678,13 @@ final class WindowTracker {
         if let known = widgetHosts[pid] { return known }
         let host = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier == "com.apple.notificationcenterui"
         widgetHosts[pid] = host
+        return host
+    }
+
+    private func isPictureInPicture(pid: Int32) -> Bool {
+        if let known = pipHosts[pid] { return known }
+        let host = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier == "com.apple.PIPAgent"
+        pipHosts[pid] = host
         return host
     }
 
