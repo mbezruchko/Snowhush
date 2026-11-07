@@ -11,3 +11,4 @@ linux/packaging/src/
 linux/packaging/*.pkg.tar.zst
 linux/packaging/dist/
 linux/bench/out/
+site-engine/target/

@@ -28,21 +28,26 @@
   const GUST_WIND = 1000;
   // The snowfall is caught this long after the drifts, so it trails behind their powder.
   const GUST_LAG = 0.3;
-  const DENSITY = { off: 0, light: 150, steady: 380, heavy: 800, variable: 380 };
+  /// Flakes per million square points at 0, 25, 50, 75 and 100% Intensity, as in the app.
+  const DENSITY = [0, 150, 380, 800, 1500];
+  const density = intensity => {
+    const at = Math.min(Math.max(intensity, 0), 1) * 4;
+    const i = Math.min(Math.floor(at), 3);
+    return DENSITY[i] + (DENSITY[i + 1] - DENSITY[i]) * (at - i);
+  };
   const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
+  /// The light the app's simulation draws leaves, rain and petals in on the page's night.
+  const ENGINE_NIGHT = [0.8, 0.77, 0.72];
   // Halloween, from October 30 until dawn on November 1 as in the app, or with ?halloween: pumpkins glow in the
   // street's drift and ghosts made of its snow rise out of it under the lamp.
-  const halloween = (() => {
+  const halloweenTime = (() => {
     if (new URLSearchParams(location.search).has('halloween')) return true;
     const now = new Date();
     const month = now.getMonth() + 1;
     return month === 10 && now.getDate() >= 30 || month === 11 && now.getDate() === 1 && now.getHours() < 6;
   })();
-  if (halloween) {
-    document.documentElement.classList.add('halloween');
-    const hint = document.querySelector('.hint');
-    if (hint) hint.textContent = 'Try it: scare the ghost.';
-  }
+  const hint = document.querySelector('.hint');
+  const hintText = hint?.textContent;
 
   /// The street's ghost: its size, and its life in seconds: heaping up, waving, holding its sign up and putting it
   /// back, settling into a heap, and the wait for the next one.
@@ -58,8 +63,10 @@
   };
   const ghostBulk = form => GHOST.size * GHOST.size * 0.04 * ghostHeight(form) / 0.425;
 
-  const settings = { snowfall: 'steady', accumulate: true, melt: true, windows: true, behind: false, screenshots: false, login: false, quit: false };
-  const variation = { strength: 1, target: 1, next: 0, clock: 0 };
+  const settings = {
+    mode: 'snow', intensity: 0.5, opacity: 1, halloween: halloweenTime, accumulate: true, melt: true, windows: true, deep: true,
+    behind: false, fullscreen: false, screenshots: false, performance: false, login: false, quit: false,
+  };
 
   const rand = (a, b) => a + Math.random() * (b - a);
   const smoothstep = (a, b, x) => {
@@ -606,8 +613,8 @@
       this.light = null;
       this.ground = new Layer(GROUND_DEPTH, false);
       this.ledges = [...section.querySelectorAll('[data-ledge]')].map(element => ({ element, layer: new Layer(LEDGE_DEPTH, true) }));
-      this.haunted = halloween && section.classList.contains('street');
-      this.boo = this.haunted ? section.querySelector('.boo') : null;
+      this.haunted = false;
+      this.boo = section.querySelector('.boo');
       this.candles = [];
       this.ghost = null;
       this.falling = null;
@@ -620,6 +627,11 @@
       this.time = rand(0, 100);
       this.nextGhost = this.time + 2;
       this.visible = false;
+      // Autumn Leaves, Rain and Cherry Blossom: the app's own simulation (engine.js), and when it is on its way out.
+      this.engine = null;
+      this.renderer = null;
+      this.retiring = null;
+      this.boxes = [];
       this.width = 0;
       this.height = 0;
       this.setUpGL();
@@ -634,7 +646,6 @@
       try {
         this.sprite = program(gl, SPRITE_VERTEX, SPRITE_FRAGMENT);
         this.pile = program(gl, PILE_VERTEX, PILE_FRAGMENT);
-        if (this.haunted) this.ghostProgram = program(gl, GHOST_VERTEX, GHOST_FRAGMENT);
       } catch (error) {
         console.warn('Snowhush: snow disabled,', error);
         this.canvas.hidden = true;
@@ -660,6 +671,26 @@
       gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
     }
 
+    /// Pumpkins in the street's drift and a ghost rising out of it; turned off, the ghost pours back into the drift.
+    haunt(on) {
+      on = on && this.section.classList.contains('street') && Boolean(this.boo);
+      if (on && this.gl && !this.ghostProgram) {
+        try {
+          this.ghostProgram = program(this.gl, GHOST_VERTEX, GHOST_FRAGMENT);
+        } catch (error) {
+          console.warn('Snowhush: no ghosts,', error);
+        }
+      }
+      if (!on && this.ghost) {
+        this.pourGhost(this.ghost, 0);
+        this.ghost = null;
+      }
+      if (on && !this.haunted) this.nextGhost = this.time + 2;
+      this.haunted = on;
+      if (this.boo) this.boo.style.visibility = 'hidden';
+      if (this.width) this.measure();
+    }
+
     get layers() {
       return ledgesActive() ? [this.ground, ...this.ledges.map(ledge => ledge.layer)] : [this.ground];
     }
@@ -678,10 +709,12 @@
       }
       // Sunk a little below the edge so no sliver of background shows under the drift after rounding.
       this.ground.place(0, rect.height + 2, rect.width);
-      for (const { element, layer } of this.ledges) {
+      this.boxes = this.ledges.map(({ element, layer }) => {
         const box = element.getBoundingClientRect();
         layer.place(box.left - rect.left, box.top - rect.top, box.width, Number(element.dataset.ledge), 2.5);
-      }
+        return { x: box.left - rect.left, y: box.top - rect.top, w: box.width, h: box.height, radius: Number(element.dataset.ledge) };
+      });
+      if (this.engine && (this.engine.width !== rect.width || this.engine.height !== rect.height)) this.engine.resize(rect.width, rect.height);
       if (first) {
         const target = this.target();
         while (this.flakes.length < target) this.flakes.push(this.makeFlake(rand(-20, this.height)));
@@ -691,6 +724,7 @@
         this.light = { x: lamp.left + lamp.width / 2 - rect.left, y: lamp.top + lamp.height * 0.66 - rect.top };
         if (this.lightCanvas) this.paintLight();
       }
+      this.candles = [];
       if (this.haunted) {
         this.candles = [...this.section.querySelectorAll('.pumpkin')].map(element => {
           const box = element.getBoundingClientRect();
@@ -701,8 +735,8 @@
     }
 
     target() {
-      if (settings.quit) return 0;
-      return Math.round(DENSITY[settings.snowfall] * variation.strength * this.width * this.height / 1e6);
+      if (settings.quit || settings.mode !== 'snow') return 0;
+      return Math.round(density(settings.intensity) * this.width * this.height / 1e6);
     }
 
     wind() {
@@ -711,8 +745,7 @@
 
     breeze() {
       const t = this.time;
-      const breeze = 10 * Math.sin(t * 0.07) + 6 * Math.sin(t * 0.19 + 1.7) + 3 * Math.sin(t * 0.43 + 4.1);
-      return breeze * (0.6 + 0.4 * variation.strength);
+      return 10 * Math.sin(t * 0.07) + 6 * Math.sin(t * 0.19 + 1.7) + 3 * Math.sin(t * 0.43 + 4.1);
     }
 
     makeFlake(y) {
@@ -773,12 +806,64 @@
       this.advanceFlakes(dt);
       this.advanceGrains(dt);
       this.advanceMotes(dt);
-      if (this.haunted) this.haunt();
+      if (this.haunted) this.hauntStep();
       this.settle(dt);
       // No new snow falls until the gust has carried off the last flake, then the snowfall starts again from the top.
       const target = this.blowing ? 0 : this.target();
-      while (this.flakes.length < target) this.flakes.push(this.makeFlake(-rand(0, this.height * 0.8)));
+      // New flakes queue in a band one section high above the top, so a change in Intensity comes in from the top
+      // at once and moves down the page as a front.
+      while (this.flakes.length < target) this.flakes.push(this.makeFlake(-rand(0, this.height)));
       for (const layer of this.layers) layer.refreshTop();
+      if (this.engine) {
+        this.engine.windows(ledgesActive() ? this.boxes : [], dt);
+        this.engine.step(dt, this.cursor);
+        if (this.retiring !== null && this.time - this.retiring > 5) this.stopEngine();
+      }
+    }
+
+    /// Starts the app's simulation for another mode. From the snow, it starts empty: the page's snow blows away while
+    /// the gust clears the way, and the other kind falls from the top after it.
+    startEngine(module, mode) {
+      if (!this.gl) return;
+      if (this.engine && this.retiring === null) {
+        this.engine.switchTo(mode, reduceMotion.matches);
+        return;
+      }
+      this.stopEngine();
+      try {
+        this.engine = new SnowhushEngine.Engine(module, this.width, this.height, 0, 'snow');
+        this.renderer ??= new SnowhushEngine.Renderer(this.gl, this.engine);
+      } catch (error) {
+        console.warn('Snowhush: no', mode, error);
+        this.stopEngine();
+        return;
+      }
+      this.engine.switchTo(mode, reduceMotion.matches);
+      this.engine.windows(ledgesActive() ? this.boxes : [], 0);
+      this.tuneEngine();
+    }
+
+    /// Back to the page's snow: what the app's simulation has on screen blows away, then it goes.
+    retireEngine() {
+      if (!this.engine || this.retiring !== null) return;
+      this.retiring = this.time;
+      this.engine.intensity(0);
+      this.engine.blow(reduceMotion.matches);
+    }
+
+    stopEngine() {
+      this.engine?.free();
+      this.engine = null;
+      this.retiring = null;
+    }
+
+    tuneEngine() {
+      const engine = this.engine;
+      if (!engine || this.retiring !== null) return;
+      engine.intensity(settings.intensity);
+      engine.opacity(settings.opacity);
+      engine.accumulates(settings.accumulate);
+      engine.thaws(settings.melt);
     }
 
     /// The highest snow surface crossed while falling from `from` to `to` at `x`.
@@ -860,7 +945,7 @@
           gone = true;
         }
         if (!gone) continue;
-        if (flakes.length <= target) {
+        if (Math.random() * flakes.length < target) {
           flakes[i] = this.makeFlake(-rand(4, 40));
         } else {
           flakes[i] = flakes[flakes.length - 1];
@@ -973,7 +1058,7 @@
 
     settle(dt) {
       // Melting nearly keeps pace with the snowfall, so heavier snowfall builds drifts only a little higher.
-      const falling = DENSITY[settings.snowfall] * variation.strength;
+      const falling = density(settings.intensity);
       const meltPace = falling > 0 ? BUILDUP * (falling / THAW_BALANCE) ** THAW_EXPONENT : 1;
       for (const layer of this.layers) {
         if (!settings.accumulate || settings.melt) {
@@ -1253,9 +1338,14 @@
     draw() {
       const gl = this.gl;
       if (!gl) return;
-      gl.viewport(0, 0, this.canvas.width, this.canvas.height);
-      gl.clearColor(0, 0, 0, 0);
-      gl.clear(gl.COLOR_BUFFER_BIT);
+      if (this.engine && this.renderer && !settings.quit) {
+        // Moonlit in the night sections, as the page's snow is away from its lamp.
+        this.renderer.draw(this.engine, this.dpr, this.night ? ENGINE_NIGHT : [1, 1, 1], this.time % 1000);
+      } else {
+        gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+        gl.clearColor(0, 0, 0, 0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+      }
       if (settings.quit) return;
       const lamp = this.light ? [this.light.x, this.light.y, 1] : [0, 0, 0];
       const candles = new Float32Array(8);
@@ -1299,7 +1389,7 @@
       const data = this.spriteData;
       let k = 0;
       for (const f of this.flakes) {
-        data[k++] = f.x; data[k++] = f.y; data[k++] = f.size; data[k++] = f.alpha; data[k++] = f.soft; data[k++] = 0;
+        data[k++] = f.x; data[k++] = f.y; data[k++] = f.size; data[k++] = f.alpha * settings.opacity; data[k++] = f.soft; data[k++] = 0;
       }
       for (const g of this.grains) {
         data[k++] = g.x; data[k++] = g.y; data[k++] = g.size;
@@ -1360,7 +1450,7 @@
 
     /// Under the lamp a ghost heaps up out of the drift now and then; it says boo as the cursor comes near and
     /// crumbles back into snow at its touch.
-    haunt() {
+    hauntStep() {
       // Blown away with the rest of the snow, or gone with the app.
       if (this.ghost && (this.blowing || settings.quit)) {
         this.ghost = null;
@@ -1581,23 +1671,9 @@
   let running = false;
   let last = 0;
 
-  /// Variable snowfall wanders between lulls and bursts like the app's, only every few seconds instead of minutes.
-  function vary(dt) {
-    variation.clock += dt;
-    if (settings.snowfall !== 'variable') {
-      variation.target = 1;
-    } else if (variation.clock >= variation.next) {
-      const roll = Math.random();
-      variation.target = roll < 0.25 ? rand(0.25, 0.5) : roll < 0.75 ? rand(0.7, 1.3) : rand(1.5, 2.1);
-      variation.next = variation.clock + rand(8, 16);
-    }
-    variation.strength += (variation.target - variation.strength) * (1 - Math.exp(-dt / 3));
-  }
-
   function frame(now) {
     const dt = last ? Math.min((now - last) / 1000, 0.05) : 1 / 60;
     last = now;
-    vary(dt);
     let active = false;
     for (const scene of scenes) {
       if (!scene.visible || !scene.gl) continue;
@@ -1643,14 +1719,163 @@
 
   // MARK: - Menu
 
+  const NAMES = {
+    snow: { melt: 'Melt Snow', windows: 'Snow on Windows', clear: 'Clear Snow' },
+    autumn: { melt: 'Wither Leaves', windows: 'Leaves on Windows', clear: 'Clear Leaves' },
+    rain: { melt: 'Melt Snow', windows: 'Rain on Windows', clear: 'Clear Snow' },
+    blossom: { melt: 'Wilt Petals', windows: 'Petals on Windows', clear: 'Clear Petals' },
+  };
+  let engineModule = null;
+
+  /// Another kind falls: the page's own snow, or the app's simulation for the others, loaded the first time.
+  async function chooseMode(mode) {
+    if (mode === settings.mode) return;
+    const wasSnow = settings.mode === 'snow';
+    settings.mode = mode;
+    reflectHalloween();
+    if (mode === 'snow') {
+      scenes.forEach(scene => scene.retireEngine());
+    } else {
+      if (!engineModule) {
+        try {
+          engineModule = await SnowhushEngine.load();
+        } catch (error) {
+          console.warn('Snowhush: modes unavailable,', error);
+          settings.mode = 'snow';
+          reflectHalloween();
+          reflect();
+          return;
+        }
+        if (settings.mode !== mode) return;
+      }
+      if (wasSnow) clearSnow();
+      syncEngines();
+    }
+    reflect();
+    wake();
+  }
+
+  /// Keeps each scene's simulation in step with the menu: gone while quit, there for any mode but the snow.
+  function syncEngines() {
+    for (const scene of scenes) {
+      if (settings.quit) {
+        scene.stopEngine();
+      } else if (settings.mode !== 'snow' && engineModule) {
+        scene.startEngine(engineModule, settings.mode);
+      }
+      scene.tuneEngine();
+    }
+  }
+
+  /// Opens a submenu beside its menu, on the side with room as macOS does, or under its item when neither side has.
+  function openSubmenu(trigger) {
+    const submenu = document.getElementById(trigger.getAttribute('aria-controls'));
+    if (!submenu || !submenu.hidden) return;
+    closeSubmenus(trigger.closest('[data-snow-menu]'));
+    submenu.classList.remove('left', 'inline');
+    submenu.style.top = '';
+    submenu.hidden = false;
+    trigger.setAttribute('aria-expanded', 'true');
+    const bounds = trigger.closest('[data-scene]').getBoundingClientRect();
+    const menu = trigger.closest('.menu').getBoundingClientRect();
+    const width = submenu.offsetWidth;
+    if (menu.right + 10 + width > bounds.right - 12) {
+      submenu.classList.add(menu.left - 10 - width >= bounds.left + 12 ? 'left' : 'inline');
+    }
+    if (!submenu.classList.contains('inline')) {
+      const over = submenu.getBoundingClientRect().bottom - (bounds.bottom - 16);
+      if (over > 0) submenu.style.top = `${-6 - over}px`;
+    }
+  }
+
+  function closeSubmenus(menu) {
+    for (const trigger of menu.querySelectorAll('[aria-haspopup][aria-expanded="true"]')) {
+      trigger.setAttribute('aria-expanded', 'false');
+      document.getElementById(trigger.getAttribute('aria-controls')).hidden = true;
+    }
+  }
+
+  /// Halloween haunts the snow only, as in the app.
+  function reflectHalloween() {
+    const on = settings.halloween && settings.mode === 'snow';
+    document.documentElement.classList.toggle('halloween', on);
+    if (hint) hint.textContent = on ? 'Try it: scare the ghost.' : hintText;
+    scenes.forEach(scene => {
+      if (scene.haunted !== on) scene.haunt(on);
+    });
+  }
+
+  /// Raising Intensity fills the band above the top; lowering it thins that queue, so the change shows at the top at once.
+  function thinAbove() {
+    for (const scene of scenes) {
+      const target = scene.target();
+      const flakes = scene.flakes;
+      if (flakes.length <= target) continue;
+      const keep = target / flakes.length;
+      for (let i = flakes.length - 1; i >= 0; i--) {
+        if (flakes[i].y < 0 && Math.random() >= keep) {
+          flakes[i] = flakes[flakes.length - 1];
+          flakes.pop();
+        }
+      }
+    }
+  }
+
+  function percent(value) {
+    return value <= 0 ? 'Off' : `${Math.round(value * 100)}%`;
+  }
+
   for (const menu of document.querySelectorAll('[data-snow-menu]')) {
+    menu.addEventListener('pointerover', event => {
+      if (event.pointerType !== 'mouse') return;
+      const item = event.target.closest('.menu-item, .menu-slider');
+      if (!item || item.closest('.submenu')) return;
+      if (item.matches('[aria-haspopup]')) openSubmenu(item);
+      else closeSubmenus(menu);
+    });
+
+    menu.addEventListener('keydown', event => {
+      const trigger = event.target.closest('[aria-haspopup]');
+      if (trigger && event.key === 'ArrowRight') {
+        event.preventDefault();
+        openSubmenu(trigger);
+        document.getElementById(trigger.getAttribute('aria-controls')).querySelector('.menu-item')?.focus();
+      } else if (event.key === 'Escape' || event.key === 'ArrowLeft' && event.target.closest('.submenu')) {
+        const open = event.target.closest('.menu-group')?.querySelector('[aria-haspopup]');
+        closeSubmenus(menu);
+        open?.focus();
+      }
+    });
+
+    menu.addEventListener('input', event => {
+      const input = event.target.closest('[data-slider]');
+      if (!input) return;
+      const value = Number(input.value);
+      settings[input.dataset.slider] = value;
+      settings.quit = false;
+      if (input.dataset.slider === 'intensity') thinAbove();
+      syncEngines();
+      reflect();
+      scenes.forEach(scene => scene.draw());
+      wake();
+    });
+
     menu.addEventListener('click', event => {
       const item = event.target.closest('.menu-item');
       if (!item || item.getAttribute('aria-disabled') === 'true') return;
+      if (item.matches('[aria-haspopup]')) {
+        openSubmenu(item);
+        return;
+      }
       const ledgesBefore = ledgesActive();
-      if (item.dataset.snowfall) {
-        settings.snowfall = item.dataset.snowfall;
-        if (settings.snowfall === 'variable') variation.next = variation.clock;
+      if (item.dataset.mode) {
+        closeSubmenus(menu);
+        settings.quit = false;
+        chooseMode(item.dataset.mode);
+      } else if (item.dataset.toggle === 'halloween') {
+        settings.halloween = !settings.halloween;
+        reflectHalloween();
+        closeSubmenus(menu);
       } else if (item.dataset.toggle) {
         settings[item.dataset.toggle] = !settings[item.dataset.toggle];
       }
@@ -1660,18 +1885,27 @@
       } else {
         settings.quit = false;
       }
+      if (item.dataset.action) closeSubmenus(menu);
       if (item.dataset.action === 'clear') clearSnow();
       if (ledgesBefore && !ledgesActive()) scenes.forEach(scene => scene.shed());
       document.body.classList.toggle('snow-behind', settings.behind);
+      syncEngines();
       reflect();
       scenes.forEach(scene => scene.draw());
       wake();
       if (item.dataset.toggle === 'screenshots') capture();
     });
+
+    document.addEventListener('pointerdown', event => {
+      if (!menu.contains(event.target)) closeSubmenus(menu);
+    });
   }
 
   /// Blows the snow off every scene in the way the breeze blows; with reduced motion the drifts just go.
   function clearSnow() {
+    scenes.forEach(scene => {
+      if (scene.retiring === null) scene.engine?.blow(reduceMotion.matches);
+    });
     if (reduceMotion.matches) {
       for (const scene of scenes) {
         scene.ground.clear();
@@ -1746,8 +1980,24 @@
   }
 
   function reflect() {
+    for (const input of document.querySelectorAll('[data-snow-menu] [data-slider]')) {
+      const value = settings[input.dataset.slider];
+      if (Number(input.value) !== value) input.value = String(value);
+      const min = Number(input.min), max = Number(input.max);
+      input.style.setProperty('--at', String((value - min) / (max - min)));
+      input.setAttribute('aria-valuetext', percent(value));
+      const output = input.parentElement.querySelector('output');
+      if (output) output.textContent = percent(value);
+    }
+    const names = NAMES[settings.mode];
+    const rain = settings.mode === 'rain';
     for (const item of document.querySelectorAll('[data-snow-menu] .menu-item')) {
-      if (item.dataset.snowfall) item.setAttribute('aria-checked', String(!settings.quit && item.dataset.snowfall === settings.snowfall));
+      if (item.dataset.mode) item.setAttribute('aria-checked', String(!settings.quit && item.dataset.mode === settings.mode));
+      const name = names[item.dataset.toggle] ?? names[item.dataset.action];
+      if (name) item.textContent = name;
+      // Rain neither heaps up nor lies about to clear away.
+      if (['accumulate', 'melt'].includes(item.dataset.toggle) || item.dataset.action === 'clear') item.hidden = rain;
+      if (item.dataset.toggle === 'halloween') item.setAttribute('aria-disabled', String(settings.mode !== 'snow'));
       if (item.dataset.toggle) item.setAttribute('aria-checked', String(settings[item.dataset.toggle]));
       if (item.dataset.toggle === 'melt') item.setAttribute('aria-disabled', String(!settings.accumulate));
       if (item.dataset.toggle === 'windows') item.setAttribute('aria-disabled', String(settings.behind));
@@ -1761,5 +2011,6 @@
   reduceMotion.addEventListener('change', () => (reduceMotion.matches ? scenes.forEach(scene => scene.draw()) : wake()));
   document.fonts?.ready.then(measureAll);
   reflect();
+  reflectHalloween();
   measureAll();
 })();
