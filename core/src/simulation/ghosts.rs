@@ -921,14 +921,13 @@ impl SnowSimulation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::simulation::Snowfall;
 
     const DT: f32 = 1.0 / 60.0;
     const AWAY: V2 = V2::new(-10_000.0, -10_000.0);
 
     /// A haunted screen with a deep, even drift and no snowfall to muddle it.
     fn haunted() -> SnowSimulation {
-        let mut simulation = SnowSimulation::new(1200.0, 800.0, Snowfall::Off);
+        let mut simulation = SnowSimulation::new(1200.0, 800.0, 0.0);
         for i in 0..simulation.layers[0].count() {
             simulation.layers[0].set(i, 20.0);
         }
@@ -1032,7 +1031,7 @@ mod tests {
 
     #[test]
     fn haunting_for_a_while_stays_sound() {
-        let mut simulation = SnowSimulation::new(1200.0, 800.0, Snowfall::Heavy);
+        let mut simulation = SnowSimulation::new(1200.0, 800.0, 0.75);
         for i in 0..simulation.layers[0].count() {
             simulation.layers[0].set(i, 25.0);
         }

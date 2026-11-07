@@ -5,7 +5,7 @@ use calloop::channel::Sender;
 use ksni::menu::{CheckmarkItem, MenuItem, RadioGroup, RadioItem, StandardItem, SubMenu};
 
 use snowhush_core::halloween::Today;
-use snowhush_core::simulation::{Mode, Snowfall};
+use snowhush_core::simulation::Mode;
 
 use crate::log;
 use crate::prefs::{self, Settings};
@@ -36,6 +36,9 @@ const GLYPHS: [[[&[u8]; 7]; 2]; 5] = [
     [glyph!("blossom-white"), glyph!("blossom-black")],
 ];
 const MODES: [Mode; 4] = [Mode::Snow, Mode::Autumn, Mode::Rain, Mode::Blossom];
+/// The panel's menu can't hold a slider: Intensity and Opacity offer these, in percent.
+const INTENSITY_STOPS: [u32; 5] = [0, 25, 50, 75, 100];
+const OPACITY_STOPS: [u32; 5] = [100, 80, 60, 40, 20];
 const SPONSORS: &str = "https://github.com/sponsors/mbezruchko";
 
 pub struct Tray {
@@ -100,7 +103,6 @@ impl ksni::Tray for Tray {
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
         let settings = self.settings;
-        let current = Snowfall::ALL.iter().position(|&s| s == settings.snowfall).unwrap_or(0);
         let mode = settings.mode;
         let autumn = mode == Mode::Autumn;
         let blossom = mode == Mode::Blossom;
@@ -111,15 +113,37 @@ impl ksni::Tray for Tray {
                 label: "Intensity".into(),
                 submenu: vec![
                     RadioGroup {
-                        selected: current,
+                        selected: INTENSITY_STOPS.iter().position(|&stop| stop == settings.intensity).unwrap_or(usize::MAX),
                         select: Box::new(|tray: &mut Tray, index| {
-                            let Some(&snowfall) = Snowfall::ALL.get(index) else { return };
+                            let Some(&intensity) = INTENSITY_STOPS.get(index) else { return };
                             tray.change(|settings| {
-                                settings.snowfall = snowfall;
-                                Command::Snowfall(snowfall)
+                                settings.intensity = intensity;
+                                Command::Intensity(intensity as f32 / 100.0)
                             });
                         }),
-                        options: Snowfall::ALL.iter().map(|option| RadioItem { label: option.title().into(), ..Default::default() }).collect(),
+                        options: INTENSITY_STOPS
+                            .iter()
+                            .map(|&stop| RadioItem { label: if stop == 0 { "Off".into() } else { format!("{stop}%") }, ..Default::default() })
+                            .collect(),
+                    }
+                    .into(),
+                ],
+                ..Default::default()
+            }
+            .into(),
+            SubMenu {
+                label: "Opacity".into(),
+                submenu: vec![
+                    RadioGroup {
+                        selected: OPACITY_STOPS.iter().position(|&stop| stop == settings.opacity).unwrap_or(usize::MAX),
+                        select: Box::new(|tray: &mut Tray, index| {
+                            let Some(&opacity) = OPACITY_STOPS.get(index) else { return };
+                            tray.change(|settings| {
+                                settings.opacity = opacity;
+                                Command::FallingOpacity(opacity as f32 / 100.0)
+                            });
+                        }),
+                        options: OPACITY_STOPS.iter().map(|stop| RadioItem { label: format!("{stop}%"), ..Default::default() }).collect(),
                     }
                     .into(),
                 ],
@@ -187,6 +211,18 @@ impl ksni::Tray for Tray {
                 label: "Settings".into(),
                 submenu: vec![
                     StandardItem { label: "Behavior".into(), enabled: false, ..Default::default() }.into(),
+                    CheckmarkItem {
+                        label: "Vary Intensity".into(),
+                        checked: settings.varies,
+                        activate: Box::new(|tray: &mut Tray| {
+                            tray.change(|settings| {
+                                settings.varies = !settings.varies;
+                                Command::VaryIntensity(settings.varies)
+                            })
+                        }),
+                        ..Default::default()
+                    }
+                    .into(),
                     CheckmarkItem {
                         label: "Accumulate".into(),
                         checked: settings.accumulate,

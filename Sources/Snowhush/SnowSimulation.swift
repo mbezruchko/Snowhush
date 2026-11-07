@@ -346,16 +346,48 @@ final class SnowSimulation {
 
     private(set) var pace = Pace.calm
 
-    var snowfall: Snowfall {
+    /// How much falls, from 0 to 1.
+    var intensity: Float {
         didSet {
-            if snowfall == .variable && oldValue != .variable { nextShift = clock }
-            if snowfall != .variable {
+            updateTarget()
+            thinAbove()
+            stirred()
+        }
+    }
+
+    /// Flakes still above the screen, waiting to come in, outnumber a lighter snowfall's target as the ones on screen
+    /// do: thinned in the same proportion, they come in at the new rate at once.
+    private func thinAbove() {
+        guard flakes.count > targetFlakes else { return }
+        let keep = Float(targetFlakes) / Float(flakes.count)
+        var i = 0
+        while i < flakes.count {
+            if flakes[i].position.y > height && random.next() >= keep {
+                removeFlake(i)
+            } else {
+                i += 1
+            }
+        }
+    }
+    /// Whether the snowfall rises and eases on its own over the day.
+    var variesIntensity = false {
+        didSet {
+            if variesIntensity && !oldValue { nextShift = clock }
+            if !variesIntensity {
                 strength = 1
                 strengthTarget = 1
             }
             updateTarget()
             stirred()
         }
+    }
+    /// The flakes a megapoint of screen holds at an intensity from 0 to 1: a quarter of the way up is a light fall,
+    /// halfway a steady one, three quarters a heavy one, and the top nearly twice that.
+    private static func flakesPerMegapoint(_ intensity: Float) -> Float {
+        let stops: [Float] = [0, 150, 380, 800, 1500]
+        let along = min(max(intensity, 0), 1) * 4
+        let i = min(Int(along), 3)
+        return stops[i] + (stops[i + 1] - stops[i]) * (along - Float(i))
     }
     /// Called when the screen may get snow again after it has come to rest.
     var stirred: () -> Void = {}
@@ -365,6 +397,8 @@ final class SnowSimulation {
     }
     var thaws = false
     var accumulates = true
+    /// How opaque snow, leaves and rain are while they fall; once settled they show in full.
+    var fallingOpacity: Float = 1
     /// Screen edges with no display past them: a window slid past one leaves its snow heaped against the edge.
     var walls: (left: Bool, right: Bool) = (false, false)
     /// Keeps the snowfall from starting until a scattered window's snow first reaches the bottom of the screen.
@@ -593,10 +627,10 @@ final class SnowSimulation {
     /// The app windows on the screen, left, bottom, right, top: a pumpkin hides from any that covers it.
     var windowFrames: [SIMD4<Float>] = []
 
-    init(width: Float, height: Float, snowfall: Snowfall) {
+    init(width: Float, height: Float, intensity: Float) {
         self.width = width
         self.height = height
-        self.snowfall = snowfall
+        self.intensity = min(max(intensity, 0), 1)
         var seed = RandomSource()
         ground = SnowLayer(
             origin: .zero,
@@ -614,7 +648,7 @@ final class SnowSimulation {
     var hasSnow: Bool { !lying.isEmpty || layers.contains { $0.top > 0.5 } }
     /// Nothing falls, lies, waits for its window or haunts, and nothing will until the snow is stirred.
     var isEmpty: Bool {
-        snowfall == .off && !halloween && flakes.isEmpty && grains.isEmpty && motes.isEmpty && ghosts.isEmpty
+        intensity <= 0 && !halloween && flakes.isEmpty && grains.isEmpty && motes.isEmpty && ghosts.isEmpty
             && fallingSigns.isEmpty && snowballs.isEmpty && gust == nil && dormant.isEmpty && parking.isEmpty && lying.isEmpty && nextMode == nil
             && splashes.isEmpty && glassDrops.isEmpty && !wet
             && !layers.contains { $0.top > 0 }
@@ -723,7 +757,7 @@ final class SnowSimulation {
                 position: flake.position,
                 velocity: flake.leaf != 0 ? motion(of: flake) : flake.velocity,
                 size: flake.leaf != 0 ? drawnSize(flake.size, seed: flake.leaf) : flake.size,
-                alpha: flake.alpha,
+                alpha: flake.alpha * fallingOpacity,
                 soft: flake.soft,
                 tintAmount: flake.tintAmount,
                 tintRed: flake.tint.x,
@@ -2349,8 +2383,10 @@ final class SnowSimulation {
         grains.removeLast()
     }
 
+    /// A flake that has landed or left starts again at the top. Past the snowfall's target, only every target-th of
+    /// the count does, so the top of the screen thins to the new snowfall at once and the change comes down with it.
     private func recycle(_ i: Int) {
-        if flakes.count <= targetFlakes && !holding {
+        if !holding && random.range(0, Float(flakes.count)) < Float(targetFlakes) {
             flakes[i] = makeFlake(y: height + random.range(4, 40))
         } else {
             removeFlake(i)
@@ -2362,11 +2398,13 @@ final class SnowSimulation {
         flakes.removeLast()
     }
 
-    /// No new snow falls until the gust has carried off the last flake, then the snowfall starts again from the top.
+    /// Flakes short of the target start above the screen, spread over a screen's height: they come in at the top at
+    /// the new rate from the first frame, and a heavier snowfall comes down the screen as a front. No new snow falls
+    /// until a gust has carried off the last flake, then the snowfall starts again from the top.
     private func spawnFlakes() {
         guard flakes.count < targetFlakes, !holding else { return }
         for _ in flakes.count..<targetFlakes {
-            flakes.append(makeFlake(y: height + random.range(0, height * 0.8)))
+            flakes.append(makeFlake(y: height + random.range(0, height)))
         }
     }
 
@@ -2973,7 +3011,7 @@ final class SnowSimulation {
             snowfallHeld = false
             snowfallReleased()
         }
-        if snowfall != .variable {
+        if !variesIntensity {
             strengthTarget = 1
         } else if clock >= nextShift {
             let roll = random.next()
@@ -3404,7 +3442,7 @@ final class SnowSimulation {
     private func settle(dt: Float) {
         // Melting nearly keeps pace with the snowfall, so heavier snowfall builds drifts only a little higher, and the
         // far sparser leaves wither as slowly.
-        let falling = snowfall.flakesPerMegapoint * strength * density * (leafy ? leafShare : 1)
+        let falling = Self.flakesPerMegapoint(intensity) * strength * density * (leafy ? leafShare : 1)
         let meltPace = falling > 0 ? pow(falling / thawBalance, thawExponent) : 1
         for ledge in ledgeList { ledge.outside = (outside(of: ledge, left: true), outside(of: ledge, left: false)) }
         for layer in layers {
@@ -3430,7 +3468,7 @@ final class SnowSimulation {
 
     private func updateTarget() {
         let share: Float = leafy ? leafShare : rain ? rainShare : 1
-        targetFlakes = snowfallHeld ? 0 : Int(snowfall.flakesPerMegapoint * share * strength * density * width * height / 1_000_000)
+        targetFlakes = snowfallHeld ? 0 : Int(Self.flakesPerMegapoint(intensity) * share * strength * density * width * height / 1_000_000)
     }
 
     private static func columnCount(for width: Float, columnWidth: Float) -> Int {

@@ -96,37 +96,13 @@ pub enum Mode {
     Blossom,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Snowfall {
-    Off,
-    Light,
-    Steady,
-    Heavy,
-    Variable,
-}
-
-impl Snowfall {
-    pub const ALL: [Snowfall; 5] = [Snowfall::Off, Snowfall::Light, Snowfall::Steady, Snowfall::Heavy, Snowfall::Variable];
-
-    pub fn title(self) -> &'static str {
-        match self {
-            Snowfall::Off => "Off",
-            Snowfall::Light => "Light",
-            Snowfall::Steady => "Steady",
-            Snowfall::Heavy => "Heavy",
-            Snowfall::Variable => "Variable",
-        }
-    }
-
-    fn flakes_per_megapoint(self) -> f32 {
-        match self {
-            Snowfall::Off => 0.0,
-            Snowfall::Light => 150.0,
-            Snowfall::Steady => 380.0,
-            Snowfall::Heavy => 800.0,
-            Snowfall::Variable => 380.0,
-        }
-    }
+/// The flakes a megapoint of screen holds at an intensity from 0 to 1: a quarter of the way up is a light fall, halfway
+/// a steady one, three quarters a heavy one, and the top nearly twice that.
+fn flakes_per_megapoint(intensity: f32) -> f32 {
+    const STOPS: [f32; 5] = [0.0, 150.0, 380.0, 800.0, 1500.0];
+    let along = intensity.clamp(0.0, 1.0) * 4.0;
+    let i = (along as usize).min(3);
+    STOPS[i] + (STOPS[i + 1] - STOPS[i]) * (along - i as f32)
 }
 
 /// How briskly the scene changes, which sets how often it is drawn.
@@ -372,10 +348,15 @@ pub struct SnowSimulation {
     width: f32,
     height: f32,
     pace: Pace,
-    snowfall: Snowfall,
+    /// How much falls, from 0 to 1.
+    intensity: f32,
+    /// Whether the snowfall rises and eases on its own over the day.
+    varies: bool,
     density: f32,
     pub thaws: bool,
     pub accumulates: bool,
+    /// How opaque snow, leaves and rain are while they fall; once settled they show in full.
+    pub falling_opacity: f32,
     /// Side edges, left and right, with no display past them: a window slid past one leaves its snow heaped against the edge.
     pub walls: (bool, bool),
     /// Keeps the snowfall from starting until a scattered window's snow first reaches the bottom of the screen.
@@ -416,17 +397,19 @@ pub struct SnowSimulation {
 }
 
 impl SnowSimulation {
-    pub fn new(width: f32, height: f32, snowfall: Snowfall) -> SnowSimulation {
+    pub fn new(width: f32, height: f32, intensity: f32) -> SnowSimulation {
         let mut seed = Random::new();
         let ground = SnowLayer::new(V2::ZERO, column_count(width), COLUMN_WIDTH, GROUND_DEPTH, false, (seed.range(0.0, TAU), seed.range(0.0, TAU)));
         let mut simulation = SnowSimulation {
             width,
             height,
             pace: Pace::Calm,
-            snowfall,
+            intensity: intensity.clamp(0.0, 1.0),
+            varies: false,
             density: 1.0,
             thaws: false,
             accumulates: true,
+            falling_opacity: 1.0,
             walls: (false, false),
             snowfall_held: false,
             snowfall_released: false,
@@ -490,15 +473,33 @@ impl SnowSimulation {
         self.pace
     }
 
-    pub fn set_snowfall(&mut self, snowfall: Snowfall) {
-        if snowfall == Snowfall::Variable && self.snowfall != Snowfall::Variable {
+    pub fn set_intensity(&mut self, intensity: f32) {
+        self.intensity = intensity.clamp(0.0, 1.0);
+        self.update_target();
+        self.thin_above();
+    }
+
+    /// Flakes still above the screen, waiting to come in, outnumber a lighter snowfall's target as the ones on screen
+    /// do: thinned in the same proportion, they come in at the new rate at once.
+    fn thin_above(&mut self) {
+        if self.air.flakes.len() <= self.target_flakes {
+            return;
+        }
+        let keep = self.target_flakes as f32 / self.air.flakes.len() as f32;
+        let height = self.height;
+        let random = &mut self.air.random;
+        self.air.flakes.retain(|flake| flake.position.y <= height || random.next() < keep);
+    }
+
+    pub fn set_varies(&mut self, varies: bool) {
+        if varies && !self.varies {
             self.next_shift = self.air.clock;
         }
-        if snowfall != Snowfall::Variable {
+        if !varies {
             self.air.strength = 1.0;
             self.strength_target = 1.0;
         }
-        self.snowfall = snowfall;
+        self.varies = varies;
         self.update_target();
     }
 
@@ -584,7 +585,7 @@ impl SnowSimulation {
     /// Nothing falls, lies, waits for its window or haunts, and nothing will until the snowfall or Halloween is
     /// turned on: the screen can rest.
     pub fn is_empty(&self) -> bool {
-        self.snowfall == Snowfall::Off
+        self.intensity <= 0.0
             && !self.haunting.on
             && self.sprite_count() == 0
             && !self.haunting.moving()
@@ -777,7 +778,7 @@ impl SnowSimulation {
                     position: flake.position,
                     velocity: motion(flake, blossom),
                     size: drawn_size(blossom, flake.size, flake.leaf),
-                    alpha: flake.alpha,
+                    alpha: flake.alpha * self.falling_opacity,
                     pose: [0.0, tilt.map_or(0.0, |(_, direction)| direction), 0.0, 0.0],
                     leaf: [flake.leaf, flake_turn(clock, flake, blossom), tilt.map_or_else(|| tumble(clock, flake.leaf), |(face, _)| face)],
                     spin: [
@@ -791,7 +792,7 @@ impl SnowSimulation {
                 position: flake.position,
                 velocity: flake.velocity,
                 size: flake.size,
-                alpha: flake.alpha,
+                alpha: flake.alpha * self.falling_opacity,
                 soft: flake.soft,
                 tint_amount: flake.tint_amount,
                 tint: flake.tint,
@@ -1270,8 +1271,10 @@ impl SnowSimulation {
         }
     }
 
+    /// A flake that has landed or left starts again at the top. Past the snowfall's target, only every target-th of
+    /// the count does, so the top of the screen thins to the new snowfall at once and the change comes down with it.
     fn recycle(&mut self, i: usize) {
-        if self.air.flakes.len() <= self.target_flakes && !self.holding() {
+        if !self.holding() && self.air.random.range(0.0, self.air.flakes.len() as f32) < self.target_flakes as f32 {
             let y = self.height + self.air.random.range(4.0, 40.0);
             self.air.flakes[i] = self.air.make_flake(self.width, y);
         } else {
@@ -1279,13 +1282,15 @@ impl SnowSimulation {
         }
     }
 
-    /// No new snow falls until the gust has carried off the last flake, then the snowfall starts again from the top.
+    /// Flakes short of the target start above the screen, spread over a screen's height: they come in at the top at
+    /// the new rate from the first frame, and a heavier snowfall comes down the screen as a front. No new snow falls
+    /// until a gust has carried off the last flake, then the snowfall starts again from the top.
     fn spawn_flakes(&mut self) {
         if self.holding() {
             return;
         }
         while self.air.flakes.len() < self.target_flakes {
-            let y = self.height + self.air.random.range(0.0, self.height * 0.8);
+            let y = self.height + self.air.random.range(0.0, self.height);
             let flake = self.air.make_flake(self.width, y);
             self.air.flakes.push(flake);
         }
@@ -1304,7 +1309,7 @@ impl SnowSimulation {
             self.snowfall_released = true;
             self.update_target();
         }
-        if self.snowfall != Snowfall::Variable {
+        if !self.varies {
             self.strength_target = 1.0;
         } else if self.air.clock >= self.next_shift {
             let random = &mut self.air.random;
@@ -1483,7 +1488,7 @@ impl SnowSimulation {
     fn settle(&mut self, dt: f32) {
         // Melting nearly keeps pace with the snowfall, so heavier snowfall builds drifts only a little higher, and the
         // far sparser leaves wither as slowly.
-        let falling = self.snowfall.flakes_per_megapoint() * self.air.strength * self.density * self.share();
+        let falling = flakes_per_megapoint(self.intensity) * self.air.strength * self.density * self.share();
         let melt_pace = if falling > 0.0 { (falling / THAW_BALANCE).powf(THAW_EXPONENT) } else { 1.0 };
         let outside: Vec<[f32; 2]> = (0..self.layers.len())
             .map(|li| if li == 0 { [0.0; 2] } else { [outside(&self.layers, li, true), outside(&self.layers, li, false)] })
@@ -1537,7 +1542,7 @@ impl SnowSimulation {
     }
 
     fn update_target(&mut self) {
-        let per_megapoint = if self.snowfall_held { 0.0 } else { self.snowfall.flakes_per_megapoint() };
+        let per_megapoint = if self.snowfall_held { 0.0 } else { flakes_per_megapoint(self.intensity) };
         let share = self.share();
         self.target_flakes = (per_megapoint * share * self.air.strength * self.density * self.width * self.height / 1_000_000.0) as usize;
     }

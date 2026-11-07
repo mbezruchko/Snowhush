@@ -28,12 +28,17 @@ use crate::prefs::{self, Settings};
 use crate::snow::{self, Command, Links};
 use crate::update::{self, Release};
 use crate::welcome::{self, Handlers};
-use snowhush_core::simulation::{Mode, Snowfall};
+use snowhush_core::simulation::Mode;
 
 const CLASS: PCWSTR = w!("SnowhushController");
 const WM_TRAY: u32 = WM_APP + 1;
 const NIN_KEYSELECT: u32 = NIN_SELECT | 1;
+/// Intensity from 0 up in steps of 5%: `ID_SNOWFALL` + the step.
 const ID_SNOWFALL: u32 = 100;
+const INTENSITY_STEPS: u32 = 21;
+/// The system's menu can't hold a slider: its Intensity submenu offers these, in percent.
+const INTENSITY_STOPS: [u32; 5] = [0, 25, 50, 75, 100];
+const ID_VARY: u32 = 219;
 const ID_ACCUMULATE: u32 = 200;
 const ID_MELT: u32 = 201;
 const ID_SCREENSHOTS: u32 = 202;
@@ -53,6 +58,11 @@ const ID_MAX_PERFORMANCE: u32 = 215;
 const ID_DEEP: u32 = 216;
 const ID_BLOSSOM: u32 = 217;
 const ID_SPONSOR: u32 = 218;
+/// Opacity from 10% up in steps of 5%: `ID_OPACITY` + the step.
+const ID_OPACITY: u32 = 400;
+const OPACITY_STEPS: u32 = 19;
+/// The system's menu can't hold a slider: its Opacity submenu offers these, in percent.
+const OPACITY_STOPS: [u32; 5] = [100, 80, 60, 40, 20];
 
 const SPONSORS: &str = "https://github.com/sponsors/mbezruchko";
 const TIMER_WELCOME: usize = 1;
@@ -332,32 +342,27 @@ fn send(app: &App, command: Command) {
 fn show_menu(window: HWND, x: i32, y: i32) {
     let current = || APP.with_borrow(|app| app.as_ref().map(|app| app.settings));
     let Some(settings) = current() else { return };
-    let listed = entries(&settings, prefs::opens_at_login());
     let mut toggle = |id: u32| {
         choose(window, id, prefs::opens_at_login());
-        entries(&current().unwrap_or(settings), prefs::opens_at_login())
+        entries(&current().unwrap_or(settings), prefs::opens_at_login(), true)
     };
+    let native = || native_menu(window, x, y, &entries(&settings, prefs::opens_at_login(), false));
     let chosen = if menu::available() {
-        menu::track(x, y, listed.clone(), light_taskbar(), &mut toggle).unwrap_or_else(|error| {
+        menu::track(x, y, entries(&settings, prefs::opens_at_login(), true), light_taskbar(), &mut toggle).unwrap_or_else(|error| {
             log!("menu failed, using the system's: {error}");
-            native_menu(window, x, y, &listed)
+            native()
         })
     } else {
-        native_menu(window, x, y, &listed)
+        native()
     };
     choose(window, chosen, prefs::opens_at_login());
 }
 
-/// What the tray menu lists, with what is on or off.
-fn entries(settings: &Settings, login: bool) -> Vec<Entry> {
+/// What the tray menu lists, with what is on or off: sliders in the drawn menu, submenus in the system's.
+fn entries(settings: &Settings, login: bool, sliders: bool) -> Vec<Entry> {
     let mode = settings.mode;
     let autumn = mode == Mode::Autumn;
     let blossom = mode == Mode::Blossom;
-    let snowfall = Snowfall::ALL
-        .iter()
-        .enumerate()
-        .map(|(i, &option)| Entry::choice(ID_SNOWFALL + i as u32, option.title(), option == settings.snowfall))
-        .collect();
     let modes = vec![
         Entry::choice(ID_SNOW, "Snow", mode == Mode::Snow),
         Entry::choice(ID_AUTUMN, "Autumn Leaves", autumn),
@@ -366,7 +371,7 @@ fn entries(settings: &Settings, login: bool) -> Vec<Entry> {
         Entry::Separator,
         Entry::item(ID_HALLOWEEN, "Halloween", halloween::wanted(settings.halloween), mode == Mode::Snow),
     ];
-    let mut behavior = vec![Entry::header("Behavior")];
+    let mut behavior = vec![Entry::header("Behavior"), Entry::toggle(ID_VARY, "Vary Intensity", settings.varies, true)];
     // Rain doesn't lie anywhere: nothing to keep, melt or clear.
     if mode != Mode::Rain {
         behavior.push(Entry::toggle(ID_ACCUMULATE, "Accumulate", settings.accumulate, true));
@@ -401,8 +406,26 @@ fn entries(settings: &Settings, login: bool) -> Vec<Entry> {
         Entry::toggle(ID_LOGIN, "Open at Login", login, true),
         Entry::item(ID_UPDATES, "Check for Updates\u{2026}", false, true),
     ]);
-    let mut entries =
-        vec![Entry::Submenu { label: "Intensity".to_string(), entries: snowfall }, Entry::Submenu { label: "Mode".to_string(), entries: modes }];
+    let mut entries = if sliders {
+        vec![
+            Entry::header("Intensity"),
+            Entry::slider(ID_SNOWFALL, settings.intensity.clamp(0, 100) / 5, INTENSITY_STEPS, &percent(settings.intensity)),
+            Entry::header("Opacity"),
+            Entry::slider(ID_OPACITY, (settings.opacity.clamp(10, 100) - 10) / 5, OPACITY_STEPS, &format!("{}%", settings.opacity)),
+            Entry::Separator,
+        ]
+    } else {
+        let intensities = INTENSITY_STOPS.iter().map(|&stop| Entry::choice(ID_SNOWFALL + stop / 5, &percent(stop), stop == settings.intensity)).collect();
+        let opacities = OPACITY_STOPS
+            .iter()
+            .map(|&stop| Entry::choice(ID_OPACITY + (stop - 10) / 5, &format!("{stop}%"), stop == settings.opacity))
+            .collect();
+        vec![
+            Entry::Submenu { label: "Intensity".to_string(), entries: intensities },
+            Entry::Submenu { label: "Opacity".to_string(), entries: opacities },
+        ]
+    };
+    entries.push(Entry::Submenu { label: "Mode".to_string(), entries: modes });
     if mode != Mode::Rain {
         let clear = if autumn {
             "Clear Leaves"
@@ -420,6 +443,11 @@ fn entries(settings: &Settings, login: bool) -> Vec<Entry> {
         Entry::item(ID_QUIT, "Quit", false, true),
     ]);
     entries
+}
+
+/// An intensity as its caption: a percentage, or Off.
+fn percent(intensity: u32) -> String {
+    if intensity == 0 { "Off".to_string() } else { format!("{intensity}%") }
 }
 
 /// The system's own menu, for when the drawn one can't be shown.
@@ -459,6 +487,7 @@ unsafe fn append(menu: HMENU, entries: &[Entry]) {
                     append(submenu, entries);
                     let _ = AppendMenuW(menu, MF_POPUP, submenu.0 as usize, PCWSTR(text(label).as_ptr()));
                 }
+                Entry::Slider { .. } => {}
             }
         }
     }
@@ -546,11 +575,19 @@ fn choose(window: HWND, chosen: u32, login: bool) {
                     settings.max_performance = !settings.max_performance;
                     Command::Performance(settings.max_performance)
                 }
-                _ => {
-                    let Some(&snowfall) = Snowfall::ALL.get(chosen.wrapping_sub(ID_SNOWFALL) as usize) else { return };
-                    settings.snowfall = snowfall;
-                    Command::Snowfall(snowfall)
+                ID_VARY => {
+                    settings.varies = !settings.varies;
+                    Command::VaryIntensity(settings.varies)
                 }
+                id if (ID_OPACITY..ID_OPACITY + OPACITY_STEPS).contains(&id) => {
+                    settings.opacity = 10 + 5 * (id - ID_OPACITY);
+                    Command::FallingOpacity(settings.opacity as f32 / 100.0)
+                }
+                id if (ID_SNOWFALL..ID_SNOWFALL + INTENSITY_STEPS).contains(&id) => {
+                    settings.intensity = 5 * (id - ID_SNOWFALL);
+                    Command::Intensity(settings.intensity as f32 / 100.0)
+                }
+                _ => return,
             };
             settings.save();
             send(app, command);
