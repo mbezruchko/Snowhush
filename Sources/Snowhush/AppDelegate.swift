@@ -6,7 +6,6 @@ import Sparkle
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUStandardUserDriverDelegate {
     private var device: MTLDevice!
     private var screens: [ScreenSnow] = []
-    private var snowfall = Snowfall.steady
     private var accumulates = true
     private var thaws = true
     private var snowOnWindows = true
@@ -14,8 +13,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var snowfallHeld = false
     private var halloween = false
     private var statusItem: NSStatusItem!
-    private let snowfallSlider = SnowfallSlider()
-    private let opacitySlider = OpacitySlider()
+    private let intensitySlider = MenuSlider(range: 0...1)
+    private let opacitySlider = MenuSlider(range: Preferences.opacityRange)
+    private var varyItem: NSMenuItem!
     private var accumulateItem: NSMenuItem!
     private var meltItem: NSMenuItem!
     private var snowOnWindowsItem: NSMenuItem!
@@ -52,7 +52,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
             return
         }
         self.device = device
-        snowfall = Preferences.snowfall
         accumulates = Preferences.accumulate
         thaws = Preferences.meltSnow
         snowOnWindows = Preferences.snowOnWindows
@@ -144,10 +143,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         menu.autoenablesItems = false
 
         menu.addItem(.sectionHeader(title: "Intensity"))
-        snowfallSlider.changed = { [unowned self] in select($0) }
-        let sliderItem = NSMenuItem()
-        sliderItem.view = snowfallSlider
-        menu.addItem(sliderItem)
+        intensitySlider.changed = { [unowned self] in select(intensity: $0) }
+        let intensityItem = NSMenuItem()
+        intensityItem.view = intensitySlider
+        menu.addItem(intensityItem)
         menu.addItem(.sectionHeader(title: "Opacity"))
         opacitySlider.changed = { [unowned self] opacity in
             Preferences.fallingOpacity = opacity
@@ -170,6 +169,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         let settings = NSMenu()
         settings.autoenablesItems = false
         settings.addItem(.sectionHeader(title: "Behavior"))
+        varyItem = toggle("Vary Intensity", #selector(toggleVaryIntensity), to: settings)
         accumulateItem = toggle("Accumulate", #selector(toggleAccumulate), to: settings)
         meltItem = toggle("Melt Snow", #selector(toggleMeltSnow), to: settings)
         snowOnWindowsItem = toggle("Snow on Windows", #selector(toggleSnowOnWindows), to: settings)
@@ -207,8 +207,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
-        snowfallSlider.snowfall = snowfall
-        opacitySlider.opacity = Preferences.fallingOpacity
+        intensitySlider.value = Preferences.intensity
+        opacitySlider.value = Preferences.fallingOpacity
+        varyItem.state = Preferences.variesIntensity ? .on : .off
         accumulateItem.state = accumulates ? .on : .off
         let mode = Preferences.mode
         let autumn = mode == .autumn
@@ -241,11 +242,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
     }
 
-    private func select(_ snowfall: Snowfall) {
-        self.snowfall = snowfall
-        Preferences.snowfall = snowfall
-        for snow in screens { snow.simulation.snowfall = snowfall }
+    private func select(intensity: Double) {
+        Preferences.intensity = intensity
+        for snow in screens { snow.simulation.intensity = Float(intensity) }
         updateStatusIcon()
+    }
+
+    @objc private func toggleVaryIntensity() {
+        Preferences.variesIntensity.toggle()
+        for snow in screens { snow.simulation.variesIntensity = Preferences.variesIntensity }
     }
 
     @objc private func toggleAccumulate() {
@@ -335,7 +340,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     }
 
     private func updateStatusIcon() {
-        statusItem.button?.image = Self.icon(halloween: halloween, dimmed: snowfall == .off)
+        statusItem.button?.image = Self.icon(halloween: halloween, dimmed: Preferences.intensity <= 0)
     }
 
     private static let symbol: [Mode: String] = [.snow: "snowflake", .autumn: "leaf", .rain: "cloud.rain"]

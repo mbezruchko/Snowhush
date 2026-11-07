@@ -32,7 +32,7 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::Graphics::Imaging::{CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, IWICImagingFactory, WICBitmapCacheOnLoad};
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
-use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
+use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_BINARY, RRF_RT_REG_DWORD, RegGetValueW};
 use windows::Win32::UI::Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTW};
 use windows::Win32::UI::Controls::MARGINS;
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
@@ -62,6 +62,14 @@ const LABEL: f32 = 36.0;
 /// Room after the longest label, where a submenu's chevron goes.
 const TRAILING: f32 = 40.0;
 const MIN_WIDTH: f32 = 160.0;
+/// The inset of a panel with no checkmarks or radio dots to show, the same on both sides.
+const INSET: f32 = 12.0;
+/// A slider's row: the track with its thumb, the caption under it.
+const SLIDER: f32 = 46.0;
+const THUMB: f32 = 10.0;
+const TRACK: f32 = 4.0;
+/// A panel with a slider is at least this wide, for its steps to lie far enough apart.
+const SLIDER_WIDTH: f32 = 240.0;
 const TEXT_SIZE: f32 = 14.0;
 const GLYPH_SIZE: f32 = 12.0;
 const HEADER_SIZE: f32 = 12.0;
@@ -88,6 +96,14 @@ pub enum Entry {
     },
     /// The title of the group of entries under it.
     Header(String),
+    /// One of `stops` values along a track, `at` the one chosen. Moving it goes to the menu's `toggle` as `id + at`,
+    /// leaving the menu open.
+    Slider {
+        id: u32,
+        at: u32,
+        stops: u32,
+        caption: String,
+    },
     Submenu {
         label: String,
         entries: Vec<Entry>,
@@ -112,17 +128,21 @@ impl Entry {
         Entry::Item { id, label: label.to_string(), checked: chosen, enabled: true, radio: true, keep_open: false }
     }
 
+    pub fn slider(id: u32, at: u32, stops: u32, caption: &str) -> Entry {
+        Entry::Slider { id, at: at.min(stops - 1), stops, caption: caption.to_string() }
+    }
+
     fn label(&self) -> Option<&str> {
         match self {
             Entry::Item { label, .. } | Entry::Submenu { label, .. } | Entry::Header(label) => Some(label),
-            Entry::Separator => None,
+            Entry::Separator | Entry::Slider { .. } => None,
         }
     }
 
     fn selectable(&self) -> bool {
         match self {
             Entry::Item { enabled, .. } => *enabled,
-            Entry::Submenu { .. } => true,
+            Entry::Submenu { .. } | Entry::Slider { .. } => true,
             Entry::Separator | Entry::Header(_) => false,
         }
     }
@@ -131,12 +151,17 @@ impl Entry {
         match self {
             Entry::Separator => SEPARATOR,
             Entry::Header(_) => HEADER,
+            Entry::Slider { .. } => SLIDER,
             _ => ROW,
         }
     }
 
     fn is_submenu(&self) -> bool {
         matches!(self, Entry::Submenu { .. })
+    }
+
+    fn is_slider(&self) -> bool {
+        matches!(self, Entry::Slider { .. })
     }
 }
 
@@ -167,18 +192,72 @@ struct Palette {
     dim: D2D1_COLOR_F,
     hover: D2D1_COLOR_F,
     line: D2D1_COLOR_F,
+    /// A slider's caption, its track, its thumb and the thumb's rim, after the system's own sliders.
+    soft: D2D1_COLOR_F,
+    track: D2D1_COLOR_F,
+    thumb: D2D1_COLOR_F,
+    rim: D2D1_COLOR_F,
+    accent: D2D1_COLOR_F,
 }
 
 impl Palette {
     fn new(light: bool) -> Palette {
         let tone = if light { 0.0 } else { 1.0 };
         let color = |a: f32| D2D1_COLOR_F { r: tone, g: tone, b: tone, a };
+        let accent = accent(light);
         if light {
-            Palette { ink: color(0.894), dim: color(0.361), hover: color(0.037), line: color(0.058) }
+            Palette {
+                ink: color(0.894),
+                dim: color(0.361),
+                hover: color(0.037),
+                line: color(0.058),
+                soft: color(0.606),
+                track: color(0.447),
+                thumb: D2D1_COLOR_F { r: 1.0, g: 1.0, b: 1.0, a: 1.0 },
+                rim: color(0.06),
+                accent,
+            }
         } else {
-            Palette { ink: color(1.0), dim: color(0.363), hover: color(0.061), line: color(0.084) }
+            Palette {
+                ink: color(1.0),
+                dim: color(0.363),
+                hover: color(0.061),
+                line: color(0.084),
+                soft: color(0.786),
+                track: color(0.545),
+                thumb: D2D1_COLOR_F { r: 0.271, g: 0.271, b: 0.271, a: 1.0 },
+                rim: color(0.094),
+                accent,
+            }
         }
     }
+}
+
+/// The user's accent as the system's sliders fill with it: a lighter shade on dark menus, a darker one on light.
+fn accent(light: bool) -> D2D1_COLOR_F {
+    let mut shades = [0u8; 32];
+    let mut size = shades.len() as u32;
+    let read = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            w!("Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Accent"),
+            w!("AccentPalette"),
+            RRF_RT_REG_BINARY,
+            None,
+            Some(shades.as_mut_ptr().cast()),
+            Some(&mut size),
+        )
+    };
+    // Eight shades, lightest first, the accent itself fourth: dark menus take the second, light ones the fifth.
+    let (r, g, b) = if read.0 == 0 && size as usize >= shades.len() {
+        let at = if light { 16 } else { 4 };
+        (shades[at], shades[at + 1], shades[at + 2])
+    } else if light {
+        (0x00, 0x5f, 0xb8)
+    } else {
+        (0x4c, 0xc2, 0xff)
+    };
+    D2D1_COLOR_F { r: f32::from(r) / 255.0, g: f32::from(g) / 255.0, b: f32::from(b) / 255.0, a: 1.0 }
 }
 
 struct Panel {
@@ -193,6 +272,8 @@ struct Panel {
     hover: Option<usize>,
     /// The entry of the panel before it that opened it.
     from: usize,
+    /// Where labels start, in DIPs from the panel's left edge.
+    label: f32,
     pixels: Vec<u8>,
 }
 
@@ -211,12 +292,15 @@ struct Menu {
     palette: Palette,
     /// The panel and entry the pointer last came to rest on, while the submenu timer runs.
     resting: Option<(usize, Option<usize>)>,
+    /// The panel and slider being dragged.
+    sliding: Option<(usize, usize)>,
     delay: u32,
     d2d: ID2D1Factory,
     imaging: IWICImagingFactory,
     write: IDWriteFactory,
     text: IDWriteTextFormat,
     heading: IDWriteTextFormat,
+    caption: IDWriteTextFormat,
     glyphs: IDWriteTextFormat,
 }
 
@@ -421,22 +505,34 @@ unsafe extern "system" fn procedure(window: HWND, message: u32, wparam: WPARAM, 
             }
             WM_MOUSEMOVE => {
                 let point = screen_point(window, lparam);
-                act(|menu| menu.pointer(point));
+                act(|menu| if menu.sliding.is_some() { menu.drag(point) } else { menu.pointer(point) });
                 LRESULT(0)
             }
             WM_LBUTTONDOWN | WM_RBUTTONDOWN => {
                 let point = screen_point(window, lparam);
+                let left = message == WM_LBUTTONDOWN;
                 act(|menu| {
-                    if menu.panel_at(point).is_none() {
+                    let Some(p) = menu.panel_at(point) else {
                         CLOSED.set(true);
+                        return false;
+                    };
+                    match menu.entry_at(p, point) {
+                        Some(i) if left && menu.panels[p].entries[i].is_slider() => {
+                            menu.sliding = Some((p, i));
+                            menu.drag(point);
+                            true
+                        }
+                        _ => false,
                     }
-                    false
                 });
                 LRESULT(0)
             }
             WM_LBUTTONUP | WM_RBUTTONUP => {
                 let point = screen_point(window, lparam);
                 act(|menu| {
+                    if menu.sliding.take().is_some() {
+                        return true;
+                    }
                     let Some(p) = menu.panel_at(point) else { return false };
                     match menu.entry_at(p, point) {
                         Some(i) => menu.activate(p, i, false),
@@ -449,10 +545,23 @@ unsafe extern "system" fn procedure(window: HWND, message: u32, wparam: WPARAM, 
                 act(|menu| menu.press(wparam.0));
                 LRESULT(0)
             }
+            WM_MOUSEWHEEL => {
+                // Unlike the other mouse messages, the wheel's carries a point on the screen.
+                let point = POINT { x: (lparam.0 & 0xffff) as i16 as i32, y: ((lparam.0 >> 16) & 0xffff) as i16 as i32 };
+                let up = ((wparam.0 >> 16) & 0xffff) as i16 > 0;
+                act(|menu| {
+                    let Some(p) = menu.panel_at(point) else { return false };
+                    match menu.entry_at(p, point) {
+                        Some(i) => menu.nudge(p, i, if up { 1 } else { -1 }),
+                        None => false,
+                    }
+                });
+                LRESULT(0)
+            }
             WM_TIMER if wparam.0 == TIMER_POINTER => {
                 let mut point = POINT::default();
                 let _ = GetCursorPos(&mut point);
-                act(|menu| menu.panel_at(point).is_none() && menu.pointer(point));
+                act(|menu| menu.sliding.is_none() && menu.panel_at(point).is_none() && menu.pointer(point));
                 LRESULT(0)
             }
             WM_TIMER if wparam.0 == TIMER_SUBMENU => {
@@ -507,6 +616,9 @@ impl Menu {
             text.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
             let heading = format(w!("Segoe UI Variable Text"), HEADER_SIZE, DWRITE_FONT_WEIGHT_SEMI_BOLD)?;
             heading.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
+            let caption = format(w!("Segoe UI Variable Text"), HEADER_SIZE, DWRITE_FONT_WEIGHT_NORMAL)?;
+            caption.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
+            caption.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
             let glyphs = format(w!("Segoe Fluent Icons"), GLYPH_SIZE, DWRITE_FONT_WEIGHT_NORMAL)?;
             glyphs.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
             glyphs.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
@@ -517,12 +629,14 @@ impl Menu {
                 light,
                 palette: Palette::new(light),
                 resting: None,
+                sliding: None,
                 delay: delay.max(1),
                 d2d: D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?,
                 imaging: CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?,
                 write,
                 text,
                 heading,
+                caption,
                 glyphs,
             })
         }
@@ -542,11 +656,15 @@ impl Menu {
             tops.push(y);
             y += entry.height();
         }
+        let marks = entries.iter().any(|entry| matches!(entry, Entry::Item { checked, radio, keep_open, .. } if *checked || *radio || *keep_open));
+        let label = if marks { LABEL } else { INSET };
+        let least = if entries.iter().any(Entry::is_slider) { SLIDER_WIDTH } else { MIN_WIDTH };
         Ok(Panel {
             window: HWND::default(),
             entries,
             tops,
-            width: (LABEL + widest + TRAILING).ceil().max(MIN_WIDTH),
+            label,
+            width: (label + widest + TRAILING).ceil().max(least),
             height: y + PAD,
             frame: RECT::default(),
             hover: None,
@@ -584,6 +702,33 @@ impl Menu {
         let changed = self.panels[p].hover != hover;
         self.panels[p].hover = hover;
         changed
+    }
+
+    /// Moves the slider being dragged to the stop nearest the pointer.
+    fn drag(&mut self, point: POINT) -> bool {
+        let Some((p, i)) = self.sliding else { return false };
+        let panel = &self.panels[p];
+        let &Entry::Slider { stops, .. } = &panel.entries[i] else { return false };
+        let (left, right) = travel(panel);
+        let x = (point.x - panel.frame.left) as f32 / self.scale;
+        let along = ((x - left) / (right - left)).clamp(0.0, 1.0);
+        self.set_slider(p, i, (along * (stops - 1) as f32).round() as u32)
+    }
+
+    /// Moves a slider a stop up or down, if entry `i` of panel `p` is one.
+    fn nudge(&mut self, p: usize, i: usize, step: i32) -> bool {
+        let &Entry::Slider { at, stops, .. } = &self.panels[p].entries[i] else { return false };
+        self.set_slider(p, i, (at as i32 + step).clamp(0, stops as i32 - 1) as u32)
+    }
+
+    fn set_slider(&mut self, p: usize, i: usize, next: u32) -> bool {
+        let Entry::Slider { id, at, .. } = &mut self.panels[p].entries[i] else { return false };
+        if *at == next {
+            return false;
+        }
+        *at = next;
+        TOGGLED.set(Some(*id + next));
+        true
     }
 
     /// Follows the pointer: lights what it is over, and once it rests, closes the submenus it left and opens the
@@ -742,6 +887,12 @@ impl Menu {
     fn press(&mut self, key: usize) -> bool {
         let is = |code: u16| key == code as usize;
         let last = self.panels.len() - 1;
+        if (is(VK_LEFT.0) || is(VK_RIGHT.0))
+            && let Some(i) = self.panels[last].hover
+            && self.panels[last].entries[i].is_slider()
+        {
+            return self.nudge(last, i, if is(VK_RIGHT.0) { 1 } else { -1 });
+        }
         if is(VK_ESCAPE.0) || is(VK_LEFT.0) {
             if last > 0 {
                 return self.close_after(last - 1);
@@ -786,7 +937,7 @@ impl Menu {
 
     /// Draws a panel again and has its window show it.
     fn render(&mut self, p: usize) {
-        match self.paint(&self.panels[p]) {
+        match self.paint(p) {
             Ok(pixels) => {
                 self.panels[p].pixels = pixels;
                 unsafe {
@@ -797,8 +948,8 @@ impl Menu {
         }
     }
 
-    fn paint(&self, panel: &Panel) -> Result<Vec<u8>> {
-        let size = panel.size();
+    fn paint(&self, p: usize) -> Result<Vec<u8>> {
+        let size = self.panels[p].size();
         unsafe {
             let bitmap = self.imaging.CreateBitmap(size.0 as u32, size.1 as u32, &GUID_WICPixelFormat32bppPBGRA, WICBitmapCacheOnLoad)?;
             let properties = D2D1_RENDER_TARGET_PROPERTIES {
@@ -813,7 +964,7 @@ impl Menu {
             target.BeginDraw();
             target.Clear(Some(&D2D1_COLOR_F::default()));
             target.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
-            let drawn = self.draw(&target, panel);
+            let drawn = self.draw(&target, p);
             target.EndDraw(None, None)?;
             drawn?;
             drop(target);
@@ -823,7 +974,8 @@ impl Menu {
         }
     }
 
-    fn draw(&self, target: &ID2D1RenderTarget, panel: &Panel) -> Result<()> {
+    fn draw(&self, target: &ID2D1RenderTarget, p: usize) -> Result<()> {
+        let panel = &self.panels[p];
         let palette = self.palette;
         unsafe {
             let ink = target.CreateSolidColorBrush(&palette.ink, None)?;
@@ -840,8 +992,19 @@ impl Menu {
                     }
                     Entry::Header(label) => {
                         let units: Vec<u16> = label.encode_utf16().collect();
-                        let layout = self.write.CreateTextLayout(&units, &self.heading, panel.width - LABEL, HEADER)?;
-                        target.DrawTextLayout(Vector2 { X: LABEL, Y: top }, &layout, &dim, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                        let layout = self.write.CreateTextLayout(&units, &self.heading, panel.width - panel.label, HEADER)?;
+                        target.DrawTextLayout(Vector2 { X: panel.label, Y: top }, &layout, &dim, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                        continue;
+                    }
+                    &Entry::Slider { at, stops, ref caption, .. } => {
+                        let state = if self.sliding == Some((p, i)) {
+                            Thumb::Pressed
+                        } else if panel.hover == Some(i) {
+                            Thumb::Hovered
+                        } else {
+                            Thumb::Resting
+                        };
+                        self.slider(target, panel, top, at as f32 / (stops - 1).max(1) as f32, caption, state)?;
                         continue;
                     }
                     Entry::Item { label, checked, enabled, radio, .. } => (label.as_str(), *checked, *radio, *enabled),
@@ -861,9 +1024,44 @@ impl Menu {
                 if entry.is_submenu() {
                     self.glyph(target, CHEVRON, panel.width - PAD - 14.0, top, brush);
                 }
-                let layout = self.layout(label, panel.width - LABEL - TRAILING / 2.0)?;
-                target.DrawTextLayout(Vector2 { X: LABEL, Y: top }, &layout, brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                let layout = self.layout(label, panel.width - panel.label - TRAILING / 2.0)?;
+                target.DrawTextLayout(Vector2 { X: panel.label, Y: top }, &layout, brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
             }
+        }
+        Ok(())
+    }
+
+    /// A slider in the row starting at `top`, its thumb `along` the track from 0 to 1, drawn like the system's.
+    fn slider(&self, target: &ID2D1RenderTarget, panel: &Panel, top: f32, along: f32, caption: &str, thumb: Thumb) -> Result<()> {
+        let palette = self.palette;
+        let (left, right) = travel(panel);
+        let y = top + 5.0 + THUMB;
+        let x = left + (right - left) * along;
+        let bar = |from: f32, to: f32| D2D1_ROUNDED_RECT {
+            rect: D2D_RECT_F { left: from, top: y - TRACK / 2.0, right: to, bottom: y + TRACK / 2.0 },
+            radiusX: TRACK / 2.0,
+            radiusY: TRACK / 2.0,
+        };
+        let dot = match thumb {
+            Thumb::Resting => 6.0,
+            Thumb::Hovered => 7.0,
+            Thumb::Pressed => 5.0,
+        };
+        let circle = |radius: f32| D2D1_ELLIPSE { point: Vector2 { X: x, Y: y }, radiusX: radius, radiusY: radius };
+        unsafe {
+            let track = target.CreateSolidColorBrush(&palette.track, None)?;
+            let accent = target.CreateSolidColorBrush(&palette.accent, None)?;
+            let fill = target.CreateSolidColorBrush(&palette.thumb, None)?;
+            let rim = target.CreateSolidColorBrush(&palette.rim, None)?;
+            let soft = target.CreateSolidColorBrush(&palette.soft, None)?;
+            target.FillRoundedRectangle(&bar(left - THUMB, right + THUMB), &track);
+            target.FillRoundedRectangle(&bar(left - THUMB, x), &accent);
+            target.FillEllipse(&circle(THUMB), &fill);
+            target.DrawEllipse(&circle(THUMB - 0.5), &rim, 1.0, None);
+            target.FillEllipse(&circle(dot), &accent);
+            let units: Vec<u16> = caption.encode_utf16().collect();
+            let layout = self.write.CreateTextLayout(&units, &self.caption, right - left + 2.0 * THUMB, 16.0)?;
+            target.DrawTextLayout(Vector2 { X: left - THUMB, Y: top + 27.0 }, &layout, &soft, D2D1_DRAW_TEXT_OPTIONS_NONE);
         }
         Ok(())
     }
@@ -877,6 +1075,18 @@ impl Menu {
             }
         }
     }
+}
+
+#[derive(Clone, Copy)]
+enum Thumb {
+    Resting,
+    Hovered,
+    Pressed,
+}
+
+/// Where a slider's thumb goes in a panel, from the first stop to the last, in DIPs from its left edge.
+fn travel(panel: &Panel) -> (f32, f32) {
+    (panel.label + THUMB, panel.width - panel.label - THUMB)
 }
 
 /// Copies premultiplied pixels into a window's client area; the backdrop shows through where they are clear.

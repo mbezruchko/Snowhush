@@ -1,31 +1,11 @@
 import AppKit
 
-enum Snowfall: Int, CaseIterable {
-    case off, light, steady, heavy, variable
-
-    var title: String {
-        switch self {
-        case .off: "Off"
-        case .light: "Light"
-        case .steady: "Steady"
-        case .heavy: "Heavy"
-        case .variable: "Variable"
-        }
-    }
-
-    var flakesPerMegapoint: Float {
-        switch self {
-        case .off: 0
-        case .light: 150
-        case .steady: 380
-        case .heavy: 800
-        case .variable: 380
-        }
-    }
-}
-
 enum Preferences {
     private static let defaults = UserDefaults.standard
+    static let opacityRange = 0.1...1.0
+    private static let intensityKey = "intensity"
+    private static let varyIntensityKey = "variableIntensity"
+    /// Before the slider, the intensity was one of Off, Light, Steady, Heavy and Variable.
     private static let snowfallKey = "snowfall"
     private static let behindWindowsKey = "behindWindows"
     private static let showOverFullScreenKey = "showOverFullScreen"
@@ -46,7 +26,7 @@ enum Preferences {
     static func registerDefaults() {
         let calm = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         defaults.register(defaults: [
-            snowfallKey: (calm ? Snowfall.light : .steady).rawValue,
+            intensityKey: calm ? 0.25 : 0.5,
             behindWindowsKey: false,
             showOverFullScreenKey: false,
             meltSnowKey: true,
@@ -59,11 +39,22 @@ enum Preferences {
             autumnKey: false,
             fallingOpacityKey: 1.0,
         ])
+        if defaults.object(forKey: intensityKey) == nil, let stop = defaults.object(forKey: snowfallKey) as? Int {
+            defaults.set([0, 0.25, 0.5, 0.75, 0.5][min(max(stop, 0), 4)], forKey: intensityKey)
+            defaults.set(stop == 4, forKey: varyIntensityKey)
+        }
     }
 
-    static var snowfall: Snowfall {
-        get { Snowfall(rawValue: defaults.integer(forKey: snowfallKey)) ?? .steady }
-        set { defaults.set(newValue.rawValue, forKey: snowfallKey) }
+    /// How much falls, from 0 to 1.
+    static var intensity: Double {
+        get { min(max(defaults.double(forKey: intensityKey), 0), 1) }
+        set { defaults.set(newValue, forKey: intensityKey) }
+    }
+
+    /// Whether the snowfall rises and eases on its own over the day.
+    static var variesIntensity: Bool {
+        get { defaults.bool(forKey: varyIntensityKey) }
+        set { defaults.set(newValue, forKey: varyIntensityKey) }
     }
 
     static var snowOnWindows: Bool {
@@ -127,12 +118,13 @@ enum Preferences {
         set { defaults.set(newValue.rawValue, forKey: modeKey) }
     }
 
-    /// Drawn at the display's highest rate all the time, instead of only while something is pushed around.
+    /// How opaque snow, leaves and rain are while they fall.
     static var fallingOpacity: Double {
-        get { min(max(defaults.double(forKey: fallingOpacityKey), OpacitySlider.range.lowerBound), OpacitySlider.range.upperBound) }
+        get { min(max(defaults.double(forKey: fallingOpacityKey), opacityRange.lowerBound), opacityRange.upperBound) }
         set { defaults.set(newValue, forKey: fallingOpacityKey) }
     }
 
+    /// Drawn at the display's highest rate all the time, instead of only while something is pushed around.
     static var maxPerformance: Bool {
         get { defaults.integer(forKey: performanceKey) == 1 }
         set { defaults.set(newValue ? 1 : 0, forKey: performanceKey) }

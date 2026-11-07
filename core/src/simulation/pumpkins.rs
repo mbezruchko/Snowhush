@@ -80,7 +80,7 @@ mod tests {
 
     use crate::geometry::{Rect, V2};
     use crate::halloween::PUMPKIN_ASPECT;
-    use crate::simulation::{SnowSimulation, Snowfall, WindowSurface};
+    use crate::simulation::{SnowSimulation, WindowSurface};
 
     const DT: f32 = 1.0 / 60.0;
     const AWAY: V2 = V2::new(-10_000.0, -10_000.0);
@@ -93,7 +93,7 @@ mod tests {
 
     #[test]
     fn pumpkins_sit_in_the_drift_and_hide_from_a_window_over_them() {
-        let mut simulation = SnowSimulation::new(1200.0, 800.0, Snowfall::Off);
+        let mut simulation = SnowSimulation::new(1200.0, 800.0, 0.0);
         for i in 0..simulation.layers[0].count() {
             simulation.layers[0].set(i, 30.0);
         }
@@ -123,7 +123,7 @@ mod tests {
 
     #[test]
     fn pumpkins_over_a_panels_shelf_sit_in_its_snow() {
-        let mut simulation = SnowSimulation::new(1200.0, 800.0, Snowfall::Off);
+        let mut simulation = SnowSimulation::new(1200.0, 800.0, 0.0);
         let shelf = WindowSurface {
             id: 7,
             frame: Rect { x: 8.0, y: 0.0, width: 1184.0, height: 44.0 },

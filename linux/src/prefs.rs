@@ -3,13 +3,16 @@
 use std::path::PathBuf;
 
 use snowhush_core::halloween::Choice;
-use snowhush_core::simulation::{Mode, Snowfall};
+use snowhush_core::simulation::Mode;
 
 const MODES: [Mode; 4] = [Mode::Snow, Mode::Autumn, Mode::Rain, Mode::Blossom];
 
 #[derive(Clone, Copy)]
 pub struct Settings {
-    pub snowfall: Snowfall,
+    /// How much falls, in percent.
+    pub intensity: u32,
+    /// Whether the snowfall rises and eases on its own over the day.
+    pub varies: bool,
     pub accumulate: bool,
     pub melt: bool,
     pub snow_on_windows: bool,
@@ -22,6 +25,8 @@ pub struct Settings {
     pub mode: Mode,
     /// Drawn at the display's highest rate all the time, instead of only while something is pushed around.
     pub max_performance: bool,
+    /// How opaque what falls is drawn, in percent.
+    pub opacity: u32,
 }
 
 impl Settings {
@@ -31,9 +36,11 @@ impl Settings {
             text.lines().find_map(|line| line.split_once('=').filter(|(k, _)| k.trim() == key).and_then(|(_, v)| v.trim().parse::<u32>().ok()))
         };
         let calm = !animations_enabled();
-        let snowfall = read("snowfall").and_then(|i| Snowfall::ALL.get(i as usize).copied());
+        // Before the slider, the intensity was one of Off, Light, Steady, Heavy and Variable.
+        let stop = read("snowfall").map(|i| i.min(4) as usize);
         Settings {
-            snowfall: snowfall.unwrap_or(if calm { Snowfall::Light } else { Snowfall::Steady }),
+            intensity: read("intensity").map(|v| v.clamp(0, 100)).or(stop.map(|i| [0, 25, 50, 75, 50][i])).unwrap_or(if calm { 25 } else { 50 }),
+            varies: read("variableIntensity").map_or(stop == Some(4), |v| v != 0),
             accumulate: read("accumulate").is_none_or(|v| v != 0),
             melt: read("meltSnow").is_none_or(|v| v != 0),
             snow_on_windows: read("snowOnWindows").is_none_or(|v| v != 0),
@@ -43,6 +50,7 @@ impl Settings {
             halloween: Choice { on: read("halloweenOn").is_some_and(|v| v != 0), skipped: read("halloweenSkipped").unwrap_or(0) },
             // Before rain there was only a switch for leaves.
             max_performance: read("performance").is_some_and(|v| v == 1),
+            opacity: read("fallingOpacity").map_or(100, |v| v.clamp(10, 100)),
             mode: read("mode").and_then(|i| MODES.get(i as usize).copied()).unwrap_or(if read("autumn").is_some_and(|v| v != 0) {
                 Mode::Autumn
             } else {
@@ -53,9 +61,10 @@ impl Settings {
 
     pub fn save(&self) {
         let Some(folder) = config_dir() else { return };
-        let snowfall = Snowfall::ALL.iter().position(|&s| s == self.snowfall).unwrap_or(2);
         let text = format!(
-            "snowfall={snowfall}\naccumulate={}\nmeltSnow={}\nsnowOnWindows={}\nbehindWindows={}\nshowOverFullScreen={}\nshowInScreenshots={}\nhalloweenOn={}\nhalloweenSkipped={}\nmode={}\nautumn={}\nperformance={}\n",
+            "intensity={}\nvariableIntensity={}\naccumulate={}\nmeltSnow={}\nsnowOnWindows={}\nbehindWindows={}\nshowOverFullScreen={}\nshowInScreenshots={}\nhalloweenOn={}\nhalloweenSkipped={}\nmode={}\nautumn={}\nperformance={}\nfallingOpacity={}\n",
+            self.intensity,
+            self.varies as u32,
             self.accumulate as u32,
             self.melt as u32,
             self.snow_on_windows as u32,
@@ -66,7 +75,8 @@ impl Settings {
             self.halloween.skipped,
             MODES.iter().position(|&m| m == self.mode).unwrap_or(0),
             (self.mode == Mode::Autumn) as u32,
-            self.max_performance as u32
+            self.max_performance as u32,
+            self.opacity
         );
         let _ = std::fs::create_dir_all(&folder);
         let _ = std::fs::write(folder.join("settings"), text);

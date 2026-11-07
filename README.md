@@ -24,7 +24,7 @@ A tiny app that lives in the menu bar on macOS and in the tray on Windows and Li
 
 ## What the snow does
 
-- **Falls.** Every flake keeps its own pace and sways in a slow breeze. Variable lets the snowfall rise and ease on its own over the day.
+- **Falls.** Every flake keeps its own pace and sways in a slow breeze. Vary Intensity lets the snowfall rise and ease on its own over the day.
 - **Settles.** It piles up and slumps to a natural slope along the bottom of the screen, on any window with room above it, and on the Dock.
 - **Moves.** Push the cursor through a drift and it parts and sprays. Drag or shake a window and its snow slides off and lands below.
 - **Drops.** Close or minimize a window and its snow drops at once, in lumps that burst into powder where they land.
@@ -48,7 +48,7 @@ Choose Mode › Cherry Blossom and pink petals fall instead of snow. Curved like
 
 From October 30 until dawn on November 1 the snow turns spooky: jack-o'-lanterns glow in the drift and ghosts pop up out of it with signs. Choose Mode › Halloween to have it any other day, as long as snow is falling.
 
-Everything else lives in the menu bar: Intensity (Off, Light, Steady, Heavy, Variable), Mode (Snow, Autumn Leaves, Rain, Cherry Blossom, and Halloween on top of snow) and Clear Snow, with the rest under Settings: Accumulate, Melt Snow, Snow on Windows, Deep Interaction (on Windows and the Mac, the snow also settles on a selection dragged across the desktop), Behind Windows, Show over Full Screen, Show in Screenshots, Max Performance (draws every frame at the display's full rate) and Open at Login. On Windows and the Mac, Settings stays open while you switch its options. On Windows, Behind Taskbar lets the snow settle at the bottom of the screen under a see-through taskbar, such as one made clear with TranslucentTB.
+Everything else lives in the menu bar: Intensity and Opacity sliders (how much falls and how see-through it is; on Linux and in the plain Windows menu, submenus of steps), Mode (Snow, Autumn Leaves, Rain, Cherry Blossom, and Halloween on top of snow) and Clear Snow, with the rest under Settings: Vary Intensity, Accumulate, Melt Snow, Snow on Windows, Deep Interaction (on Windows and the Mac, the snow also settles on a selection dragged across the desktop), Behind Windows, Show over Full Screen, Show in Screenshots, Max Performance (draws every frame at the display's full rate) and Open at Login. On Windows and the Mac, Settings stays open while you switch its options. On Windows, Behind Taskbar lets the snow settle at the bottom of the screen under a see-through taskbar, such as one made clear with TranslucentTB.
 
 ## Building
 

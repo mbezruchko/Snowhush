@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use crate::geometry::{Rect, V2};
-use crate::simulation::{Mode, Pace, ScatterPiece, SnowSimulation, Snowfall, Sprite, WindowSurface};
+use crate::simulation::{Mode, Pace, ScatterPiece, SnowSimulation, Sprite, WindowSurface};
 
 const DT: f32 = 1.0 / 60.0;
 const AWAY: V2 = V2::new(-10_000.0, -10_000.0);
@@ -49,7 +49,7 @@ fn assert_finite(simulation: &SnowSimulation) {
 
 #[test]
 fn snow_falls_and_settles_on_the_ground() {
-    let mut simulation = SnowSimulation::new(1280.0, 800.0, Snowfall::Heavy);
+    let mut simulation = SnowSimulation::new(1280.0, 800.0, 0.75);
     run(&mut simulation, 1.0, AWAY);
     assert!(simulation.sprite_count() > 500, "flakes: {}", simulation.sprite_count());
     run(&mut simulation, 60.0, AWAY);
@@ -62,7 +62,7 @@ fn snow_falls_and_settles_on_the_ground() {
 
 #[test]
 fn off_stops_the_snowfall() {
-    let mut simulation = SnowSimulation::new(1280.0, 800.0, Snowfall::Off);
+    let mut simulation = SnowSimulation::new(1280.0, 800.0, 0.0);
     run(&mut simulation, 30.0, AWAY);
     assert_eq!(simulation.sprite_count(), 0);
     assert!(!simulation.has_snow());
@@ -70,10 +70,10 @@ fn off_stops_the_snowfall() {
 
 #[test]
 fn cursor_sweeps_the_drift_aside() {
-    let mut simulation = SnowSimulation::new(1280.0, 800.0, Snowfall::Heavy);
+    let mut simulation = SnowSimulation::new(1280.0, 800.0, 0.75);
     simulation.thaws = false;
     run(&mut simulation, 120.0, AWAY);
-    simulation.set_snowfall(Snowfall::Off);
+    simulation.set_intensity(0.0);
     run(&mut simulation, 15.0, AWAY);
     let before = piles(&simulation)[0].1;
 
@@ -93,7 +93,7 @@ fn cursor_sweeps_the_drift_aside() {
 
 #[test]
 fn a_gust_blows_all_the_snow_away() {
-    let mut simulation = SnowSimulation::new(1280.0, 800.0, Snowfall::Heavy);
+    let mut simulation = SnowSimulation::new(1280.0, 800.0, 0.75);
     let none = HashSet::new();
     let window = [surface(7, 300.0, 600.0, 500.0)];
     simulation.update_windows(&window, 0.2, &none, &none, false);
@@ -116,12 +116,12 @@ fn a_gust_blows_all_the_snow_away() {
 
 #[test]
 fn a_screen_rests_only_once_its_snow_is_gone_and_none_is_coming() {
-    let mut simulation = SnowSimulation::new(1280.0, 800.0, Snowfall::Steady);
+    let mut simulation = SnowSimulation::new(1280.0, 800.0, 0.5);
     simulation.thaws = true;
     let none = HashSet::new();
     simulation.update_windows(&[surface(7, 300.0, 600.0, 500.0)], 0.2, &none, &none, false);
     run(&mut simulation, 30.0, AWAY);
-    simulation.set_snowfall(Snowfall::Off);
+    simulation.set_intensity(0.0);
     run(&mut simulation, 1.0, AWAY);
     assert!(!simulation.is_empty(), "snow still falls and lies");
 
@@ -133,15 +133,15 @@ fn a_screen_rests_only_once_its_snow_is_gone_and_none_is_coming() {
     simulation.set_halloween(true);
     assert!(!simulation.is_empty(), "Halloween's pumpkins are coming");
     simulation.set_halloween(false);
-    simulation.set_snowfall(Snowfall::Light);
+    simulation.set_intensity(0.25);
     assert!(!simulation.is_empty(), "the snowfall is coming");
 }
 
 #[test]
 fn a_calm_gust_melts_the_drifts_where_they_lie() {
-    let mut simulation = SnowSimulation::new(1280.0, 800.0, Snowfall::Heavy);
+    let mut simulation = SnowSimulation::new(1280.0, 800.0, 0.75);
     run(&mut simulation, 90.0, AWAY);
-    simulation.set_snowfall(Snowfall::Off);
+    simulation.set_intensity(0.0);
     let before = piles(&simulation)[0].1;
     let falling = simulation.sprite_count();
     simulation.blow_away(-1.0, true);
@@ -155,9 +155,9 @@ fn a_calm_gust_melts_the_drifts_where_they_lie() {
 
 #[test]
 fn a_sliding_desktop_skims_the_drifts_without_blowing_them_away() {
-    let mut simulation = SnowSimulation::new(1280.0, 800.0, Snowfall::Heavy);
+    let mut simulation = SnowSimulation::new(1280.0, 800.0, 0.75);
     run(&mut simulation, 90.0, AWAY);
-    simulation.set_snowfall(Snowfall::Off);
+    simulation.set_intensity(0.0);
     run(&mut simulation, 15.0, AWAY);
     let before = piles(&simulation)[0].1;
     let flying = simulation.sprite_count();
@@ -176,7 +176,7 @@ fn a_sliding_desktop_skims_the_drifts_without_blowing_them_away() {
 
 #[test]
 fn snow_settles_on_a_window_and_drops_when_it_closes() {
-    let mut simulation = SnowSimulation::new(1280.0, 800.0, Snowfall::Heavy);
+    let mut simulation = SnowSimulation::new(1280.0, 800.0, 0.75);
     let none = HashSet::new();
     let window = [surface(7, 300.0, 600.0, 500.0)];
     simulation.update_windows(&window, 0.2, &none, &none, false);
@@ -186,7 +186,7 @@ fn snow_settles_on_a_window_and_drops_when_it_closes() {
     let ledge = layers.iter().find(|(origin, _)| origin.y > 500.0).expect("ledge");
     assert!(ledge.1 > 200.0, "ledge area {}", ledge.1);
 
-    simulation.set_snowfall(Snowfall::Off);
+    simulation.set_intensity(0.0);
     simulation.update_windows(&[], 0.2, &none, &none, false);
     simulation.step(DT, AWAY);
     assert!(simulation.sprite_count() > 20, "the window's snow didn't fall");
@@ -197,12 +197,12 @@ fn snow_settles_on_a_window_and_drops_when_it_closes() {
 
 #[test]
 fn snow_back_from_another_desktop_grows_into_shape() {
-    let mut simulation = SnowSimulation::new(1280.0, 800.0, Snowfall::Heavy);
+    let mut simulation = SnowSimulation::new(1280.0, 800.0, 0.75);
     let none = HashSet::new();
     let window = [surface(7, 300.0, 600.0, 500.0)];
     simulation.update_windows(&window, 0.2, &none, &none, false);
     run(&mut simulation, 60.0, AWAY);
-    simulation.set_snowfall(Snowfall::Off);
+    simulation.set_intensity(0.0);
     run(&mut simulation, 2.0, AWAY);
     let ledge = |simulation: &SnowSimulation| piles(simulation).iter().find(|(origin, _)| origin.y > 500.0).map(|ledge| ledge.1);
     let full = ledge(&simulation).expect("snow on the window");
@@ -221,12 +221,12 @@ fn snow_back_from_another_desktop_grows_into_shape() {
 
 #[test]
 fn dragged_window_sheds_its_snow() {
-    let mut simulation = SnowSimulation::new(1280.0, 800.0, Snowfall::Heavy);
+    let mut simulation = SnowSimulation::new(1280.0, 800.0, 0.75);
     simulation.thaws = false;
     let none = HashSet::new();
     simulation.update_windows(&[surface(3, 300.0, 600.0, 500.0)], 0.2, &none, &none, false);
     run(&mut simulation, 90.0, AWAY);
-    simulation.set_snowfall(Snowfall::Off);
+    simulation.set_intensity(0.0);
     run(&mut simulation, 10.0, AWAY);
     let resting = piles(&simulation).iter().find(|(origin, _)| origin.y > 500.0).map(|p| p.1).unwrap();
 
@@ -240,7 +240,7 @@ fn dragged_window_sheds_its_snow() {
 
 #[test]
 fn scattered_window_starts_the_held_snowfall() {
-    let mut simulation = SnowSimulation::new(1280.0, 800.0, Snowfall::Steady);
+    let mut simulation = SnowSimulation::new(1280.0, 800.0, 0.5);
     simulation.set_snowfall_held(true);
     run(&mut simulation, 2.0, AWAY);
     assert_eq!(simulation.sprite_count(), 0, "snowfall should wait for the welcome window");
@@ -267,13 +267,13 @@ fn scattered_window_starts_the_held_snowfall() {
 #[test]
 fn a_window_slid_past_the_screen_edge_leaves_its_snow_heaped_against_it() {
     for (out, wall) in [(-300.0, 0.0), (1080.0, 1280.0)] {
-        let mut simulation = SnowSimulation::new(1280.0, 800.0, Snowfall::Heavy);
+        let mut simulation = SnowSimulation::new(1280.0, 800.0, 0.75);
         simulation.thaws = false;
         simulation.walls = (true, true);
         let none = HashSet::new();
         simulation.update_windows(&[surface(5, 400.0, 600.0, 500.0)], 0.2, &none, &none, false);
         run(&mut simulation, 90.0, AWAY);
-        simulation.set_snowfall(Snowfall::Off);
+        simulation.set_intensity(0.0);
         run(&mut simulation, 10.0, AWAY);
         let resting = ledge(&simulation);
 
@@ -324,15 +324,15 @@ fn compare_with_swift() {
     let runs = 6;
     let (mut ground, mut ledge_area, mut dropped, mut shake_ratio, mut sweep_peak, mut sweep_ratio) = (0.0, 0.0, 0, 0.0, 0, 0.0);
     for _ in 0..runs {
-        let mut a = SnowSimulation::new(1280.0, 800.0, Snowfall::Heavy);
+        let mut a = SnowSimulation::new(1280.0, 800.0, 0.75);
         a.thaws = true;
         run(&mut a, 60.0, AWAY);
         ground += piles(&a)[0].1;
 
-        let mut b = SnowSimulation::new(1280.0, 800.0, Snowfall::Heavy);
+        let mut b = SnowSimulation::new(1280.0, 800.0, 0.75);
         b.update_windows(&[surface(3, 300.0, 600.0, 500.0)], 0.2, &none, &none, false);
         run(&mut b, 90.0, AWAY);
-        b.set_snowfall(Snowfall::Off);
+        b.set_intensity(0.0);
         run(&mut b, 10.0, AWAY);
         let resting = ledge(&b);
         ledge_area += resting;
@@ -345,9 +345,9 @@ fn compare_with_swift() {
         b.step(DT, AWAY);
         dropped += b.sprite_count();
 
-        let mut c = SnowSimulation::new(1280.0, 800.0, Snowfall::Heavy);
+        let mut c = SnowSimulation::new(1280.0, 800.0, 0.75);
         run(&mut c, 120.0, AWAY);
-        c.set_snowfall(Snowfall::Off);
+        c.set_intensity(0.0);
         run(&mut c, 15.0, AWAY);
         let before = piles(&c)[0].1;
         let mut peak = 0;
@@ -373,7 +373,8 @@ fn compare_with_swift() {
 
 #[test]
 fn survives_a_long_chaotic_session() {
-    let mut simulation = SnowSimulation::new(1920.0, 1080.0, Snowfall::Variable);
+    let mut simulation = SnowSimulation::new(1920.0, 1080.0, 0.5);
+    simulation.set_varies(true);
     let none = HashSet::new();
     let mut seed = 12345u64;
     let mut next = move || {
@@ -423,11 +424,11 @@ fn survives_a_long_chaotic_session() {
 #[test]
 fn snow_falls_off_a_lowered_ground_and_rides_up_on_a_raised_one() {
     let none = HashSet::new();
-    let mut simulation = SnowSimulation::new(800.0, 600.0, Snowfall::Heavy);
+    let mut simulation = SnowSimulation::new(800.0, 600.0, 0.75);
     simulation.thaws = false;
     simulation.update_windows(&[surface(1, 200.0, 400.0, 300.0)], 0.2, &none, &none, false);
     run(&mut simulation, 90.0, AWAY);
-    simulation.set_snowfall(Snowfall::Off);
+    simulation.set_intensity(0.0);
     run(&mut simulation, 15.0, AWAY);
     // An empty layer isn't drawn, so it isn't among the piles.
     let ground = |simulation: &SnowSimulation| piles(simulation).iter().find(|pile| pile.0.y == 0.0).map_or(0.0, |pile| pile.1);
@@ -465,10 +466,10 @@ fn snow_falls_off_a_lowered_ground_and_rides_up_on_a_raised_one() {
 #[test]
 fn a_panel_given_back_takes_up_the_drift_under_it() {
     let none = HashSet::new();
-    let mut simulation = SnowSimulation::new(800.0, 600.0, Snowfall::Heavy);
+    let mut simulation = SnowSimulation::new(800.0, 600.0, 0.75);
     simulation.thaws = false;
     run(&mut simulation, 90.0, AWAY);
-    simulation.set_snowfall(Snowfall::Off);
+    simulation.set_intensity(0.0);
     run(&mut simulation, 15.0, AWAY);
     let lying = piles(&simulation)[0].1;
     assert!(lying > 500.0, "no drift on the ground: {lying}");
@@ -487,7 +488,7 @@ fn a_panel_given_back_takes_up_the_drift_under_it() {
 #[ignore]
 fn step_cost() {
     let none = HashSet::new();
-    let mut simulation = SnowSimulation::new(1920.0, 1080.0, Snowfall::Steady);
+    let mut simulation = SnowSimulation::new(1920.0, 1080.0, 0.5);
     simulation.thaws = true;
     let window = [WindowSurface {
         id: 1,
@@ -566,7 +567,7 @@ fn leaf_sprites(simulation: &SnowSimulation) -> usize {
 
 #[test]
 fn leaves_lie_where_they_land() {
-    let mut simulation = SnowSimulation::new(800.0, 600.0, Snowfall::Heavy);
+    let mut simulation = SnowSimulation::new(800.0, 600.0, 0.75);
     simulation.set_mode(Mode::Autumn);
     run(&mut simulation, 90.0, AWAY);
     assert_finite(&simulation);
@@ -579,7 +580,7 @@ fn leaves_lie_where_they_land() {
 
 #[test]
 fn cherry_blossom_petals_fall_and_lie_as_leaves_do() {
-    let mut simulation = SnowSimulation::new(800.0, 600.0, Snowfall::Heavy);
+    let mut simulation = SnowSimulation::new(800.0, 600.0, 0.75);
     simulation.set_mode(Mode::Blossom);
     assert_eq!(simulation.mode(), Mode::Blossom);
     assert!(simulation.leafy() && simulation.blossom());
@@ -597,7 +598,7 @@ fn cherry_blossom_petals_fall_and_lie_as_leaves_do() {
 
 #[test]
 fn unwithered_leaves_heap_no_deeper_than_snow() {
-    let mut simulation = SnowSimulation::new(800.0, 600.0, Snowfall::Heavy);
+    let mut simulation = SnowSimulation::new(800.0, 600.0, 0.75);
     simulation.set_mode(Mode::Autumn);
     simulation.thaws = false;
     for _ in 0..15 * 60 * 30 {
@@ -613,14 +614,14 @@ fn unwithered_leaves_heap_no_deeper_than_snow() {
 
 #[test]
 fn a_closed_window_drops_only_its_own_leaves() {
-    let mut simulation = SnowSimulation::new(800.0, 600.0, Snowfall::Heavy);
+    let mut simulation = SnowSimulation::new(800.0, 600.0, 0.75);
     simulation.set_mode(Mode::Autumn);
     let none = HashSet::new();
     for _ in 0..(120.0 / DT) as usize {
         simulation.update_windows(&[surface(7, 200.0, 400.0, 400.0)], DT, &none, &none, false);
         simulation.step(DT, AWAY);
     }
-    simulation.set_snowfall(Snowfall::Off);
+    simulation.set_intensity(0.0);
     run(&mut simulation, 30.0, AWAY);
     let before = leaf_sprites(&simulation);
     assert!(before > 10, "too few leaves on the window: {before}");
@@ -635,7 +636,7 @@ fn a_closed_window_drops_only_its_own_leaves() {
 
 #[test]
 fn switching_modes_clears_the_screen_first() {
-    let mut simulation = SnowSimulation::new(800.0, 600.0, Snowfall::Heavy);
+    let mut simulation = SnowSimulation::new(800.0, 600.0, 0.75);
     run(&mut simulation, 30.0, AWAY);
     simulation.switch_mode(Mode::Autumn, 1.0, false);
     run(&mut simulation, 0.5, AWAY);
@@ -661,13 +662,13 @@ fn jerk(simulation: &mut SnowSimulation, id: isize) {
 
 #[test]
 fn a_heap_jerked_off_its_window_comes_off_as_leaves() {
-    let mut simulation = SnowSimulation::new(1280.0, 800.0, Snowfall::Heavy);
+    let mut simulation = SnowSimulation::new(1280.0, 800.0, 0.75);
     simulation.set_mode(Mode::Autumn);
     simulation.thaws = false;
     let none = HashSet::new();
     simulation.update_windows(&[surface(3, 300.0, 650.0, 500.0)], 0.2, &none, &none, false);
     run(&mut simulation, 120.0, AWAY);
-    simulation.set_snowfall(Snowfall::Off);
+    simulation.set_intensity(0.0);
     run(&mut simulation, 15.0, AWAY);
     let resting = ledge(&simulation);
     let before = leaf_sprites(&simulation);
@@ -693,13 +694,13 @@ fn a_heap_jerked_off_its_window_comes_off_as_leaves() {
 
 #[test]
 fn leaves_stay_put_as_their_window_is_resized() {
-    let mut simulation = SnowSimulation::new(1280.0, 800.0, Snowfall::Heavy);
+    let mut simulation = SnowSimulation::new(1280.0, 800.0, 0.75);
     simulation.set_mode(Mode::Autumn);
     simulation.thaws = false;
     let none = HashSet::new();
     simulation.update_windows(&[surface(3, 300.0, 600.0, 500.0)], 0.2, &none, &none, false);
     run(&mut simulation, 90.0, AWAY);
-    simulation.set_snowfall(Snowfall::Off);
+    simulation.set_intensity(0.0);
     run(&mut simulation, 20.0, AWAY);
     let lying = |simulation: &SnowSimulation| -> Vec<V2> {
         let mut sprites = vec![Sprite::default(); simulation.sprite_count()];
@@ -751,7 +752,7 @@ fn leaves_stay_put_as_their_window_is_resized() {
 
 #[test]
 fn snow_pouring_off_a_window_heaps_up_no_higher_than_it_pours_from() {
-    let mut simulation = SnowSimulation::new(800.0, 600.0, Snowfall::Heavy);
+    let mut simulation = SnowSimulation::new(800.0, 600.0, 0.75);
     simulation.thaws = false;
     let none = HashSet::new();
     // The upper window sits in front, over the top of the lower one; snow pours off its right end onto the lower one.
@@ -787,7 +788,7 @@ fn rain_sprites(simulation: &SnowSimulation, kind: f32) -> Vec<Sprite> {
 #[test]
 fn rain_runs_down_a_window_and_hangs_under_its_bottom_edge() {
     let none = HashSet::new();
-    let mut simulation = SnowSimulation::new(1200.0, 900.0, Snowfall::Heavy);
+    let mut simulation = SnowSimulation::new(1200.0, 900.0, 0.75);
     simulation.set_mode(Mode::Rain);
     simulation.update_windows(&[surface(1, 200.0, 700.0, 800.0)], 0.2, &none, &none, false);
     let (mut ran, mut hung) = (false, false);
@@ -808,7 +809,7 @@ fn rain_runs_down_a_window_and_hangs_under_its_bottom_edge() {
 #[test]
 fn rain_spatters_the_glass_and_leaves_wet_uneven_trails() {
     let none = HashSet::new();
-    let mut simulation = SnowSimulation::new(1200.0, 900.0, Snowfall::Heavy);
+    let mut simulation = SnowSimulation::new(1200.0, 900.0, 0.75);
     simulation.set_mode(Mode::Rain);
     simulation.update_windows(&[surface(1, 200.0, 700.0, 800.0)], 0.2, &none, &none, false);
     let mut filmed = false;
@@ -834,7 +835,7 @@ fn rain_spatters_the_glass_and_leaves_wet_uneven_trails() {
 
 #[test]
 fn switching_to_rain_clears_the_snow_first() {
-    let mut simulation = SnowSimulation::new(800.0, 600.0, Snowfall::Heavy);
+    let mut simulation = SnowSimulation::new(800.0, 600.0, 0.75);
     run(&mut simulation, 30.0, AWAY);
     simulation.switch_mode(Mode::Rain, 1.0, false);
     run(&mut simulation, 0.5, AWAY);

@@ -20,7 +20,7 @@ use zbus::blocking::Connection as Bus;
 
 use snowhush_core::geometry::V2;
 use snowhush_core::halloween::{Choice, Today};
-use snowhush_core::simulation::{Mode, SnowSimulation, Snowfall};
+use snowhush_core::simulation::{Mode, SnowSimulation};
 
 use crate::chores;
 use crate::kwin;
@@ -34,7 +34,12 @@ use crate::tray::Tray;
 use crate::windows::{self, Area};
 
 pub enum Command {
-    Snowfall(Snowfall),
+    /// How much falls, 0 to 1.
+    Intensity(f32),
+    /// Whether the snowfall rises and eases on its own over the day.
+    VaryIntensity(bool),
+    /// How opaque what falls is drawn, 0.1 to 1.
+    FallingOpacity(f32),
     Accumulate(bool),
     Melt(bool),
     SnowOnWindows(bool),
@@ -226,13 +231,21 @@ impl App {
     fn command(&mut self, command: Command) {
         match command {
             Command::Quit => self.quit = true,
-            Command::Snowfall(snowfall) => {
-                self.settings.snowfall = snowfall;
+            Command::Intensity(intensity) => {
+                self.settings.intensity = (intensity * 100.0).round() as u32;
                 let now = Instant::now();
                 self.screens.iter_mut().for_each(|screen| {
-                    screen.simulation.set_snowfall(snowfall);
+                    screen.simulation.set_intensity(intensity);
                     screen.wake(now);
                 });
+            }
+            Command::VaryIntensity(on) => {
+                self.settings.varies = on;
+                self.screens.iter_mut().for_each(|screen| screen.simulation.set_varies(on));
+            }
+            Command::FallingOpacity(opacity) => {
+                self.settings.opacity = (opacity * 100.0).round() as u32;
+                self.screens.iter_mut().for_each(|screen| screen.simulation.falling_opacity = opacity);
             }
             Command::Accumulate(on) => {
                 self.settings.accumulate = on;
@@ -493,9 +506,11 @@ fn window_list(report: &Report) -> String {
 }
 
 fn new_simulation(bounds: &Area, settings: &Settings, budget: PowerBudget) -> SnowSimulation {
-    let mut simulation = SnowSimulation::new(bounds.w as f32, bounds.h as f32, settings.snowfall);
+    let mut simulation = SnowSimulation::new(bounds.w as f32, bounds.h as f32, settings.intensity as f32 / 100.0);
+    simulation.set_varies(settings.varies);
     simulation.thaws = settings.melt;
     simulation.accumulates = settings.accumulate;
+    simulation.falling_opacity = settings.opacity as f32 / 100.0;
     simulation.set_mode(settings.mode);
     simulation.set_density(density(budget));
     simulation

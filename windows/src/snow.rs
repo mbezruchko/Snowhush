@@ -16,7 +16,7 @@ use windows::core::{HSTRING, PCWSTR, Result, w};
 
 use snowhush_core::geometry::V2;
 use snowhush_core::halloween::Choice;
-use snowhush_core::simulation::{Mode, ScatterPiece, SnowSimulation, Snowfall};
+use snowhush_core::simulation::{Mode, ScatterPiece, SnowSimulation};
 
 use crate::desktop::{self, DesktopLayer};
 use crate::halloween;
@@ -36,7 +36,12 @@ pub struct Piece {
 }
 
 pub enum Command {
-    Snowfall(Snowfall),
+    /// How much falls, 0 to 1.
+    Intensity(f32),
+    /// Whether the snowfall rises and eases on its own over the day.
+    VaryIntensity(bool),
+    /// How opaque what falls is drawn, 0.1 to 1.
+    FallingOpacity(f32),
     Accumulate(bool),
     Melt(bool),
     SnowOnWindows(bool),
@@ -121,13 +126,21 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
         while let Ok(command) = commands.try_recv() {
             match command {
                 Command::Quit => return Ok(()),
-                Command::Snowfall(snowfall) => {
-                    settings.snowfall = snowfall;
+                Command::Intensity(intensity) => {
+                    settings.intensity = (intensity * 100.0).round() as u32;
                     let now = Clock::now();
                     screens.iter_mut().for_each(|screen| {
-                        screen.simulation.set_snowfall(snowfall);
+                        screen.simulation.set_intensity(intensity);
                         screen.wake(now);
                     });
+                }
+                Command::VaryIntensity(on) => {
+                    settings.varies = on;
+                    screens.iter_mut().for_each(|screen| screen.simulation.set_varies(on));
+                }
+                Command::FallingOpacity(opacity) => {
+                    settings.opacity = (opacity * 100.0).round() as u32;
+                    screens.iter_mut().for_each(|screen| screen.simulation.falling_opacity = opacity);
                 }
                 Command::Accumulate(on) => {
                     settings.accumulate = on;
@@ -479,9 +492,11 @@ fn find_layer() -> Option<DesktopLayer> {
 
 fn new_simulation(monitor: &Monitor, settings: &Settings) -> SnowSimulation {
     let (width, height) = dip_size(monitor);
-    let mut simulation = SnowSimulation::new(width as f32, height as f32, settings.snowfall);
+    let mut simulation = SnowSimulation::new(width as f32, height as f32, settings.intensity as f32 / 100.0);
+    simulation.set_varies(settings.varies);
     simulation.thaws = settings.melt;
     simulation.accumulates = settings.accumulate;
+    simulation.falling_opacity = settings.opacity as f32 / 100.0;
     simulation.set_snowfall_held(!settings.welcomed);
     simulation.set_halloween(halloween::shows(settings));
     simulation.set_mode(settings.mode);
