@@ -1,6 +1,7 @@
 //! Settings in `~/.config/snowhush/settings`, Open at Login as an autostart entry, and KDE's animation speed.
 
 use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use snowhush_core::halloween::Choice;
 use snowhush_core::simulation::Mode;
@@ -18,6 +19,8 @@ pub struct Settings {
     /// The snow stays over full-screen apps instead of fading out of their way.
     pub over_full_screen: bool,
     pub show_in_screenshots: bool,
+    /// Unix seconds of the first run, or 0 for an install older than the stamp.
+    pub installed_at: u32,
     pub halloween: Choice,
     /// What falls: snow, leaves or rain; the kind picked last.
     pub mode: Mode,
@@ -44,7 +47,8 @@ impl Settings {
         } else {
             Mode::Snow
         });
-        Settings {
+        let stamped = read("installedAt");
+        let settings = Settings {
             intensity: read("intensity").map(|v| v.clamp(0, 100)).or(stop.map(|i| [0, 25, 50, 75, 50][i])).unwrap_or(if calm { 25 } else { 50 }),
             accumulate: read("accumulate").is_none_or(|v| v != 0),
             melt: read("meltSnow").is_none_or(|v| v != 0),
@@ -52,6 +56,7 @@ impl Settings {
             behind_windows: read("behindWindows").is_some_and(|v| v != 0),
             over_full_screen: read("showOverFullScreen").is_some_and(|v| v != 0),
             show_in_screenshots: read("showInScreenshots").is_some_and(|v| v != 0),
+            installed_at: stamped.unwrap_or_else(|| if text.is_empty() { now() } else { 0 }),
             halloween: Choice { on: read("halloweenOn").is_some_and(|v| v != 0), skipped: read("halloweenSkipped").unwrap_or(0) },
             // Before rain there was only a switch for leaves.
             max_performance: read("performance").is_some_and(|v| v == 1),
@@ -59,13 +64,17 @@ impl Settings {
             mode,
             mixed: read("mixed").is_some_and(|v| v != 0),
             mix: mix_of(read("mix0"), read("mix1"), mode),
+        };
+        if stamped.is_none() {
+            settings.save();
         }
+        settings
     }
 
     pub fn save(&self) {
         let Some(folder) = config_dir() else { return };
         let text = format!(
-            "intensity={}\naccumulate={}\nmeltSnow={}\nsnowOnWindows={}\nbehindWindows={}\nshowOverFullScreen={}\nshowInScreenshots={}\nhalloweenOn={}\nhalloweenSkipped={}\nmode={}\nmixed={}\nmix0={}\nmix1={}\nautumn={}\nperformance={}\nfallingOpacity={}\n",
+            "intensity={}\naccumulate={}\nmeltSnow={}\nsnowOnWindows={}\nbehindWindows={}\nshowOverFullScreen={}\nshowInScreenshots={}\ninstalledAt={}\nhalloweenOn={}\nhalloweenSkipped={}\nmode={}\nmixed={}\nmix0={}\nmix1={}\nautumn={}\nperformance={}\nfallingOpacity={}\n",
             self.intensity,
             self.accumulate as u32,
             self.melt as u32,
@@ -73,6 +82,7 @@ impl Settings {
             self.behind_windows as u32,
             self.over_full_screen as u32,
             self.show_in_screenshots as u32,
+            self.installed_at,
             self.halloween.on as u32,
             self.halloween.skipped,
             MODES.iter().position(|&m| m == self.mode).unwrap_or(0),
@@ -129,6 +139,10 @@ fn mix_of(first: Option<u32>, second: Option<u32>, mode: Mode) -> [Mode; 2] {
 /// The kind to mix with `mode` until another is picked.
 fn other_than(mode: Mode) -> Mode {
     if mode == Mode::Snow { Mode::Autumn } else { Mode::Snow }
+}
+
+fn now() -> u32 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() as u32)
 }
 
 pub fn opens_at_login() -> bool {

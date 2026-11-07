@@ -12,6 +12,7 @@ enum Preferences {
     private static let accumulateKey = "accumulate"
     private static let snowOnWindowsKey = "snowOnWindows"
     private static let welcomedKey = "welcomed"
+    private static let installedAtKey = "installedAt"
     private static let showInScreenshotsKey = "showInScreenshots"
     private static let deepInteractionKey = "deepInteraction"
     private static let halloweenKey = "halloweenOn"
@@ -44,6 +45,15 @@ enum Preferences {
         if defaults.object(forKey: intensityKey) == nil, let stop = defaults.object(forKey: snowfallKey) as? Int {
             defaults.set([0, 0.25, 0.5, 0.75, 0.5][min(max(stop, 0), 4)], forKey: intensityKey)
         }
+        if defaults.object(forKey: installedAtKey) == nil {
+            defaults.set(defaults.bool(forKey: welcomedKey) ? 0 : Date().timeIntervalSince1970, forKey: installedAtKey)
+        }
+    }
+
+    /// When this install was first run, or nil for an install older than the stamp.
+    static var installedAt: Date? {
+        let stamp = defaults.double(forKey: installedAtKey)
+        return stamp > 0 ? Date(timeIntervalSince1970: stamp) : nil
     }
 
     /// How much falls, from 0 to 1.

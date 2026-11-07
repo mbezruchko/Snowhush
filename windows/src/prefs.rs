@@ -1,4 +1,5 @@
 use std::ffi::c_void;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use windows::Win32::Foundation::{ERROR_SUCCESS, WIN32_ERROR};
 use windows::Win32::System::Registry::{
@@ -31,6 +32,8 @@ pub struct Settings {
     /// The snow also settles on what the desktop draws without a window of its own: a selection dragged across it.
     pub deep_interaction: bool,
     pub welcomed: bool,
+    /// Unix seconds of the first run, or 0 for an install older than the stamp.
+    pub installed_at: u32,
     pub halloween: Choice,
     /// What falls: snow, leaves or rain; the kind picked last.
     pub mode: Mode,
@@ -48,6 +51,12 @@ impl Settings {
         let calm = !animations_enabled();
         // Before the slider, the intensity was one of Off, Light, Steady, Heavy and Variable.
         let stop = read(w!("snowfall")).map(|i| i.min(4) as usize);
+        let welcomed = read(w!("welcomed")).is_some_and(|v| v != 0);
+        let installed_at = read(w!("installedAt")).unwrap_or_else(|| {
+            let stamp = if welcomed { 0 } else { now() };
+            write(w!("installedAt"), stamp);
+            stamp
+        });
         let mode = read(w!("mode")).and_then(|i| MODES.get(i as usize).copied()).unwrap_or(if read(w!("autumn")).is_some_and(|v| v != 0) {
             Mode::Autumn
         } else {
@@ -63,7 +72,8 @@ impl Settings {
             behind_taskbar: read(w!("behindTaskbar")).is_some_and(|v| v != 0),
             show_in_screenshots: read(w!("showInScreenshots")).is_some_and(|v| v != 0),
             deep_interaction: read(w!("deepInteraction")).is_some_and(|v| v != 0),
-            welcomed: read(w!("welcomed")).is_some_and(|v| v != 0),
+            welcomed,
+            installed_at,
             halloween: Choice { on: read(w!("halloweenOn")).is_some_and(|v| v != 0), skipped: read(w!("halloweenSkipped")).unwrap_or(0) },
             // Before rain there was only a switch for leaves.
             max_performance: read(w!("performance")).is_some_and(|v| v == 1),
@@ -85,6 +95,7 @@ impl Settings {
         write(w!("showInScreenshots"), self.show_in_screenshots as u32);
         write(w!("deepInteraction"), self.deep_interaction as u32);
         write(w!("welcomed"), self.welcomed as u32);
+        write(w!("installedAt"), self.installed_at);
         write(w!("halloweenOn"), self.halloween.on as u32);
         write(w!("halloweenSkipped"), self.halloween.skipped);
         write(w!("mode"), MODES.iter().position(|&m| m == self.mode).unwrap_or(0) as u32);
@@ -174,6 +185,10 @@ fn read(name: PCWSTR) -> Option<u32> {
     let status =
         unsafe { RegGetValueW(HKEY_CURRENT_USER, KEY, name, RRF_RT_REG_DWORD, None, Some((&raw mut value).cast::<c_void>()), Some(&mut size)) };
     (status == ERROR_SUCCESS).then_some(value)
+}
+
+fn now() -> u32 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() as u32)
 }
 
 fn write(name: PCWSTR, value: u32) {
