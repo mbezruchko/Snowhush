@@ -212,18 +212,6 @@ impl ksni::Tray for Tray {
                 submenu: vec![
                     StandardItem { label: "Behavior".into(), enabled: false, ..Default::default() }.into(),
                     CheckmarkItem {
-                        label: "Vary Intensity".into(),
-                        checked: settings.varies,
-                        activate: Box::new(|tray: &mut Tray| {
-                            tray.change(|settings| {
-                                settings.varies = !settings.varies;
-                                Command::VaryIntensity(settings.varies)
-                            })
-                        }),
-                        ..Default::default()
-                    }
-                    .into(),
-                    CheckmarkItem {
                         label: "Accumulate".into(),
                         checked: settings.accumulate,
                         visible: lies,

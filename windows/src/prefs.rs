@@ -19,8 +19,6 @@ const RUN_VALUE: PCWSTR = w!("Snowhush");
 pub struct Settings {
     /// How much falls, in percent: 0 to 100 in steps of 5.
     pub intensity: u32,
-    /// Whether the snowfall rises and eases on its own over the day.
-    pub varies: bool,
     pub accumulate: bool,
     pub melt: bool,
     pub snow_on_windows: bool,
@@ -49,7 +47,6 @@ impl Settings {
         let stop = read(w!("snowfall")).map(|i| i.min(4) as usize);
         Settings {
             intensity: read(w!("intensity")).map(|v| v.clamp(0, 100)).or(stop.map(|i| [0, 25, 50, 75, 50][i])).unwrap_or(if calm { 25 } else { 50 }),
-            varies: read(w!("variableIntensity")).map_or(stop == Some(4), |v| v != 0),
             accumulate: read(w!("accumulate")).is_none_or(|v| v != 0),
             melt: read(w!("meltSnow")).is_none_or(|v| v != 0),
             snow_on_windows: read(w!("snowOnWindows")).is_none_or(|v| v != 0),
@@ -73,7 +70,6 @@ impl Settings {
 
     pub fn save(&self) {
         write(w!("intensity"), self.intensity);
-        write(w!("variableIntensity"), self.varies as u32);
         write(w!("accumulate"), self.accumulate as u32);
         write(w!("meltSnow"), self.melt as u32);
         write(w!("snowOnWindows"), self.snow_on_windows as u32);

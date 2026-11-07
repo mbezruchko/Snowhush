@@ -36,8 +36,6 @@ use crate::windows::{self, Area};
 pub enum Command {
     /// How much falls, 0 to 1.
     Intensity(f32),
-    /// Whether the snowfall rises and eases on its own over the day.
-    VaryIntensity(bool),
     /// How opaque what falls is drawn, 0.1 to 1.
     FallingOpacity(f32),
     Accumulate(bool),
@@ -238,10 +236,6 @@ impl App {
                     screen.simulation.set_intensity(intensity);
                     screen.wake(now);
                 });
-            }
-            Command::VaryIntensity(on) => {
-                self.settings.varies = on;
-                self.screens.iter_mut().for_each(|screen| screen.simulation.set_varies(on));
             }
             Command::FallingOpacity(opacity) => {
                 self.settings.opacity = (opacity * 100.0).round() as u32;
@@ -507,7 +501,6 @@ fn window_list(report: &Report) -> String {
 
 fn new_simulation(bounds: &Area, settings: &Settings, budget: PowerBudget) -> SnowSimulation {
     let mut simulation = SnowSimulation::new(bounds.w as f32, bounds.h as f32, settings.intensity as f32 / 100.0);
-    simulation.set_varies(settings.varies);
     simulation.thaws = settings.melt;
     simulation.accumulates = settings.accumulate;
     simulation.falling_opacity = settings.opacity as f32 / 100.0;

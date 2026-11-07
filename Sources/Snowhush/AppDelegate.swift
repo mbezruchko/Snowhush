@@ -15,7 +15,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var statusItem: NSStatusItem!
     private let intensitySlider = MenuSlider(range: 0...1)
     private let opacitySlider = MenuSlider(range: Preferences.opacityRange)
-    private var varyItem: NSMenuItem!
     private var accumulateItem: NSMenuItem!
     private var meltItem: NSMenuItem!
     private var snowOnWindowsItem: NSMenuItem!
@@ -169,7 +168,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         let settings = NSMenu()
         settings.autoenablesItems = false
         settings.addItem(.sectionHeader(title: "Behavior"))
-        varyItem = toggle("Vary Intensity", #selector(toggleVaryIntensity), to: settings)
         accumulateItem = toggle("Accumulate", #selector(toggleAccumulate), to: settings)
         meltItem = toggle("Melt Snow", #selector(toggleMeltSnow), to: settings)
         snowOnWindowsItem = toggle("Snow on Windows", #selector(toggleSnowOnWindows), to: settings)
@@ -209,7 +207,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     func menuNeedsUpdate(_ menu: NSMenu) {
         intensitySlider.value = Preferences.intensity
         opacitySlider.value = Preferences.fallingOpacity
-        varyItem.state = Preferences.variesIntensity ? .on : .off
         accumulateItem.state = accumulates ? .on : .off
         let mode = Preferences.mode
         let autumn = mode == .autumn
@@ -246,11 +243,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         Preferences.intensity = intensity
         for snow in screens { snow.simulation.intensity = Float(intensity) }
         updateStatusIcon()
-    }
-
-    @objc private func toggleVaryIntensity() {
-        Preferences.variesIntensity.toggle()
-        for snow in screens { snow.simulation.variesIntensity = Preferences.variesIntensity }
     }
 
     @objc private func toggleAccumulate() {

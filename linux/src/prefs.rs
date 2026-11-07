@@ -11,8 +11,6 @@ const MODES: [Mode; 4] = [Mode::Snow, Mode::Autumn, Mode::Rain, Mode::Blossom];
 pub struct Settings {
     /// How much falls, in percent.
     pub intensity: u32,
-    /// Whether the snowfall rises and eases on its own over the day.
-    pub varies: bool,
     pub accumulate: bool,
     pub melt: bool,
     pub snow_on_windows: bool,
@@ -40,7 +38,6 @@ impl Settings {
         let stop = read("snowfall").map(|i| i.min(4) as usize);
         Settings {
             intensity: read("intensity").map(|v| v.clamp(0, 100)).or(stop.map(|i| [0, 25, 50, 75, 50][i])).unwrap_or(if calm { 25 } else { 50 }),
-            varies: read("variableIntensity").map_or(stop == Some(4), |v| v != 0),
             accumulate: read("accumulate").is_none_or(|v| v != 0),
             melt: read("meltSnow").is_none_or(|v| v != 0),
             snow_on_windows: read("snowOnWindows").is_none_or(|v| v != 0),
@@ -62,9 +59,8 @@ impl Settings {
     pub fn save(&self) {
         let Some(folder) = config_dir() else { return };
         let text = format!(
-            "intensity={}\nvariableIntensity={}\naccumulate={}\nmeltSnow={}\nsnowOnWindows={}\nbehindWindows={}\nshowOverFullScreen={}\nshowInScreenshots={}\nhalloweenOn={}\nhalloweenSkipped={}\nmode={}\nautumn={}\nperformance={}\nfallingOpacity={}\n",
+            "intensity={}\naccumulate={}\nmeltSnow={}\nsnowOnWindows={}\nbehindWindows={}\nshowOverFullScreen={}\nshowInScreenshots={}\nhalloweenOn={}\nhalloweenSkipped={}\nmode={}\nautumn={}\nperformance={}\nfallingOpacity={}\n",
             self.intensity,
-            self.varies as u32,
             self.accumulate as u32,
             self.melt as u32,
             self.snow_on_windows as u32,
