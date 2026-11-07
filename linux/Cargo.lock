@@ -965,7 +965,7 @@ dependencies = [
 
 [[package]]
 name = "snowhush"
-version = "0.8.5"
+version = "0.9.0"
 dependencies = [
  "calloop",
  "calloop-wayland-source",
