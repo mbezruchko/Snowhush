@@ -365,6 +365,8 @@ final class SnowSimulation {
     }
     var thaws = false
     var accumulates = true
+    /// How opaque snow, leaves and rain are while they fall; once settled they show in full.
+    var fallingOpacity: Float = 1
     /// Screen edges with no display past them: a window slid past one leaves its snow heaped against the edge.
     var walls: (left: Bool, right: Bool) = (false, false)
     /// Keeps the snowfall from starting until a scattered window's snow first reaches the bottom of the screen.
@@ -723,7 +725,7 @@ final class SnowSimulation {
                 position: flake.position,
                 velocity: flake.leaf != 0 ? motion(of: flake) : flake.velocity,
                 size: flake.leaf != 0 ? drawnSize(flake.size, seed: flake.leaf) : flake.size,
-                alpha: flake.alpha,
+                alpha: flake.alpha * fallingOpacity,
                 soft: flake.soft,
                 tintAmount: flake.tintAmount,
                 tintRed: flake.tint.x,

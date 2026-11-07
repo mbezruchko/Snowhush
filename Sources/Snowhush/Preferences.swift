@@ -41,6 +41,7 @@ enum Preferences {
     /// Before rain, the mode was only whether leaves fell.
     private static let autumnKey = "autumn"
     private static let performanceKey = "performance"
+    private static let fallingOpacityKey = "fallingOpacity"
 
     static func registerDefaults() {
         let calm = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
@@ -56,6 +57,7 @@ enum Preferences {
             halloweenKey: false,
             halloweenSkippedKey: 0,
             autumnKey: false,
+            fallingOpacityKey: 1.0,
         ])
     }
 
@@ -126,6 +128,11 @@ enum Preferences {
     }
 
     /// Drawn at the display's highest rate all the time, instead of only while something is pushed around.
+    static var fallingOpacity: Double {
+        get { min(max(defaults.double(forKey: fallingOpacityKey), OpacitySlider.range.lowerBound), OpacitySlider.range.upperBound) }
+        set { defaults.set(newValue, forKey: fallingOpacityKey) }
+    }
+
     static var maxPerformance: Bool {
         get { defaults.integer(forKey: performanceKey) == 1 }
         set { defaults.set(newValue ? 1 : 0, forKey: performanceKey) }

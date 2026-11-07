@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var halloween = false
     private var statusItem: NSStatusItem!
     private let snowfallSlider = SnowfallSlider()
+    private let opacitySlider = OpacitySlider()
     private var accumulateItem: NSMenuItem!
     private var meltItem: NSMenuItem!
     private var snowOnWindowsItem: NSMenuItem!
@@ -147,6 +148,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         let sliderItem = NSMenuItem()
         sliderItem.view = snowfallSlider
         menu.addItem(sliderItem)
+        menu.addItem(.sectionHeader(title: "Opacity"))
+        opacitySlider.changed = { [unowned self] opacity in
+            Preferences.fallingOpacity = opacity
+            for snow in screens { snow.simulation.fallingOpacity = Float(opacity) }
+        }
+        let opacityItem = NSMenuItem()
+        opacityItem.view = opacitySlider
+        menu.addItem(opacityItem)
         let modes = NSMenu()
         modes.autoenablesItems = false
         snowItem = add("Snow", #selector(chooseMode), to: modes)
@@ -199,6 +208,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         snowfallSlider.snowfall = snowfall
+        opacitySlider.opacity = Preferences.fallingOpacity
         accumulateItem.state = accumulates ? .on : .off
         let mode = Preferences.mode
         let autumn = mode == .autumn
