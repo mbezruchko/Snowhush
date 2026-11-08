@@ -11,7 +11,7 @@ struct Uniforms {
     var occluderCount: Int32 = 0
     var origin: SIMD2<Float> = .zero
     var pileBottom: Float = 0
-    /// One while leaves fall instead of snow.
+    /// One while leaves fall instead of snow, for a ghost; a pile has its own leaves and petals in each column.
     var autumn: Float = 0
     /// One while the leaves are cherry blossom petals.
     var blossom: Float = 0
@@ -271,7 +271,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             shake: SIMD4(lowHalf: simulation.shake, highHalf: .zero)
         )
         uniforms.autumn = simulation.leafy ? 1 : 0
-        uniforms.blossom = simulation.blossom ? 1 : 0
+        uniforms.blossom = simulation.leafy && simulation.modes.contains(.blossom) ? 1 : 0
         uniforms.wilt = simulation.thaws && simulation.accumulates ? 1 : 0
         let pumpkins = simulation.pumpkins
         let candles = pumpkins.prefix(3).map { pumpkin in

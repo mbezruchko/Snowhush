@@ -5,10 +5,10 @@
 
 use std::f32::consts::{PI, TAU};
 
-use super::{Grain, MAX_GRAINS, MAX_MOTES, Mote, SignSprite, SnowSimulation, Sprite, WindowId};
+use super::{Grain, MAX_GRAINS, MAX_MOTES, Mode, Mote, SignSprite, SnowSimulation, Sprite, WindowId};
 use crate::geometry::{V2, smoothstep};
 use crate::halloween::SIGN_CAPTIONS;
-use crate::layer::SnowLayer;
+use crate::layer::{Blend, SnowLayer};
 
 #[derive(Clone, Copy, PartialEq)]
 enum Stage {
@@ -765,6 +765,7 @@ impl SnowSimulation {
                 blown: false,
                 seed: random.range(0.001, 1.0),
                 bulk: false,
+                kind: Mode::Snow,
             };
             self.haunting.clinging.push((grain, 0.5 + (1.0 - out) * 1.6 + random.range(0.0, 0.4)));
         }
@@ -784,6 +785,7 @@ impl SnowSimulation {
                 blown: false,
                 seed: random.range(0.001, 1.0),
                 bulk: false,
+                kind: Mode::Snow,
             };
             self.air.grains.push(grain);
         }
@@ -875,11 +877,12 @@ impl SnowSimulation {
                 blown: false,
                 seed: random.range(0.001, 1.0),
                 bulk: false,
+                kind: Mode::Snow,
             };
             self.air.grains.push(grain);
         }
         if left > 0.0 {
-            self.layers[li].deposit(left, center.x, true);
+            self.layers[li].deposit(left, center.x, true, Blend::SNOW);
         }
         for _ in 0..(if scared { 10 } else { 5 }) {
             if self.air.motes.len() >= MAX_MOTES {

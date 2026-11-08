@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use super::{Air, CURSOR_RADIUS, Flake, SnowSimulation, Sprite, WindowId};
+use super::{Air, CURSOR_RADIUS, Flake, Mode, SnowSimulation, Sprite, WindowId};
 use crate::geometry::{V2, smoothstep};
 use crate::layer::{Droplet, FilmPiece, SnowLayer};
 
@@ -353,7 +353,7 @@ impl SnowSimulation {
     /// Spray dries up slowly in the rain and soon once it stops, a running drop's film in a few seconds, and both fast
     /// once the rain stops. The cursor moving over the glass wipes them off where it passes, as a finger would.
     pub(super) fn tend_glass(&mut self, dt: f32) {
-        let hurry = if self.air.rain { 1.0 } else { 12.0 };
+        let hurry = if self.air.raining() { 1.0 } else { 12.0 };
         let velocity = self.air.cursor_velocity;
         let wiping = self.air.cursor.filter(|_| velocity.length() > 40.0).map(|point| (point - velocity * dt, point));
         let reach = CURSOR_RADIUS * 0.8;
@@ -772,7 +772,7 @@ fn smear(air: &mut Air, drop: &GlassDrop, layer: &SnowLayer, point: V2, drops: &
 /// it lands on.
 fn fall(air: &mut Air, drop: &GlassDrop, layer: &SnowLayer, share: f32, below: f32, throw: Throw) {
     let position = layer.origin + drop.offset - V2::new(0.0, below);
-    if !air.rain || position.y <= 2.0 {
+    if !air.raining() || position.y <= 2.0 {
         return;
     }
     let (velocity, fastest, start) = match throw {
@@ -801,7 +801,7 @@ fn fall(air: &mut Air, drop: &GlassDrop, layer: &SnowLayer, share: f32, below: f
         tint_amount: 0.0,
         blown: 0.0,
         leaf: 0.0,
-        rain: true,
+        kind: Mode::Rain,
         water: drop.radius * share.sqrt(),
     });
 }

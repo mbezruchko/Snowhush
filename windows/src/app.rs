@@ -57,6 +57,7 @@ const ID_MAX_PERFORMANCE: u32 = 215;
 const ID_DEEP: u32 = 216;
 const ID_BLOSSOM: u32 = 217;
 const ID_SPONSOR: u32 = 218;
+const ID_MIXED: u32 = 219;
 /// Opacity from 10% up in steps of 5%: `ID_OPACITY` + the step.
 const ID_OPACITY: u32 = 400;
 const OPACITY_STEPS: u32 = 19;
@@ -359,39 +360,40 @@ fn show_menu(window: HWND, x: i32, y: i32) {
 
 /// What the tray menu lists, with what is on or off: sliders in the drawn menu, submenus in the system's.
 fn entries(settings: &Settings, login: bool, sliders: bool) -> Vec<Entry> {
-    let mode = settings.mode;
-    let autumn = mode == Mode::Autumn;
-    let blossom = mode == Mode::Blossom;
+    let picked = settings.modes();
+    let falling: Vec<Mode> = Mode::ALL.iter().copied().filter(|mode| picked.contains(mode)).collect();
+    // Mixed, the kinds are checkboxes and picking one leaves the menu open for the other; alone, one of a set.
+    let kind = |id: u32, label: &str, mode: Mode| {
+        if settings.mixed { Entry::toggle(id, label, picked.contains(&mode), true) } else { Entry::choice(id, label, settings.mode == mode) }
+    };
     let modes = vec![
-        Entry::choice(ID_SNOW, "Snow", mode == Mode::Snow),
-        Entry::choice(ID_AUTUMN, "Autumn Leaves", autumn),
-        Entry::choice(ID_RAIN, "Rain", mode == Mode::Rain),
-        Entry::choice(ID_BLOSSOM, "Cherry Blossom", blossom),
+        Entry::toggle(ID_MIXED, "Mixed", settings.mixed, true),
         Entry::Separator,
-        Entry::item(ID_HALLOWEEN, "Halloween", halloween::wanted(settings.halloween), mode == Mode::Snow),
+        kind(ID_SNOW, "Snow", Mode::Snow),
+        kind(ID_AUTUMN, "Autumn Leaves", Mode::Autumn),
+        kind(ID_RAIN, "Rain", Mode::Rain),
+        kind(ID_BLOSSOM, "Cherry Blossom", Mode::Blossom),
+        Entry::Separator,
+        Entry::item(ID_HALLOWEEN, "Halloween", halloween::wanted(settings.halloween), falling == [Mode::Snow]),
     ];
     let mut behavior = vec![Entry::header("Behavior")];
     // Rain doesn't lie anywhere: nothing to keep, melt or clear.
-    if mode != Mode::Rain {
+    let heaps: Vec<Mode> = falling.iter().copied().filter(|&mode| mode != Mode::Rain).collect();
+    if !heaps.is_empty() {
         behavior.push(Entry::toggle(ID_ACCUMULATE, "Accumulate", settings.accumulate, true));
-        let melt = if autumn {
-            "Wither Leaves"
-        } else if blossom {
+        let melt = if heaps.contains(&Mode::Snow) {
+            "Melt Snow"
+        } else if heaps == [Mode::Blossom] {
             "Wilt Petals"
         } else {
-            "Melt Snow"
+            "Wither Leaves"
         };
         behavior.push(Entry::toggle(ID_MELT, melt, settings.melt, settings.accumulate));
     }
-    let windows = match mode {
-        Mode::Snow => "Snow on Windows",
-        Mode::Autumn => "Leaves on Windows",
-        Mode::Rain => "Rain on Windows",
-        Mode::Blossom => "Petals on Windows",
-    };
+    let windows = format!("{} on Windows", names(&falling));
     let mut options = behavior;
     options.extend([
-        Entry::toggle(ID_WINDOWS, windows, settings.snow_on_windows, true),
+        Entry::toggle(ID_WINDOWS, &windows, settings.snow_on_windows, true),
         Entry::toggle(ID_DEEP, "Deep Interaction", settings.deep_interaction, settings.snow_on_windows),
         Entry::Separator,
         Entry::header("Display"),
@@ -414,31 +416,23 @@ fn entries(settings: &Settings, login: bool, sliders: bool) -> Vec<Entry> {
             Entry::Separator,
         ]
     } else {
-        let intensities = INTENSITY_STOPS.iter().map(|&stop| Entry::choice(ID_SNOWFALL + stop / 5, &percent(stop), stop == settings.intensity)).collect();
-        let opacities = OPACITY_STOPS
-            .iter()
-            .map(|&stop| Entry::choice(ID_OPACITY + (stop - 10) / 5, &format!("{stop}%"), stop == settings.opacity))
-            .collect();
+        let intensities =
+            INTENSITY_STOPS.iter().map(|&stop| Entry::choice(ID_SNOWFALL + stop / 5, &percent(stop), stop == settings.intensity)).collect();
+        let opacities =
+            OPACITY_STOPS.iter().map(|&stop| Entry::choice(ID_OPACITY + (stop - 10) / 5, &format!("{stop}%"), stop == settings.opacity)).collect();
         vec![
             Entry::Submenu { label: "Intensity".to_string(), entries: intensities },
             Entry::Submenu { label: "Opacity".to_string(), entries: opacities },
         ]
     };
     entries.push(Entry::Submenu { label: "Mode".to_string(), entries: modes });
-    if mode != Mode::Rain {
-        let clear = if autumn {
-            "Clear Leaves"
-        } else if blossom {
-            "Clear Petals"
-        } else {
-            "Clear Snow"
-        };
-        entries.push(Entry::item(ID_CLEAR, clear, false, true));
+    if !heaps.is_empty() {
+        entries.push(Entry::item(ID_CLEAR, &format!("Clear {}", names(&heaps)), false, true));
     }
     entries.extend([
         Entry::Separator,
         Entry::Submenu { label: "Settings".to_string(), entries: options },
-        Entry::item(ID_SPONSOR, "Support Snowhush\u{2026}", false, true),
+        Entry::loved(ID_SPONSOR, "Support Snowhush"),
         Entry::item(ID_QUIT, "Quit", false, true),
     ]);
     entries
@@ -516,6 +510,14 @@ fn choose(window: HWND, chosen: u32, login: bool) {
             });
             refresh_icon(window);
         }
+        ID_MIXED => {
+            APP.with_borrow_mut(|app| {
+                let Some(app) = app else { return };
+                app.settings.toggle_mixed();
+                switch_modes(app);
+            });
+            refresh_icon(window);
+        }
         ID_SNOW | ID_AUTUMN | ID_RAIN | ID_BLOSSOM => {
             let mode = match chosen {
                 ID_AUTUMN => Mode::Autumn,
@@ -525,12 +527,9 @@ fn choose(window: HWND, chosen: u32, login: bool) {
             };
             APP.with_borrow_mut(|app| {
                 let Some(app) = app else { return };
-                if mode == app.settings.mode {
-                    return;
+                if app.settings.pick(mode) {
+                    switch_modes(app);
                 }
-                app.settings.mode = mode;
-                app.settings.save();
-                send(app, Command::SwitchMode { mode, calm: !prefs::animations_enabled() });
             });
             refresh_icon(window);
         }
@@ -588,6 +587,23 @@ fn choose(window: HWND, chosen: u32, login: bool) {
             send(app, command);
         }),
     }
+}
+
+/// The kinds falling, as the menu names them: "Snow and Leaves".
+fn names(modes: &[Mode]) -> String {
+    let name = |mode: &Mode| match mode {
+        Mode::Snow => "Snow",
+        Mode::Autumn => "Leaves",
+        Mode::Rain => "Rain",
+        Mode::Blossom => "Petals",
+    };
+    modes.iter().map(name).collect::<Vec<_>>().join(" and ")
+}
+
+fn switch_modes(app: &App) {
+    app.settings.save();
+    let settings = &app.settings;
+    send(app, Command::SwitchMode { mode: settings.mode, mixed: settings.mixed, mix: settings.mix, calm: !prefs::animations_enabled() });
 }
 
 /// Checks on another thread and reports back to the window with `WM_UPDATE`.

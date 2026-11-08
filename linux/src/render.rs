@@ -29,6 +29,7 @@ const GLASS_VERTEX: &str = include_str!("shaders/glass.vert");
 const GLASS_FRAGMENT: &str = include_str!("shaders/glass.frag");
 /// A drop on the glass, as both the sprites and the field draw it, put into each where it is included.
 const DROP: &str = include_str!("shaders/drop.glsl");
+const LEAVES: &str = include_str!("shaders/leaves.glsl");
 /// A quad over the whole surface, drawn with a blend that leaves what is there at the given opacity.
 const FADE_VERTEX: &str = "#version 300 es
 void main() {
@@ -163,7 +164,7 @@ impl Gpu {
         };
         unsafe {
             let adapter = gl.get_parameter_string(glow::RENDERER);
-            let included = |source: &str| source.replace("#include \"drop.glsl\"", DROP);
+            let included = |source: &str| source.replace("#include \"drop.glsl\"", DROP).replace("#include \"leaves.glsl\"", LEAVES);
             let sprite = program(
                 &gl,
                 SPRITE_VERTEX,
@@ -193,7 +194,7 @@ impl Gpu {
             let pile = program(
                 &gl,
                 PILE_VERTEX,
-                PILE_FRAGMENT,
+                &included(PILE_FRAGMENT),
                 &[
                     "viewSize",
                     "scale",
@@ -214,8 +215,6 @@ impl Gpu {
                     "occluders",
                     "heights",
                     "panel",
-                    "autumn",
-                    "blossom",
                     "wilt",
                     "drift",
                 ],
@@ -258,6 +257,7 @@ impl Gpu {
                 (12, 2, 100),
                 (13, 2, 108),
                 (14, 4, 116),
+                (15, 1, 132),
             ] {
                 gl.enable_vertex_attrib_array(location);
                 gl.vertex_attrib_pointer_f32(location, components, glow::FLOAT, false, stride, offset);
@@ -445,8 +445,6 @@ impl Gpu {
                 gl.uniform_2_f32_slice(pile.location("shake"), &shake);
                 gl.uniform_1_i32(pile.location("heights"), 0);
                 gl.uniform_4_f32_slice(pile.location("panel"), &panel);
-                gl.uniform_1_f32(pile.location("autumn"), autumn);
-                gl.uniform_1_f32(pile.location("blossom"), blossom);
                 gl.uniform_1_f32(pile.location("wilt"), wilt);
                 for layer in &piles {
                     let count = layer.occluders.len().min(OCCLUDERS);

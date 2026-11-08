@@ -52,9 +52,12 @@ pub enum Command {
     Locked(bool),
     /// Blows all the snow away; when calm, for less motion, melts it where it lies instead.
     ClearSnow(bool),
-    /// Another kind falls, once what lies is cleared away as `ClearSnow` clears it.
+    /// Other kinds fall, once what lies is cleared away as `ClearSnow` clears it; a kind only joining what falls
+    /// starts at once.
     Mode {
         mode: Mode,
+        mixed: bool,
+        mix: [Mode; 2],
         calm: bool,
     },
     Power(PowerBudget),
@@ -286,12 +289,15 @@ impl App {
                 let direction = self.screens.first().map_or(-1.0, |screen| screen.simulation.breeze_direction());
                 self.screens.iter_mut().for_each(|screen| screen.simulation.blow_away(direction, calm));
             }
-            Command::Mode { mode, calm } => {
+            Command::Mode { mode, mixed, mix, calm } => {
                 self.settings.mode = mode;
+                self.settings.mixed = mixed;
+                self.settings.mix = mix;
+                let modes = self.settings.modes();
                 let direction = self.screens.first().map_or(-1.0, |screen| screen.simulation.breeze_direction());
                 let now = Instant::now();
                 self.screens.iter_mut().for_each(|screen| {
-                    screen.simulation.switch_mode(mode, direction, calm);
+                    screen.simulation.switch_modes(&modes, direction, calm);
                     screen.wake(now);
                 });
                 self.update_light();
@@ -424,7 +430,7 @@ impl App {
                 tray.update(|tray| tray.today = today);
             }
         }
-        let halloween = self.settings.mode == Mode::Snow && self.settings.halloween.wanted(today);
+        let halloween = self.settings.modes() == [Mode::Snow] && self.settings.halloween.wanted(today);
         if halloween != self.halloween {
             self.halloween = halloween;
             log!("halloween: {halloween}");
@@ -504,7 +510,7 @@ fn new_simulation(bounds: &Area, settings: &Settings, budget: PowerBudget) -> Sn
     simulation.thaws = settings.melt;
     simulation.accumulates = settings.accumulate;
     simulation.falling_opacity = settings.opacity as f32 / 100.0;
-    simulation.set_mode(settings.mode);
+    simulation.set_modes(&settings.modes());
     simulation.set_density(density(budget));
     simulation
 }

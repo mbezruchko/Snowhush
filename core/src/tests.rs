@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use crate::geometry::{Rect, V2};
+use crate::layer::SnowLayer;
 use crate::simulation::{Mode, Pace, ScatterPiece, SnowSimulation, Sprite, WindowSurface};
 
 const DT: f32 = 1.0 / 60.0;
@@ -193,6 +194,22 @@ fn snow_settles_on_a_window_and_drops_when_it_closes() {
     run(&mut simulation, 5.0, AWAY);
     assert_eq!(piles(&simulation).len(), 1);
     assert_finite(&simulation);
+}
+
+#[test]
+fn snow_falling_off_a_window_shows_at_the_falling_opacity() {
+    let mut simulation = SnowSimulation::new(1280.0, 800.0, 0.75);
+    let none = HashSet::new();
+    simulation.update_windows(&[surface(7, 300.0, 600.0, 500.0)], 0.2, &none, &none, false);
+    run(&mut simulation, 60.0, AWAY);
+    simulation.set_intensity(0.0);
+    simulation.falling_opacity = 0.4;
+    simulation.update_windows(&[], 0.2, &none, &none, false);
+    simulation.step(DT, AWAY);
+    let mut sprites = vec![Sprite::default(); simulation.sprite_count()];
+    let count = simulation.write_sprites(&mut sprites);
+    assert!(count > 20, "the window's snow didn't fall");
+    assert!(sprites[..count].iter().all(|sprite| sprite.alpha <= 0.4), "snow off the window ignores the opacity");
 }
 
 #[test]
@@ -593,6 +610,44 @@ fn cherry_blossom_petals_fall_and_lie_as_leaves_do() {
     assert!(sprites[..count].iter().any(|sprite| sprite.tint_amount > 0.0), "no petal withering");
     simulation.set_mode(Mode::Autumn);
     assert!(simulation.leafy() && !simulation.blossom());
+}
+
+#[test]
+fn mixed_snow_and_leaves_fall_together_and_heap_up_mixed() {
+    let mut simulation = SnowSimulation::new(800.0, 600.0, 0.75);
+    simulation.set_modes(&[Mode::Snow, Mode::Autumn]);
+    assert_eq!(simulation.modes(), [Mode::Snow, Mode::Autumn]);
+    assert!(!simulation.leafy(), "snow among the leaves counts as snow");
+    run(&mut simulation, 90.0, AWAY);
+    assert_finite(&simulation);
+    let mut sprites = vec![Sprite::default(); simulation.sprite_count()];
+    let count = simulation.write_sprites(&mut sprites);
+    let leaves = sprites[..count].iter().filter(|sprite| sprite.leaf[0] > 0.0).count();
+    assert!(leaves > 0 && leaves < count, "{leaves} leaves among {count} sprites");
+    let mut buffer = vec![0.0; simulation.column_count()];
+    let layers = simulation.write_layers(&mut buffer);
+    let ground = &layers[0];
+    assert_eq!(simulation.column_count(), SnowLayer::ROWS * ground.count);
+    let shares = &buffer[ground.offset + 2 * ground.count..ground.offset + 3 * ground.count];
+    let mixed = shares.iter().filter(|&&share| share > 0.05 && share < 0.95).count();
+    assert!(mixed > ground.count / 2, "only {mixed} of {} columns are snow and leaves mixed", ground.count);
+}
+
+#[test]
+fn a_kind_joining_the_fall_starts_at_once_and_one_leaving_clears_the_screen() {
+    let mut simulation = SnowSimulation::new(800.0, 600.0, 0.75);
+    run(&mut simulation, 30.0, AWAY);
+    simulation.switch_modes(&[Mode::Snow, Mode::Autumn], 1.0, false);
+    assert_eq!(simulation.modes(), [Mode::Snow, Mode::Autumn], "a kind joining waited for a gust");
+    assert!(simulation.has_snow(), "a kind joining cleared the snow");
+    run(&mut simulation, 10.0, AWAY);
+    assert!(leaf_sprites(&simulation) > 0, "no leaves falling");
+    simulation.switch_modes(&[Mode::Autumn], 1.0, false);
+    run(&mut simulation, 0.5, AWAY);
+    assert_eq!(simulation.modes(), [Mode::Snow, Mode::Autumn], "switched before the gust cleared the screen");
+    run(&mut simulation, 8.0, AWAY);
+    assert_eq!(simulation.modes(), [Mode::Autumn], "never switched");
+    assert!(simulation.leafy());
 }
 
 #[test]

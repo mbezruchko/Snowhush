@@ -64,9 +64,13 @@
   const ghostBulk = form => GHOST.size * GHOST.size * 0.04 * ghostHeight(form) / 0.425;
 
   const settings = {
-    mode: 'snow', intensity: 0.5, opacity: 1, halloween: halloweenTime, accumulate: true, melt: true, windows: true, deep: true,
-    behind: false, fullscreen: false, screenshots: false, performance: false, login: false, quit: false,
+    mode: 'snow', mixed: false, mix: ['autumn', 'snow'], intensity: 0.5, opacity: 1, halloween: halloweenTime, accumulate: true, melt: true,
+    windows: true, deep: true, behind: false, fullscreen: false, screenshots: false, performance: false, login: false, quit: false,
   };
+  /// The kinds falling: the two mixed, or the one picked.
+  const modesOf = () => settings.mixed ? settings.mix : [settings.mode];
+  /// Snow alone falls: the page's own, with its ghosts on Halloween.
+  const onlySnow = () => !settings.mixed && settings.mode === 'snow';
 
   const rand = (a, b) => a + Math.random() * (b - a);
   const smoothstep = (a, b, x) => {
@@ -735,7 +739,7 @@
     }
 
     target() {
-      if (settings.quit || settings.mode !== 'snow') return 0;
+      if (settings.quit || !onlySnow()) return 0;
       return Math.round(density(settings.intensity) * this.width * this.height / 1e6);
     }
 
@@ -821,24 +825,24 @@
       }
     }
 
-    /// Starts the app's simulation for another mode. From the snow, it starts empty: the page's snow blows away while
-    /// the gust clears the way, and the other kind falls from the top after it.
-    startEngine(module, mode) {
+    /// Starts the app's simulation for other kinds. From the snow, it starts empty: the page's snow blows away while
+    /// the gust clears the way, and the other kinds fall from the top after it.
+    startEngine(module, modes) {
       if (!this.gl) return;
       if (this.engine && this.retiring === null) {
-        this.engine.switchTo(mode, reduceMotion.matches);
+        this.engine.switchTo(modes, reduceMotion.matches);
         return;
       }
       this.stopEngine();
       try {
-        this.engine = new SnowhushEngine.Engine(module, this.width, this.height, 0, 'snow');
+        this.engine = new SnowhushEngine.Engine(module, this.width, this.height, 0, ['snow']);
         this.renderer ??= new SnowhushEngine.Renderer(this.gl, this.engine);
       } catch (error) {
-        console.warn('Snowhush: no', mode, error);
+        console.warn('Snowhush: no', modes.join(' and '), error);
         this.stopEngine();
         return;
       }
-      this.engine.switchTo(mode, reduceMotion.matches);
+      this.engine.switchTo(modes, reduceMotion.matches);
       this.engine.windows(ledgesActive() ? this.boxes : [], 0);
       this.tuneEngine();
     }
@@ -1393,12 +1397,12 @@
       }
       for (const g of this.grains) {
         data[k++] = g.x; data[k++] = g.y; data[k++] = g.size;
-        data[k++] = g.lump ? 0.97 : g.blown ? 0.8 : 0.95; data[k++] = g.lump ? 0.2 : 0.3; data[k++] = g.lump || 0;
+        data[k++] = (g.lump ? 0.97 : g.blown ? 0.8 : 0.95) * settings.opacity; data[k++] = g.lump ? 0.2 : 0.3; data[k++] = g.lump || 0;
       }
       for (const m of this.motes) {
         const t = m.age / m.life;
         data[k++] = m.x; data[k++] = m.y; data[k++] = m.size * (1 + t);
-        data[k++] = m.alpha * Math.min(1, m.age / 0.06) * Math.pow(1 - t, 1.5); data[k++] = 1; data[k++] = 0;
+        data[k++] = m.alpha * Math.min(1, m.age / 0.06) * Math.pow(1 - t, 1.5) * settings.opacity; data[k++] = 1; data[k++] = 0;
       }
       gl.useProgram(this.sprite.program);
       const s = this.sprite.uniforms;
@@ -1719,34 +1723,56 @@
 
   // MARK: - Menu
 
-  const NAMES = {
-    snow: { melt: 'Melt Snow', windows: 'Snow on Windows', clear: 'Clear Snow' },
-    autumn: { melt: 'Wither Leaves', windows: 'Leaves on Windows', clear: 'Clear Leaves' },
-    rain: { melt: 'Melt Snow', windows: 'Rain on Windows', clear: 'Clear Snow' },
-    blossom: { melt: 'Wilt Petals', windows: 'Petals on Windows', clear: 'Clear Petals' },
-  };
+  const MODE_ORDER = ['snow', 'autumn', 'rain', 'blossom'];
+  const KIND_NAMES = { snow: 'Snow', autumn: 'Leaves', rain: 'Rain', blossom: 'Petals' };
+  /// The menu's names for what falls: "Snow and Leaves".
+  const names = modes => modes.map(mode => KIND_NAMES[mode]).join(' and ');
   let engineModule = null;
 
-  /// Another kind falls: the page's own snow, or the app's simulation for the others, loaded the first time.
-  async function chooseMode(mode) {
-    if (mode === settings.mode) return;
-    const wasSnow = settings.mode === 'snow';
+  /// Picks a kind; mixed, a third kind picked takes the place of the one picked before the other. Whether anything changed.
+  function pickMode(mode) {
+    if (settings.mixed) {
+      if (settings.mix.includes(mode)) return false;
+      settings.mix = [settings.mix[1], mode];
+    } else if (mode === settings.mode) {
+      return false;
+    }
     settings.mode = mode;
+    return true;
+  }
+
+  /// Mixed, the kind picked last falls along with the one picked before it; unmixed, it falls alone.
+  function toggleMixed() {
+    settings.mixed = !settings.mixed;
+    if (settings.mixed) {
+      const other = settings.mix.includes(settings.mode) ? settings.mix.find(mode => mode !== settings.mode) : settings.mix[1];
+      settings.mix = [other ?? (settings.mode === 'snow' ? 'autumn' : 'snow'), settings.mode];
+    }
+    return true;
+  }
+
+  /// Other kinds fall, as `change` picks them: the page's own snow alone, or the app's simulation for anything else,
+  /// loaded the first time.
+  async function changeModes(change) {
+    const wasSnow = onlySnow();
+    if (!change()) return;
     reflectHalloween();
-    if (mode === 'snow') {
+    if (onlySnow()) {
       scenes.forEach(scene => scene.retireEngine());
     } else {
       if (!engineModule) {
+        const wanted = modesOf().join();
         try {
           engineModule = await SnowhushEngine.load();
         } catch (error) {
           console.warn('Snowhush: modes unavailable,', error);
           settings.mode = 'snow';
+          settings.mixed = false;
           reflectHalloween();
           reflect();
           return;
         }
-        if (settings.mode !== mode) return;
+        if (modesOf().join() !== wanted) return;
       }
       if (wasSnow) clearSnow();
       syncEngines();
@@ -1755,13 +1781,13 @@
     wake();
   }
 
-  /// Keeps each scene's simulation in step with the menu: gone while quit, there for any mode but the snow.
+  /// Keeps each scene's simulation in step with the menu: gone while quit, there for anything but the snow alone.
   function syncEngines() {
     for (const scene of scenes) {
       if (settings.quit) {
         scene.stopEngine();
-      } else if (settings.mode !== 'snow' && engineModule) {
-        scene.startEngine(engineModule, settings.mode);
+      } else if (!onlySnow() && engineModule) {
+        scene.startEngine(engineModule, modesOf());
       }
       scene.tuneEngine();
     }
@@ -1797,7 +1823,7 @@
 
   /// Halloween haunts the snow only, as in the app.
   function reflectHalloween() {
-    const on = settings.halloween && settings.mode === 'snow';
+    const on = settings.halloween && onlySnow();
     document.documentElement.classList.toggle('halloween', on);
     if (hint) hint.textContent = on ? 'Try it: scare the ghost.' : hintText;
     scenes.forEach(scene => {
@@ -1869,9 +1895,13 @@
       }
       const ledgesBefore = ledgesActive();
       if (item.dataset.mode) {
-        closeSubmenus(menu);
+        // Mixed, the kinds are checkboxes and picking one leaves the menu open for the other.
+        if (!settings.mixed) closeSubmenus(menu);
         settings.quit = false;
-        chooseMode(item.dataset.mode);
+        changeModes(() => pickMode(item.dataset.mode));
+      } else if (item.dataset.toggle === 'mixed') {
+        settings.quit = false;
+        changeModes(toggleMixed);
       } else if (item.dataset.toggle === 'halloween') {
         settings.halloween = !settings.halloween;
         reflectHalloween();
@@ -1989,15 +2019,23 @@
       const output = input.parentElement.querySelector('output');
       if (output) output.textContent = percent(value);
     }
-    const names = NAMES[settings.mode];
-    const rain = settings.mode === 'rain';
+    const falling = MODE_ORDER.filter(mode => modesOf().includes(mode));
+    // Rain neither heaps up nor lies about to clear away.
+    const heaps = falling.filter(mode => mode !== 'rain');
+    const titles = {
+      melt: heaps.includes('snow') ? 'Melt Snow' : heaps.join() === 'blossom' ? 'Wilt Petals' : 'Wither Leaves',
+      windows: `${names(falling)} on Windows`,
+      clear: `Clear ${names(heaps)}`,
+    };
     for (const item of document.querySelectorAll('[data-snow-menu] .menu-item')) {
-      if (item.dataset.mode) item.setAttribute('aria-checked', String(!settings.quit && item.dataset.mode === settings.mode));
-      const name = names[item.dataset.toggle] ?? names[item.dataset.action];
+      if (item.dataset.mode) {
+        item.setAttribute('role', settings.mixed ? 'menuitemcheckbox' : 'menuitemradio');
+        item.setAttribute('aria-checked', String(!settings.quit && falling.includes(item.dataset.mode)));
+      }
+      const name = titles[item.dataset.toggle] ?? titles[item.dataset.action];
       if (name) item.textContent = name;
-      // Rain neither heaps up nor lies about to clear away.
-      if (['accumulate', 'melt'].includes(item.dataset.toggle) || item.dataset.action === 'clear') item.hidden = rain;
-      if (item.dataset.toggle === 'halloween') item.setAttribute('aria-disabled', String(settings.mode !== 'snow'));
+      if (['accumulate', 'melt'].includes(item.dataset.toggle) || item.dataset.action === 'clear') item.hidden = heaps.length === 0;
+      if (item.dataset.toggle === 'halloween') item.setAttribute('aria-disabled', String(!onlySnow()));
       if (item.dataset.toggle) item.setAttribute('aria-checked', String(settings[item.dataset.toggle]));
       if (item.dataset.toggle === 'melt') item.setAttribute('aria-disabled', String(!settings.accumulate));
       if (item.dataset.toggle === 'windows') item.setAttribute('aria-disabled', String(settings.behind));

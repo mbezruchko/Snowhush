@@ -31,7 +31,8 @@ use snowhush_core::simulation::{COLUMN_WIDTH, PumpkinSprite, SnowSimulation, Spr
 use crate::halloween::{self, SIGN_SCALE};
 use crate::log;
 
-const SHADERS: &str = include_str!("shaders.hlsl");
+// The digitized leaves' tables come first: the shaders draw the leaves from them.
+const SHADERS: &str = concat!(include_str!("leaves.hlsl"), "\n", include_str!("shaders.hlsl"));
 /// How far the cursor's candlelight reaches, in points.
 pub const LANTERN_REACH: f32 = 130.0;
 
@@ -44,7 +45,8 @@ const _: () = assert!(
         && offset_of!(Sprite, spin) == 100
         && offset_of!(Sprite, rain) == 108
         && offset_of!(Sprite, drop) == 116
-        && size_of::<Sprite>() == 132
+        && offset_of!(Sprite, petal) == 132
+        && size_of::<Sprite>() == 136
 );
 
 #[repr(C)]
@@ -70,7 +72,7 @@ struct Uniforms {
     /// The pumpkins' candles: where each burns, how far its light reaches and how bright it is.
     pumpkins: [[f32; 4]; 3],
     occluders: [[f32; 4]; 16],
-    /// One while leaves fall instead of snow.
+    /// One while all that heaps up is leaves, for a ghost; a pile has its own leaves and petals in each column.
     autumn: f32,
     /// One while the leaves are cherry blossom petals.
     blossom: f32,
@@ -214,10 +216,7 @@ impl Gpu {
             let elements = [
                 element(s!("POSITION"), DXGI_FORMAT_R32G32_FLOAT, 0),
                 element(s!("VELOCITY"), DXGI_FORMAT_R32G32_FLOAT, 8),
-                element(s!("SIZE"), DXGI_FORMAT_R32_FLOAT, 16),
-                element(s!("ALPHA"), DXGI_FORMAT_R32_FLOAT, 20),
-                element(s!("SOFT"), DXGI_FORMAT_R32_FLOAT, 24),
-                element(s!("TINTAMOUNT"), DXGI_FORMAT_R32_FLOAT, 28),
+                element(s!("BODY"), DXGI_FORMAT_R32G32B32A32_FLOAT, 16),
                 element(s!("TINTCOLOR"), DXGI_FORMAT_R32G32B32_FLOAT, 32),
                 element(s!("LUMP"), DXGI_FORMAT_R32_FLOAT, 44),
                 element(s!("GHOST"), DXGI_FORMAT_R32G32B32A32_FLOAT, 48),
@@ -227,6 +226,7 @@ impl Gpu {
                 element(s!("SPIN"), DXGI_FORMAT_R32G32_FLOAT, 100),
                 element(s!("RAIN"), DXGI_FORMAT_R32G32_FLOAT, 108),
                 element(s!("DROP"), DXGI_FORMAT_R32G32B32A32_FLOAT, 116),
+                element(s!("PETAL"), DXGI_FORMAT_R32_FLOAT, 132),
             ];
             let mut sprite_layout = None;
             device.CreateInputLayout(&elements, blob_bytes(&sprite_code), Some(&mut sprite_layout))?;

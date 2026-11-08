@@ -5,6 +5,8 @@ import AppKit
 final class MenuToggle: NSView {
     private let action: Selector
     private weak var target: AnyObject?
+    /// Whether a click leaves the menu open; false closes it like a plain item.
+    var staysOpen: () -> Bool = { true }
 
     // Measured from a macOS 26 menu at 2x: rows 24 pt, titles and separators at 30 pt, checkmarks centred at 18 pt
     // and matching a 10.5 pt bold SF checkmark, not the older, thinner menuOnStateTemplate; lit in the accent colour.
@@ -63,6 +65,10 @@ final class MenuToggle: NSView {
         NSApp.sendAction(action, to: target, from: item)
         var root = item.menu
         while let parent = root?.supermenu { root = parent }
+        guard staysOpen() else {
+            root?.cancelTracking()
+            return
+        }
         if let root { root.delegate?.menuNeedsUpdate?(root) }
         redrawRows()
     }

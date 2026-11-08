@@ -62,10 +62,12 @@ pub enum Command {
     ClearSnow(bool),
     /// Halloween turned on or off from the menu.
     Halloween(Choice),
-    /// Another kind falls, once a gust has blown what is there away; when calm, for less motion, it melts where it
-    /// lies instead.
+    /// Other kinds fall, once a gust has blown what is there away; when calm, for less motion, it melts where it
+    /// lies instead. A kind only joining what falls starts at once.
     SwitchMode {
         mode: Mode,
+        mixed: bool,
+        mix: [Mode; 2],
         calm: bool,
     },
     Quit,
@@ -210,13 +212,16 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                     chores_at = 0;
                     light_at = 0;
                 }
-                Command::SwitchMode { mode, calm } => {
+                Command::SwitchMode { mode, mixed, mix, calm } => {
                     settings.mode = mode;
+                    settings.mixed = mixed;
+                    settings.mix = mix;
                     light_at = 0;
+                    let modes = settings.modes();
                     let direction = screens.first().map_or(-1.0, |screen| screen.simulation.breeze_direction());
                     let now = Clock::now();
                     screens.iter_mut().for_each(|screen| {
-                        screen.simulation.switch_mode(mode, direction, calm);
+                        screen.simulation.switch_modes(&modes, direction, calm);
                         screen.wake(now);
                     });
                 }
@@ -419,7 +424,7 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
 /// window. Snow and leaves lie on its top edge. What falls is what the screens show, the switch to another kind
 /// coming only once the gust has cleared the screen.
 fn over_taskbar(settings: &Settings, screens: &[Screen]) -> bool {
-    settings.behind_taskbar || screens.first().map_or(settings.mode, |screen| screen.simulation.mode()) == Mode::Rain
+    settings.behind_taskbar || screens.first().map_or(settings.modes().contains(&Mode::Rain), |screen| screen.simulation.raining())
 }
 
 fn sync_screens(
@@ -492,7 +497,7 @@ fn new_simulation(monitor: &Monitor, settings: &Settings) -> SnowSimulation {
     simulation.falling_opacity = settings.opacity as f32 / 100.0;
     simulation.set_snowfall_held(!settings.welcomed);
     simulation.set_halloween(halloween::shows(settings));
-    simulation.set_mode(settings.mode);
+    simulation.set_modes(&settings.modes());
     simulation
 }
 

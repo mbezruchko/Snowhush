@@ -50,6 +50,7 @@ struct Sprite {
     float turnSpeed;
     float flipSpeed;
     float rain;
+    float petal;
 };
 
 struct SpriteOut {
@@ -83,6 +84,7 @@ struct SpriteOut {
     float flipSmear;
     float samples;
     float rain;
+    float petal;
     /// For a drop running down the glass, the share of it from its head back that is its smear over the exposure.
     float blur;
 };
@@ -94,6 +96,8 @@ static float hash(float2 p) {
     p += dot(p, p + 45.32);
     return fract(p.x * p.y);
 }
+
+\(leafShapesSource)
 
 static float noise(float x) {
     float i = floor(x);
@@ -114,12 +118,8 @@ static float3 leafColor(float seed) {
 
 /// Blush, soft pink, pink or nearly white, a little lighter or darker.
 static float3 petalColor(float seed) {
-    float k = fract(seed * 7.13);
-    float3 c = k < 0.35 ? float3(1.0, 0.85, 0.89)
-        : k < 0.7 ? float3(0.99, 0.76, 0.84)
-        : k < 0.88 ? float3(0.97, 0.66, 0.78)
-        : float3(1.0, 0.93, 0.95);
-    return c * (0.94 + 0.08 * fract(seed * 31.7));
+    // A digitized flower's colour half way out along its petals, a little lighter or darker.
+    return PETAL_RINGS[petalTone(seed) * 3 + 1] * (0.94 + 0.08 * fract(seed * 31.7));
 }
 
 /// The tan a fallen petal turns as it withers.
@@ -127,35 +127,66 @@ static float3 withered(float seed) {
     return float3(0.78, 0.6, 0.49) * (0.86 + 0.18 * fract(seed * 17.3));
 }
 
-/// Fallen leaves lying every which way: the topmost at each point shows, the gaps between them in shadow.
-static float3 litter(float2 point, float blossom, float wilt) {
-    float spacing = blossom > 0.5 ? 4.6 : 6.5;
+/// Fallen leaves lying every which way, `petals` of them petals and only `density` of them there at all: the topmost
+/// at each point shows, the gaps between them in shadow. Alpha is one where a leaf lies, zero in a gap.
+static float4 litterAt(float2 point, float petals, float wilt, float density) {
+    // The grid holds still across a heap: it changes only where the heap turns from mostly leaves to mostly petals.
+    float spacing = petals > 0.5 ? 4.6 : 6.5;
     float2 cell = floor(point / spacing);
     float top = -1.0;
     float rim = 0.0;
-    float3 color = blossom > 0.5 ? float3(0.86, 0.68, 0.74) : float3(0.34, 0.19, 0.08);
+    bool petal = petals > 0.5;
+    float3 color = mix(float3(0.34, 0.19, 0.08), float3(0.86, 0.68, 0.74), petals);
     for (int j = -1; j <= 1; j++) {
         for (int i = -1; i <= 1; i++) {
             for (int k = 0; k < 3; k++) {
                 float2 c = cell + float2(i, j) + float(k) * 0.37;
+                if (hash(c + 13.7) >= density) continue;
+                bool p = hash(c + 17.3) < petals;
                 float2 d = point - (cell + float2(i, j) + float2(hash(c + 7.1), hash(c + 3.3))) * spacing;
                 float angle = hash(c + 11.7) * 6.2832;
                 float2 q = float2(cos(angle) * d.x + sin(angle) * d.y, -sin(angle) * d.x + cos(angle) * d.y);
-                float size = blossom > 0.5 ? 3.2 + 1.6 * hash(c + 2.9) : 3.8 + 2.4 * hash(c + 2.9);
+                float size = p ? 3.2 + 1.6 * hash(c + 2.9) : 3.8 + 2.4 * hash(c + 2.9);
                 float t = q.x / size;
-                float inside = (1.0 - t * t) * size * (blossom > 0.5 ? 0.62 : 0.45) - abs(q.y);
+                float inside = (1.0 - t * t) * size * 0.62 - abs(q.y);
+                // A leaf is one of those cut from photos, in its own colours from the middle out. Most cells' leaves
+                // lie too far off to cover this point: a glance at the distance spares looking their outlines up.
+                int kind = 0;
+                float2 l = float2(0.0, 0.0);
+                float reach = 1.0;
+                if (!p) {
+                    inside = -1.0;
+                    if (dot(q, q) < size * size * LEAF_BOUND) {
+                        kind = leafKind(hash(c + 0.5));
+                        l = q / size - float2(LEAF_FRAME[kind].x, 0.0);
+                        float far = length(l);
+                        if (far < LEAF_EXTENT[kind].x) {
+                            reach = leafReach(kind, atan2(l.y, l.x));
+                            inside = (reach - far) * size;
+                        }
+                    }
+                }
                 float z = hash(c + 5.9);
                 if (inside > 0.0 && z > top) {
                     top = z;
                     rim = inside;
-                    color = blossom > 0.5 ? petalColor(hash(c + 0.5)) : leafColor(hash(c + 0.5));
+                    petal = p;
+                    float outward = saturate(length(l) / max(reach, 1e-3));
+                    float3 middle = LEAF_RINGS[kind * 3], halfway = LEAF_RINGS[kind * 3 + 1], edge = LEAF_RINGS[kind * 3 + 2];
+                    float3 leaf = (outward < 0.5 ? mix(middle, halfway, outward * 2.0) : mix(halfway, edge, outward * 2.0 - 1.0))
+                        * (0.86 + 0.26 * fract(hash(c + 0.5) * 31.7));
+                    color = p ? petalColor(hash(c + 0.5)) : leaf;
                     // Petals that have lain a while are withering.
-                    if (blossom > 0.5 && hash(c + 9.1) < 0.35 * wilt) color = mix(color, withered(hash(c + 0.5)), 0.3 + 0.6 * hash(c + 4.4));
+                    if (p && hash(c + 9.1) < 0.35 * wilt) color = mix(color, withered(hash(c + 0.5)), 0.3 + 0.6 * hash(c + 4.4));
                 }
             }
         }
     }
-    return color * ((blossom > 0.5 ? 0.86 : 0.7) + (blossom > 0.5 ? 0.14 : 0.3) * smoothstep(0.0, 0.7, rim));
+    return float4(color * (petal ? 0.8 + 0.2 * smoothstep(0.0, 0.3, rim) : 0.7 + 0.3 * smoothstep(0.0, 0.7, rim)), top >= 0.0 ? 1.0 : 0.0);
+}
+
+static float3 litter(float2 point, float blossom, float wilt) {
+    return litterAt(point, blossom, wilt, 1.0).rgb;
 }
 
 /// A cherry blossom petal, as `leafAt` draws a leaf: narrow at its base, broadest near its rounded tip, which is
@@ -164,15 +195,24 @@ static float4 petalAt(float2 r, float seed, float flip, float alpha, float3 ligh
     float t = (r.x + 0.9) / 1.8;
     float width = 0.84 * (0.9 + 0.2 * fract(seed * 5.3));
     float halfWidth = width * pow(saturate(t), 0.5) * sqrt(saturate(1.0 - pow(saturate(t), 5.0)));
-    float notch = 0.9 - 0.16 * saturate(1.0 - abs(r.y) / (width * 0.3)) - r.x;
-    float inside = min(min(halfWidth - abs(r.y), notch), t * 0.5);
+    // Its tip, from one of the petals digitized from photos, notched, uneven, a little lopsided: how far it reaches
+    // from the petal's base in each direction, as it was measured from the middle of its flower.
+    float2 fromBase = r - float2(-0.9, 0.0);
+    float tip = 1.8 * petalEdge(petalShape(seed), atan2(fromBase.y, fromBase.x) / 0.55) - length(fromBase);
+    float inside = min(min(halfWidth - abs(r.y), tip), t * 0.5);
     float edge = max(fwidth(inside), 1e-4);
     float a = smoothstep(-edge, edge, inside) * alpha;
-    float3 color = petalColor(seed);
-    color = mix(color * float3(0.96, 0.8, 0.88), color, smoothstep(0.05, 0.6, t));
+    int tone = petalTone(seed);
+    float3 color = t < 0.5 ? mix(PETAL_RINGS[tone * 3], PETAL_RINGS[tone * 3 + 1], saturate(t * 2.0))
+                         : mix(PETAL_RINGS[tone * 3 + 1], PETAL_RINGS[tone * 3 + 2], saturate(t * 2.0 - 1.0));
+    color *= 0.94 + 0.08 * fract(seed * 31.7);
     color *= 0.9 + 0.1 * smoothstep(0.0, 0.12, inside);
+    // Its fine veins show only where the petal is drawn big enough to hold them; small, they only blur it.
+    float detail = smoothstep(0.03, 0.012, edge);
     float vein = 0.5 + 0.5 * cos(atan2(r.y, r.x + 0.9) * 26.0);
-    color *= 1.0 - 0.035 * vein * smoothstep(0.1, 0.5, t);
+    color *= 1.0 - 0.035 * vein * smoothstep(0.1, 0.5, t) * detail;
+    // A slightly darker line a pixel wide all round: the outline reads crisp however small the petal.
+    color = mix(color, color * 0.86, 1.0 - smoothstep(edge * 0.6, edge * 1.6, inside));
     // Withering, it browns from its edges in.
     float rim = 1.0 - smoothstep(0.0, 0.35, inside);
     color = mix(color, withered(seed) * (0.85 + 0.15 * smoothstep(0.0, 0.2, inside)), saturate(wither * (0.6 + rim)) * 0.9);
@@ -306,40 +346,118 @@ static float4 flowerAt(float2 p, float seed, float spin, float face, float direc
     return nz > 0.0 ? over(color, stalkColor) : over(stalkColor, color);
 }
 
+static float leafNoise(float2 x) {
+    float2 i = floor(x), f = fract(x);
+    float2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + float2(1.0, 0.0)), u.x), mix(hash(i + float2(0.0, 1.0)), hash(i + float2(1.0, 1.0)), u.x), u.y);
+}
+
+/// One side of a leaf at `q` in its own coordinates, tip toward +x, its outline smoothed over `edge`, `pixel` of it to
+/// a pixel: the blade of a leaf cut from a photo, its colour from the photo's, mottled, darker at the edge and along its
+/// veins; `facing` below zero shows its paler back.
+static float4 bladeAt(float2 q, float seed, int kind, float facing, float alpha, float edge, float pixel) {
+    float4 frame = LEAF_FRAME[kind];
+    float2 d = q - float2(frame.x, 0.0);
+    float dist = length(d);
+    float stalk = 0.03 - max(abs(q.y), max(frame.y - 0.3 - q.x, q.x - frame.x));
+    // Past the blade's furthest reach only the stalk can show there: its outline isn't looked up.
+    if (dist > LEAF_EXTENT[kind].x + edge && stalk < -edge) return float4(0.0);
+    float reach = leafReach(kind, atan2(d.y, d.x));
+    float inside = reach - dist;
+    float shape = max(inside, stalk);
+    float a = smoothstep(-edge, edge, shape) * alpha;
+    if (a <= 0.0) return float4(0.0);
+
+    float t = saturate(dist / max(reach, 1e-3));
+    float3 middle = LEAF_RINGS[kind * 3], halfway = LEAF_RINGS[kind * 3 + 1], rim = LEAF_RINGS[kind * 3 + 2];
+    float3 color = t < 0.5 ? mix(middle, halfway, t * 2.0) : mix(halfway, rim, t * 2.0 - 1.0);
+    color *= 0.86 + 0.26 * fract(seed * 31.7);
+    // Mottling and freckles show only where the leaf is drawn big enough to hold them; at the size it shows on the
+    // desktop, a pixel or two across a freckle, they only blur it, and aren't worked out at all.
+    float detail = smoothstep(0.03, 0.012, pixel);
+    if (detail > 0.0) {
+        color *= 1.0 + detail * (0.2 * leafNoise(q * 7.0 + seed * 41.0) - 0.1);
+        float2 cell = floor(q * 16.0 + seed * 9.0);
+        float freckle = step(0.93, hash(cell + 3.1)) * smoothstep(0.32, 0.12, length(fract(q * 16.0 + seed * 9.0) - 0.5));
+        color = mix(color, color * 0.55, freckle * 0.6 * detail);
+    }
+    color = mix(color, color * 0.6, (1.0 - smoothstep(0.0, 0.05, inside)) * 0.45);
+    // A darker line a pixel wide all round: the outline reads crisp however small the leaf.
+    color = mix(color, color * 0.84, 1.0 - smoothstep(pixel * 0.6, pixel * 1.6, inside));
+
+    // The veins: the midrib, then those spreading from the base to a palmate leaf's lobes, or branching off a
+    // pinnate leaf's midrib toward its edge. Never thinner than a pixel, or they only smudge.
+    float width = max(0.012 + 0.012 * (1.0 - t), pixel * 0.8);
+    float vein = (1.0 - smoothstep(width * 0.5, width, abs(q.y))) * step(frame.y, q.x) * step(q.x, frame.x + LEAF_EXTENT[kind].y * 0.92);
+    if (frame.z > 0.5) {
+        float phase = (d.x - abs(d.y) * 0.85) * 7.0;
+        float lateral = 1.0 - smoothstep(0.0, 0.07, abs(fract(phase + 0.5) - 0.5));
+        vein = max(vein, lateral * 0.7 * smoothstep(0.02, 0.05, abs(q.y)) * smoothstep(0.0, 0.08, inside));
+    } else {
+        for (int k = 0; k < 6; k++) {
+            float2 dir = LEAF_VEINS[kind * 6 + k];
+            if (dir.x == 0.0 && dir.y == 0.0) break;
+            float along = dot(d, dir);
+            float off = abs(d.x * dir.y - d.y * dir.x);
+            float w = max(0.008 + 0.012 * (1.0 - saturate(along / 0.8)), pixel * 0.9);
+            vein = max(vein, (1.0 - smoothstep(w * 0.5, w, off)) * step(0.0, along) * smoothstep(0.0, 0.1, inside));
+        }
+    }
+    float3 veined = facing >= 0.0 ? color * 0.72 : color * 1.12;
+    color = mix(color, veined, vein * 0.6);
+    // A touch more colour than the photos have, so the leaf holds its own against the wallpaper.
+    float grey = dot(color, float3(0.3, 0.59, 0.11));
+    color = mix(float3(grey, grey, grey), color, 1.15);
+    // The back is paler and duller.
+    if (facing < 0.0) color = mix(color, float3(0.8, 0.72, 0.56) * dot(color, float3(0.33, 0.33, 0.33)) * 1.6, 0.35);
+    return float4(color * a, a);
+}
+
+/// A leaf tumbling about its length, curved across like a dry leaf: turned edge on it shows as a bowed sliver, turned
+/// further, the inside of the curve, lit where it turns to the light. 
+static float4 curledLeafAt(float2 r, float seed, float turn, float flip, float sense, float alpha, float3 light, float warm) {
+    const float curl = 0.22;
+    // A pixel's size here, taken before any branch, where every pixel of a block has its neighbours'.
+    float px = max(0.5 * (fwidth(r.x) + fwidth(r.y)), 1e-4);
+    int kind = leafKind(seed);
+    float c = flip >= 0.0 ? max(flip, 0.2) : min(flip, -0.2);
+    float s = sense * sqrt(saturate(1.0 - c * c));
+    float A = curl * s;
+    float disc = c * c - 4.0 * A * r.y;
+    float root = sqrt(max(disc, 0.0));
+    float2 ys = abs(A) > 1e-4 ? float2(c + root, c - root) / (2.0 * A) : float2(r.y / c, 1e3);
+    float2 depth = ys * s + curl * ys * ys * c;
+    ys = depth.y > depth.x ? ys.yx : ys;
+    float4 color = float4(0.0);
+    for (int i = 0; i < 2; i++) {
+        float y = i == 0 ? ys.x : ys.y;
+        float hit = step(0.0, disc) * step(abs(y), 1.2);
+        // The far side of the curve shows only through what the near side leaves uncovered.
+        if (hit <= 0.0 || color.a >= 0.999) continue;
+        float facing = clamp(c - 2.0 * curl * y * s, -1.0, 1.0);
+        float edge = px * (0.6 + 0.6 / max(abs(facing), 0.2));
+        float4 piece = bladeAt(float2(r.x, y), seed, kind, facing, alpha, edge, px);
+        if (piece.a <= 0.0) continue;
+        float across = -2.0 * curl * y * c - s;
+        float3 normal = normalize(float3(across * float2(-sin(turn), cos(turn)), c - 2.0 * curl * y * s));
+        float lit = dot(normal.z >= 0.0 ? normal : -normal, normalize(float3(-0.35, 0.75, 0.55)));
+        piece.rgb *= mix(0.72, 1.08, saturate(lit));
+        // Lit from behind, the thin blade glows in its own colour.
+        piece.rgb = mix(piece.rgb, piece.rgb * 1.35, saturate(-lit) * 0.3);
+        piece.rgb *= mix(float3(1.0, 1.0, 1.0), light, 0.4);
+        piece.rgb = mix(piece.rgb, candle * piece.a, warm * 0.45);
+        color = over(color, piece);
+    }
+    return color;
+}
+
 /// A leaf at one moment, `p` running across it from -0.5 to 0.5: its colour, premultiplied.
 static float4 leafAt(float2 p, float seed, float turn, float flip, float alpha, float3 light, float warm, float blossom, float wither,
                      float direction, float sense) {
     if (blossom > 0.5 && fract(seed * 23.3) < 0.035) return flowerAt(p * 2.0, seed, turn, flip, direction, alpha, light, warm, wither);
     float2 r = float2(cos(turn) * p.x + sin(turn) * p.y, -sin(turn) * p.x + cos(turn) * p.y) * 2.0;
     if (blossom > 0.5) return curledPetalAt(r, seed, turn, flip, sense, alpha, light, warm, wither);
-    float across = max(abs(flip), 0.35);
-    r.y /= across;
-    float inside;
-    if (fract(seed * 13.7) < 0.4) {
-        // A maple leaf: five pointed lobes around the stem.
-        float2 m = r - float2(0.08, 0.0);
-        float a = atan2(m.y, m.x);
-        float reach = (0.5 + 0.44 * pow(abs(cos(a * 2.5)), 1.3)) * (0.82 + 0.18 * cos(a));
-        inside = reach - length(m);
-    } else {
-        // An oval leaf, widest toward the stem and pointed at the tip.
-        float t = (r.x + 0.88) / 1.82;
-        float halfWidth = 2.1 * pow(saturate(t), 0.7) * pow(saturate(1.0 - t), 1.1) * (0.8 + 0.4 * fract(seed * 5.3));
-        inside = min(halfWidth - abs(r.y), min(t, 1.0 - t) * 0.6);
-    }
-    float stem = 0.05 - max(abs(r.y) * across, max(-0.98 - r.x, r.x + 0.55));
-    float shape = max(inside, stem);
-    float edge = max(fwidth(shape), 1e-4);
-    float a = smoothstep(-edge, edge, shape) * alpha;
-    float3 color = leafColor(seed);
-    color *= 0.76 + 0.24 * smoothstep(0.0, 0.22, inside);
-    float vein = (1.0 - smoothstep(0.0, 0.045, abs(r.y) * across)) * step(-0.9, r.x) * step(r.x, 0.7);
-    color = mix(color, color * 0.6, vein * 0.55);
-    if (flip < 0.0) color = mix(color, float3(0.86, 0.74, 0.52), 0.28) * 0.9;
-    // Night dims the leaves without draining their colour.
-    color *= (0.8 + 0.2 * abs(flip)) * mix(float3(1.0), light, 0.4);
-    color = mix(color, candle, warm * 0.45);
-    return float4(color * a, a);
+    return curledLeafAt(r, seed, turn, flip, sense, alpha, light, warm);
 }
 
 static float flicker(float time, float seed) {
@@ -405,6 +523,7 @@ vertex SpriteOut spriteVertex(uint vid [[vertex_id]],
         out.light = u.light.rgb;
         out.warm = candlelight(u, s.position);
         out.leaf = s.leaf;
+        out.petal = s.petal;
         out.tint = float4(0.0, 0.0, 0.0, s.tintAmount);
         out.armAngle = s.armAngle;
         out.turn = s.turn;
@@ -767,7 +886,7 @@ fragment float4 spriteFragment(SpriteOut in [[stage_in]], float2 coord [[point_c
             float along = (float(k) + 0.5) / float(n) - 0.5;
             float back = along - 0.5;
             sum += leafAt(p * in.reach - in.streak * along, in.leaf, in.turn + in.turnSmear * back,
-                          clamp(in.flip + in.flipSmear * back, -1.0, 1.0), in.alpha, in.light, in.warm, u.blossom, in.tint.a, in.armAngle,
+                          clamp(in.flip + in.flipSmear * back, -1.0, 1.0), in.alpha, in.light, in.warm, in.petal, in.tint.a, in.armAngle,
                           in.flipSmear > 0.0 ? -1.0 : 1.0);
         }
         sum /= float(n);
@@ -947,10 +1066,13 @@ fragment float4 pileFragment(PileOut in [[stage_in]],
     float2 grain = float2(x - u.shake.z, in.point.y);
     float level = heightAt(heights, u, x);
     float bed = heightAt(heights + u.columnCount, u, x);
+    // How much of the heap is leaves, and how much of those petals: snow and leaves fallen together lie mixed.
+    float leaves = heightAt(heights + 2 * u.columnCount, u, x);
+    float petals = heightAt(heights + 3 * u.columnCount, u, x);
     // The leaves on top are drawn one by one, the heap under them as a mass with a ragged top; a leaf or two lie on their own.
-    if (u.autumn > 0.5) {
-        level -= 2.5;
-        level += (noise(grain.x * 0.4) - 0.5) * 2.4 * saturate((level - bed) / 4.0);
+    if (leaves > 0.0) {
+        level -= 2.5 * leaves;
+        level += (noise(grain.x * 0.4) - 0.5) * 2.4 * saturate((level - bed) / 4.0) * leaves;
     }
     float depth = level - in.point.y;
     float coverage = saturate(depth * u.scale + 0.5)
@@ -961,14 +1083,8 @@ fragment float4 pileFragment(PileOut in [[stage_in]],
     float slope = (heightAt(heights, u, x + 2.0) - heightAt(heights, u, x - 2.0)) * 0.25;
     float light = dot(normalize(float2(-slope, 1.0)), normalize(float2(-0.5, 1.0)));
 
-    float3 color;
-    if (u.autumn > 0.5) {
-        // Deeper in the heap the leaves lie in shadow.
-        color = litter(grain, u.blossom, u.wilt);
-        float3 deep = u.blossom > 0.5 ? float3(0.8, 0.66, 0.72) : float3(0.62, 0.54, 0.5);
-        color = mix(color, color * deep, saturate(1.0 - exp(-depth / 18.0)) * 0.6);
-        color *= 0.84 + 0.2 * light;
-    } else {
+    float3 color = float3(0.0);
+    if (leaves < 1.0) {
         float3 shadow = mix(float3(0.72, 0.78, 0.88), u.shadowTint.rgb, u.shadowTint.a);
         float3 surface = mix(float3(0.925, 0.94, 0.965), min(u.shadowTint.rgb * 1.18, float3(1.0)), u.shadowTint.a * 0.2);
         float shade = (1.0 - exp(-depth / 30.0)) * 0.32 + (1.0 - light) * 0.6 * exp(-depth / 5.0);
@@ -982,10 +1098,20 @@ fragment float4 pileFragment(PileOut in [[stage_in]],
             color = mix(color, float3(1.0), twinkle * exp(-depth / 7.0));
         }
     }
+    // Where leaves are, a leaf shows where one lies; mostly leaves, the gaps between them are the heap's shadow too.
+    float leafy = 0.0;
+    if (leaves > 0.0) {
+        float4 litter = litterAt(grain, petals, u.wilt, leaves);
+        leafy = max(litter.a, smoothstep(0.55, 0.95, leaves));
+        // Deeper in the heap the leaves lie in shadow.
+        float3 deep = mix(float3(0.62, 0.54, 0.5), float3(0.8, 0.66, 0.72), petals);
+        float3 leaf = mix(litter.rgb, litter.rgb * deep, saturate(1.0 - exp(-depth / 18.0)) * 0.6) * (0.84 + 0.2 * light);
+        color = mix(color, leaf, leafy);
+    }
 
     // Night dims fallen leaves without draining their colour.
-    color *= u.autumn > 0.5 ? mix(float3(1.0), u.light.rgb, 0.4) : u.light.rgb;
-    color = mix(color, u.rim.rgb, u.rim.a * exp(-depth / 2.5) * (1.0 - u.autumn));
+    color *= mix(u.light.rgb, mix(float3(1.0), u.light.rgb, 0.4), leafy);
+    color = mix(color, u.rim.rgb, u.rim.a * exp(-depth / 2.5) * (1.0 - leafy));
     color = mix(color, candle, candlelight(u, world) * (0.35 + 0.65 * exp(-depth / 14.0)) * 0.55);
     return float4(color * coverage, coverage);
 }

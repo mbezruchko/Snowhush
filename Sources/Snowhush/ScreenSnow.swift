@@ -84,9 +84,9 @@ final class ScreenSnow {
             simulation.halloween = halloween
         }
     }
-    var mode: Mode {
-        get { simulation.mode }
-        set { simulation.mode = newValue }
+    var modes: [Mode] {
+        get { simulation.modes }
+        set { simulation.modes = newValue }
     }
 
     init?(screen: NSScreen, device: MTLDevice, snowOnWindows: @escaping () -> Bool) {

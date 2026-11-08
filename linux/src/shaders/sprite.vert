@@ -35,6 +35,8 @@ layout(location = 13) in vec2 rain;
 // A drop on the glass: its outline's seed, how it has turned as it ran, how far it bulges forward, held back, and how
 // far it is squashed or stretched.
 layout(location = 14) in vec4 drop;
+// One for a cherry blossom petal or flower instead of a leaf.
+layout(location = 15) in float petal;
 
 out vec2 vCoord;
 out float vAlpha;
@@ -57,6 +59,7 @@ flat out vec4 vSmear;
 // Rain's kind and how far along a hanging drop is, then the sprite's size and its quad's, in pixels.
 flat out vec4 vRain;
 flat out vec4 vDrop;
+flat out float vPetal;
 
 float flicker(float t, float seed) {
     return 0.86 + 0.08 * sin(t * 11.0 + seed * 2.1) + 0.06 * sin(t * 29.0 + 1.3 + seed * 4.3);
@@ -102,6 +105,7 @@ void main() {
     vWarm = candlelight(position);
     vRain = vec4(0.0);
     vDrop = vec4(0.0);
+    vPetal = petal;
     if (rain.x > 4.5) {
         // A piece of the film a running drop leaves behind: `velocity` from one end to the other, `size` wide.
         float thick = max(size * scale, 1.0);
