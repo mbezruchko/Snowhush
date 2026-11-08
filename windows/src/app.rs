@@ -416,11 +416,10 @@ fn entries(settings: &Settings, login: bool, sliders: bool) -> Vec<Entry> {
             Entry::Separator,
         ]
     } else {
-        let intensities = INTENSITY_STOPS.iter().map(|&stop| Entry::choice(ID_SNOWFALL + stop / 5, &percent(stop), stop == settings.intensity)).collect();
-        let opacities = OPACITY_STOPS
-            .iter()
-            .map(|&stop| Entry::choice(ID_OPACITY + (stop - 10) / 5, &format!("{stop}%"), stop == settings.opacity))
-            .collect();
+        let intensities =
+            INTENSITY_STOPS.iter().map(|&stop| Entry::choice(ID_SNOWFALL + stop / 5, &percent(stop), stop == settings.intensity)).collect();
+        let opacities =
+            OPACITY_STOPS.iter().map(|&stop| Entry::choice(ID_OPACITY + (stop - 10) / 5, &format!("{stop}%"), stop == settings.opacity)).collect();
         vec![
             Entry::Submenu { label: "Intensity".to_string(), entries: intensities },
             Entry::Submenu { label: "Opacity".to_string(), entries: opacities },
