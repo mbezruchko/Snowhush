@@ -35,6 +35,7 @@ flat in vec4 vLeaf;
 flat in vec4 vSmear;
 flat in vec4 vRain;
 flat in vec4 vDrop;
+flat in float vPetal;
 
 out vec4 fragment;
 
@@ -259,9 +260,9 @@ vec4 flowerAt(vec2 p, float seed, float spin, float face, float direction, float
 /// browns as it withers by `wither`; a whole flower's face points `direction` on the screen, and a petal curves the way
 /// it tumbles, `sense`.
 vec4 leafAt(vec2 p, float seed, float turn, float flip, float wither, float direction, float sense) {
-    if (blossom > 0.5 && fract(seed * 23.3) < 0.035) return flowerAt(p * 2.0, seed, turn, flip, direction, vAlpha, light.rgb, vWarm, wither);
+    if (vPetal > 0.5 && fract(seed * 23.3) < 0.035) return flowerAt(p * 2.0, seed, turn, flip, direction, vAlpha, light.rgb, vWarm, wither);
     vec2 r = vec2(cos(turn) * p.x + sin(turn) * p.y, -sin(turn) * p.x + cos(turn) * p.y) * 2.0;
-    if (blossom > 0.5) return curledPetalAt(r, seed, turn, flip, sense, vAlpha, light.rgb, vWarm, wither);
+    if (vPetal > 0.5) return curledPetalAt(r, seed, turn, flip, sense, vAlpha, light.rgb, vWarm, wither);
     float across = max(abs(flip), 0.35);
     r.y /= across;
     float inside;

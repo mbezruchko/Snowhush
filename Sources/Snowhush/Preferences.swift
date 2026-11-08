@@ -17,6 +17,8 @@ enum Preferences {
     private static let halloweenKey = "halloweenOn"
     private static let halloweenSkippedKey = "halloweenSkipped"
     private static let modeKey = "mode"
+    private static let mixedKey = "mixed"
+    private static let mixKey = "mix"
     /// Before rain, the mode was only whether leaves fell.
     private static let autumnKey = "autumn"
     private static let performanceKey = "performance"
@@ -36,6 +38,7 @@ enum Preferences {
             halloweenKey: false,
             halloweenSkippedKey: 0,
             autumnKey: false,
+            mixedKey: false,
             fallingOpacityKey: 1.0,
         ])
         if defaults.object(forKey: intensityKey) == nil, let stop = defaults.object(forKey: snowfallKey) as? Int {
@@ -109,6 +112,24 @@ enum Preferences {
         }
         set { defaults.set(newValue.rawValue, forKey: modeKey) }
     }
+
+    /// Two modes falling together.
+    static var mixed: Bool {
+        get { defaults.bool(forKey: mixedKey) }
+        set { defaults.set(newValue, forKey: mixedKey) }
+    }
+
+    /// The two modes Mixed lets fall together, the one picked last at the end.
+    static var mix: [Mode] {
+        get {
+            let picked = (defaults.array(forKey: mixKey) as? [Int] ?? []).compactMap(Mode.init(rawValue:))
+            return picked.count == 2 && picked[0] != picked[1] ? picked : [mode == .snow ? .autumn : .snow, mode]
+        }
+        set { defaults.set(newValue.map(\.rawValue), forKey: mixKey) }
+    }
+
+    /// What falls.
+    static var modes: [Mode] { mixed ? mix : [mode] }
 
     /// How opaque snow, leaves and rain are while they fall.
     static var fallingOpacity: Double {

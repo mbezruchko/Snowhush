@@ -4,12 +4,14 @@
 // site-engine/ to engine.wasm and loaded the first time one of them is picked. The simulation works in points, y up;
 // the page is y down, so frames and the pointer are flipped on the way in.
 window.SnowhushEngine = (() => {
-  const SPRITE_FLOATS = 33;
+  const SPRITE_FLOATS = 34;
   const PILE_FLOATS = 72;
   /// The height texture's width; the pile shader wraps its index at the same width.
   const ROW = 4096;
   const COLUMN_WIDTH = 2;
   const MODES = { snow: 0, autumn: 1, rain: 2, blossom: 3 };
+  /// The kinds falling, as the engine takes them: a bit for each.
+  const mask = modes => modes.reduce((bits, mode) => bits | 1 << MODES[mode], 0);
 
   let loading = null;
   const load = () => {
@@ -23,11 +25,11 @@ window.SnowhushEngine = (() => {
   };
 
   class Engine {
-    constructor(module, width, height, intensity, mode) {
+    constructor(module, width, height, intensity, modes) {
       this.w = new WebAssembly.Instance(module, {}).exports;
       this.width = width;
       this.height = height;
-      this.e = this.w.engine_new(width, height, intensity, MODES[mode]);
+      this.e = this.w.engine_new(width, height, intensity, mask(modes));
     }
 
     free() { this.w.engine_free(this.e); }
@@ -36,7 +38,7 @@ window.SnowhushEngine = (() => {
       this.height = height;
       this.w.engine_resize(this.e, width, height);
     }
-    switchTo(mode, calm) { this.w.engine_switch(this.e, MODES[mode], calm); }
+    switchTo(modes, calm) { this.w.engine_switch(this.e, mask(modes), calm); }
     blow(calm) { this.w.engine_blow(this.e, calm); }
     intensity(value) { this.w.engine_intensity(this.e, value); }
     opacity(value) { this.w.engine_opacity(this.e, value); }
@@ -128,11 +130,11 @@ window.SnowhushEngine = (() => {
       this.buffer = gl.createBuffer();
       gl.bindVertexArray(this.array);
       gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
-      // Position, velocity, size, alpha, soft, tint amount, tint, lump, ghost, pose, mood, leaf, spin, rain, drop: see
-      // `Sprite`.
+      // Position, velocity, size, alpha, soft, tint amount, tint, lump, ghost, pose, mood, leaf, spin, rain, drop,
+      // petal: see `Sprite`.
       for (const [location, components, offset] of [
         [0, 2, 0], [1, 2, 8], [2, 1, 16], [3, 1, 20], [4, 1, 24], [5, 1, 28], [6, 3, 32], [7, 1, 44],
-        [8, 4, 48], [9, 4, 64], [10, 2, 80], [11, 3, 88], [12, 2, 100], [13, 2, 108], [14, 4, 116],
+        [8, 4, 48], [9, 4, 64], [10, 2, 80], [11, 3, 88], [12, 2, 100], [13, 2, 108], [14, 4, 116], [15, 1, 132],
       ]) {
         gl.enableVertexAttribArray(location);
         gl.vertexAttribPointer(location, components, gl.FLOAT, false, SPRITE_FLOATS * 4, offset);
@@ -220,8 +222,6 @@ window.SnowhushEngine = (() => {
         gl.uniform2fv(p.at('shake'), shake);
         gl.uniform1i(p.at('heights'), 0);
         gl.uniform4fv(p.at('panel'), panel);
-        gl.uniform1f(p.at('autumn'), autumn);
-        gl.uniform1f(p.at('blossom'), blossom);
         gl.uniform1f(p.at('wilt'), wilt);
         for (const pile of piles) {
           gl.uniform1i(p.at('columnCount'), pile.count);

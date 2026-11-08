@@ -58,7 +58,7 @@ impl Tray {
     }
 
     fn halloween(&self) -> bool {
-        self.settings.mode == Mode::Snow && self.settings.halloween.wanted(self.today)
+        self.settings.modes() == [Mode::Snow] && self.settings.halloween.wanted(self.today)
     }
 
     fn change(&mut self, change: impl FnOnce(&mut Settings) -> Command) {
@@ -66,6 +66,30 @@ impl Tray {
         self.settings.save();
         let _ = self.commands.send(command);
     }
+
+    fn pick(&mut self, mode: Mode) {
+        if self.settings.pick(mode) {
+            self.switch_modes();
+        }
+    }
+
+    fn switch_modes(&mut self) {
+        self.settings.save();
+        let settings = self.settings;
+        let calm = !prefs::animations_enabled();
+        let _ = self.commands.send(Command::Mode { mode: settings.mode, mixed: settings.mixed, mix: settings.mix, calm });
+    }
+}
+
+/// The kinds falling, as the menu names them: "Snow and Leaves".
+fn names(modes: &[Mode]) -> String {
+    let name = |mode: &Mode| match mode {
+        Mode::Snow => "Snow",
+        Mode::Autumn => "Leaves",
+        Mode::Rain => "Rain",
+        Mode::Blossom => "Petals",
+    };
+    modes.iter().map(name).collect::<Vec<_>>().join(" and ")
 }
 
 impl ksni::Tray for Tray {
@@ -103,11 +127,76 @@ impl ksni::Tray for Tray {
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
         let settings = self.settings;
-        let mode = settings.mode;
-        let autumn = mode == Mode::Autumn;
-        let blossom = mode == Mode::Blossom;
+        let picked = settings.modes();
+        let falling: Vec<Mode> = MODES.iter().copied().filter(|mode| picked.contains(mode)).collect();
         // Rain doesn't lie anywhere: nothing to keep, melt or clear.
-        let lies = mode != Mode::Rain;
+        let heaps: Vec<Mode> = falling.iter().copied().filter(|&mode| mode != Mode::Rain).collect();
+        let lies = !heaps.is_empty();
+        let melt = if heaps.contains(&Mode::Snow) {
+            "Melt Snow"
+        } else if heaps == [Mode::Blossom] {
+            "Wilt Petals"
+        } else {
+            "Wither Leaves"
+        };
+        let mut kinds: Vec<MenuItem<Self>> = vec![
+            CheckmarkItem {
+                label: "Mixed".into(),
+                checked: settings.mixed,
+                activate: Box::new(|tray: &mut Tray| {
+                    tray.settings.toggle_mixed();
+                    tray.switch_modes();
+                }),
+                ..Default::default()
+            }
+            .into(),
+            MenuItem::Separator,
+        ];
+        let labels = ["Snow", "Autumn Leaves", "Rain", "Cherry Blossom"];
+        if settings.mixed {
+            // Mixed, the kinds are checkboxes: a third picked takes the place of the one picked before the other.
+            for (&mode, &label) in MODES.iter().zip(&labels) {
+                kinds.push(
+                    CheckmarkItem {
+                        label: label.into(),
+                        checked: picked.contains(&mode),
+                        activate: Box::new(move |tray: &mut Tray| tray.pick(mode)),
+                        ..Default::default()
+                    }
+                    .into(),
+                );
+            }
+        } else {
+            kinds.push(
+                RadioGroup {
+                    selected: MODES.iter().position(|&m| m == settings.mode).unwrap_or(0),
+                    select: Box::new(|tray: &mut Tray, index| {
+                        if let Some(&mode) = MODES.get(index) {
+                            tray.pick(mode);
+                        }
+                    }),
+                    options: labels.iter().map(|&label| RadioItem { label: label.into(), ..Default::default() }).collect(),
+                }
+                .into(),
+            );
+        }
+        kinds.extend([
+            MenuItem::Separator,
+            CheckmarkItem {
+                label: "Halloween".into(),
+                checked: settings.halloween.wanted(self.today),
+                enabled: falling == [Mode::Snow],
+                activate: Box::new(|tray: &mut Tray| {
+                    let today = tray.today;
+                    tray.change(|settings| {
+                        settings.halloween = settings.halloween.toggled(today);
+                        Command::Halloween(settings.halloween)
+                    })
+                }),
+                ..Default::default()
+            }
+            .into(),
+        ]);
         vec![
             SubMenu {
                 label: "Intensity".into(),
@@ -150,55 +239,9 @@ impl ksni::Tray for Tray {
                 ..Default::default()
             }
             .into(),
-            SubMenu {
-                label: "Mode".into(),
-                submenu: vec![
-                    RadioGroup {
-                        selected: MODES.iter().position(|&m| m == mode).unwrap_or(0),
-                        select: Box::new(|tray: &mut Tray, index| {
-                            let Some(&mode) = MODES.get(index) else { return };
-                            if mode == tray.settings.mode {
-                                return;
-                            }
-                            tray.change(|settings| {
-                                settings.mode = mode;
-                                Command::Mode { mode, calm: !prefs::animations_enabled() }
-                            });
-                        }),
-                        options: ["Snow", "Autumn Leaves", "Rain", "Cherry Blossom"]
-                            .iter()
-                            .map(|&label| RadioItem { label: label.into(), ..Default::default() })
-                            .collect(),
-                    }
-                    .into(),
-                    MenuItem::Separator,
-                    CheckmarkItem {
-                        label: "Halloween".into(),
-                        checked: settings.halloween.wanted(self.today),
-                        enabled: mode == Mode::Snow,
-                        activate: Box::new(|tray: &mut Tray| {
-                            let today = tray.today;
-                            tray.change(|settings| {
-                                settings.halloween = settings.halloween.toggled(today);
-                                Command::Halloween(settings.halloween)
-                            })
-                        }),
-                        ..Default::default()
-                    }
-                    .into(),
-                ],
-                ..Default::default()
-            }
-            .into(),
+            SubMenu { label: "Mode".into(), submenu: kinds, ..Default::default() }.into(),
             StandardItem {
-                label: if autumn {
-                    "Clear Leaves"
-                } else if blossom {
-                    "Clear Petals"
-                } else {
-                    "Clear Snow"
-                }
-                .into(),
+                label: format!("Clear {}", names(&heaps)),
                 visible: lies,
                 activate: Box::new(|tray: &mut Tray| {
                     let _ = tray.commands.send(Command::ClearSnow(!prefs::animations_enabled()));
@@ -225,14 +268,7 @@ impl ksni::Tray for Tray {
                     }
                     .into(),
                     CheckmarkItem {
-                        label: if autumn {
-                            "Wither Leaves"
-                        } else if blossom {
-                            "Wilt Petals"
-                        } else {
-                            "Melt Snow"
-                        }
-                        .into(),
+                        label: melt.into(),
                         checked: settings.melt,
                         enabled: settings.accumulate,
                         visible: lies,
@@ -246,13 +282,7 @@ impl ksni::Tray for Tray {
                     }
                     .into(),
                     CheckmarkItem {
-                        label: match mode {
-                            Mode::Snow => "Snow on Windows",
-                            Mode::Autumn => "Leaves on Windows",
-                            Mode::Rain => "Rain on Windows",
-                            Mode::Blossom => "Petals on Windows",
-                        }
-                        .into(),
+                        label: format!("{} on Windows", names(&falling)),
                         checked: settings.snow_on_windows,
                         activate: Box::new(|tray: &mut Tray| {
                             tray.change(|settings| {

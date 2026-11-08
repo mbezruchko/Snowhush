@@ -214,8 +214,6 @@ impl Gpu {
                     "occluders",
                     "heights",
                     "panel",
-                    "autumn",
-                    "blossom",
                     "wilt",
                     "drift",
                 ],
@@ -258,6 +256,7 @@ impl Gpu {
                 (12, 2, 100),
                 (13, 2, 108),
                 (14, 4, 116),
+                (15, 1, 132),
             ] {
                 gl.enable_vertex_attrib_array(location);
                 gl.vertex_attrib_pointer_f32(location, components, glow::FLOAT, false, stride, offset);
@@ -445,8 +444,6 @@ impl Gpu {
                 gl.uniform_2_f32_slice(pile.location("shake"), &shake);
                 gl.uniform_1_i32(pile.location("heights"), 0);
                 gl.uniform_4_f32_slice(pile.location("panel"), &panel);
-                gl.uniform_1_f32(pile.location("autumn"), autumn);
-                gl.uniform_1_f32(pile.location("blossom"), blossom);
                 gl.uniform_1_f32(pile.location("wilt"), wilt);
                 for layer in &piles {
                     let count = layer.occluders.len().min(OCCLUDERS);

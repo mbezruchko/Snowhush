@@ -37,11 +37,16 @@ fn engine<'a>(engine: *mut Engine) -> &'a mut Engine {
 
 const MODES: [Mode; 4] = [Mode::Snow, Mode::Autumn, Mode::Rain, Mode::Blossom];
 
-/// A simulation `width` by `height` points with this much falling and this mode: Snow, Autumn, Rain, Blossom.
+/// The kinds falling, from a mask with a bit for each of `MODES` in turn: Snow, Autumn, Rain, Blossom.
+fn modes_of(mask: u32) -> Vec<Mode> {
+    MODES.iter().enumerate().filter(|&(k, _)| mask & (1 << k) != 0).map(|(_, &mode)| mode).collect()
+}
+
+/// A simulation `width` by `height` points with this much falling and these kinds, as `modes_of` reads them.
 #[unsafe(no_mangle)]
-pub extern "C" fn engine_new(width: f32, height: f32, intensity: f32, mode: u32) -> *mut Engine {
+pub extern "C" fn engine_new(width: f32, height: f32, intensity: f32, modes: u32) -> *mut Engine {
     let mut sim = SnowSimulation::new(width, height, intensity);
-    sim.set_mode(MODES[(mode as usize).min(3)]);
+    sim.set_modes(&modes_of(modes));
     let engine = Engine { sim, sprites: Vec::new(), heights: Vec::new(), piles: Vec::new(), input: Vec::new(), shader: String::new() };
     Box::into_raw(Box::new(engine))
 }
@@ -56,12 +61,13 @@ pub extern "C" fn engine_resize(e: *mut Engine, width: f32, height: f32) {
     engine(e).sim.resize(width, height);
 }
 
-/// Clears the screen with a gust, then lets the other kind fall from the top.
+/// Clears the screen with a gust, then lets the other kinds fall from the top; a kind only joining what falls starts
+/// at once.
 #[unsafe(no_mangle)]
-pub extern "C" fn engine_switch(e: *mut Engine, mode: u32, calm: bool) {
+pub extern "C" fn engine_switch(e: *mut Engine, modes: u32, calm: bool) {
     let sim = &mut engine(e).sim;
     let direction = sim.breeze_direction();
-    sim.switch_mode(MODES[(mode as usize).min(3)], direction, calm);
+    sim.switch_modes(&modes_of(modes), direction, calm);
 }
 
 #[unsafe(no_mangle)]
@@ -124,7 +130,7 @@ pub extern "C" fn engine_step(e: *mut Engine, dt: f32, x: f32, y: f32) {
     engine(e).sim.step(dt, V2::new(x, y));
 }
 
-/// Writes the sprites and returns how many; `engine_sprites_at` says where, 33 floats each.
+/// Writes the sprites and returns how many; `engine_sprites_at` says where, 34 floats each.
 #[unsafe(no_mangle)]
 pub extern "C" fn engine_sprites(e: *mut Engine) -> u32 {
     let engine = engine(e);

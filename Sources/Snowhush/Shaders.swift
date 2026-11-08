@@ -50,6 +50,7 @@ struct Sprite {
     float turnSpeed;
     float flipSpeed;
     float rain;
+    float petal;
 };
 
 struct SpriteOut {
@@ -83,6 +84,7 @@ struct SpriteOut {
     float flipSmear;
     float samples;
     float rain;
+    float petal;
     /// For a drop running down the glass, the share of it from its head back that is its smear over the exposure.
     float blur;
 };
@@ -127,35 +129,45 @@ static float3 withered(float seed) {
     return float3(0.78, 0.6, 0.49) * (0.86 + 0.18 * fract(seed * 17.3));
 }
 
-/// Fallen leaves lying every which way: the topmost at each point shows, the gaps between them in shadow.
-static float3 litter(float2 point, float blossom, float wilt) {
-    float spacing = blossom > 0.5 ? 4.6 : 6.5;
+/// Fallen leaves lying every which way, `petals` of them petals and only `density` of them there at all: the topmost
+/// at each point shows, the gaps between them in shadow. Alpha is one where a leaf lies, zero in a gap.
+static float4 litterAt(float2 point, float petals, float wilt, float density) {
+    // The grid holds still across a heap: it changes only where the heap turns from mostly leaves to mostly petals.
+    float spacing = petals > 0.5 ? 4.6 : 6.5;
     float2 cell = floor(point / spacing);
     float top = -1.0;
     float rim = 0.0;
-    float3 color = blossom > 0.5 ? float3(0.86, 0.68, 0.74) : float3(0.34, 0.19, 0.08);
+    bool petal = petals > 0.5;
+    float3 color = mix(float3(0.34, 0.19, 0.08), float3(0.86, 0.68, 0.74), petals);
     for (int j = -1; j <= 1; j++) {
         for (int i = -1; i <= 1; i++) {
             for (int k = 0; k < 3; k++) {
                 float2 c = cell + float2(i, j) + float(k) * 0.37;
+                if (hash(c + 13.7) >= density) continue;
+                bool p = hash(c + 17.3) < petals;
                 float2 d = point - (cell + float2(i, j) + float2(hash(c + 7.1), hash(c + 3.3))) * spacing;
                 float angle = hash(c + 11.7) * 6.2832;
                 float2 q = float2(cos(angle) * d.x + sin(angle) * d.y, -sin(angle) * d.x + cos(angle) * d.y);
-                float size = blossom > 0.5 ? 3.2 + 1.6 * hash(c + 2.9) : 3.8 + 2.4 * hash(c + 2.9);
+                float size = p ? 3.2 + 1.6 * hash(c + 2.9) : 3.8 + 2.4 * hash(c + 2.9);
                 float t = q.x / size;
-                float inside = (1.0 - t * t) * size * (blossom > 0.5 ? 0.62 : 0.45) - abs(q.y);
+                float inside = (1.0 - t * t) * size * (p ? 0.62 : 0.45) - abs(q.y);
                 float z = hash(c + 5.9);
                 if (inside > 0.0 && z > top) {
                     top = z;
                     rim = inside;
-                    color = blossom > 0.5 ? petalColor(hash(c + 0.5)) : leafColor(hash(c + 0.5));
+                    petal = p;
+                    color = p ? petalColor(hash(c + 0.5)) : leafColor(hash(c + 0.5));
                     // Petals that have lain a while are withering.
-                    if (blossom > 0.5 && hash(c + 9.1) < 0.35 * wilt) color = mix(color, withered(hash(c + 0.5)), 0.3 + 0.6 * hash(c + 4.4));
+                    if (p && hash(c + 9.1) < 0.35 * wilt) color = mix(color, withered(hash(c + 0.5)), 0.3 + 0.6 * hash(c + 4.4));
                 }
             }
         }
     }
-    return color * ((blossom > 0.5 ? 0.86 : 0.7) + (blossom > 0.5 ? 0.14 : 0.3) * smoothstep(0.0, 0.7, rim));
+    return float4(color * ((petal ? 0.86 : 0.7) + (petal ? 0.14 : 0.3) * smoothstep(0.0, 0.7, rim)), top >= 0.0 ? 1.0 : 0.0);
+}
+
+static float3 litter(float2 point, float blossom, float wilt) {
+    return litterAt(point, blossom, wilt, 1.0).rgb;
 }
 
 /// A cherry blossom petal, as `leafAt` draws a leaf: narrow at its base, broadest near its rounded tip, which is
@@ -405,6 +417,7 @@ vertex SpriteOut spriteVertex(uint vid [[vertex_id]],
         out.light = u.light.rgb;
         out.warm = candlelight(u, s.position);
         out.leaf = s.leaf;
+        out.petal = s.petal;
         out.tint = float4(0.0, 0.0, 0.0, s.tintAmount);
         out.armAngle = s.armAngle;
         out.turn = s.turn;
@@ -767,7 +780,7 @@ fragment float4 spriteFragment(SpriteOut in [[stage_in]], float2 coord [[point_c
             float along = (float(k) + 0.5) / float(n) - 0.5;
             float back = along - 0.5;
             sum += leafAt(p * in.reach - in.streak * along, in.leaf, in.turn + in.turnSmear * back,
-                          clamp(in.flip + in.flipSmear * back, -1.0, 1.0), in.alpha, in.light, in.warm, u.blossom, in.tint.a, in.armAngle,
+                          clamp(in.flip + in.flipSmear * back, -1.0, 1.0), in.alpha, in.light, in.warm, in.petal, in.tint.a, in.armAngle,
                           in.flipSmear > 0.0 ? -1.0 : 1.0);
         }
         sum /= float(n);
@@ -947,10 +960,13 @@ fragment float4 pileFragment(PileOut in [[stage_in]],
     float2 grain = float2(x - u.shake.z, in.point.y);
     float level = heightAt(heights, u, x);
     float bed = heightAt(heights + u.columnCount, u, x);
+    // How much of the heap is leaves, and how much of those petals: snow and leaves fallen together lie mixed.
+    float leaves = heightAt(heights + 2 * u.columnCount, u, x);
+    float petals = heightAt(heights + 3 * u.columnCount, u, x);
     // The leaves on top are drawn one by one, the heap under them as a mass with a ragged top; a leaf or two lie on their own.
-    if (u.autumn > 0.5) {
-        level -= 2.5;
-        level += (noise(grain.x * 0.4) - 0.5) * 2.4 * saturate((level - bed) / 4.0);
+    if (leaves > 0.0) {
+        level -= 2.5 * leaves;
+        level += (noise(grain.x * 0.4) - 0.5) * 2.4 * saturate((level - bed) / 4.0) * leaves;
     }
     float depth = level - in.point.y;
     float coverage = saturate(depth * u.scale + 0.5)
@@ -961,14 +977,8 @@ fragment float4 pileFragment(PileOut in [[stage_in]],
     float slope = (heightAt(heights, u, x + 2.0) - heightAt(heights, u, x - 2.0)) * 0.25;
     float light = dot(normalize(float2(-slope, 1.0)), normalize(float2(-0.5, 1.0)));
 
-    float3 color;
-    if (u.autumn > 0.5) {
-        // Deeper in the heap the leaves lie in shadow.
-        color = litter(grain, u.blossom, u.wilt);
-        float3 deep = u.blossom > 0.5 ? float3(0.8, 0.66, 0.72) : float3(0.62, 0.54, 0.5);
-        color = mix(color, color * deep, saturate(1.0 - exp(-depth / 18.0)) * 0.6);
-        color *= 0.84 + 0.2 * light;
-    } else {
+    float3 color = float3(0.0);
+    if (leaves < 1.0) {
         float3 shadow = mix(float3(0.72, 0.78, 0.88), u.shadowTint.rgb, u.shadowTint.a);
         float3 surface = mix(float3(0.925, 0.94, 0.965), min(u.shadowTint.rgb * 1.18, float3(1.0)), u.shadowTint.a * 0.2);
         float shade = (1.0 - exp(-depth / 30.0)) * 0.32 + (1.0 - light) * 0.6 * exp(-depth / 5.0);
@@ -982,10 +992,20 @@ fragment float4 pileFragment(PileOut in [[stage_in]],
             color = mix(color, float3(1.0), twinkle * exp(-depth / 7.0));
         }
     }
+    // Where leaves are, a leaf shows where one lies; mostly leaves, the gaps between them are the heap's shadow too.
+    float leafy = 0.0;
+    if (leaves > 0.0) {
+        float4 litter = litterAt(grain, petals, u.wilt, leaves);
+        leafy = max(litter.a, smoothstep(0.55, 0.95, leaves));
+        // Deeper in the heap the leaves lie in shadow.
+        float3 deep = mix(float3(0.62, 0.54, 0.5), float3(0.8, 0.66, 0.72), petals);
+        float3 leaf = mix(litter.rgb, litter.rgb * deep, saturate(1.0 - exp(-depth / 18.0)) * 0.6) * (0.84 + 0.2 * light);
+        color = mix(color, leaf, leafy);
+    }
 
     // Night dims fallen leaves without draining their colour.
-    color *= u.autumn > 0.5 ? mix(float3(1.0), u.light.rgb, 0.4) : u.light.rgb;
-    color = mix(color, u.rim.rgb, u.rim.a * exp(-depth / 2.5) * (1.0 - u.autumn));
+    color *= mix(u.light.rgb, mix(float3(1.0), u.light.rgb, 0.4), leafy);
+    color = mix(color, u.rim.rgb, u.rim.a * exp(-depth / 2.5) * (1.0 - leafy));
     color = mix(color, candle, candlelight(u, world) * (0.35 + 0.65 * exp(-depth / 14.0)) * 0.55);
     return float4(color * coverage, coverage);
 }

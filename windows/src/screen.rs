@@ -21,7 +21,7 @@ use windows::core::{BOOL, Error, PCWSTR, Result, w};
 
 use snowhush_core::geometry::V2;
 use snowhush_core::halloween::moonlit;
-use snowhush_core::simulation::{Mode, Pace, SnowSimulation, WindowId, WindowSurface};
+use snowhush_core::simulation::{Pace, SnowSimulation, WindowId, WindowSurface};
 
 use crate::desktop::DesktopLayer;
 use crate::light::{Backdrop, Sky, Wallpapers};
@@ -410,7 +410,7 @@ impl Screen {
     /// rain bursts on its top edge and runs down over its icons.
     fn taskbar_surface(&self) -> Option<WindowSurface> {
         let bounds = &self.monitor.bounds;
-        if self.behind_taskbar || self.simulation.mode() != Mode::Rain || self.monitor.rect.bottom != bounds.bottom {
+        if self.behind_taskbar || !self.simulation.raining() || self.monitor.rect.bottom != bounds.bottom {
             return None;
         }
         let mut rect = RECT::default();

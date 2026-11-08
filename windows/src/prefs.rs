@@ -32,8 +32,11 @@ pub struct Settings {
     pub deep_interaction: bool,
     pub welcomed: bool,
     pub halloween: Choice,
-    /// What falls: snow, leaves or rain.
+    /// What falls: snow, leaves or rain; the kind picked last.
     pub mode: Mode,
+    /// Two kinds fall together: `mix`, the one picked last after the one picked before it.
+    pub mixed: bool,
+    pub mix: [Mode; 2],
     /// Drawn at the display's highest rate all the time, instead of only while something is pushed around.
     pub max_performance: bool,
     /// How opaque what falls is drawn, in percent: 10 to 100 in steps of 5.
@@ -45,6 +48,11 @@ impl Settings {
         let calm = !animations_enabled();
         // Before the slider, the intensity was one of Off, Light, Steady, Heavy and Variable.
         let stop = read(w!("snowfall")).map(|i| i.min(4) as usize);
+        let mode = read(w!("mode")).and_then(|i| MODES.get(i as usize).copied()).unwrap_or(if read(w!("autumn")).is_some_and(|v| v != 0) {
+            Mode::Autumn
+        } else {
+            Mode::Snow
+        });
         Settings {
             intensity: read(w!("intensity")).map(|v| v.clamp(0, 100)).or(stop.map(|i| [0, 25, 50, 75, 50][i])).unwrap_or(if calm { 25 } else { 50 }),
             accumulate: read(w!("accumulate")).is_none_or(|v| v != 0),
@@ -60,11 +68,9 @@ impl Settings {
             // Before rain there was only a switch for leaves.
             max_performance: read(w!("performance")).is_some_and(|v| v == 1),
             opacity: read(w!("fallingOpacity")).map_or(100, |v| v.clamp(10, 100)),
-            mode: read(w!("mode")).and_then(|i| MODES.get(i as usize).copied()).unwrap_or(if read(w!("autumn")).is_some_and(|v| v != 0) {
-                Mode::Autumn
-            } else {
-                Mode::Snow
-            }),
+            mode,
+            mixed: read(w!("mixed")).is_some_and(|v| v != 0),
+            mix: mix_of(read(w!("mix0")), read(w!("mix1")), mode),
         }
     }
 
@@ -82,10 +88,56 @@ impl Settings {
         write(w!("halloweenOn"), self.halloween.on as u32);
         write(w!("halloweenSkipped"), self.halloween.skipped);
         write(w!("mode"), MODES.iter().position(|&m| m == self.mode).unwrap_or(0) as u32);
+        write(w!("mixed"), self.mixed as u32);
+        write(w!("mix0"), MODES.iter().position(|&m| m == self.mix[0]).unwrap_or(0) as u32);
+        write(w!("mix1"), MODES.iter().position(|&m| m == self.mix[1]).unwrap_or(0) as u32);
         write(w!("autumn"), (self.mode == Mode::Autumn) as u32);
         write(w!("performance"), self.max_performance as u32);
         write(w!("fallingOpacity"), self.opacity);
     }
+
+    /// The kinds falling: the two mixed, or the one picked.
+    pub fn modes(&self) -> Vec<Mode> {
+        if self.mixed { self.mix.to_vec() } else { vec![self.mode] }
+    }
+
+    /// Picks a kind; mixed, a third kind picked takes the place of the one picked before the other. Whether anything
+    /// changed.
+    pub fn pick(&mut self, mode: Mode) -> bool {
+        if self.mixed {
+            if self.mix.contains(&mode) {
+                return false;
+            }
+            self.mix = [self.mix[1], mode];
+        } else if mode == self.mode {
+            return false;
+        }
+        self.mode = mode;
+        true
+    }
+
+    /// Mixed, the kind picked last falls along with the one picked before it; unmixed, it falls alone.
+    pub fn toggle_mixed(&mut self) {
+        self.mixed = !self.mixed;
+        if self.mixed {
+            let other = if self.mix.contains(&self.mode) { self.mix.iter().copied().find(|&m| m != self.mode) } else { Some(self.mix[1]) };
+            self.mix = [other.unwrap_or(other_than(self.mode)), self.mode];
+        }
+    }
+}
+
+/// Two different kinds read from the settings, or `mode` and another when they don't make a pair.
+fn mix_of(first: Option<u32>, second: Option<u32>, mode: Mode) -> [Mode; 2] {
+    let kind = |i: Option<u32>| i.and_then(|i| MODES.get(i as usize).copied());
+    match (kind(first), kind(second)) {
+        (Some(a), Some(b)) if a != b => [a, b],
+        _ => [other_than(mode), mode],
+    }
+}
+
+/// The kind to mix with `mode` until another is picked.
+fn other_than(mode: Mode) -> Mode {
+    if mode == Mode::Snow { Mode::Autumn } else { Mode::Snow }
 }
 
 pub fn opens_at_login() -> bool {

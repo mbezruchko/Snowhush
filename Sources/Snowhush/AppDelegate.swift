@@ -20,10 +20,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var snowOnWindowsItem: NSMenuItem!
     private var clearItem: NSMenuItem!
     private var halloweenItem: NSMenuItem!
-    private var snowItem: NSMenuItem!
-    private var autumnItem: NSMenuItem!
-    private var rainItem: NSMenuItem!
-    private var blossomItem: NSMenuItem!
+    private var mixedItem: NSMenuItem!
+    private var modeItems: [(item: NSMenuItem, mode: Mode)] = []
     private var maxPerformanceItem: NSMenuItem!
     private var behindWindowsItem: NSMenuItem!
     private var fullScreenItem: NSMenuItem!
@@ -95,7 +93,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
                 snow.simulation.snowfallHeld = snowfallHeld
                 snow.simulation.snowfallReleased = { [weak self] in self?.releaseSnowfall() }
                 snow.halloween = halloween
-                snow.mode = Preferences.mode
+                snow.modes = Preferences.modes
                 snow.maxFrameRate = Preferences.maxPerformance
                 snow.activityChanged = { [weak self] in self?.updateActivity() }
                 snow.apply(power.budget)
@@ -156,10 +154,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         menu.addItem(opacityItem)
         let modes = NSMenu()
         modes.autoenablesItems = false
-        snowItem = add("Snow", #selector(chooseMode), to: modes)
-        autumnItem = add("Autumn Leaves", #selector(chooseMode), to: modes)
-        rainItem = add("Rain", #selector(chooseMode), to: modes)
-        blossomItem = add("Cherry Blossom", #selector(chooseMode), to: modes)
+        mixedItem = toggle("Mixed", #selector(toggleMixed), to: modes)
+        modes.addItem(.separator())
+        modeItems = [(.snow, "Snow"), (.autumn, "Autumn Leaves"), (.rain, "Rain"), (.blossom, "Cherry Blossom")].map { mode, title in
+            let item = toggle(title, #selector(chooseMode), to: modes)
+            (item.view as? MenuToggle)?.staysOpen = { Preferences.mixed }
+            return (item, mode)
+        }
         modes.addItem(.separator())
         halloweenItem = add("Halloween", #selector(toggleHalloween), to: modes)
         menu.addItem(withTitle: "Mode", action: nil, keyEquivalent: "").submenu = modes
@@ -208,21 +209,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         intensitySlider.value = Preferences.intensity
         opacitySlider.value = Preferences.fallingOpacity
         accumulateItem.state = accumulates ? .on : .off
-        let mode = Preferences.mode
-        let autumn = mode == .autumn
-        let rain = mode == .rain
-        let blossom = mode == .blossom
-        snowItem.state = mode == .snow ? .on : .off
-        autumnItem.state = autumn ? .on : .off
-        rainItem.state = rain ? .on : .off
-        blossomItem.state = blossom ? .on : .off
+        let modes = Mode.allCases.filter(Preferences.modes.contains)
+        mixedItem.state = Preferences.mixed ? .on : .off
+        for (item, mode) in modeItems { item.state = modes.contains(mode) ? .on : .off }
         // Rain neither heaps up nor lies about to clear away.
-        accumulateItem.isHidden = rain
-        meltItem.isHidden = rain
-        clearItem.isHidden = rain
-        meltItem.title = autumn ? "Wither Leaves" : blossom ? "Wilt Petals" : "Melt Snow"
-        snowOnWindowsItem.title = autumn ? "Leaves on Windows" : blossom ? "Petals on Windows" : rain ? "Rain on Windows" : "Snow on Windows"
-        clearItem.title = autumn ? "Clear Leaves" : blossom ? "Clear Petals" : "Clear Snow"
+        let heaps = modes.filter { $0 != .rain }
+        accumulateItem.isHidden = heaps.isEmpty
+        meltItem.isHidden = heaps.isEmpty
+        clearItem.isHidden = heaps.isEmpty
+        meltItem.title = heaps.contains(.snow) ? "Melt Snow" : heaps == [.blossom] ? "Wilt Petals" : "Wither Leaves"
+        snowOnWindowsItem.title = "\(Self.names(modes)) on Windows"
+        clearItem.title = "Clear \(Self.names(heaps))"
         meltItem.state = thaws ? .on : .off
         meltItem.isEnabled = accumulates
         snowOnWindowsItem.state = snowOnWindows ? .on : .off
@@ -230,7 +227,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         deepInteractionItem.isEnabled = snowOnWindows
         clearItem.isEnabled = screens.contains { $0.simulation.hasSnow || $0.simulation.spriteCount > 0 }
         halloweenItem.state = Halloween.isWanted ? .on : .off
-        halloweenItem.isEnabled = mode == .snow
+        halloweenItem.isEnabled = modes == [.snow]
         maxPerformanceItem.state = Preferences.maxPerformance ? .on : .off
         behindWindowsItem.state = behindWindows ? .on : .off
         fullScreenItem.state = Preferences.showOverFullScreen ? .on : .off
@@ -310,15 +307,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         }
     }
 
+    /// What falls, as the menu names it: "Snow", "Snow and Leaves".
+    private static func names(_ modes: [Mode]) -> String {
+        let name: [Mode: String] = [.snow: "Snow", .autumn: "Leaves", .rain: "Rain", .blossom: "Petals"]
+        return modes.compactMap { name[$0] }.joined(separator: " and ")
+    }
+
+    /// Mixed, a third mode picked takes the place of the one picked before the other.
     @objc private func chooseMode(_ sender: NSMenuItem) {
-        let mode: Mode = sender === autumnItem ? .autumn : sender === rainItem ? .rain : sender === blossomItem ? .blossom : .snow
-        guard mode != Preferences.mode else { return }
+        guard let mode = modeItems.first(where: { $0.item === sender })?.mode else { return }
+        if Preferences.mixed {
+            let mix = Preferences.mix
+            guard !mix.contains(mode) else { return }
+            Preferences.mix = [mix[1], mode]
+        } else {
+            guard mode != Preferences.mode else { return }
+        }
         Preferences.mode = mode
+        switchModes()
+    }
+
+    /// Mixed, the mode picked last falls along with the one picked before it; unmixed, it falls alone.
+    @objc private func toggleMixed() {
+        Preferences.mixed.toggle()
+        let mode = Preferences.mode
+        if Preferences.mixed, !Preferences.mix.contains(mode) {
+            Preferences.mix = [Preferences.mix[1], mode]
+        } else if Preferences.mixed {
+            Preferences.mix = [Preferences.mix.first { $0 != mode } ?? .snow, mode]
+        }
+        switchModes()
+    }
+
+    private func switchModes() {
         refreshHalloween()
         updateStatusIcon()
         let direction = screens.first?.simulation.breezeDirection ?? -1
         let calm = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        for snow in screens { snow.simulation.switchMode(to: mode, direction: direction, calm: calm) }
+        for snow in screens { snow.simulation.switchMode(to: Preferences.modes, direction: direction, calm: calm) }
     }
 
     @objc private func toggleMaxPerformance() {

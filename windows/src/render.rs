@@ -44,7 +44,8 @@ const _: () = assert!(
         && offset_of!(Sprite, spin) == 100
         && offset_of!(Sprite, rain) == 108
         && offset_of!(Sprite, drop) == 116
-        && size_of::<Sprite>() == 132
+        && offset_of!(Sprite, petal) == 132
+        && size_of::<Sprite>() == 136
 );
 
 #[repr(C)]
@@ -70,7 +71,7 @@ struct Uniforms {
     /// The pumpkins' candles: where each burns, how far its light reaches and how bright it is.
     pumpkins: [[f32; 4]; 3],
     occluders: [[f32; 4]; 16],
-    /// One while leaves fall instead of snow.
+    /// One while all that heaps up is leaves, for a ghost; a pile has its own leaves and petals in each column.
     autumn: f32,
     /// One while the leaves are cherry blossom petals.
     blossom: f32,
@@ -227,6 +228,7 @@ impl Gpu {
                 element(s!("SPIN"), DXGI_FORMAT_R32G32_FLOAT, 100),
                 element(s!("RAIN"), DXGI_FORMAT_R32G32_FLOAT, 108),
                 element(s!("DROP"), DXGI_FORMAT_R32G32B32A32_FLOAT, 116),
+                element(s!("PETAL"), DXGI_FORMAT_R32_FLOAT, 132),
             ];
             let mut sprite_layout = None;
             device.CreateInputLayout(&elements, blob_bytes(&sprite_code), Some(&mut sprite_layout))?;
