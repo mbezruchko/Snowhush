@@ -901,3 +901,48 @@ fn switching_to_rain_clears_the_snow_first() {
     assert!(streaks > 0, "no rain falling");
     assert_eq!(streaks, simulation.sprite_count(), "snow left over");
 }
+
+#[test]
+fn every_language_has_every_text() {
+    use crate::text::{LOCALES, parse};
+    let english = parse(LOCALES[0].1);
+    assert!(english.len() > 50);
+    let placeholders =
+        |text: &str| text.split('{').skip(1).filter_map(|rest| rest.split_once('}')).map(|(name, _)| name.to_string()).collect::<HashSet<_>>();
+    for (code, text) in LOCALES {
+        let table = parse(text);
+        let mut missing: Vec<_> = english.keys().filter(|key| !table.contains_key(*key)).collect();
+        let mut extra: Vec<_> = table.keys().filter(|key| !english.contains_key(*key)).collect();
+        missing.sort();
+        extra.sort();
+        assert!(missing.is_empty() && extra.is_empty(), "{code}: missing {missing:?}, extra {extra:?}");
+        for (key, value) in &table {
+            assert!(!value.trim().is_empty(), "{code}: {key} is empty");
+            assert_eq!(placeholders(value), placeholders(&english[key]), "{code}: {key} placeholders");
+        }
+    }
+}
+
+#[test]
+fn reads_strings_tables() {
+    let table = crate::text::parse("/* a \"note\" */\n\"a\" = \"one \\\"two\\\"\\nthree\";\n// \"b\" = \"no\";\n\"c\" = \"x\";");
+    assert_eq!(table.len(), 2);
+    assert_eq!(table["a"], "one \"two\"\nthree");
+    assert_eq!(table["c"], "x");
+}
+
+#[test]
+fn picks_a_language_from_system_tags() {
+    use crate::text::language;
+    let code = |tag: &str| language(tag).map(|(code, _)| code);
+    assert_eq!(code("ru_RU.UTF-8"), Some("ru"));
+    assert_eq!(code("uk-UA"), Some("uk"));
+    assert_eq!(code("pt-BR"), Some("pt"));
+    assert_eq!(code("de_CH@euro"), Some("de"));
+    assert_eq!(code("zh-Hans-CN"), Some("zh-Hans"));
+    assert_eq!(code("zh_CN"), Some("zh-Hans"));
+    assert_eq!(code("zh-Hant-TW"), None);
+    assert_eq!(code("zh_TW"), None);
+    assert_eq!(code("C"), None);
+    assert_eq!(code("nl-NL"), None);
+}

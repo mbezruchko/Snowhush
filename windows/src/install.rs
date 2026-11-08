@@ -18,7 +18,7 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::{
     FindWindowW, GetWindowThreadProcessId, SMTO_ABORTIFHUNG, SW_SHOWNORMAL, SendMessageTimeoutW, WM_CLOSE,
 };
-use windows::core::{GUID, Interface, PCWSTR, w};
+use windows::core::{GUID, HSTRING, Interface, PCWSTR, w};
 
 const UNINSTALL: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Snowhush");
 const RUN: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
@@ -128,7 +128,7 @@ fn shortcut(target: &Path, at: &Path) -> windows::core::Result<()> {
         let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
         link.SetPath(PCWSTR(target_path.as_ptr()))?;
         link.SetWorkingDirectory(PCWSTR(folder.as_ptr()))?;
-        link.SetDescription(w!("Snow on your desktop"))?;
+        link.SetDescription(&HSTRING::from(snowhush_core::text::tr("shortcut")))?;
         link.cast::<IPersistFile>()?.Save(PCWSTR(at.as_ptr()), true)
     }
 }

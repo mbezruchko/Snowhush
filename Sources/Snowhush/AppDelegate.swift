@@ -139,12 +139,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         menu.delegate = self
         menu.autoenablesItems = false
 
-        menu.addItem(.sectionHeader(title: "Intensity"))
+        menu.addItem(.sectionHeader(title: tr("intensity")))
         intensitySlider.changed = { [unowned self] in select(intensity: $0) }
         let intensityItem = NSMenuItem()
         intensityItem.view = intensitySlider
         menu.addItem(intensityItem)
-        menu.addItem(.sectionHeader(title: "Opacity"))
+        menu.addItem(.sectionHeader(title: tr("opacity")))
         opacitySlider.changed = { [unowned self] opacity in
             Preferences.fallingOpacity = opacity
             for snow in screens { snow.simulation.fallingOpacity = Float(opacity) }
@@ -154,39 +154,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         menu.addItem(opacityItem)
         let modes = NSMenu()
         modes.autoenablesItems = false
-        mixedItem = toggle("Mixed", #selector(toggleMixed), to: modes)
+        mixedItem = toggle(tr("mixed"), #selector(toggleMixed), to: modes)
         modes.addItem(.separator())
-        modeItems = [(.snow, "Snow"), (.autumn, "Autumn Leaves"), (.rain, "Rain"), (.blossom, "Cherry Blossom")].map { mode, title in
-            let item = toggle(title, #selector(chooseMode), to: modes)
+        modeItems = Mode.allCases.map { mode in
+            let item = toggle(tr(mode.key), #selector(chooseMode), to: modes)
             (item.view as? MenuToggle)?.staysOpen = { Preferences.mixed }
             return (item, mode)
         }
         modes.addItem(.separator())
-        halloweenItem = add("Halloween", #selector(toggleHalloween), to: modes)
-        menu.addItem(withTitle: "Mode", action: nil, keyEquivalent: "").submenu = modes
-        clearItem = add("Clear Snow", #selector(clearSnow), to: menu)
+        halloweenItem = add(tr("halloween"), #selector(toggleHalloween), to: modes)
+        menu.addItem(withTitle: tr("mode"), action: nil, keyEquivalent: "").submenu = modes
+        clearItem = add(tr("clear.snow"), #selector(clearSnow), to: menu)
         menu.addItem(.separator())
         let settings = NSMenu()
         settings.autoenablesItems = false
-        settings.addItem(.sectionHeader(title: "Behavior"))
-        accumulateItem = toggle("Accumulate", #selector(toggleAccumulate), to: settings)
-        meltItem = toggle("Melt Snow", #selector(toggleMeltSnow), to: settings)
-        snowOnWindowsItem = toggle("Snow on Windows", #selector(toggleSnowOnWindows), to: settings)
-        deepInteractionItem = toggle("Deep Interaction", #selector(toggleDeepInteraction), to: settings)
+        settings.addItem(.sectionHeader(title: tr("behavior")))
+        accumulateItem = toggle(tr("accumulate"), #selector(toggleAccumulate), to: settings)
+        meltItem = toggle(tr("melt.snow"), #selector(toggleMeltSnow), to: settings)
+        snowOnWindowsItem = toggle(tr("windows.snow"), #selector(toggleSnowOnWindows), to: settings)
+        deepInteractionItem = toggle(tr("deep"), #selector(toggleDeepInteraction), to: settings)
         settings.addItem(.separator())
-        settings.addItem(.sectionHeader(title: "Display"))
-        behindWindowsItem = toggle("Behind Windows", #selector(toggleBehindWindows), to: settings)
-        fullScreenItem = toggle("Show over Full Screen", #selector(toggleFullScreen), to: settings)
-        screenshotsItem = toggle("Show in Screenshots", #selector(toggleScreenshots), to: settings)
-        maxPerformanceItem = toggle("Max Performance", #selector(toggleMaxPerformance), to: settings)
+        settings.addItem(.sectionHeader(title: tr("display")))
+        behindWindowsItem = toggle(tr("behind"), #selector(toggleBehindWindows), to: settings)
+        fullScreenItem = toggle(tr("full_screen"), #selector(toggleFullScreen), to: settings)
+        screenshotsItem = toggle(tr("screenshots"), #selector(toggleScreenshots), to: settings)
+        maxPerformanceItem = toggle(tr("performance"), #selector(toggleMaxPerformance), to: settings)
         settings.addItem(.separator())
-        settings.addItem(.sectionHeader(title: "General"))
-        loginItem = toggle("Open at Login", #selector(toggleOpenAtLogin), to: settings)
-        let updates = settings.addItem(withTitle: "Check for Updates…", action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)), keyEquivalent: "")
+        settings.addItem(.sectionHeader(title: tr("general")))
+        loginItem = toggle(tr("login"), #selector(toggleOpenAtLogin), to: settings)
+        let updates = settings.addItem(withTitle: tr("updates"), action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)), keyEquivalent: "")
         updates.target = updater
-        menu.addItem(withTitle: "Settings", action: nil, keyEquivalent: "").submenu = settings
-        add("Support Snowhush", #selector(openSponsors), to: menu).attributedTitle = Self.supportTitle
-        menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        menu.addItem(withTitle: tr("settings"), action: nil, keyEquivalent: "").submenu = settings
+        add(tr("support"), #selector(openSponsors), to: menu).attributedTitle = Self.supportTitle
+        menu.addItem(withTitle: tr("quit"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 
         item.menu = menu
         return item
@@ -196,7 +196,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     /// show it.
     private static let supportTitle: NSAttributedString = {
         let font = NSFont.menuFont(ofSize: 0)
-        let title = NSMutableAttributedString(string: "Support Snowhush", attributes: [.font: font])
+        let title = NSMutableAttributedString(string: tr("support"), attributes: [.font: font])
         guard let heart = NSImage(systemSymbolName: "heart.fill", accessibilityDescription: nil)?
             .withSymbolConfiguration(.init(pointSize: font.pointSize * 0.85, weight: .regular).applying(.init(paletteColors: [NSColor(srgbRed: 0.92, green: 0.51, blue: 0.51, alpha: 1)])))
         else { return title }
@@ -218,7 +218,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
 
     private func toggle(_ title: String, _ action: Selector, to menu: NSMenu) -> NSMenuItem {
         let item = menu.addItem(withTitle: title, action: nil, keyEquivalent: "")
-        item.view = MenuToggle(action: action, target: self)
+        let toggle = MenuToggle(action: action, target: self)
+        toggle.fit(title)
+        item.view = toggle
         return item
     }
 
@@ -234,9 +236,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         accumulateItem.isHidden = heaps.isEmpty
         meltItem.isHidden = heaps.isEmpty
         clearItem.isHidden = heaps.isEmpty
-        meltItem.title = heaps.contains(.snow) ? "Melt Snow" : heaps == [.blossom] ? "Wilt Petals" : "Wither Leaves"
-        snowOnWindowsItem.title = "\(Self.names(modes)) on Windows"
-        clearItem.title = "Clear \(Self.names(heaps))"
+        meltItem.title = tr(heaps.contains(.snow) ? "melt.snow" : heaps == [.blossom] ? "melt.blossom" : "melt.autumn")
+        snowOnWindowsItem.title = tr("windows", modes)
+        clearItem.title = tr("clear", heaps)
+        for item: NSMenuItem in [meltItem, snowOnWindowsItem] { (item.view as? MenuToggle)?.fit(item.title) }
         meltItem.state = thaws ? .on : .off
         meltItem.isEnabled = accumulates
         snowOnWindowsItem.state = snowOnWindows ? .on : .off
@@ -322,12 +325,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         } catch {
             NSLog("Snowhush: login item change failed: \(error)")
         }
-    }
-
-    /// What falls, as the menu names it: "Snow", "Snow and Leaves".
-    private static func names(_ modes: [Mode]) -> String {
-        let name: [Mode: String] = [.snow: "Snow", .autumn: "Leaves", .rain: "Rain", .blossom: "Petals"]
-        return modes.compactMap { name[$0] }.joined(separator: " and ")
     }
 
     /// Mixed, a third mode picked takes the place of the one picked before the other.

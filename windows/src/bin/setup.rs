@@ -14,6 +14,7 @@ use windows::core::{PCWSTR, Result, w};
 
 use snowhush::card::{self, Card, Content, Hits};
 use snowhush::install;
+use snowhush_core::text::{self, tr};
 
 /// The app this installer carries, built before it.
 const APP: &[u8] = include_bytes!(env!("SNOWHUSH_APP"));
@@ -47,6 +48,7 @@ fn main() {
     unsafe {
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
     }
+    snowhush::language::choose();
     if std::env::args().skip(1).any(|argument| argument.eq_ignore_ascii_case("--silent") || argument.eq_ignore_ascii_case("/s")) {
         std::process::exit(if install::install(APP, VERSION).is_ok() { 0 } else { 1 });
     }
@@ -68,9 +70,14 @@ fn main() {
 
 fn open() -> Result<()> {
     card::register(CLASS, Some(procedure))?;
-    let (scale, origin) = card::placement(WIDTH, HEIGHT);
-    let card = Card::new(WIDTH, HEIGHT, scale)?;
     let installed = install::installed_version();
+    let (scale, _) = card::placement(WIDTH, HEIGHT);
+    let stages = [Stage::Ready, Stage::Done(PathBuf::new())];
+    let words: Vec<_> = stages.iter().map(|stage| words(stage, installed.as_deref())).collect();
+    let contents: Vec<_> = words.iter().map(|words| content(words, false)).collect();
+    let height = Card::new(WIDTH, HEIGHT, scale)?.fitting_height(&contents, HEIGHT)?;
+    let (scale, origin) = card::placement(WIDTH, height);
+    let card = Card::new(WIDTH, height, scale)?;
     let (pixels, hits) = paint(&card, &Stage::Ready, installed.as_deref(), false)?;
     unsafe {
         let window = CreateWindowExW(
@@ -98,21 +105,38 @@ fn open() -> Result<()> {
 /// The card for a stage of the installation.
 fn paint(card: &Card, stage: &Stage, installed: Option<&str>, pressed: bool) -> Result<(Vec<u8>, Hits)> {
     let installing = matches!(stage, Stage::Installing);
+    card.paint(&content(&words(stage, installed), pressed || installing))
+}
+
+/// A stage's title, text and button, the title and button in capitals.
+struct Words {
+    title: String,
+    body: String,
+    button: String,
+    closable: bool,
+}
+
+fn words(stage: &Stage, installed: Option<&str>) -> Words {
+    let version = [("version", VERSION)];
     let (title, body, button) = match stage {
         Stage::Ready | Stage::Installing => {
             let (body, button) = match installed {
-                None => (format!("Version {VERSION}. Installs just for you, without administrator rights."), "INSTALL"),
+                None => (text::fill("setup.fresh", &version), "setup.install"),
                 Some(old) if snowhush_core::version::newer(VERSION, old) => {
-                    (format!("Updates Snowhush {old} to {VERSION}. Your settings stay as they are."), "UPDATE")
+                    (text::fill("setup.newer", &[("old", old), ("version", VERSION)]), "setup.update")
                 }
-                Some(old) => (format!("Snowhush {old} is already here. Installing {VERSION} again repairs it."), "REINSTALL"),
+                Some(old) => (text::fill("setup.same", &[("old", old), ("version", VERSION)]), "setup.reinstall"),
             };
-            ("SNOWHUSH", body, if installing { "INSTALLING…" } else { button })
+            ("Snowhush", body, if matches!(stage, Stage::Installing) { "setup.installing" } else { button })
         }
-        Stage::Done(_) => ("LET IT SETTLE.", "Snowhush is installed. You'll find it in the Start menu.".to_string(), "OPEN SNOWHUSH"),
-        Stage::Failed(error) => ("SNOWHUSH", format!("Couldn't install: {error}."), "TRY AGAIN"),
+        Stage::Done(_) => (tr("setup.settle"), tr("setup.done").to_string(), "setup.open"),
+        Stage::Failed(error) => ("Snowhush", text::fill("setup.failed", &[("error", error)]), "setup.retry"),
     };
-    card.paint(&Content { icon: 96.0, title, title_size: 40.0, body: &body, button, pressed: pressed || installing, closable: !installing })
+    Words { title: title.to_uppercase(), body, button: tr(button).to_uppercase(), closable: !matches!(stage, Stage::Installing) }
+}
+
+fn content(words: &Words, pressed: bool) -> Content<'_> {
+    Content { icon: 96.0, title: &words.title, title_size: 40.0, body: &words.body, button: &words.button, pressed, closable: words.closable }
 }
 
 unsafe extern "system" fn procedure(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {

@@ -19,6 +19,11 @@ vtool -set-build-version macos "$minimum" "$(xcrun --sdk macosx --show-sdk-versi
 ditto "$products/Sparkle.framework" "$app/Contents/Frameworks/Sparkle.framework"
 cp Resources/Info.plist "$app/Contents/"
 cp Resources/AppIcon.icns "$app/Contents/Resources/"
+for strings in locales/*.strings; do
+    lproj="$app/Contents/Resources/$(basename "$strings" .strings).lproj"
+    mkdir -p "$lproj"
+    plutil -convert binary1 -o "$lproj/Localizable.strings" "$strings"
+done
 
 if [[ -n "${IDENTITY:-}" ]]; then
     # Sparkle's helpers are signed inside out, each with the hardened runtime, as notarization requires.
