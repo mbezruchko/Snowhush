@@ -196,6 +196,22 @@ fn snow_settles_on_a_window_and_drops_when_it_closes() {
 }
 
 #[test]
+fn snow_falling_off_a_window_shows_at_the_falling_opacity() {
+    let mut simulation = SnowSimulation::new(1280.0, 800.0, 0.75);
+    let none = HashSet::new();
+    simulation.update_windows(&[surface(7, 300.0, 600.0, 500.0)], 0.2, &none, &none, false);
+    run(&mut simulation, 60.0, AWAY);
+    simulation.set_intensity(0.0);
+    simulation.falling_opacity = 0.4;
+    simulation.update_windows(&[], 0.2, &none, &none, false);
+    simulation.step(DT, AWAY);
+    let mut sprites = vec![Sprite::default(); simulation.sprite_count()];
+    let count = simulation.write_sprites(&mut sprites);
+    assert!(count > 20, "the window's snow didn't fall");
+    assert!(sprites[..count].iter().all(|sprite| sprite.alpha <= 0.4), "snow off the window ignores the opacity");
+}
+
+#[test]
 fn snow_back_from_another_desktop_grows_into_shape() {
     let mut simulation = SnowSimulation::new(1280.0, 800.0, 0.75);
     let none = HashSet::new();

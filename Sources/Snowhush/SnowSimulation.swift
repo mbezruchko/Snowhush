@@ -385,7 +385,7 @@ final class SnowSimulation {
     }
     var thaws = false
     var accumulates = true
-    /// How opaque snow, leaves and rain are while they fall; once settled they show in full.
+    /// How opaque snow, leaves and rain are while they fall, from the sky or off a window; once settled they show in full.
     var fallingOpacity: Float = 1
     /// Screen edges with no display past them: a window slid past one leaves its snow heaped against the edge.
     var walls: (left: Bool, right: Bool) = (false, false)
@@ -824,7 +824,7 @@ final class SnowSimulation {
                     position: grain.position,
                     velocity: grain.velocity,
                     size: drawnSize(grain.size >= 5.5 ? grain.size : 6 + grain.seed * 4.5, seed: grain.seed),
-                    alpha: 0.95,
+                    alpha: 0.95 * fallingOpacity,
                     soft: 0,
                     armAngle: tilt?.direction ?? 0,
                     leaf: grain.seed,
@@ -838,7 +838,7 @@ final class SnowSimulation {
                     position: grain.position,
                     velocity: grain.velocity,
                     size: grain.size,
-                    alpha: grain.lump > 0 ? 0.97 : grain.blown ? 0.8 : 0.95,
+                    alpha: (grain.lump > 0 ? 0.97 : grain.blown ? 0.8 : 0.95) * fallingOpacity,
                     soft: grain.lump > 0 ? 0.2 : 0.3,
                     lump: grain.lump
                 )
@@ -848,7 +848,7 @@ final class SnowSimulation {
         for mote in motes where count < capacity && !leafy {
             let t = mote.age / mote.life
             let fade = min(1, mote.age / 0.06) * pow(1 - t, 1.5)
-            buffer[count] = Sprite(position: mote.position, size: mote.size * (1 + t), alpha: mote.alpha * fade, soft: 1)
+            buffer[count] = Sprite(position: mote.position, size: mote.size * (1 + t), alpha: mote.alpha * fade * fallingOpacity, soft: 1)
             count += 1
         }
         for ghost in ghosts where count < capacity {

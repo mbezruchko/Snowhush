@@ -1393,12 +1393,12 @@
       }
       for (const g of this.grains) {
         data[k++] = g.x; data[k++] = g.y; data[k++] = g.size;
-        data[k++] = g.lump ? 0.97 : g.blown ? 0.8 : 0.95; data[k++] = g.lump ? 0.2 : 0.3; data[k++] = g.lump || 0;
+        data[k++] = (g.lump ? 0.97 : g.blown ? 0.8 : 0.95) * settings.opacity; data[k++] = g.lump ? 0.2 : 0.3; data[k++] = g.lump || 0;
       }
       for (const m of this.motes) {
         const t = m.age / m.life;
         data[k++] = m.x; data[k++] = m.y; data[k++] = m.size * (1 + t);
-        data[k++] = m.alpha * Math.min(1, m.age / 0.06) * Math.pow(1 - t, 1.5); data[k++] = 1; data[k++] = 0;
+        data[k++] = m.alpha * Math.min(1, m.age / 0.06) * Math.pow(1 - t, 1.5) * settings.opacity; data[k++] = 1; data[k++] = 0;
       }
       gl.useProgram(this.sprite.program);
       const s = this.sprite.uniforms;

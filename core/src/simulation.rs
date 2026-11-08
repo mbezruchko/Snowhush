@@ -352,7 +352,7 @@ pub struct SnowSimulation {
     density: f32,
     pub thaws: bool,
     pub accumulates: bool,
-    /// How opaque snow, leaves and rain are while they fall; once settled they show in full.
+    /// How opaque snow, leaves and rain are while they fall, from the sky or off a window; once settled they show in full.
     pub falling_opacity: f32,
     /// Side edges, left and right, with no display past them: a window slid past one leaves its snow heaped against the edge.
     pub walls: (bool, bool),
@@ -788,7 +788,7 @@ impl SnowSimulation {
                     position: grain.position,
                     velocity: grain.velocity,
                     size: drawn_size(blossom, if grain.size >= 5.5 { grain.size } else { 6.0 + grain.seed * 4.5 }, grain.seed),
-                    alpha: 0.95,
+                    alpha: 0.95 * self.falling_opacity,
                     pose: [0.0, tilt.map_or(0.0, |(_, direction)| direction), 0.0, 0.0],
                     leaf: [grain.seed, grain_turn(clock, grain), tilt.map_or_else(|| tumble(clock, grain.seed), |(face, _)| face)],
                     spin: [(grain.seed - 0.5) * 9.0, if tilt.is_some() { 0.0 } else { tumble_speed(clock, grain.seed) }],
@@ -799,13 +799,14 @@ impl SnowSimulation {
                 position: grain.position,
                 velocity: grain.velocity,
                 size: grain.size,
-                alpha: if grain.lump > 0.0 {
-                    0.97
-                } else if grain.blown {
-                    0.8
-                } else {
-                    0.95
-                },
+                alpha: self.falling_opacity
+                    * if grain.lump > 0.0 {
+                        0.97
+                    } else if grain.blown {
+                        0.8
+                    } else {
+                        0.95
+                    },
                 soft: if grain.lump > 0.0 { 0.2 } else { 0.3 },
                 tint: [1.0; 3],
                 lump: grain.lump,
@@ -815,7 +816,14 @@ impl SnowSimulation {
         let motes = self.air.motes.iter().filter(|_| !leafy).map(|mote| {
             let t = mote.age / mote.life;
             let fade = (mote.age / 0.06).min(1.0) * (1.0 - t).powf(1.5);
-            Sprite { position: mote.position, size: mote.size * (1.0 + t), alpha: mote.alpha * fade, soft: 1.0, tint: [1.0; 3], ..Sprite::default() }
+            Sprite {
+                position: mote.position,
+                size: mote.size * (1.0 + t),
+                alpha: mote.alpha * fade * self.falling_opacity,
+                soft: 1.0,
+                tint: [1.0; 3],
+                ..Sprite::default()
+            }
         });
         let mut count = 0;
         for (slot, sprite) in buffer.iter_mut().zip(lying.chain(flakes).chain(self.rain_sprites()).chain(grains).chain(motes)) {
