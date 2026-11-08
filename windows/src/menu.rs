@@ -358,8 +358,6 @@ pub fn track(x: i32, y: i32, entries: Vec<Entry>, light: bool, toggle: &mut dyn 
 
     unsafe {
         show(root, true);
-        // First open cold-starts D2D/Acrylic and Windows leaves AppStarting on this window; put the arrow back.
-        ready_cursor();
         let _ = SetForegroundWindow(root);
         SetCapture(root);
         SetTimer(Some(root), TIMER_POINTER, 50, None);
@@ -388,7 +386,6 @@ pub fn track(x: i32, y: i32, entries: Vec<Entry>, light: bool, toggle: &mut dyn 
         for window in windows.into_iter().rev() {
             let _ = DestroyWindow(window);
         }
-        ready_cursor();
     }
     Ok(CHOSEN.get())
 }
@@ -487,6 +484,8 @@ fn show(window: HWND, root: bool) {
         let _ = SetWindowPos(window, Some(HWND_TOPMOST), 0, 0, 0, 0, flags);
         // The backdrop shows as on an active window, also on a submenu, which never takes the foreground.
         SendMessageW(window, WM_NCACTIVATE, Some(WPARAM(1)), None);
+        // The menu holds the mouse, so nothing else sets the cursor while it is open: on the first open after launch,
+        // the busy cursor Windows shows for a starting app would stay over it.
         ready_cursor();
     }
 }
