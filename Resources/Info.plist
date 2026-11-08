@@ -30,6 +30,8 @@
 	<true/>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSSupportsAutomaticGraphicsSwitching</key>
+	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string>© 2026 Mykhailo Bezruchko</string>
 	<key>SUEnableAutomaticChecks</key>
