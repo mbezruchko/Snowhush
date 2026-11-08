@@ -482,7 +482,6 @@ impl SnowSimulation {
         self.air.flakes.retain(|flake| flake.position.y <= height || random.next() < keep);
     }
 
-
     pub fn set_snowfall_held(&mut self, held: bool) {
         self.snowfall_held = held;
         self.update_target();
