@@ -6,6 +6,7 @@ use ksni::menu::{CheckmarkItem, MenuItem, RadioGroup, RadioItem, StandardItem, S
 
 use snowhush_core::halloween::Today;
 use snowhush_core::simulation::Mode;
+use snowhush_core::text::{self, tr};
 
 use crate::log;
 use crate::prefs::{self, Settings};
@@ -81,17 +82,6 @@ impl Tray {
     }
 }
 
-/// The kinds falling, as the menu names them: "Snow and Leaves".
-fn names(modes: &[Mode]) -> String {
-    let name = |mode: &Mode| match mode {
-        Mode::Snow => "Snow",
-        Mode::Autumn => "Leaves",
-        Mode::Rain => "Rain",
-        Mode::Blossom => "Petals",
-    };
-    modes.iter().map(name).collect::<Vec<_>>().join(" and ")
-}
-
 impl ksni::Tray for Tray {
     const MENU_ON_ACTIVATE: bool = true;
 
@@ -132,16 +122,16 @@ impl ksni::Tray for Tray {
         // Rain doesn't lie anywhere: nothing to keep, melt or clear.
         let heaps: Vec<Mode> = falling.iter().copied().filter(|&mode| mode != Mode::Rain).collect();
         let lies = !heaps.is_empty();
-        let melt = if heaps.contains(&Mode::Snow) {
-            "Melt Snow"
+        let melt = tr(if heaps.contains(&Mode::Snow) {
+            "melt.snow"
         } else if heaps == [Mode::Blossom] {
-            "Wilt Petals"
+            "melt.blossom"
         } else {
-            "Wither Leaves"
-        };
+            "melt.autumn"
+        });
         let mut kinds: Vec<MenuItem<Self>> = vec![
             CheckmarkItem {
-                label: "Mixed".into(),
+                label: tr("mixed").into(),
                 checked: settings.mixed,
                 activate: Box::new(|tray: &mut Tray| {
                     tray.settings.toggle_mixed();
@@ -152,7 +142,7 @@ impl ksni::Tray for Tray {
             .into(),
             MenuItem::Separator,
         ];
-        let labels = ["Snow", "Autumn Leaves", "Rain", "Cherry Blossom"];
+        let labels = [tr("snow"), tr("autumn"), tr("rain"), tr("blossom")];
         if settings.mixed {
             // Mixed, the kinds are checkboxes: a third picked takes the place of the one picked before the other.
             for (&mode, &label) in MODES.iter().zip(&labels) {
@@ -183,7 +173,7 @@ impl ksni::Tray for Tray {
         kinds.extend([
             MenuItem::Separator,
             CheckmarkItem {
-                label: "Halloween".into(),
+                label: tr("halloween").into(),
                 checked: settings.halloween.wanted(self.today),
                 enabled: falling == [Mode::Snow],
                 activate: Box::new(|tray: &mut Tray| {
@@ -199,7 +189,7 @@ impl ksni::Tray for Tray {
         ]);
         vec![
             SubMenu {
-                label: "Intensity".into(),
+                label: tr("intensity").into(),
                 submenu: vec![
                     RadioGroup {
                         selected: INTENSITY_STOPS.iter().position(|&stop| stop == settings.intensity).unwrap_or(usize::MAX),
@@ -212,7 +202,7 @@ impl ksni::Tray for Tray {
                         }),
                         options: INTENSITY_STOPS
                             .iter()
-                            .map(|&stop| RadioItem { label: if stop == 0 { "Off".into() } else { format!("{stop}%") }, ..Default::default() })
+                            .map(|&stop| RadioItem { label: if stop == 0 { tr("off").into() } else { format!("{stop}%") }, ..Default::default() })
                             .collect(),
                     }
                     .into(),
@@ -221,7 +211,7 @@ impl ksni::Tray for Tray {
             }
             .into(),
             SubMenu {
-                label: "Opacity".into(),
+                label: tr("opacity").into(),
                 submenu: vec![
                     RadioGroup {
                         selected: OPACITY_STOPS.iter().position(|&stop| stop == settings.opacity).unwrap_or(usize::MAX),
@@ -239,9 +229,9 @@ impl ksni::Tray for Tray {
                 ..Default::default()
             }
             .into(),
-            SubMenu { label: "Mode".into(), submenu: kinds, ..Default::default() }.into(),
+            SubMenu { label: tr("mode").into(), submenu: kinds, ..Default::default() }.into(),
             StandardItem {
-                label: format!("Clear {}", names(&heaps)),
+                label: text::kinds("clear", &heaps).into(),
                 visible: lies,
                 activate: Box::new(|tray: &mut Tray| {
                     let _ = tray.commands.send(Command::ClearSnow(!prefs::animations_enabled()));
@@ -251,11 +241,11 @@ impl ksni::Tray for Tray {
             .into(),
             MenuItem::Separator,
             SubMenu {
-                label: "Settings".into(),
+                label: tr("settings").into(),
                 submenu: vec![
-                    StandardItem { label: "Behavior".into(), enabled: false, ..Default::default() }.into(),
+                    StandardItem { label: tr("behavior").into(), enabled: false, ..Default::default() }.into(),
                     CheckmarkItem {
-                        label: "Accumulate".into(),
+                        label: tr("accumulate").into(),
                         checked: settings.accumulate,
                         visible: lies,
                         activate: Box::new(|tray: &mut Tray| {
@@ -282,7 +272,7 @@ impl ksni::Tray for Tray {
                     }
                     .into(),
                     CheckmarkItem {
-                        label: format!("{} on Windows", names(&falling)),
+                        label: text::kinds("windows", &falling).into(),
                         checked: settings.snow_on_windows,
                         activate: Box::new(|tray: &mut Tray| {
                             tray.change(|settings| {
@@ -294,9 +284,9 @@ impl ksni::Tray for Tray {
                     }
                     .into(),
                     MenuItem::Separator,
-                    StandardItem { label: "Display".into(), enabled: false, ..Default::default() }.into(),
+                    StandardItem { label: tr("display").into(), enabled: false, ..Default::default() }.into(),
                     CheckmarkItem {
-                        label: "Behind Windows".into(),
+                        label: tr("behind").into(),
                         checked: settings.behind_windows,
                         activate: Box::new(|tray: &mut Tray| {
                             tray.change(|settings| {
@@ -308,7 +298,7 @@ impl ksni::Tray for Tray {
                     }
                     .into(),
                     CheckmarkItem {
-                        label: "Show over Full Screen".into(),
+                        label: tr("full_screen").into(),
                         checked: settings.over_full_screen,
                         enabled: !settings.behind_windows,
                         activate: Box::new(|tray: &mut Tray| {
@@ -321,7 +311,7 @@ impl ksni::Tray for Tray {
                     }
                     .into(),
                     CheckmarkItem {
-                        label: "Show in Screenshots".into(),
+                        label: tr("screenshots").into(),
                         checked: settings.show_in_screenshots,
                         activate: Box::new(|tray: &mut Tray| {
                             tray.change(|settings| {
@@ -333,7 +323,7 @@ impl ksni::Tray for Tray {
                     }
                     .into(),
                     CheckmarkItem {
-                        label: "Max Performance".into(),
+                        label: tr("performance").into(),
                         checked: settings.max_performance,
                         activate: Box::new(|tray: &mut Tray| {
                             tray.change(|settings| {
@@ -345,9 +335,9 @@ impl ksni::Tray for Tray {
                     }
                     .into(),
                     MenuItem::Separator,
-                    StandardItem { label: "General".into(), enabled: false, ..Default::default() }.into(),
+                    StandardItem { label: tr("general").into(), enabled: false, ..Default::default() }.into(),
                     CheckmarkItem {
-                        label: "Open at Login".into(),
+                        label: tr("login").into(),
                         checked: prefs::opens_at_login(),
                         activate: Box::new(|_: &mut Tray| {
                             let on = !prefs::opens_at_login();
@@ -361,9 +351,9 @@ impl ksni::Tray for Tray {
                 ..Default::default()
             }
             .into(),
-            StandardItem { label: "Support Snowhush".into(), activate: Box::new(|_: &mut Tray| open(SPONSORS)), ..Default::default() }.into(),
+            StandardItem { label: tr("support").into(), activate: Box::new(|_: &mut Tray| open(SPONSORS)), ..Default::default() }.into(),
             StandardItem {
-                label: "Quit".into(),
+                label: tr("quit").into(),
                 icon_name: "application-exit".into(),
                 activate: Box::new(|tray: &mut Tray| {
                     let _ = tray.commands.send(Command::Quit);

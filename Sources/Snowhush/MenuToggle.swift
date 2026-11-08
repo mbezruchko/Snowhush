@@ -30,6 +30,12 @@ final class MenuToggle: NSView {
 
     override var isFlipped: Bool { true }
 
+    /// Widens the row to fit `title`: a menu sizes itself to its rows' views, not to their items' titles.
+    func fit(_ title: String) {
+        let text = NSAttributedString(string: title, attributes: [.font: NSFont.menuFont(ofSize: 0)])
+        setFrameSize(NSSize(width: max(200, ceil(Self.titleX + text.size().width + 24)), height: frame.height))
+    }
+
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         trackingAreas.forEach(removeTrackingArea)

@@ -29,6 +29,7 @@ use crate::snow::{self, Command, Links};
 use crate::update::{self, Release};
 use crate::welcome::{self, Handlers};
 use snowhush_core::simulation::Mode;
+use snowhush_core::text::{self, tr};
 
 const CLASS: PCWSTR = w!("SnowhushController");
 const WM_TRAY: u32 = WM_APP + 1;
@@ -367,51 +368,51 @@ fn entries(settings: &Settings, login: bool, sliders: bool) -> Vec<Entry> {
         if settings.mixed { Entry::toggle(id, label, picked.contains(&mode), true) } else { Entry::choice(id, label, settings.mode == mode) }
     };
     let modes = vec![
-        Entry::toggle(ID_MIXED, "Mixed", settings.mixed, true),
+        Entry::toggle(ID_MIXED, tr("mixed"), settings.mixed, true),
         Entry::Separator,
-        kind(ID_SNOW, "Snow", Mode::Snow),
-        kind(ID_AUTUMN, "Autumn Leaves", Mode::Autumn),
-        kind(ID_RAIN, "Rain", Mode::Rain),
-        kind(ID_BLOSSOM, "Cherry Blossom", Mode::Blossom),
+        kind(ID_SNOW, tr("snow"), Mode::Snow),
+        kind(ID_AUTUMN, tr("autumn"), Mode::Autumn),
+        kind(ID_RAIN, tr("rain"), Mode::Rain),
+        kind(ID_BLOSSOM, tr("blossom"), Mode::Blossom),
         Entry::Separator,
-        Entry::item(ID_HALLOWEEN, "Halloween", halloween::wanted(settings.halloween), falling == [Mode::Snow]),
+        Entry::item(ID_HALLOWEEN, tr("halloween"), halloween::wanted(settings.halloween), falling == [Mode::Snow]),
     ];
-    let mut behavior = vec![Entry::header("Behavior")];
+    let mut behavior = vec![Entry::header(tr("behavior"))];
     // Rain doesn't lie anywhere: nothing to keep, melt or clear.
     let heaps: Vec<Mode> = falling.iter().copied().filter(|&mode| mode != Mode::Rain).collect();
     if !heaps.is_empty() {
-        behavior.push(Entry::toggle(ID_ACCUMULATE, "Accumulate", settings.accumulate, true));
-        let melt = if heaps.contains(&Mode::Snow) {
-            "Melt Snow"
+        behavior.push(Entry::toggle(ID_ACCUMULATE, tr("accumulate"), settings.accumulate, true));
+        let melt = tr(if heaps.contains(&Mode::Snow) {
+            "melt.snow"
         } else if heaps == [Mode::Blossom] {
-            "Wilt Petals"
+            "melt.blossom"
         } else {
-            "Wither Leaves"
-        };
+            "melt.autumn"
+        });
         behavior.push(Entry::toggle(ID_MELT, melt, settings.melt, settings.accumulate));
     }
-    let windows = format!("{} on Windows", names(&falling));
+    let windows = text::kinds("windows", &falling);
     let mut options = behavior;
     options.extend([
-        Entry::toggle(ID_WINDOWS, &windows, settings.snow_on_windows, true),
-        Entry::toggle(ID_DEEP, "Deep Interaction", settings.deep_interaction, settings.snow_on_windows),
+        Entry::toggle(ID_WINDOWS, windows, settings.snow_on_windows, true),
+        Entry::toggle(ID_DEEP, tr("deep"), settings.deep_interaction, settings.snow_on_windows),
         Entry::Separator,
-        Entry::header("Display"),
-        Entry::toggle(ID_BEHIND, "Behind Windows", settings.behind_windows, true),
-        Entry::toggle(ID_FULL_SCREEN, "Show over Full Screen", settings.over_full_screen, !settings.behind_windows),
-        Entry::toggle(ID_TASKBAR, "Behind Taskbar", settings.behind_taskbar, true),
-        Entry::toggle(ID_SCREENSHOTS, "Show in Screenshots", settings.show_in_screenshots, true),
-        Entry::toggle(ID_MAX_PERFORMANCE, "Max Performance", settings.max_performance, true),
+        Entry::header(tr("display")),
+        Entry::toggle(ID_BEHIND, tr("behind"), settings.behind_windows, true),
+        Entry::toggle(ID_FULL_SCREEN, tr("full_screen"), settings.over_full_screen, !settings.behind_windows),
+        Entry::toggle(ID_TASKBAR, tr("taskbar"), settings.behind_taskbar, true),
+        Entry::toggle(ID_SCREENSHOTS, tr("screenshots"), settings.show_in_screenshots, true),
+        Entry::toggle(ID_MAX_PERFORMANCE, tr("performance"), settings.max_performance, true),
         Entry::Separator,
-        Entry::header("General"),
-        Entry::toggle(ID_LOGIN, "Open at Login", login, true),
-        Entry::item(ID_UPDATES, "Check for Updates\u{2026}", false, true),
+        Entry::header(tr("general")),
+        Entry::toggle(ID_LOGIN, tr("login"), login, true),
+        Entry::item(ID_UPDATES, tr("updates"), false, true),
     ]);
     let mut entries = if sliders {
         vec![
-            Entry::header("Intensity"),
+            Entry::header(tr("intensity")),
             Entry::slider(ID_SNOWFALL, settings.intensity.clamp(0, 100) / 5, INTENSITY_STEPS, &percent(settings.intensity)),
-            Entry::header("Opacity"),
+            Entry::header(tr("opacity")),
             Entry::slider(ID_OPACITY, (settings.opacity.clamp(10, 100) - 10) / 5, OPACITY_STEPS, &format!("{}%", settings.opacity)),
             Entry::Separator,
         ]
@@ -421,26 +422,26 @@ fn entries(settings: &Settings, login: bool, sliders: bool) -> Vec<Entry> {
         let opacities =
             OPACITY_STOPS.iter().map(|&stop| Entry::choice(ID_OPACITY + (stop - 10) / 5, &format!("{stop}%"), stop == settings.opacity)).collect();
         vec![
-            Entry::Submenu { label: "Intensity".to_string(), entries: intensities },
-            Entry::Submenu { label: "Opacity".to_string(), entries: opacities },
+            Entry::Submenu { label: tr("intensity").to_string(), entries: intensities },
+            Entry::Submenu { label: tr("opacity").to_string(), entries: opacities },
         ]
     };
-    entries.push(Entry::Submenu { label: "Mode".to_string(), entries: modes });
+    entries.push(Entry::Submenu { label: tr("mode").to_string(), entries: modes });
     if !heaps.is_empty() {
-        entries.push(Entry::item(ID_CLEAR, &format!("Clear {}", names(&heaps)), false, true));
+        entries.push(Entry::item(ID_CLEAR, text::kinds("clear", &heaps), false, true));
     }
     entries.extend([
         Entry::Separator,
-        Entry::Submenu { label: "Settings".to_string(), entries: options },
-        Entry::loved(ID_SPONSOR, "Support Snowhush"),
-        Entry::item(ID_QUIT, "Quit", false, true),
+        Entry::Submenu { label: tr("settings").to_string(), entries: options },
+        Entry::loved(ID_SPONSOR, tr("support")),
+        Entry::item(ID_QUIT, tr("quit"), false, true),
     ]);
     entries
 }
 
 /// An intensity as its caption: a percentage, or Off.
 fn percent(intensity: u32) -> String {
-    if intensity == 0 { "Off".to_string() } else { format!("{intensity}%") }
+    if intensity == 0 { tr("off").to_string() } else { format!("{intensity}%") }
 }
 
 /// The system's own menu, for when the drawn one can't be shown.
@@ -589,17 +590,6 @@ fn choose(window: HWND, chosen: u32, login: bool) {
     }
 }
 
-/// The kinds falling, as the menu names them: "Snow and Leaves".
-fn names(modes: &[Mode]) -> String {
-    let name = |mode: &Mode| match mode {
-        Mode::Snow => "Snow",
-        Mode::Autumn => "Leaves",
-        Mode::Rain => "Rain",
-        Mode::Blossom => "Petals",
-    };
-    modes.iter().map(name).collect::<Vec<_>>().join(" and ")
-}
-
 fn switch_modes(app: &App) {
     app.settings.save();
     let settings = &app.settings;
@@ -622,7 +612,7 @@ fn updated(window: HWND, result: std::result::Result<Option<Release>, String>, a
     let current = env!("CARGO_PKG_VERSION");
     match result {
         Ok(Some(release)) if asked => {
-            let text = format!("Snowhush {} is available. You have {current}.\n\nDownload it now?", release.version);
+            let text = text::fill("update.ask", &[("version", &release.version), ("current", current)]);
             if message(window, &text, MB_YESNO | MB_ICONINFORMATION) == IDYES {
                 update::open(&release.url);
             }
@@ -633,17 +623,17 @@ fn updated(window: HWND, result: std::result::Result<Option<Release>, String>, a
                 (app.update.as_deref() != Some(&release.url)).then(|| app.update = Some(release.url.clone()))
             });
             if fresh.is_some() {
-                notify(window, &format!("Snowhush {} is available", release.version), "Click to download it.");
+                notify(window, &text::fill("update.available", &[("version", &release.version)]), tr("update.click"));
             }
         }
         Ok(None) if asked => {
-            message(window, &format!("You're up to date.\n\nSnowhush {current} is the latest version."), MB_OK | MB_ICONINFORMATION);
+            message(window, &text::fill("update.latest", &[("current", current)]), MB_OK | MB_ICONINFORMATION);
         }
         Ok(None) => {}
         Err(error) => {
             log!("update check failed: {error}");
             if asked {
-                message(window, &format!("Couldn't check for updates.\n\n{error}"), MB_OK | MB_ICONWARNING);
+                message(window, &format!("{}\n\n{error}", tr("update.failed")), MB_OK | MB_ICONWARNING);
             }
         }
     }
