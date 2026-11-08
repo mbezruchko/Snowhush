@@ -185,12 +185,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         let updates = settings.addItem(withTitle: "Check for Updates…", action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)), keyEquivalent: "")
         updates.target = updater
         menu.addItem(withTitle: "Settings", action: nil, keyEquivalent: "").submenu = settings
-        add("Support Snowhush…", #selector(openSponsors), to: menu)
+        add("Support Snowhush", #selector(openSponsors), to: menu).attributedTitle = Self.supportTitle
         menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 
         item.menu = menu
         return item
     }
+
+    /// The site's sponsor heart, in its colour, ahead of the title: set as the item's image, the status menu doesn't
+    /// show it.
+    private static let supportTitle: NSAttributedString = {
+        let font = NSFont.menuFont(ofSize: 0)
+        let title = NSMutableAttributedString(string: "Support Snowhush", attributes: [.font: font])
+        guard let heart = NSImage(systemSymbolName: "heart.fill", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: font.pointSize * 0.85, weight: .regular).applying(.init(paletteColors: [NSColor(srgbRed: 0.92, green: 0.51, blue: 0.51, alpha: 1)])))
+        else { return title }
+        heart.isTemplate = false
+        let attachment = NSTextAttachment()
+        attachment.image = heart
+        attachment.bounds = CGRect(x: 0, y: (font.capHeight - heart.size.height) / 2, width: heart.size.width, height: heart.size.height)
+        title.insert(NSAttributedString(string: "  ", attributes: [.font: font]), at: 0)
+        title.insert(NSAttributedString(attachment: attachment), at: 0)
+        return title
+    }()
 
     @discardableResult
     private func add(_ title: String, _ action: Selector, to menu: NSMenu) -> NSMenuItem {
