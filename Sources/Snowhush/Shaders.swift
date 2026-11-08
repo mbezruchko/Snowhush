@@ -54,8 +54,8 @@ struct Sprite {
 };
 
 struct SpriteOut {
-    float4 position [[position]];
-    float pointSize [[point_size]];
+    float4 position;
+    float pointSize;
     float alpha;
     float soft;
     float4 tint;
@@ -88,6 +88,57 @@ struct SpriteOut {
     /// For a drop running down the glass, the share of it from its head back that is its smear over the exposure.
     float blur;
 };
+
+/// What a sprite hands from its vertex to its fragments, packed in fours: Intel and AMD GPUs link at most 32 varyings,
+/// counting the position, the point size and the point coordinate, and a lone float takes a whole one.
+struct SpriteVaryings {
+    float4 position [[position]];
+    float pointSize [[point_size]];
+    float4 tint;
+    float4 lightAlpha;
+    float4 streakSoftRadius;
+    float4 a;
+    float4 b;
+    float4 c;
+    float4 d;
+    float4 e;
+    float4 f;
+};
+
+static SpriteVaryings pack(SpriteOut o) {
+    SpriteVaryings v;
+    v.position = o.position;
+    v.pointSize = o.pointSize;
+    v.tint = o.tint;
+    v.lightAlpha = float4(o.light, o.alpha);
+    v.streakSoftRadius = float4(o.streak, o.soft, o.radius);
+    v.a = float4(o.lump, o.spin, o.warm, o.ghost);
+    v.b = float4(o.ground, o.eyes, o.form, o.size);
+    v.c = float4(o.paws, o.hold, o.armAngle, o.wave);
+    v.d = float4(o.dab, o.anger, o.leaf, o.turn);
+    v.e = float4(o.flip, o.reach, o.turnSmear, o.flipSmear);
+    v.f = float4(o.samples, o.rain, o.petal, o.blur);
+    return v;
+}
+
+static SpriteOut unpack(SpriteVaryings v) {
+    SpriteOut o;
+    o.position = v.position;
+    o.pointSize = v.pointSize;
+    o.tint = v.tint;
+    o.light = v.lightAlpha.xyz;
+    o.alpha = v.lightAlpha.w;
+    o.streak = v.streakSoftRadius.xy;
+    o.soft = v.streakSoftRadius.z;
+    o.radius = v.streakSoftRadius.w;
+    o.lump = v.a.x; o.spin = v.a.y; o.warm = v.a.z; o.ghost = v.a.w;
+    o.ground = v.b.x; o.eyes = v.b.y; o.form = v.b.z; o.size = v.b.w;
+    o.paws = v.c.x; o.hold = v.c.y; o.armAngle = v.c.z; o.wave = v.c.w;
+    o.dab = v.d.x; o.anger = v.d.y; o.leaf = v.d.z; o.turn = v.d.w;
+    o.flip = v.e.x; o.reach = v.e.y; o.turnSmear = v.e.z; o.flipSmear = v.e.w;
+    o.samples = v.f.x; o.rain = v.f.y; o.petal = v.f.z; o.blur = v.f.w;
+    return o;
+}
 
 constant float3 candle = float3(1.0, 0.62, 0.26);
 
@@ -498,9 +549,7 @@ static float2 hangingReach(float along) {
     return float2(0.05, shape.z - shape.y);
 }
 
-vertex SpriteOut spriteVertex(uint vid [[vertex_id]],
-                              const device Sprite *sprites [[buffer(0)]],
-                              constant Uniforms &u [[buffer(1)]]) {
+static SpriteOut sprite(uint vid, const device Sprite *sprites, constant Uniforms &u) {
     Sprite s = sprites[vid];
     if (s.leaf != 0.0) {
         SpriteOut out;
@@ -637,6 +686,12 @@ vertex SpriteOut spriteVertex(uint vid [[vertex_id]],
     out.leaf = 0.0;
     out.rain = 0.0;
     return out;
+}
+
+vertex SpriteVaryings spriteVertex(uint vid [[vertex_id]],
+                                   const device Sprite *sprites [[buffer(0)]],
+                                   constant Uniforms &u [[buffer(1)]]) {
+    return pack(sprite(vid, sprites, u));
 }
 
 /// Rain, premultiplied: a streak or splash of water in the air, or a drop on the glass.
@@ -798,7 +853,8 @@ static float4 rainAt(SpriteOut in, float2 p) {
 /// A running drop or a bead as a smooth bump in the field the glass is drawn from, reaching half as far again as its
 /// outline: where drops come close, their bumps add up and they run together into one, as water does. The bump is the
 /// field's first channel, and the bump times how big the drop is, how high the water stands, its second.
-fragment half2 fieldFragment(SpriteOut in [[stage_in]], float2 coord [[point_coord]], constant Uniforms &u [[buffer(1)]]) {
+fragment half2 fieldFragment(SpriteVaryings v [[stage_in]], float2 coord [[point_coord]], constant Uniforms &u [[buffer(1)]]) {
+    SpriteOut in = unpack(v);
     if (in.rain < 1.5 || in.rain > 2.5) discard_fragment();
     float2 p = float2(coord.x - 0.5, 0.5 - coord.y);
     float2 half_ = in.streak * 0.5;
@@ -870,7 +926,8 @@ fragment float4 glassFragment(GlassOut in [[stage_in]], texture2d<half, access::
     return float4(float3(0.95, 0.975, 1.0) * u.light.rgb * min(glow, 1.0), alpha);
 }
 
-fragment float4 spriteFragment(SpriteOut in [[stage_in]], float2 coord [[point_coord]], constant Uniforms &u [[buffer(1)]]) {
+fragment float4 spriteFragment(SpriteVaryings v [[stage_in]], float2 coord [[point_coord]], constant Uniforms &u [[buffer(1)]]) {
+    SpriteOut in = unpack(v);
     // Point coordinates run down the screen; velocities run up.
     float2 p = float2(coord.x - 0.5, 0.5 - coord.y);
     if (in.rain != 0.0) {
