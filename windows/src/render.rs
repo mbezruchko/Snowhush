@@ -216,10 +216,7 @@ impl Gpu {
             let elements = [
                 element(s!("POSITION"), DXGI_FORMAT_R32G32_FLOAT, 0),
                 element(s!("VELOCITY"), DXGI_FORMAT_R32G32_FLOAT, 8),
-                element(s!("SIZE"), DXGI_FORMAT_R32_FLOAT, 16),
-                element(s!("ALPHA"), DXGI_FORMAT_R32_FLOAT, 20),
-                element(s!("SOFT"), DXGI_FORMAT_R32_FLOAT, 24),
-                element(s!("TINTAMOUNT"), DXGI_FORMAT_R32_FLOAT, 28),
+                element(s!("BODY"), DXGI_FORMAT_R32G32B32A32_FLOAT, 16),
                 element(s!("TINTCOLOR"), DXGI_FORMAT_R32G32B32_FLOAT, 32),
                 element(s!("LUMP"), DXGI_FORMAT_R32_FLOAT, 44),
                 element(s!("GHOST"), DXGI_FORMAT_R32G32B32A32_FLOAT, 48),

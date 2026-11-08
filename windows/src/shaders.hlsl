@@ -453,10 +453,8 @@ float candlelight(float2 at) {
 struct SpriteIn {
     float2 position : POSITION;
     float2 velocity : VELOCITY;
-    float size : SIZE;
-    float alpha : ALPHA;
-    float soft : SOFT;
-    float tintAmount : TINTAMOUNT;
+    // Size, alpha, softness and tint amount in one input: vs_4_0 takes at most 16, SV_VertexID among them.
+    float4 body : BODY;
     float3 tintColor : TINTCOLOR;
     float lump : LUMP;
     float4 ghost : GHOST;
@@ -528,7 +526,7 @@ float2 hangingReach(float along) {
 SpriteOut rainVertex(SpriteIn s, float2 corner) {
     [branch] if (s.rain.x > 4.5) {
         // A piece of the film a running drop leaves behind: `velocity` from one end to the other, `size` wide.
-        float thick = max(s.size * scale, 1.0);
+        float thick = max(s.body.x * scale, 1.0);
         float2 piece = s.velocity * scale;
         float span = length(piece) + thick + 2.0;
         SpriteOut f = (SpriteOut)0;
@@ -537,14 +535,14 @@ SpriteOut rainVertex(SpriteIn s, float2 corner) {
         f.coord = float2(corner.x, 1.0 - corner.y);
         f.streak = piece / span;
         f.radius = thick / span * 0.5;
-        f.alpha = s.alpha;
+        f.alpha = s.body.y;
         f.rain = float4(s.rain.x, 0.0, thick, span);
         return f;
     }
-    float pixels = max(s.size * scale, 1.5);
+    float pixels = max(s.body.x * scale, 1.5);
     bool glass = s.rain.x > 1.5;
     float speed = length(s.velocity);
-    float tail = min(speed * 0.08, s.size * 0.9);
+    float tail = min(speed * 0.08, s.body.x * 0.9);
     float smear = speed * 0.024;
     float2 travel = s.velocity * 0.028;
     if (glass) {
@@ -568,8 +566,8 @@ SpriteOut rainVertex(SpriteIn s, float2 corner) {
     o.coord = float2(corner.x, 1.0 - corner.y);
     o.streak = streak / extent;
     o.radius = pixels / extent * 0.5;
-    o.alpha = s.alpha * min(pixels / 1.5, 1.0);
-    o.soft = s.soft;
+    o.alpha = s.body.y * min(pixels / 1.5, 1.0);
+    o.soft = s.body.z;
     // For a running drop, in place of how far along a hanging one is: the share of it from its head back that is its
     // smear.
     float blur = s.rain.x < 2.5 && tail + smear > 0.0 ? smear / (tail + smear) : s.rain.y;
@@ -735,14 +733,14 @@ float4 rainAt(SpriteOut i, float2 p) {
 // way to where the next frame shows it, so it glides instead of hopping. The sprite sits midway along the smear.
 SpriteOut leafVertex(SpriteIn s, float2 corner) {
     float exposure = 0.024;
-    float pixels = max(s.size * scale, 2.0);
+    float pixels = max(s.body.x * scale, 2.0);
     float2 travel = s.velocity * exposure;
     float extent = pixels + length(travel) * scale;
     float2 middle = (s.position - travel * 0.5 + shake.xy) / viewSize * 2.0 - 1.0;
     SpriteOut o = (SpriteOut)0;
     o.position = float4(middle + (corner - 0.5) * extent * 2.0 / (viewSize * scale), 0.0, 1.0);
     o.coord = float2(corner.x, 1.0 - corner.y);
-    o.streak = travel / max(s.size, 0.001);
+    o.streak = travel / max(s.body.x, 0.001);
     float turnSmear = s.spin.x * exposure;
     float flipSmear = s.spin.y * exposure;
     // Enough moments along the smear that no copy of the leaf stands apart from the next.
@@ -750,9 +748,9 @@ SpriteOut leafVertex(SpriteIn s, float2 corner) {
     o.leaf = float4(s.leaf, clamp(ceil(motion / 1.2), 1.0, 8.0));
     // The last is a pixel, in the leaf's own size.
     o.smear = float4(extent / pixels, turnSmear, flipSmear, 1.0 / pixels);
-    o.alpha = s.alpha;
+    o.alpha = s.body.y;
     o.warm = candlelight(s.position);
-    o.tint = float4(0.0, 0.0, 0.0, s.tintAmount);
+    o.tint = float4(0.0, 0.0, 0.0, s.body.w);
     o.pose = s.pose;
     o.petal = s.petal;
     return o;
@@ -766,10 +764,10 @@ SpriteOut spriteVertex(SpriteIn s) {
     [branch] if (s.rain.x > 0.0) {
         return rainVertex(s, corner);
     }
-    float pixels = s.size * scale;
+    float pixels = s.body.x * scale;
     // About a 1/55 s exposure, capped so even the fastest grain stays a short smear and never reads as rain.
     float2 travel = s.velocity * 0.018;
-    float smear = min(length(travel), s.size * (s.lump > 0.0 ? 1.2 : 2.2));
+    float smear = min(length(travel), s.body.x * (s.lump > 0.0 ? 1.2 : 2.2));
     float2 streak = smear > 0.25 ? normalize(travel) * smear * scale : float2(0.0, 0.0);
     // A lump's ragged edge reaches past its nominal size.
     float reach = s.lump > 0.0 ? 1.3 : 1.0;
@@ -781,22 +779,22 @@ SpriteOut spriteVertex(SpriteIn s) {
     o.streak = streak / extent;
     o.radius = pixels / extent * 0.5;
     // A streak spreads the same flake over more pixels, so each is fainter.
-    o.alpha = s.alpha * min(pixels / 2.0, 1.0) * pixels / max(pixels + length(streak) * 0.6, 0.001);
-    o.soft = s.soft;
-    o.tint = float4(s.tintColor, s.tintAmount);
+    o.alpha = s.body.y * min(pixels / 2.0, 1.0) * pixels / max(pixels + length(streak) * 0.6, 0.001);
+    o.soft = s.body.z;
+    o.tint = float4(s.tintColor, s.body.w);
     o.lump = s.lump;
     o.spin = s.lump > 0.0 ? time * (s.lump - 0.5) * 9.0 + s.lump * 40.0 : 0.0;
     o.warm = candlelight(s.position);
     o.ghost = s.ghost;
     o.pose = s.pose;
-    o.mood = float4(s.mood, s.size, 0.0);
+    o.mood = float4(s.mood, s.body.x, 0.0);
     o.leaf = float4(0.0, 0.0, 0.0, 0.0);
     o.smear = float4(0.0, 0.0, 0.0, 0.0);
     o.rain = float4(0.0, 0.0, 0.0, 0.0);
     o.petal = 0.0;
     if (s.ghost.x > 0.0) {
         o.spin = time + s.ghost.x * 40.0;
-        o.ghost.y = (s.ghost.y - s.position.y) / max(s.size, 0.001);
+        o.ghost.y = (s.ghost.y - s.position.y) / max(s.body.x, 0.001);
     }
     return o;
 }
