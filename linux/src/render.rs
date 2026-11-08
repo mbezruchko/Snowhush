@@ -194,7 +194,7 @@ impl Gpu {
             let pile = program(
                 &gl,
                 PILE_VERTEX,
-                PILE_FRAGMENT,
+                &included(PILE_FRAGMENT),
                 &[
                     "viewSize",
                     "scale",
