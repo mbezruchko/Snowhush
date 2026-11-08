@@ -358,6 +358,8 @@ pub fn track(x: i32, y: i32, entries: Vec<Entry>, light: bool, toggle: &mut dyn 
 
     unsafe {
         show(root, true);
+        // First open cold-starts D2D/Acrylic and Windows leaves AppStarting on this window; put the arrow back.
+        ready_cursor();
         let _ = SetForegroundWindow(root);
         SetCapture(root);
         SetTimer(Some(root), TIMER_POINTER, 50, None);
@@ -386,6 +388,7 @@ pub fn track(x: i32, y: i32, entries: Vec<Entry>, light: bool, toggle: &mut dyn 
         for window in windows.into_iter().rev() {
             let _ = DestroyWindow(window);
         }
+        ready_cursor();
     }
     Ok(CHOSEN.get())
 }
@@ -484,6 +487,15 @@ fn show(window: HWND, root: bool) {
         let _ = SetWindowPos(window, Some(HWND_TOPMOST), 0, 0, 0, 0, flags);
         // The backdrop shows as on an active window, also on a submenu, which never takes the foreground.
         SendMessageW(window, WM_NCACTIVATE, Some(WPARAM(1)), None);
+        ready_cursor();
+    }
+}
+
+fn ready_cursor() {
+    unsafe {
+        if let Ok(arrow) = LoadCursorW(None, IDC_ARROW) {
+            let _ = SetCursor(Some(arrow));
+        }
     }
 }
 
@@ -492,6 +504,11 @@ unsafe extern "system" fn procedure(window: HWND, message: u32, wparam: WPARAM, 
         match message {
             WM_NCACTIVATE => DefWindowProcW(window, message, WPARAM(1), lparam),
             WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
+            // Keep the arrow while the pointer is over the menu; otherwise AppStarting from the first open sticks.
+            WM_SETCURSOR => {
+                ready_cursor();
+                LRESULT(1)
+            }
             WM_ERASEBKGND => LRESULT(1),
             WM_PAINT => {
                 let mut paint = PAINTSTRUCT::default();
