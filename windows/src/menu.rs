@@ -80,6 +80,10 @@ const TINT_DARK: u32 = 0x732C_2C2C;
 const TINT_LIGHT: u32 = 0x80F3_F3F3;
 const CHECK: &str = "\u{E73E}";
 const CHEVRON: &str = "\u{E76C}";
+const HEART: &str = "\u{EB52}";
+/// The site's sponsor heart, and how far the label after it moves over.
+const HEART_COLOR: D2D1_COLOR_F = D2D1_COLOR_F { r: 0.92, g: 0.51, b: 0.51, a: 1.0 };
+const HEART_SPACE: f32 = 22.0;
 
 /// What the menu lists.
 #[derive(Clone)]
@@ -93,6 +97,8 @@ pub enum Entry {
         radio: bool,
         /// Switches an option and leaves the menu open, so several can be changed in one go.
         keep_open: bool,
+        /// Drawn with the sponsor heart ahead of its label.
+        heart: bool,
     },
     /// The title of the group of entries under it.
     Header(String),
@@ -113,11 +119,16 @@ pub enum Entry {
 
 impl Entry {
     pub fn item(id: u32, label: &str, checked: bool, enabled: bool) -> Entry {
-        Entry::Item { id, label: label.to_string(), checked, enabled, radio: false, keep_open: false }
+        Entry::Item { id, label: label.to_string(), checked, enabled, radio: false, keep_open: false, heart: false }
+    }
+
+    /// An item with the sponsor heart ahead of its label.
+    pub fn loved(id: u32, label: &str) -> Entry {
+        Entry::Item { id, label: label.to_string(), checked: false, enabled: true, radio: false, keep_open: false, heart: true }
     }
 
     pub fn toggle(id: u32, label: &str, checked: bool, enabled: bool) -> Entry {
-        Entry::Item { id, label: label.to_string(), checked, enabled, radio: false, keep_open: true }
+        Entry::Item { id, label: label.to_string(), checked, enabled, radio: false, keep_open: true, heart: false }
     }
 
     pub fn header(label: &str) -> Entry {
@@ -125,7 +136,7 @@ impl Entry {
     }
 
     pub fn choice(id: u32, label: &str, chosen: bool) -> Entry {
-        Entry::Item { id, label: label.to_string(), checked: chosen, enabled: true, radio: true, keep_open: false }
+        Entry::Item { id, label: label.to_string(), checked: chosen, enabled: true, radio: true, keep_open: false, heart: false }
     }
 
     pub fn slider(id: u32, at: u32, stops: u32, caption: &str) -> Entry {
@@ -645,10 +656,12 @@ impl Menu {
     /// A panel for `entries`, sized to fit them; its window and place are left to the caller.
     fn panel(&self, entries: Vec<Entry>, from: usize) -> Result<Panel> {
         let mut widest: f32 = 0.0;
-        for label in entries.iter().filter_map(Entry::label) {
+        for entry in &entries {
+            let Some(label) = entry.label() else { continue };
             let mut metrics = DWRITE_TEXT_METRICS::default();
             unsafe { self.layout(label, 10_000.0)?.GetMetrics(&mut metrics)? };
-            widest = widest.max(metrics.widthIncludingTrailingWhitespace);
+            let heart = if matches!(entry, Entry::Item { heart: true, .. }) { HEART_SPACE } else { 0.0 };
+            widest = widest.max(metrics.widthIncludingTrailingWhitespace + heart);
         }
         let mut tops = Vec::with_capacity(entries.len());
         let mut y = PAD;
@@ -1010,6 +1023,7 @@ impl Menu {
                     Entry::Item { label, checked, enabled, radio, .. } => (label.as_str(), *checked, *radio, *enabled),
                     Entry::Submenu { label, .. } => (label.as_str(), false, false, true),
                 };
+                let heart = matches!(entry, Entry::Item { heart: true, .. });
                 if enabled && panel.hover == Some(i) {
                     let rect = D2D_RECT_F { left: PAD, top, right: panel.width - PAD, bottom: top + ROW };
                     target.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect, radiusX: ROW_RADIUS, radiusY: ROW_RADIUS }, &hover);
@@ -1024,8 +1038,15 @@ impl Menu {
                 if entry.is_submenu() {
                     self.glyph(target, CHEVRON, panel.width - PAD - 14.0, top, brush);
                 }
-                let layout = self.layout(label, panel.width - panel.label - TRAILING / 2.0)?;
-                target.DrawTextLayout(Vector2 { X: panel.label, Y: top }, &layout, brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                let shift = if heart {
+                    let red = target.CreateSolidColorBrush(&HEART_COLOR, None)?;
+                    self.glyph(target, HEART, panel.label + 8.0, top, &red);
+                    HEART_SPACE
+                } else {
+                    0.0
+                };
+                let layout = self.layout(label, panel.width - panel.label - shift - TRAILING / 2.0)?;
+                target.DrawTextLayout(Vector2 { X: panel.label + shift, Y: top }, &layout, brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
             }
         }
         Ok(())

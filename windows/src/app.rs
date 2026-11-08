@@ -433,7 +433,7 @@ fn entries(settings: &Settings, login: bool, sliders: bool) -> Vec<Entry> {
     entries.extend([
         Entry::Separator,
         Entry::Submenu { label: "Settings".to_string(), entries: options },
-        Entry::item(ID_SPONSOR, "Support Snowhush", false, true),
+        Entry::loved(ID_SPONSOR, "Support Snowhush"),
         Entry::item(ID_QUIT, "Quit", false, true),
     ]);
     entries
