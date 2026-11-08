@@ -3406,8 +3406,9 @@ final class SnowSimulation {
     }
 
     /// A whole flower is drawn bigger than the petal it stands in for, though it heaps up the same.
+    /// The leaves cut from photos fill less of their sprite than a drawn oval did, and showed too small.
     private func drawnSize(_ size: Float, seed: Float, petal: Bool) -> Float {
-        isFlower(seed, petal: petal) ? size * 2.1 : size
+        isFlower(seed, petal: petal) ? size * 2.1 : petal ? size : size * 1.2
     }
 
     /// How fast a falling leaf turns, a second; a whole flower spins round like a propeller.

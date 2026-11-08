@@ -52,6 +52,8 @@ float hash(vec2 p) {
     return fract(p.x * p.y);
 }
 
+#include "leaves.glsl"
+
 float noise(float x) {
     float i = floor(x);
     float f = fract(x);
@@ -75,12 +77,8 @@ float saturate(float x) {
 
 /// Blush, soft pink, pink or nearly white, a little lighter or darker.
 vec3 petalColor(float seed) {
-    float k = fract(seed * 7.13);
-    vec3 c = k < 0.35 ? vec3(1.0, 0.85, 0.89)
-        : k < 0.7 ? vec3(0.99, 0.76, 0.84)
-        : k < 0.88 ? vec3(0.97, 0.66, 0.78)
-        : vec3(1.0, 0.93, 0.95);
-    return c * (0.94 + 0.08 * fract(seed * 31.7));
+    // A digitized flower's colour half way out along its petals, a little lighter or darker.
+    return PETAL_RINGS[petalTone(seed) * 3 + 1] * (0.94 + 0.08 * fract(seed * 31.7));
 }
 
 /// The tan a fallen petal turns as it withers.
@@ -109,20 +107,40 @@ vec4 litterAt(vec2 point, float petals, float density) {
                 vec2 q = vec2(cos(angle) * d.x + sin(angle) * d.y, -sin(angle) * d.x + cos(angle) * d.y);
                 float size = p ? 3.2 + 1.6 * hash(c + 2.9) : 3.8 + 2.4 * hash(c + 2.9);
                 float t = q.x / size;
-                float inside = (1.0 - t * t) * size * (p ? 0.62 : 0.45) - abs(q.y);
+                float inside = (1.0 - t * t) * size * 0.62 - abs(q.y);
+                // A leaf is one of those cut from photos, in its own colours from the middle out. Most cells' leaves
+                // lie too far off to cover this point: a glance at the distance spares looking their outlines up.
+                int kind = 0;
+                vec2 l = vec2(0.0, 0.0);
+                float reach = 1.0;
+                if (!p) {
+                    inside = -1.0;
+                    if (dot(q, q) < size * size * LEAF_BOUND) {
+                        kind = leafKind(hash(c + 0.5));
+                        l = q / size - vec2(LEAF_FRAME[kind].x, 0.0);
+                        float far = length(l);
+                        if (far < LEAF_EXTENT[kind].x) {
+                            reach = leafReach(kind, atan(l.y, l.x));
+                            inside = (reach - far) * size;
+                        }
+                    }
+                }
                 float z = hash(c + 5.9);
                 if (inside > 0.0 && z > top) {
                     top = z;
                     rim = inside;
                     petal = p;
-                    color = p ? petalColor(hash(c + 0.5)) : leafColor(hash(c + 0.5));
+                    float outward = clamp(length(l) / max(reach, 1e-3), 0.0, 1.0);
+                    vec3 middle = LEAF_RINGS[kind * 3], halfway = LEAF_RINGS[kind * 3 + 1], edge = LEAF_RINGS[kind * 3 + 2];
+                    vec3 leaf = (outward < 0.5 ? mix(middle, halfway, outward * 2.0) : mix(halfway, edge, outward * 2.0 - 1.0)) * (0.86 + 0.26 * fract(hash(c + 0.5) * 31.7));
+                    color = p ? petalColor(hash(c + 0.5)) : leaf;
                     // Petals that have lain a while are withering.
                     if (p && hash(c + 9.1) < 0.35 * wilt) color = mix(color, withered(hash(c + 0.5)), 0.3 + 0.6 * hash(c + 4.4));
                 }
             }
         }
     }
-    return vec4(color * ((petal ? 0.86 : 0.7) + (petal ? 0.14 : 0.3) * smoothstep(0.0, 0.7, rim)), top >= 0.0 ? 1.0 : 0.0);
+    return vec4(color * (petal ? 0.8 + 0.2 * smoothstep(0.0, 0.3, rim) : 0.7 + 0.3 * smoothstep(0.0, 0.7, rim)), top >= 0.0 ? 1.0 : 0.0);
 }
 
 float flicker(float t, float seed) {

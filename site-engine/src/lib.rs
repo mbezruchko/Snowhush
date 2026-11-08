@@ -21,6 +21,7 @@ const SHADERS: [&str; 7] = [
     include_str!("../../linux/src/shaders/glass.frag"),
 ];
 const DROP: &str = include_str!("../../linux/src/shaders/drop.glsl");
+const LEAVES: &str = include_str!("../../linux/src/shaders/leaves.glsl");
 
 pub struct Engine {
     sim: SnowSimulation,
@@ -204,7 +205,7 @@ pub extern "C" fn engine_look(e: *mut Engine) -> u32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn engine_shader(e: *mut Engine, index: u32) -> u32 {
     let engine = engine(e);
-    engine.shader = SHADERS[(index as usize).min(SHADERS.len() - 1)].replace("#include \"drop.glsl\"", DROP);
+    engine.shader = SHADERS[(index as usize).min(SHADERS.len() - 1)].replace("#include \"drop.glsl\"", DROP).replace("#include \"leaves.glsl\"", LEAVES);
     engine.shader.len() as u32
 }
 

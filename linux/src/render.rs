@@ -29,6 +29,7 @@ const GLASS_VERTEX: &str = include_str!("shaders/glass.vert");
 const GLASS_FRAGMENT: &str = include_str!("shaders/glass.frag");
 /// A drop on the glass, as both the sprites and the field draw it, put into each where it is included.
 const DROP: &str = include_str!("shaders/drop.glsl");
+const LEAVES: &str = include_str!("shaders/leaves.glsl");
 /// A quad over the whole surface, drawn with a blend that leaves what is there at the given opacity.
 const FADE_VERTEX: &str = "#version 300 es
 void main() {
@@ -163,7 +164,7 @@ impl Gpu {
         };
         unsafe {
             let adapter = gl.get_parameter_string(glow::RENDERER);
-            let included = |source: &str| source.replace("#include \"drop.glsl\"", DROP);
+            let included = |source: &str| source.replace("#include \"drop.glsl\"", DROP).replace("#include \"leaves.glsl\"", LEAVES);
             let sprite = program(
                 &gl,
                 SPRITE_VERTEX,

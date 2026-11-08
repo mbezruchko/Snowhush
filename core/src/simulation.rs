@@ -2852,9 +2852,19 @@ fn is_flower(petal: bool, seed: f32) -> bool {
     petal && (seed * 23.3).fract() < 0.035
 }
 
+/// How much bigger a leaf is drawn than its size: the leaves cut from photos fill less of their sprite than a drawn
+/// oval did, and showed too small.
+const LEAF_DRAWN: f32 = 1.2;
+
 /// A whole flower is drawn bigger than the petal it stands in for, though it heaps up the same.
 fn drawn_size(petal: bool, size: f32, seed: f32) -> f32 {
-    if is_flower(petal, seed) { size * 2.1 } else { size }
+    if is_flower(petal, seed) {
+        size * 2.1
+    } else if petal {
+        size
+    } else {
+        size * LEAF_DRAWN
+    }
 }
 
 /// How fast a falling leaf turns, a second; a whole flower spins round like a propeller.

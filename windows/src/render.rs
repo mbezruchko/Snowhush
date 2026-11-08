@@ -31,7 +31,8 @@ use snowhush_core::simulation::{COLUMN_WIDTH, PumpkinSprite, SnowSimulation, Spr
 use crate::halloween::{self, SIGN_SCALE};
 use crate::log;
 
-const SHADERS: &str = include_str!("shaders.hlsl");
+// The digitized leaves' tables come first: the shaders draw the leaves from them.
+const SHADERS: &str = concat!(include_str!("leaves.hlsl"), "\n", include_str!("shaders.hlsl"));
 /// How far the cursor's candlelight reaches, in points.
 pub const LANTERN_REACH: f32 = 130.0;
 
