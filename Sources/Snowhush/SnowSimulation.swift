@@ -484,6 +484,7 @@ final class SnowSimulation {
     /// The top of a heap is the lying leaves themselves: the pile shader draws the mass under them only this far down.
     private let leafCover: Float = 2.5
     private var lying: [LyingLeaf] = []
+    private var shownMark = 0
     /// Rain crosses the screen in a second or so, where a flake takes half a minute: far fewer are in sight at once.
     private let rainShare: Float = 0.12
     private let rainGravity: Float = 900
@@ -555,6 +556,9 @@ final class SnowSimulation {
     private let ground: SnowLayer
     private var ledges: [CGWindowID: SnowLayer] = [:]
     private var ledgeList: [SnowLayer] = []
+    /// Where each ledge starts and how many columns it has, laid out flat for finding the one a flake lands in;
+    /// they stay put while the flakes and grains move.
+    private var ledgeSpans: [(x: Float, count: Int)] = []
     private var layers: [SnowLayer]
     private var heldLayers: [SnowLayer] = []
     private var flakes: [Flake] = []
@@ -703,6 +707,7 @@ final class SnowSimulation {
         for ledge in ledgeList where !ledge.carried { confine(ledge) }
         blow(dt: dt)
         skim(dt: dt)
+        ledgeSpans = ledgeList.map { (x: $0.base.x, count: $0.count) }
         advanceFlakes(dt: dt)
         advanceGrains(dt: dt)
         advanceMotes(dt: dt)
@@ -744,8 +749,8 @@ final class SnowSimulation {
 
     func writeSprites(into buffer: UnsafeMutablePointer<Sprite>, capacity: Int) -> Int {
         var count = 0
-        let shown = Set(layers.map(ObjectIdentifier.init))
-        for leaf in lying where count < capacity && shown.contains(ObjectIdentifier(leaf.layer)) {
+        let shown = markShown()
+        for leaf in lying where count < capacity && leaf.layer.shown == shown {
             let layer = leaf.layer
             let ease = 1 - pow(1 - leaf.settled, 3)
             let x = layer.heapX + leaf.x - leaf.slide * (1 - ease)
@@ -1794,8 +1799,11 @@ final class SnowSimulation {
     private func landing(x: Float, from: Float, to: Float) -> (layer: SnowLayer, index: Int)? {
         var hit: (layer: SnowLayer, index: Int)?
         var highest = -Float.greatestFiniteMagnitude
-        for ledge in ledgeList {
-            guard let i = ledge.index(at: x), ledge.visible[i] else { continue }
+        for (k, span) in ledgeSpans.enumerated() {
+            let i = Int(((x - span.x) / columnWidth).rounded(.down))
+            guard i >= 0 && i < span.count else { continue }
+            let ledge = ledgeList[k]
+            guard ledge.visible[i] else { continue }
             let surface = ledge.surface(i)
             // Entering the snow from above the window's edge counts, even if the surface rose this frame.
             if from >= ledge.previousBaseY + ledge.bed[i] && to <= surface && surface > highest {
@@ -3218,10 +3226,10 @@ final class SnowSimulation {
         let share = abs(slideWind) / slideWindMax
         guard share > 0.1 else { return }
         // Of leaves it lifts some of those lying on top, never the mass under them.
-        let shown = Set(layers.map(ObjectIdentifier.init))
+        let shown = markShown()
         for k in lying.indices.reversed() where random.next() < share * dt {
             let leaf = lying[k]
-            guard shown.contains(ObjectIdentifier(leaf.layer)), let i = leaf.layer.index(at: leaf.layer.heapX + leaf.x),
+            guard leaf.layer.shown == shown, let i = leaf.layer.index(at: leaf.layer.heapX + leaf.x),
                   leaf.layer.visible[i], leaf.layer.surface(i) - leaf.layer.base.y < leaf.top + 2 else { continue }
             fly(k, velocity: SIMD2(slideWind * random.range(1.5, 3), random.range(30, 120)))
         }
@@ -3454,15 +3462,22 @@ final class SnowSimulation {
 
     /// Lying leaves fly up when the cursor kicks them or the heap under them comes off, sink with it as it settles,
     /// sink out of sight deep under the leaves that land on them, and wither away while the snow melts.
+    /// Stamps every layer on the screen with a new mark, so a leaf can tell whether its layer is there without a lookup.
+    private func markShown() -> Int {
+        shownMark += 1
+        for layer in layers { layer.shown = shownMark }
+        return shownMark
+    }
+
     private func tendLeaves(dt: Float) {
         guard !lying.isEmpty else { return }
-        let shown = Set(layers.map(ObjectIdentifier.init))
-        let kept = Set(dormant.values.map(ObjectIdentifier.init) + parking.map { ObjectIdentifier($0.ledge) })
+        let shown = markShown()
+        lazy var kept = Set(dormant.values.map(ObjectIdentifier.init) + parking.map { ObjectIdentifier($0.ledge) })
         let speed = simd_length(cursorVelocity)
         for k in lying.indices.reversed() {
             var leaf = lying[k]
             let layer = leaf.layer
-            guard shown.contains(ObjectIdentifier(layer)) else {
+            guard layer.shown == shown else {
                 if !kept.contains(ObjectIdentifier(layer)) { fly(k, velocity: .zero) }
                 continue
             }

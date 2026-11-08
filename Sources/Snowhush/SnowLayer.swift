@@ -143,9 +143,14 @@ final class SnowLayer {
 
     /// What the whole layer is made of.
     var blend: Blend {
-        let total = heights.reduce(0, +)
+        var total: Float = 0, leafTotal: Float = 0, petalTotal: Float = 0
+        for i in heights.indices {
+            total += heights[i]
+            leafTotal += leaves[i]
+            petalTotal += petals[i]
+        }
         guard total > 0 else { return .snow }
-        return Blend(leaves: min(leaves.reduce(0, +) / total, 1), petals: min(petals.reduce(0, +) / total, 1))
+        return Blend(leaves: min(leafTotal / total, 1), petals: min(petalTotal / total, 1))
     }
 
     /// Moves the snow one column along its support and returns the column that slid off the end.
@@ -366,6 +371,7 @@ final class SnowLayer {
                             q[a] *= 1 - part
                         }
                         for pass in 0..<6 {
+                            var shifted = false
                             let forward = (pass % 2 == 0) == forwardFirst
                             for k in 0..<(count - 1) {
                                 let i = forward ? k : count - 2 - k
@@ -377,11 +383,11 @@ final class SnowLayer {
                                 if difference > ahead + 0.01 {
                                     let transfer = min((difference - ahead) * 0.5, h[i])
                                     shift(transfer, from: i, to: i + 1)
-                                    if transfer > 0 { moved = true }
+                                    if transfer > 0 { moved = true; shifted = true }
                                 } else if difference < -behind - 0.01 {
                                     let transfer = min((-difference - behind) * 0.5, h[i + 1])
                                     shift(transfer, from: i + 1, to: i)
-                                    if transfer > 0 { moved = true }
+                                    if transfer > 0 { moved = true; shifted = true }
                                 }
                             }
                             if open {
@@ -390,14 +396,18 @@ final class SnowLayer {
                                     spill(transfer, from: 0)
                                     spilledLeft += transfer
                                     moved = true
+                                    shifted = true
                                 }
                                 if !held[count - 1] && h[count - 1] - outside.right > limit + 0.01 {
                                     let transfer = (h[count - 1] - outside.right - limit) * 0.5
                                     spill(transfer, from: count - 1)
                                     spilledRight += transfer
                                     moved = true
+                                    shifted = true
                                 }
                             }
+                            // Nothing moved, so nothing changed: the passes left would find the same and move nothing.
+                            if !shifted { break }
                         }
                         // Pulls each slope toward its neighbours' average: rounds crests and notches, leaves even slopes alone.
                         for i in 1..<max(1, count - 2) where !(held[i - 1] || held[i] || held[i + 1] || held[i + 2]) {
@@ -440,36 +450,45 @@ final class SnowLayer {
 
     /// Floats `writeSmoothed` writes per column.
     static let rows = 4
+    /// The simulation's mark from when it last found this layer on the screen.
+    var shown = 0
+    /// What `writeSmoothed` writes, worked out before it goes to the GPU.
+    private var makeup: [Float] = []
 
     /// Writes the smoothed snow surface for each column, then the bed under it, the share of it that is leaves and
     /// the share of those that are petals.
     func writeSmoothed(into buffer: UnsafeMutablePointer<Float>) {
         let count = heights.count
+        if makeup.count != Self.rows * count { makeup = Array(repeating: 0, count: Self.rows * count) }
         var empty = true
-        for i in 0..<count {
-            let l = max(i - 1, 0), r = min(i + 1, count - 1)
-            let height = 0.25 * heights[l] + 0.5 * heights[i] + 0.25 * heights[r]
-            let leafy = 0.25 * leaves[l] + 0.5 * leaves[i] + 0.25 * leaves[r]
-            let petal = 0.25 * petals[l] + 0.5 * petals[i] + 0.25 * petals[r]
-            buffer[i] = bed[i] + height
-            buffer[count + i] = bed[i]
-            buffer[2 * count + i] = height > 0 ? min(leafy / height, 1) : -1
-            buffer[3 * count + i] = leafy > 0 ? min(petal / leafy, 1) : 0
-            if height > 0 { empty = false }
-        }
-        // A bare column takes its neighbour's makeup, or the shader would blend a heap's end with snow that isn't there.
-        let shares = buffer + 2 * count, kinds = buffer + 3 * count
-        if empty {
-            for i in 0..<count { shares[i] = 0 }
-            return
-        }
-        for i in 1..<max(count, 1) where shares[i] < 0 && shares[i - 1] >= 0 {
-            shares[i] = shares[i - 1]
-            kinds[i] = kinds[i - 1]
-        }
-        for i in stride(from: count - 2, through: 0, by: -1) where shares[i] < 0 {
-            shares[i] = shares[i + 1]
-            kinds[i] = kinds[i + 1]
+        makeup.withUnsafeMutableBufferPointer { m in
+            let surfaces = m.baseAddress!, beds = surfaces + count, shares = beds + count, kinds = shares + count
+            for i in 0..<count {
+                let l = max(i - 1, 0), r = min(i + 1, count - 1)
+                let height = 0.25 * heights[l] + 0.5 * heights[i] + 0.25 * heights[r]
+                let leafy = 0.25 * leaves[l] + 0.5 * leaves[i] + 0.25 * leaves[r]
+                let petal = 0.25 * petals[l] + 0.5 * petals[i] + 0.25 * petals[r]
+                surfaces[i] = bed[i] + height
+                beds[i] = bed[i]
+                shares[i] = height > 0 ? min(leafy / height, 1) : -1
+                kinds[i] = leafy > 0 ? min(petal / leafy, 1) : 0
+                if height > 0 { empty = false }
+            }
+            // A bare column takes its neighbour's makeup, or the shader would blend a heap's end with snow that isn't there.
+            if empty {
+                for i in 0..<count { shares[i] = 0 }
+            } else {
+                for i in 1..<max(count, 1) where shares[i] < 0 && shares[i - 1] >= 0 {
+                    shares[i] = shares[i - 1]
+                    kinds[i] = kinds[i - 1]
+                }
+                for i in stride(from: count - 2, through: 0, by: -1) where shares[i] < 0 {
+                    shares[i] = shares[i + 1]
+                    kinds[i] = kinds[i + 1]
+                }
+            }
+            // The buffer is write-combined for the GPU: read back it is uncached, and only written in order is it fast.
+            buffer.update(from: surfaces, count: Self.rows * count)
         }
     }
 

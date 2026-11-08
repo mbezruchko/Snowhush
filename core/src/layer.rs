@@ -439,6 +439,7 @@ impl SnowLayer {
         let held = &self.supported;
 
         for pass in 0..6 {
+            let mut shifted = false;
             let forward = (pass % 2 == 0) == forward_first;
             for k in 0..count - 1 {
                 let i = if forward { k } else { count - 2 - k };
@@ -454,12 +455,14 @@ impl SnowLayer {
                     shift(h, p, l, q, transfer, i, i + 1);
                     if transfer > 0.0 {
                         moved = true;
+                        shifted = true;
                     }
                 } else if difference < -behind - 0.01 {
                     let transfer = ((-difference - behind) * 0.5).min(h[i + 1]);
                     shift(h, p, l, q, transfer, i + 1, i);
                     if transfer > 0.0 {
                         moved = true;
+                        shifted = true;
                     }
                 }
             }
@@ -469,13 +472,19 @@ impl SnowLayer {
                     spill(h, p, l, q, transfer, 0);
                     spilled_left += transfer;
                     moved = true;
+                    shifted = true;
                 }
                 if !held[count - 1] && h[count - 1] - outside_right > limit + 0.01 {
                     let transfer = (h[count - 1] - outside_right - limit) * 0.5;
                     spill(h, p, l, q, transfer, count - 1);
                     spilled_right += transfer;
                     moved = true;
+                    shifted = true;
                 }
+            }
+            // Nothing moved, so nothing changed: the passes left would find the same and move nothing.
+            if !shifted {
+                break;
             }
         }
         // Pulls each slope toward its neighbours' average: rounds crests and notches, leaves even slopes alone.
@@ -532,6 +541,9 @@ impl SnowLayer {
     pub fn write_smoothed(&self, buffer: &mut [f32]) {
         let count = self.heights.len();
         let mut empty = true;
+        // Worked out apart: on Windows the buffer is mapped GPU memory, write-combined, and slow to read back.
+        let mut makeup = vec![0.0f32; 2 * count];
+        let (shares, kinds) = makeup.split_at_mut(count);
         for i in 0..count {
             let (l, r) = (i.saturating_sub(1), (i + 1).min(count - 1));
             let height = 0.25 * self.heights[l] + 0.5 * self.heights[i] + 0.25 * self.heights[r];
@@ -539,30 +551,30 @@ impl SnowLayer {
             let petal = 0.25 * self.petals[l] + 0.5 * self.petals[i] + 0.25 * self.petals[r];
             buffer[i] = self.bed[i] + height;
             buffer[count + i] = self.bed[i];
-            buffer[2 * count + i] = if height > 0.0 { (leafy / height).min(1.0) } else { -1.0 };
-            buffer[3 * count + i] = if leafy > 0.0 { (petal / leafy).min(1.0) } else { 0.0 };
+            shares[i] = if height > 0.0 { (leafy / height).min(1.0) } else { -1.0 };
+            kinds[i] = if leafy > 0.0 { (petal / leafy).min(1.0) } else { 0.0 };
             if height > 0.0 {
                 empty = false;
             }
         }
         // A bare column takes its neighbour's makeup, or the shader would blend a heap's end with snow that isn't there.
-        let (shares, kinds) = buffer[2 * count..4 * count].split_at_mut(count);
         if empty {
             shares.fill(0.0);
-            return;
-        }
-        for i in 1..count {
-            if shares[i] < 0.0 && shares[i - 1] >= 0.0 {
-                shares[i] = shares[i - 1];
-                kinds[i] = kinds[i - 1];
+        } else {
+            for i in 1..count {
+                if shares[i] < 0.0 && shares[i - 1] >= 0.0 {
+                    shares[i] = shares[i - 1];
+                    kinds[i] = kinds[i - 1];
+                }
+            }
+            for i in (0..count.saturating_sub(1)).rev() {
+                if shares[i] < 0.0 {
+                    shares[i] = shares[i + 1];
+                    kinds[i] = kinds[i + 1];
+                }
             }
         }
-        for i in (0..count.saturating_sub(1)).rev() {
-            if shares[i] < 0.0 {
-                shares[i] = shares[i + 1];
-                kinds[i] = kinds[i + 1];
-            }
-        }
+        buffer[2 * count..4 * count].copy_from_slice(&makeup);
     }
 
     fn update_bed(&mut self) {
