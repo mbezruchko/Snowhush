@@ -8,12 +8,18 @@ final class MenuDisclosure: NSView {
     var summary = "" {
         didSet { needsDisplay = true }
     }
+    /// Sums the row up as these surfaces' icons instead, which take less room than their names.
+    var summaryIcons: [Surfaces] = [] {
+        didSet { needsDisplay = true }
+    }
     var toggled: () -> Void = {}
     /// Shows the summary unfolded too, as a value the folded row sets.
     var summaryWhileOpen = false
 
     /// Where a title starts in a menu with no checkmarks, as the menu bar menu's own rows have it.
     private static let titleX: CGFloat = MenuToggle.modern ? 15 : 14
+    private static let summaryIcon: CGFloat = 15
+    private static let summaryGap: CGFloat = 5
 
     init() {
         super.init(frame: NSRect(x: 0, y: 0, width: 200, height: MenuToggle.rowHeight))
@@ -77,7 +83,17 @@ final class MenuDisclosure: NSView {
             chevron.draw(in: NSRect(x: right + (12 - size.width) / 2, y: (bounds.height - size.height) / 2, width: size.width, height: size.height))
             right -= 8
         }
-        guard !open || summaryWhileOpen, !summary.isEmpty else { return }
+        guard !open || summaryWhileOpen else { return }
+        if !summaryIcons.isEmpty {
+            let side = Self.summaryIcon
+            for surface in summaryIcons.reversed() {
+                right -= side
+                SurfacePicker.drawIcon(surface, in: NSRect(x: right, y: (bounds.height - side) / 2, width: side, height: side), color: soft, pointSize: 12)
+                right -= Self.summaryGap
+            }
+            return
+        }
+        guard !summary.isEmpty else { return }
         let trailing = NSAttributedString(string: summary, attributes: [.font: font, .foregroundColor: soft])
         let width = trailing.size().width
         trailing.draw(at: NSPoint(x: max(right - width, Self.titleX + title.size().width + 12), y: (bounds.height - trailing.size().height) / 2))
@@ -87,12 +103,14 @@ final class MenuDisclosure: NSView {
     /// that row folds out: a menu sizes itself to its rows' views.
     func fit(_ title: String, least: CGFloat) {
         let font = NSFont.menuFont(ofSize: 0)
-        let width = [title, summary].map { NSAttributedString(string: $0, attributes: [.font: font]).size().width }.reduce(0, +)
+        let words = summaryIcons.isEmpty ? [title, summary] : [title]
+        let icons = summaryIcons.isEmpty ? 0 : CGFloat(summaryIcons.count) * (Self.summaryIcon + Self.summaryGap)
+        let width = words.map { NSAttributedString(string: $0, attributes: [.font: font]).size().width }.reduce(icons, +)
         setFrameSize(NSSize(width: max(200, least, ceil(Self.titleX + width + 56)), height: frame.height))
     }
 }
 
-/// A row of icons, each over its name, that switch what snow settles on; lit in the accent colour while on. The menu
+/// A row of icons, each over its name, that switch what snow settles on; bright while on, faint while off. The menu
 /// stays open, so several can be switched in one go.
 final class SurfacePicker: NSView {
     /// What can be switched, in the order shown.
@@ -183,7 +201,7 @@ final class SurfacePicker: NSView {
                 NSBezierPath(roundedRect: tile.insetBy(dx: 2, dy: 0), xRadius: MenuToggle.highlightRadius, yRadius: MenuToggle.highlightRadius).fill()
             }
             let lit = on.contains(surface)
-            let color: NSColor = lit ? .controlAccentColor : .tertiaryLabelColor
+            let color: NSColor = lit ? .labelColor : .tertiaryLabelColor
             let box = NSRect(x: tile.midX - Self.icon / 2, y: tile.minY + 6, width: Self.icon, height: Self.icon)
             Self.drawIcon(surface, in: box, color: color)
             let name = NSAttributedString(string: Self.name(of: surface), attributes: [.font: font, .foregroundColor: lit ? NSColor.labelColor : .secondaryLabelColor])
@@ -201,30 +219,34 @@ final class SurfacePicker: NSView {
         }
     }
 
-    private static func drawIcon(_ surface: Surfaces, in box: NSRect, color: NSColor) {
+    static func drawIcon(_ surface: Surfaces, in box: NSRect, color: NSColor, pointSize: CGFloat = 18) {
         guard surface == .ground else {
             let symbol = surface == .dock ? "dock.rectangle" : surface == .widgets ? "widget.small" : "macwindow"
             guard let image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
-                .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 17, weight: .regular).applying(.init(paletteColors: [color])))
+                .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: pointSize, weight: .medium).applying(.init(paletteColors: [color])))
             else { return }
             let size = image.size
             image.draw(in: NSRect(x: box.midX - size.width / 2, y: box.midY - size.height / 2, width: size.width, height: size.height))
             return
         }
-        // A drift on the ground: no symbol shows one.
-        let base = box.maxY - 3
+        // A drift on the ground: no symbol shows one. Drawn for a 20 pt box and scaled to this one. A symbol drawn in a
+        // see-through colour comes out with that colour's alpha applied twice, so the drift takes it twice too to match.
+        let k = box.width / 20
+        let alpha = color.usingColorSpace(.deviceRGB)?.alphaComponent ?? 1
+        let ink = color.withAlphaComponent(alpha * alpha)
+        let base = box.maxY - 3 * k
         let mound = NSBezierPath()
-        mound.move(to: NSPoint(x: box.minX + 2, y: base))
-        mound.curve(to: NSPoint(x: box.maxX - 2, y: base), controlPoint1: NSPoint(x: box.minX + 4, y: base - 9), controlPoint2: NSPoint(x: box.maxX - 4, y: base - 9))
-        color.withAlphaComponent(color.alphaComponent * 0.3).setFill()
+        mound.move(to: NSPoint(x: box.minX + 2 * k, y: base))
+        mound.curve(to: NSPoint(x: box.maxX - 2 * k, y: base), controlPoint1: NSPoint(x: box.minX + 4 * k, y: base - 9 * k), controlPoint2: NSPoint(x: box.maxX - 4 * k, y: base - 9 * k))
+        ink.withAlphaComponent(alpha * alpha * 0.3).setFill()
         mound.fill()
-        color.setStroke()
-        mound.lineWidth = 1.4
+        ink.setStroke()
+        mound.lineWidth = 1.7 * k
         mound.stroke()
         let line = NSBezierPath()
         line.move(to: NSPoint(x: box.minX, y: base))
         line.line(to: NSPoint(x: box.maxX, y: base))
-        line.lineWidth = 1.4
+        line.lineWidth = 1.7 * k
         line.lineCapStyle = .round
         line.stroke()
     }

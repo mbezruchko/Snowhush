@@ -420,6 +420,7 @@ fn entries(settings: &Settings, login: bool, sliders: bool) -> Vec<Entry> {
                 id: ID_OPACITY_FOLD,
                 label: tr("opacity").to_string(),
                 summary: format!("{}%", settings.opacity),
+                icons: Vec::new(),
                 open: OPACITY_OPEN.get(),
                 keeps_summary: true,
             },
@@ -462,18 +463,19 @@ fn accumulate(settings: &Settings, heaps: bool, drawn: bool) -> Vec<Entry> {
         let entries = surfaces.iter().map(|&(id, _, label, on)| Entry::item(id, label, on, true)).collect();
         return vec![Entry::Submenu { label: tr("accumulate").to_string(), entries }];
     }
-    let on: Vec<&str> = surfaces.iter().filter(|surface| surface.3).map(|surface| surface.2).collect();
-    let summary = if on.len() == surfaces.len() {
-        tr("all").to_string()
+    let on: Vec<Icon> = surfaces.iter().filter(|surface| surface.3).map(|surface| surface.1).collect();
+    // Some on, the row shows their icons rather than their names, which would widen the menu.
+    let (summary, icons) = if on.len() == surfaces.len() {
+        (tr("all").to_string(), Vec::new())
     } else if on.is_empty() {
-        tr("off").to_string()
+        (tr("off").to_string(), Vec::new())
     } else {
-        on.join(", ")
+        (String::new(), on)
     };
     let open = ACCUMULATE_OPEN.get();
     let tiles = surfaces.into_iter().map(|(id, icon, label, on)| Tile { id, icon, label: label.to_string(), on }).collect();
     vec![
-        Entry::Disclosure { id: ID_ACCUMULATE, label: tr("accumulate").to_string(), summary, open, keeps_summary: false },
+        Entry::Disclosure { id: ID_ACCUMULATE, label: tr("accumulate").to_string(), summary, icons, open, keeps_summary: false },
         Entry::Icons { tiles, shown: open },
     ]
 }

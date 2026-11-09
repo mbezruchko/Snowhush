@@ -269,7 +269,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         if surfacePicker.choices != choices { surfacePicker.choices = choices }
         surfacePicker.on = surfaces
         let lit = choices.filter(surfaces.contains)
-        accumulateRow.summary = lit.count == choices.count ? tr("all") : lit.isEmpty ? tr("off") : lit.map(SurfacePicker.name).joined(separator: ", ")
+        let every = lit.count == choices.count
+        accumulateRow.summary = every ? tr("all") : lit.isEmpty ? tr("off") : ""
+        accumulateRow.summaryIcons = every || lit.isEmpty ? [] : lit
         // Unfolded, the summary isn't shown: the menu keeps its width while the icons are switched.
         if !accumulateRow.open { accumulateRow.fit(accumulateItem.title, least: surfacePicker.frame.width) }
         meltItem.state = thaws ? .on : .off

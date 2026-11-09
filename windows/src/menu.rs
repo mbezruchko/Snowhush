@@ -41,7 +41,7 @@ use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture, VK_DOWN, VK_ESCAPE, VK_LEFT, VK_RETURN, VK_RIGHT, VK_SPACE, VK_UP};
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{BOOL, PCWSTR, Result, s, w};
-use windows_numerics::Vector2;
+use windows_numerics::{Matrix3x2, Vector2};
 
 use crate::log;
 use crate::tracker;
@@ -77,6 +77,9 @@ const SLIDER_WIDTH: f32 = 240.0;
 const ICONS: f32 = 56.0;
 const TILE_WIDTH: f32 = 72.0;
 const ICON: f32 = 20.0;
+/// An icon summing up a folded row, and the room between two.
+const SUMMARY_ICON: f32 = 15.0;
+const SUMMARY_GAP: f32 = 5.0;
 const TEXT_SIZE: f32 = 14.0;
 const GLYPH_SIZE: f32 = 12.0;
 const HEADER_SIZE: f32 = 12.0;
@@ -125,11 +128,12 @@ pub enum Entry {
         entries: Vec<Entry>,
     },
     /// Folds the row under it out or away, leaving the menu open; folded, `summary` trails it, and unfolded too with
-    /// `keeps_summary`, for a value the row sets.
+    /// `keeps_summary`, for a value the row sets. With `icons`, those trail it instead: less room than their names.
     Disclosure {
         id: u32,
         label: String,
         summary: String,
+        icons: Vec<Icon>,
         open: bool,
         keeps_summary: bool,
     },
@@ -745,6 +749,7 @@ impl Menu {
             unsafe { self.layout(label, 10_000.0)?.GetMetrics(&mut metrics)? };
             let heart = if matches!(entry, Entry::Item { heart: true, .. }) { HEART_SPACE } else { 0.0 };
             let summary = match entry {
+                Entry::Disclosure { icons, .. } if !icons.is_empty() => icons.len() as f32 * (SUMMARY_ICON + SUMMARY_GAP) + 16.0,
                 Entry::Disclosure { summary, .. } => {
                     let mut trailing = DWRITE_TEXT_METRICS::default();
                     unsafe { self.layout(summary, 10_000.0)?.GetMetrics(&mut trailing)? };
@@ -1194,7 +1199,7 @@ impl Menu {
                         }
                         continue;
                     }
-                    Entry::Disclosure { label, summary, open, keeps_summary, .. } => {
+                    Entry::Disclosure { label, summary, icons, open, keeps_summary, .. } => {
                         if panel.hover == Some(i) {
                             let rect = D2D_RECT_F { left: PAD, top, right: panel.width - PAD, bottom: top + ROW };
                             target.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect, radiusX: ROW_RADIUS, radiusY: ROW_RADIUS }, &hover);
@@ -1202,7 +1207,19 @@ impl Menu {
                         self.glyph(target, if *open { CHEVRON_DOWN } else { CHEVRON }, panel.width - PAD - 14.0, top, &ink);
                         let layout = self.layout(label, panel.width - panel.label - TRAILING / 2.0)?;
                         target.DrawTextLayout(Vector2 { X: panel.label, Y: top }, &layout, &ink, D2D1_DRAW_TEXT_OPTIONS_NONE);
-                        if !*open || *keeps_summary {
+                        if !*open && !icons.is_empty() {
+                            let soft = target.CreateSolidColorBrush(&palette.soft, None)?;
+                            let scale = SUMMARY_ICON / ICON;
+                            let mut right = panel.width - PAD - 28.0;
+                            for &icon in icons.iter().rev() {
+                                let x = right - SUMMARY_ICON / 2.0;
+                                let y = top + ROW / 2.0;
+                                target.SetTransform(&Matrix3x2 { M11: scale, M12: 0.0, M21: 0.0, M22: scale, M31: x * (1.0 - scale), M32: y * (1.0 - scale) });
+                                self.icon(target, icon, x, y - ICON / 2.0, &soft)?;
+                                right -= SUMMARY_ICON + SUMMARY_GAP;
+                            }
+                            target.SetTransform(&Matrix3x2::identity());
+                        } else if !*open || *keeps_summary {
                             let soft = target.CreateSolidColorBrush(&palette.soft, None)?;
                             let layout = self.layout(summary, panel.width - panel.label - PAD - 28.0)?;
                             layout.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING)?;
@@ -1242,13 +1259,12 @@ impl Menu {
         Ok(())
     }
 
-    /// A row of icons, entry `i` of the panel: lit in the accent while on, each over its label.
+    /// A row of icons, entry `i` of the panel: bright while on, faint while off, each over its label.
     fn icons(&self, target: &ID2D1RenderTarget, panel: &Panel, i: usize, tiles: &[Tile]) -> Result<()> {
         let palette = self.palette;
         let top = panel.tops[i];
         let width = (panel.width - 2.0 * PAD) / tiles.len() as f32;
         unsafe {
-            let accent = target.CreateSolidColorBrush(&palette.accent, None)?;
             let ink = target.CreateSolidColorBrush(&palette.ink, None)?;
             let dim = target.CreateSolidColorBrush(&palette.dim, None)?;
             let hover = target.CreateSolidColorBrush(&palette.hover, None)?;
@@ -1259,7 +1275,7 @@ impl Menu {
                     target.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect, radiusX: ROW_RADIUS, radiusY: ROW_RADIUS }, &hover);
                 }
                 let center = left + width / 2.0;
-                self.icon(target, tile.icon, center, top + 8.0, if tile.on { &accent } else { &dim })?;
+                self.icon(target, tile.icon, center, top + 8.0, if tile.on { &ink } else { &dim })?;
                 let units: Vec<u16> = tile.label.encode_utf16().collect();
                 let layout = self.write.CreateTextLayout(&units, &self.caption, width, 16.0)?;
                 target.DrawTextLayout(

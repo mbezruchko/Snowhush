@@ -1703,7 +1703,22 @@
     requestAnimationFrame(frame);
   }
 
+  // The demo menu keeps the room it takes with every row shown and unfolded, so unfolding a row or switching the
+  // mode never resizes its section, which would move the drift and everything below.
+  function reserveMenuRoom() {
+    for (const demo of document.querySelectorAll('.menu-demo')) {
+      const folded = [...demo.querySelectorAll('[data-fold]')].map(fold => document.getElementById(fold.getAttribute('aria-controls')));
+      const hidden = [...folded, ...demo.querySelectorAll('.menu-item')].filter(element => element.hidden);
+      for (const element of hidden) element.hidden = false;
+      demo.style.minHeight = '';
+      const height = demo.offsetHeight;
+      for (const element of hidden) element.hidden = true;
+      demo.style.minHeight = `${height}px`;
+    }
+  }
+
   function measureAll() {
+    reserveMenuRoom();
     for (const scene of scenes) scene.measure();
   }
 
@@ -2052,8 +2067,13 @@
     }
     const tiles = [...document.querySelectorAll('[data-snow-menu] .menu-tile')].filter(tile => !tile.hidden);
     const lit = tiles.filter(tile => settings[tile.dataset.toggle]);
-    const summary = lit.length === tiles.length ? 'All' : lit.length ? lit.map(tile => tile.textContent).join(', ') : 'Off';
-    for (const element of document.querySelectorAll('[data-snow-menu] [data-summary]')) element.textContent = summary;
+    // Some on, the row shows their icons rather than their names, which would widen the menu.
+    const words = lit.length === tiles.length ? 'All' : lit.length ? null : 'Off';
+    for (const element of document.querySelectorAll('[data-snow-menu] [data-summary]')) {
+      if (words) element.textContent = words;
+      else element.replaceChildren(...lit.map(tile => tile.querySelector('svg').cloneNode(true)));
+      element.setAttribute('aria-label', words ?? lit.map(tile => tile.textContent).join(', '));
+    }
   }
 
   addEventListener('pointermove', event => { pointer = { x: event.clientX, y: event.clientY }; }, { passive: true });

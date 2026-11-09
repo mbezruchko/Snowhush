@@ -282,8 +282,11 @@ body.snow-behind canvas.snow { z-index: 1; }
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  background: oklch(0.34 0.012 60);
+  background: oklch(0.6 0.15 27);
+  box-shadow: inset 0 0 0 0.5px oklch(0.05 0.01 60 / 0.3);
 }
+.window-dots span:nth-child(2) { background: oklch(0.74 0.13 78); }
+.window-dots span:nth-child(3) { background: oklch(0.66 0.14 145); }
 .window h2 { margin: 0; font-size: clamp(48px, 6vw, 96px); }
 .window .body {
   max-width: 36em;
@@ -383,13 +386,15 @@ a.menu-item { text-decoration: none; }
 .menu-fold[aria-expanded="true"]::after { transform: translateY(-2px) rotate(135deg); }
 .menu-fold[aria-expanded="true"] [data-summary] { visibility: hidden; }
 .menu-fold [data-summary], .menu-fold [data-value] { margin-left: auto; }
+.menu-fold [data-summary] { display: flex; gap: 5px; align-items: center; }
+.menu-fold [data-summary] svg { width: 15px; height: 15px; }
 .menu-slider[hidden] { display: none; }
 .menu-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); gap: 2px; padding: 2px 4px 6px; }
 .menu-tiles[hidden] { display: none; }
 .menu-tile { flex-direction: column; justify-content: center; gap: 6px; height: 54px; padding: 0; font-size: 12px; }
 .menu-tile[aria-checked="true"]::before { content: none; }
 .menu-tile svg { width: 22px; height: 22px; color: oklch(0.55 0.012 75); }
-.menu-tile[aria-checked="true"] svg { color: oklch(0.78 0.12 65); }
+.menu-tile[aria-checked="true"] svg { color: inherit; }
 .menu-tile[aria-checked="false"] span { color: oklch(0.66 0.015 75); }
 .menu-tile[hidden] { display: none; }
 .menu-group { position: relative; }
@@ -672,10 +677,10 @@ a.menu-item { text-decoration: none; }
           </div>
           <button class="menu-item menu-fold" type="button" role="menuitem" aria-expanded="false" aria-controls="menu-surfaces" data-fold><span>Accumulate</span><span class="menu-key" data-summary>All</span></button>
           <div class="menu-tiles" id="menu-surfaces" role="group" aria-label="Accumulate" hidden>
-            <button class="menu-item menu-tile" type="button" role="menuitemcheckbox" data-toggle="widgets" aria-checked="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="8" height="8" rx="2.4"/><rect x="13" y="3" width="8" height="8" rx="2.4"/><rect x="3" y="13" width="18" height="8" rx="2.4"/></svg><span>Widgets</span></button>
-            <button class="menu-item menu-tile" type="button" role="menuitemcheckbox" data-toggle="windows" aria-checked="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="2.5" y="4" width="19" height="16" rx="3"/><path d="M2.5 8.5h19"/><circle cx="5.6" cy="6.3" r=".8" fill="currentColor"/><circle cx="8" cy="6.3" r=".8" fill="currentColor"/></svg><span>Windows</span></button>
-            <button class="menu-item menu-tile" type="button" role="menuitemcheckbox" data-toggle="dock" aria-checked="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="2.5" y="4" width="19" height="16" rx="3.5"/><rect x="6" y="14.5" width="12" height="2.6" rx="1.3" fill="currentColor" stroke="none"/></svg><span>Dock</span></button>
-            <button class="menu-item menu-tile" type="button" role="menuitemcheckbox" data-toggle="ground" aria-checked="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M4.5 19c1.2-3.6 3.8-5.4 7.5-5.4s6.3 1.8 7.5 5.4" fill="currentColor" fill-opacity=".25"/><path d="M3 19h18"/></svg><span>Ground</span></button>
+            <button class="menu-item menu-tile" type="button" role="menuitemcheckbox" data-toggle="widgets" aria-checked="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><rect x="3.5" y="3.5" width="17" height="17" rx="4"/><rect x="7" y="7" width="4.5" height="4.5" rx="1.2" fill="currentColor" stroke="none"/><path d="M7.5 16.5h9"/></svg><span>Widgets</span></button>
+            <button class="menu-item menu-tile" type="button" role="menuitemcheckbox" data-toggle="windows" aria-checked="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><rect x="2.5" y="4" width="19" height="16" rx="3"/><path d="M2.5 8.5h19"/><circle cx="5.6" cy="6.3" r=".8" fill="currentColor"/><circle cx="8" cy="6.3" r=".8" fill="currentColor"/></svg><span>Windows</span></button>
+            <button class="menu-item menu-tile" type="button" role="menuitemcheckbox" data-toggle="dock" aria-checked="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><rect x="2.5" y="4" width="19" height="16" rx="3.5"/><rect x="6" y="14.5" width="12" height="2.6" rx="1.3" fill="currentColor" stroke="none"/></svg><span>Dock</span></button>
+            <button class="menu-item menu-tile" type="button" role="menuitemcheckbox" data-toggle="ground" aria-checked="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M4.5 19c1.2-3.6 3.8-5.4 7.5-5.4s6.3 1.8 7.5 5.4" fill="currentColor" fill-opacity=".25"/><path d="M3 19h18"/></svg><span>Ground</span></button>
           </div>
           <div class="menu-group" role="none">
             <button class="menu-item" type="button" role="menuitem" aria-haspopup="menu" aria-expanded="false" aria-controls="menu-mode">Mode</button>
