@@ -9,7 +9,8 @@ final class ScreenSnow {
     let simulation: SnowSimulation
     private let view: MTKView
     private let renderer: Renderer
-    private let tracker = WindowTracker()
+    private let tracker: WindowTracker
+    private let displays: Displays
     private let light = SceneLight()
     private(set) var screen: NSScreen
     /// Awake and showing; at rest with nothing to draw, the view may still be paused.
@@ -89,7 +90,7 @@ final class ScreenSnow {
         set { simulation.modes = newValue }
     }
 
-    init?(screen: NSScreen, device: MTLDevice, snowOnWindows: @escaping () -> Bool) {
+    init?(screen: NSScreen, device: MTLDevice, displays: Displays, snowOnWindows: @escaping () -> Bool) {
         guard let displayID = screen.displayID else { return nil }
         let simulation = SnowSimulation(
             width: Float(screen.frame.width),
@@ -107,6 +108,8 @@ final class ScreenSnow {
             return nil
         }
         self.displayID = displayID
+        self.displays = displays
+        tracker = WindowTracker(displays: displays)
         self.screen = screen
         self.simulation = simulation
         self.renderer = renderer
@@ -133,9 +136,14 @@ final class ScreenSnow {
             window.notificationLevel = onWindows ? tracker.notificationLevel : nil
             watchForFullScreen(now: now, tracked: onWindows)
             guard onWindows else { return nil }
+            for (id, display) in update?.handed ?? [:] { displays.hand(id, from: self, to: display) }
             simulation.windowFrames = tracker.covers.map { SIMD4(Float($0.minX), Float($0.minY), Float($0.maxX), Float($0.maxY)) }
             return update
         }
+        renderer.borrowedSnow = { [unowned self] in
+            snowOnWindows() ? displays.borrowed(by: self) : []
+        }
+        renderer.stepped = { [unowned self] in displays.pass(from: self) }
         renderer.sceneLight = { [unowned self] now in
             light.update(screen: self.screen, now: now)
             return (light.light, light.shadowTint, light.rim, light.lantern)
@@ -429,6 +437,8 @@ final class ScreenSnow {
             left: !others.contains { abs($0.maxX - frame.minX) < 1 },
             right: !others.contains { abs($0.minX - frame.maxX) < 1 }
         )
+        simulation.openSides = (!simulation.walls.left, !simulation.walls.right)
+        simulation.neighbours = displays.spanning ? simulation.openSides : (false, false)
     }
 
     private static func makeView(device: MTLDevice, size: CGSize) -> MTKView {
