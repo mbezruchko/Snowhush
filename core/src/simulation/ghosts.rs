@@ -5,10 +5,10 @@
 
 use std::f32::consts::{PI, TAU};
 
-use super::{Grain, MAX_GRAINS, MAX_MOTES, Mote, SignSprite, SnowSimulation, Sprite, WindowId};
+use super::{Grain, MAX_GRAINS, MAX_MOTES, Mode, Mote, SignSprite, SnowSimulation, Sprite, WindowId};
 use crate::geometry::{V2, smoothstep};
 use crate::halloween::SIGN_CAPTIONS;
-use crate::layer::SnowLayer;
+use crate::layer::{Blend, SnowLayer};
 
 #[derive(Clone, Copy, PartialEq)]
 enum Stage {
@@ -302,7 +302,7 @@ impl SnowSimulation {
         self.throw_snowballs(dt);
         self.let_go(dt);
         let clock = self.air.clock;
-        if self.haunting.on && self.air.gust.is_none() && clock >= self.haunting.next_ghost {
+        if self.haunting.on && self.air.gust.is_none() && self.next_mode.is_none() && clock >= self.haunting.next_ghost {
             let wait = if self.haunting.ghosts.len() >= 3 || self.raise_ghost() { self.air.random.range(20.0, 40.0) } else { 5.0 };
             self.haunting.next_ghost = clock + wait as f64;
         }
@@ -790,6 +790,9 @@ impl SnowSimulation {
                 size: random.range(2.4, 4.4),
                 lump: 0.0,
                 blown: false,
+                seed: random.range(0.001, 1.0),
+                bulk: false,
+                kind: Mode::Snow,
             };
             self.haunting.clinging.push((grain, 0.5 + (1.0 - out) * 1.6 + random.range(0.0, 0.4)));
         }
@@ -807,6 +810,9 @@ impl SnowSimulation {
                 size: random.range(1.4, 3.2),
                 lump: 0.0,
                 blown: false,
+                seed: random.range(0.001, 1.0),
+                bulk: false,
+                kind: Mode::Snow,
             };
             self.air.grains.push(grain);
         }
@@ -896,11 +902,14 @@ impl SnowSimulation {
                 size: random.range(1.2, 2.6),
                 lump: 0.0,
                 blown: false,
+                seed: random.range(0.001, 1.0),
+                bulk: false,
+                kind: Mode::Snow,
             };
             self.air.grains.push(grain);
         }
         if left > 0.0 {
-            self.layers[li].deposit(left, center.x, true);
+            self.layers[li].deposit(left, center.x, true, Blend::SNOW);
         }
         for _ in 0..(if scared { 10 } else { 5 }) {
             if self.air.motes.len() >= MAX_MOTES {
@@ -942,14 +951,13 @@ impl SnowSimulation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::simulation::Snowfall;
 
     const DT: f32 = 1.0 / 60.0;
     const AWAY: V2 = V2::new(-10_000.0, -10_000.0);
 
     /// A haunted screen with a deep, even drift and no snowfall to muddle it.
     fn haunted() -> SnowSimulation {
-        let mut simulation = SnowSimulation::new(1200.0, 800.0, Snowfall::Off);
+        let mut simulation = SnowSimulation::new(1200.0, 800.0, 0.0);
         for i in 0..simulation.layers[0].count() {
             simulation.layers[0].set(i, 20.0);
         }
@@ -1053,7 +1061,7 @@ mod tests {
 
     #[test]
     fn haunting_for_a_while_stays_sound() {
-        let mut simulation = SnowSimulation::new(1200.0, 800.0, Snowfall::Heavy);
+        let mut simulation = SnowSimulation::new(1200.0, 800.0, 0.75);
         for i in 0..simulation.layers[0].count() {
             simulation.layers[0].set(i, 25.0);
         }

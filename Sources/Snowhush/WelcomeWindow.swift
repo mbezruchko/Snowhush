@@ -258,7 +258,7 @@ private final class WelcomeView: NSView {
             ]
         ))
 
-        let body = NSTextField(wrappingLabelWithString: "Snowhush lives in the menu bar. Click the snowflake to change the snowfall, let the drift melt, or keep the snow behind your windows. Sweep it aside with your cursor.")
+        let body = NSTextField(wrappingLabelWithString: tr("welcome.mac"))
         body.attributedStringValue = NSAttributedString(string: body.stringValue, attributes: [
             .font: NSFont.systemFont(ofSize: 13.5),
             .foregroundColor: muted,
@@ -311,13 +311,13 @@ private final class GetStartedButton: NSButton {
 
     init() {
         super.init(frame: .zero)
-        title = "Get Started"
+        title = tr("welcome.start")
         isBordered = false
         keyEquivalent = "\r"
         focusRingType = .none
         translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([widthAnchor.constraint(equalToConstant: 190), heightAnchor.constraint(equalToConstant: 44)])
-        setAccessibilityLabel("Get Started")
+        setAccessibilityLabel(tr("welcome.start"))
     }
 
     required init?(coder: NSCoder) { nil }
@@ -326,7 +326,7 @@ private final class GetStartedButton: NSButton {
         let shape = NSBezierPath(roundedRect: bounds, xRadius: 2, yRadius: 2)
         (isHighlighted ? fill.blended(withFraction: 0.12, of: .black) ?? fill : fill).setFill()
         shape.fill()
-        let text = NSAttributedString(string: "GET STARTED", attributes: [
+        let text = NSAttributedString(string: tr("welcome.start").localizedUppercase, attributes: [
             .font: NSFont.systemFont(ofSize: 12.5, weight: .semibold),
             .foregroundColor: label,
             .kern: 1.8,

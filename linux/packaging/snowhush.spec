@@ -5,7 +5,7 @@ Name:           snowhush
 Version:        %{snowhush_version}
 Release:        1
 Summary:        Snow on your Wayland desktop
-License:        MIT
+License:        PolyForm-Noncommercial-1.0.0
 URL:            https://github.com/mbezruchko/Snowhush
 ExclusiveArch:  x86_64
 # Loaded while running, so the automatic requirements miss it.

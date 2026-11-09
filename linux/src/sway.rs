@@ -20,6 +20,7 @@ const GET_WORKSPACES: u32 = 1;
 const SUBSCRIBE: u32 = 2;
 const GET_OUTPUTS: u32 = 3;
 const GET_TREE: u32 = 4;
+const WINDOW_EVENT: u32 = 0x8000_0003;
 /// How often the tree is asked for while nothing moves, to notice a floating window starting to.
 const CALM: Duration = Duration::from_millis(100);
 const MOVING: Duration = Duration::from_millis(16);
@@ -93,7 +94,10 @@ pub fn start(shared: Arc<Shared>) -> Result<(), String> {
     std::thread::Builder::new()
         .name("sway events".into())
         .spawn(move || {
-            while receive(&mut events).is_ok() {
+            while let Ok((kind, payload)) = receive(&mut events) {
+                if moves_nothing(kind, &payload) {
+                    continue;
+                }
                 if changed.send(()).is_err() {
                     return;
                 }
@@ -240,6 +244,15 @@ fn message(stream: &mut UnixStream, kind: u32, payload: &[u8]) -> Result<(), Str
     frame.extend(kind.to_ne_bytes());
     frame.extend(payload);
     stream.write_all(&frame).map_err(|error| error.to_string())
+}
+
+/// A window's new title, mark or urgency moves nothing, and terminals and browsers retitle themselves all the time.
+fn moves_nothing(kind: u32, payload: &[u8]) -> bool {
+    #[derive(Deserialize)]
+    struct Event {
+        change: String,
+    }
+    kind == WINDOW_EVENT && serde_json::from_slice::<Event>(payload).is_ok_and(|event| matches!(event.change.as_str(), "title" | "mark" | "urgent"))
 }
 
 fn receive(stream: &mut UnixStream) -> Result<(u32, Vec<u8>), String> {

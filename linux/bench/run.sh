@@ -8,11 +8,14 @@
 #   linux/bench/run.sh kwin    the KWin script reports windows, and goes quiet once the app is killed
 #   linux/bench/run.sh side    window snow across two displays side by side, in Sway
 #   linux/bench/run.sh stacked the same with one display under the other
+#
+# Settings for the app can follow the scene, as lines of its settings file: run.sh sway autumn=1
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
-scene=${1:?usage: run.sh sway|niri|kwin|side|stacked}
+scene=${1:?usage: run.sh sway|niri|kwin|side|stacked [setting=value…]}
+shift
 out=$here/out/$scene
 rm -rf "$out"
 mkdir -p "$out"
@@ -25,5 +28,5 @@ docker run --rm -v "$root:/src:ro" -v snowhush-bench-target:/target -v snowhush-
     bash -c "apt-get update -qq && apt-get install -y -qq libwayland-dev >/dev/null && cargo build --release --locked -q"
 echo "Running ${scene}…"
 docker run --rm -v "$here:/bench:ro" -v "$out:/out" -v snowhush-bench-target:/target:ro --user tester snowhush-bench \
-    dbus-run-session /bench/scene.sh "$scene"
+    dbus-run-session /bench/scene.sh "$scene" "$@"
 cat "$out/trace"

@@ -15,14 +15,23 @@ let probeAt = 0;
 // unanswered in a row the app is taken to be gone, as after a crash, which leaves this script loaded:
 // it then tries only every half a minute, so a dead app doesn't fill the journal with failed calls,
 // and picks up again if the app was only stalled.
-function sender(method, payload) {
+// Calls go out at most every `gap` milliseconds, the latest change last, where KWin has timers.
+function sender(method, payload, gap) {
     let busy = false;
     let dirty = false;
     let sentAt = 0;
+    const later = gap > 0 ? timer(function () { send(); }) : null;
     function send() {
         const now = Date.now();
         if (busy && now - sentAt < 1000) {
             dirty = true;
+            return;
+        }
+        if (later && !busy && now - sentAt < gap) {
+            if (!later.active) {
+                later.interval = Math.max(1, gap - (now - sentAt));
+                later.start();
+            }
             return;
         }
         if (busy) {
@@ -46,6 +55,19 @@ function sender(method, payload) {
         });
     }
     return send;
+}
+
+// A one-shot timer, or none where KWin's scripts have no QTimer: the calls then go out as before.
+function timer(fire) {
+    try {
+        const t = new QTimer();
+        t.singleShot = true;
+        t.timeout.connect(fire);
+        return t;
+    } catch (error) {
+        console.log("snowhush: no timers, " + error);
+        return null;
+    }
 }
 
 function own(window) {
@@ -135,8 +157,10 @@ function windows() {
     });
 }
 
-const sendCursor = sender("Cursor", cursor);
-const sendWindows = sender("Windows", windows);
+// The pointer moves at the mouse's own rate, up to a thousand times a second; the snow reads it at most once a
+// frame, 120 a second at the most.
+const sendCursor = sender("Cursor", cursor, 8);
+const sendWindows = sender("Windows", windows, 0);
 
 function watch(window) {
     if (own(window)) {
