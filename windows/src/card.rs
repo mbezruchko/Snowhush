@@ -30,7 +30,7 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Shell::SHCreateMemStream;
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::{Error, Interface, PCWSTR, Result, w};
+use windows::core::{Error, HSTRING, Interface, PCWSTR, Result, w};
 use windows_numerics::Vector2;
 
 /// Room around the card for its shadow.
@@ -40,6 +40,8 @@ const INK: [f32; 3] = [0.93, 0.9, 0.85];
 const MUTED: [f32; 3] = [0.78, 0.75, 0.7];
 const LABEL: [f32; 3] = [0.09, 0.075, 0.06];
 const BUTTON: (f32, f32) = (190.0, 44.0);
+/// The least room above and below the content when a card grows to fit it.
+const PADDING: f32 = 24.0;
 const ICON: &[u8] = include_bytes!("../assets/icon-256.png");
 
 /// What the card shows, top to bottom.
@@ -151,20 +153,8 @@ impl Card {
             target.FillRoundedRectangle(&shape, &brush(BACKGROUND, 1.0)?);
             target.DrawRoundedRectangle(&shape, &brush([1.0; 3], 0.08)?, 1.0, None);
 
-            let text_width = self.width - 64.0;
-            let body_width = text_width.min(330.0);
-            let title = self.layout(
-                content.title,
-                w!("Bahnschrift"),
-                DWRITE_FONT_WEIGHT_LIGHT,
-                DWRITE_FONT_STRETCH_CONDENSED,
-                content.title_size,
-                text_width,
-                content.title_size * 1.13,
-                0.6,
-            )?;
-            let body =
-                self.layout(content.body, w!("Segoe UI"), DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 13.5, body_width, 23.0, 0.0)?;
+            let body_width = (self.width - 64.0).min(330.0);
+            let (title, body) = self.texts(content)?;
             let label =
                 self.layout(content.button, w!("Segoe UI"), DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STRETCH_NORMAL, 12.5, BUTTON.0, 0.0, 1.8)?;
             label.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
@@ -201,6 +191,34 @@ impl Card {
         }
     }
 
+    /// How tall the card has to be for `contents`, at least `least`: a translation can run a line or two longer.
+    pub fn fitting_height(&self, contents: &[Content], least: f32) -> Result<f32> {
+        let mut tallest = least;
+        for content in contents {
+            let (title, body) = self.texts(content)?;
+            let total = content.icon + 10.0 + height(&title)? + 18.0 + height(&body)? + 28.0 + BUTTON.1;
+            tallest = tallest.max((total + 2.0 * PADDING).ceil());
+        }
+        Ok(tallest)
+    }
+
+    fn texts(&self, content: &Content) -> Result<(IDWriteTextLayout, IDWriteTextLayout)> {
+        let text_width = self.width - 64.0;
+        let title = self.layout(
+            content.title,
+            w!("Bahnschrift"),
+            DWRITE_FONT_WEIGHT_LIGHT,
+            DWRITE_FONT_STRETCH_CONDENSED,
+            content.title_size,
+            text_width,
+            content.title_size * 1.13,
+            0.6,
+        )?;
+        let body =
+            self.layout(content.body, w!("Segoe UI"), DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 13.5, text_width.min(330.0), 23.0, 0.0)?;
+        Ok((title, body))
+    }
+
     fn layout(
         &self,
         text: &str,
@@ -214,7 +232,9 @@ impl Card {
     ) -> Result<IDWriteTextLayout> {
         let units: Vec<u16> = text.encode_utf16().collect();
         unsafe {
-            let format = self.text.CreateTextFormat(family, None, weight, DWRITE_FONT_STYLE_NORMAL, stretch, size, w!("en-us"))?;
+            // The locale picks the fallback font, so Japanese and Chinese get their own forms of the shared characters.
+            let locale = HSTRING::from(snowhush_core::text::code());
+            let format = self.text.CreateTextFormat(family, None, weight, DWRITE_FONT_STYLE_NORMAL, stretch, size, &locale)?;
             format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
             if line > 0.0 {
                 format.SetLineSpacing(DWRITE_LINE_SPACING_METHOD_UNIFORM, line, line * 0.8)?;

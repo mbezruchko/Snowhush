@@ -9,6 +9,13 @@ log=~/.local/state/snowhush/snowhush.log
 
 trace() { echo "$1" >> /out/trace; }
 
+scene=$1
+shift
+if (($#)); then
+    mkdir -p ~/.config/snowhush
+    printf '%s\n' "$@" > ~/.config/snowhush/settings
+fi
+
 # Waits for a new Wayland socket other than `$1`, and prints its name.
 socket() {
     for _ in $(seq 100); do
@@ -76,7 +83,7 @@ niri_workspace() { niri msg action focus-workspace "$1" > /dev/null; }
 niri_close() { niri msg action close-window > /dev/null; }
 niri_overview() { niri msg action toggle-overview > /dev/null; }
 
-case $1 in
+case $scene in
 sway)
     headless_sway
     export WAYLAND_DISPLAY=$sway_display
@@ -113,7 +120,7 @@ SESSION
         --exit-with-session /tmp/session.sh > /out/kwin.log 2>&1
     ;;
 *)
-    echo "no scene $1" >&2
+    echo "no scene $scene" >&2
     exit 1
     ;;
 esac

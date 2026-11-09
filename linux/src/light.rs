@@ -24,10 +24,9 @@ pub fn daylight() -> [f32; 3] {
     })
 }
 
-/// Whether it is Halloween, wanted or not.
-pub fn is_halloween() -> bool {
-    let (month, day, hour) = local_time().unwrap_or((1, 1, 12.0));
-    halloween::is_halloween(month, day, hour as u32)
+pub fn today() -> halloween::Today {
+    let (year, month, day, hour) = local_time().unwrap_or((0, 1, 1, 12.0));
+    halloween::Today::at(year, month, day, hour as u32)
 }
 
 /// How far into Halloween night it is while Halloween is on.
@@ -37,18 +36,18 @@ pub fn night(on: bool) -> f32 {
 
 /// The hour the light follows: the clock's, or one being previewed.
 fn hour() -> f32 {
-    halloween::previewed_hour().unwrap_or_else(|| local_time().map_or(12.0, |(_, _, hour)| hour))
+    halloween::previewed_hour().unwrap_or_else(|| local_time().map_or(12.0, |(_, _, _, hour)| hour))
 }
 
-/// The local month, counted from 1, the day of the month and the hour.
-fn local_time() -> Option<(u32, u32, f32)> {
+/// The local year, the month counted from 1, the day of the month and the hour.
+fn local_time() -> Option<(u32, u32, u32, f32)> {
     unsafe {
         let now = libc::time(std::ptr::null_mut());
         let mut local: libc::tm = std::mem::zeroed();
         if libc::localtime_r(&now, &mut local).is_null() {
             return None;
         }
-        Some((local.tm_mon as u32 + 1, local.tm_mday as u32, local.tm_hour as f32 + local.tm_min as f32 / 60.0))
+        Some((local.tm_year as u32 + 1900, local.tm_mon as u32 + 1, local.tm_mday as u32, local.tm_hour as f32 + local.tm_min as f32 / 60.0))
     }
 }
 

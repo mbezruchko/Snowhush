@@ -5,6 +5,7 @@ pub mod geometry;
 pub mod halloween;
 pub mod layer;
 pub mod simulation;
+pub mod text;
 pub mod version;
 
 #[cfg(test)]

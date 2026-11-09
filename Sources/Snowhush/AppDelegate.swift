@@ -7,7 +7,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var device: MTLDevice!
     private var screens: [ScreenSnow] = []
     private let displays = Displays()
-    private var snowfall = Snowfall.steady
     private var accumulates = true
     private var thaws = true
     private var snowOnWindows = true
@@ -15,17 +14,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var snowfallHeld = false
     private var halloween = false
     private var statusItem: NSStatusItem!
-    private let snowfallSlider = SnowfallSlider()
+    private let intensitySlider = MenuSlider(range: 0...1)
+    private let opacitySlider = MenuSlider(range: Preferences.opacityRange)
     private var accumulateItem: NSMenuItem!
     private var meltItem: NSMenuItem!
     private var snowOnWindowsItem: NSMenuItem!
     private var clearItem: NSMenuItem!
     private var halloweenItem: NSMenuItem!
+    private var mixedItem: NSMenuItem!
+    private var modeItems: [(item: NSMenuItem, mode: Mode)] = []
+    private var maxPerformanceItem: NSMenuItem!
     private var behindWindowsItem: NSMenuItem!
+    private var fullScreenItem: NSMenuItem!
     private var screenshotsItem: NSMenuItem!
+    private var deepInteractionItem: NSMenuItem!
     private var loginItem: NSMenuItem!
     private var observers: [NSObjectProtocol] = []
     private var screensAsleep = false
+    private let screenshots = ScreenshotWatch()
     private var screenLocked = false
     private var sessionInactive = false
     private var updater: SPUStandardUpdaterController!
@@ -44,7 +50,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
             return
         }
         self.device = device
-        snowfall = Preferences.snowfall
         accumulates = Preferences.accumulate
         thaws = Preferences.meltSnow
         snowOnWindows = Preferences.snowOnWindows
@@ -62,6 +67,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         refreshHalloween()
         halloweenTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in self?.refreshHalloween() }
         observeSystem()
+        Marquee.enabled = Preferences.deepInteraction
+        screenshots.stepAside = { [weak self] aside in self?.screens.forEach { $0.stepAside(aside) } }
+        screenshots.start()
         if snowfallHeld {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in self?.showWelcome() }
         }
@@ -87,6 +95,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
                 snow.simulation.snowfallHeld = snowfallHeld
                 snow.simulation.snowfallReleased = { [weak self] in self?.releaseSnowfall() }
                 snow.halloween = halloween
+                snow.modes = Preferences.modes
+                snow.maxFrameRate = Preferences.maxPerformance
+                snow.activityChanged = { [weak self] in self?.updateActivity() }
                 snow.apply(power.budget)
                 screens.append(snow)
             }
@@ -126,35 +137,80 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
 
     private func makeStatusItem() -> NSStatusItem {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        item.button?.image = NSImage(systemSymbolName: "snowflake", accessibilityDescription: "Snowhush")
 
         let menu = NSMenu()
         menu.delegate = self
         menu.autoenablesItems = false
 
-        menu.addItem(.sectionHeader(title: "Snowfall"))
-        snowfallSlider.changed = { [unowned self] in select($0) }
-        let sliderItem = NSMenuItem()
-        sliderItem.view = snowfallSlider
-        menu.addItem(sliderItem)
+        menu.addItem(.sectionHeader(title: tr("intensity")))
+        intensitySlider.changed = { [unowned self] in select(intensity: $0) }
+        let intensityItem = NSMenuItem()
+        intensityItem.view = intensitySlider
+        menu.addItem(intensityItem)
+        menu.addItem(.sectionHeader(title: tr("opacity")))
+        opacitySlider.changed = { [unowned self] opacity in
+            Preferences.fallingOpacity = opacity
+            for snow in screens { snow.simulation.fallingOpacity = Float(opacity) }
+        }
+        let opacityItem = NSMenuItem()
+        opacityItem.view = opacitySlider
+        menu.addItem(opacityItem)
+        let modes = NSMenu()
+        modes.autoenablesItems = false
+        mixedItem = toggle(tr("mixed"), #selector(toggleMixed), to: modes)
+        modes.addItem(.separator())
+        modeItems = Mode.allCases.map { mode in
+            let item = toggle(tr(mode.key), #selector(chooseMode), to: modes)
+            (item.view as? MenuToggle)?.staysOpen = { Preferences.mixed }
+            return (item, mode)
+        }
+        modes.addItem(.separator())
+        halloweenItem = add(tr("halloween"), #selector(toggleHalloween), to: modes)
+        menu.addItem(withTitle: tr("mode"), action: nil, keyEquivalent: "").submenu = modes
+        clearItem = add(tr("clear.snow"), #selector(clearSnow), to: menu)
         menu.addItem(.separator())
-        accumulateItem = add("Accumulate", #selector(toggleAccumulate), to: menu)
-        meltItem = add("Melt Snow", #selector(toggleMeltSnow), to: menu)
-        snowOnWindowsItem = add("Snow on Windows", #selector(toggleSnowOnWindows), to: menu)
-        clearItem = add("Clear Snow", #selector(clearSnow), to: menu)
-        halloweenItem = add("Halloween", #selector(toggleHalloween), to: menu)
-        menu.addItem(.separator())
-        behindWindowsItem = add("Behind Windows", #selector(toggleBehindWindows), to: menu)
-        screenshotsItem = add("Show in Screenshots", #selector(toggleScreenshots), to: menu)
-        loginItem = add("Open at Login", #selector(toggleOpenAtLogin), to: menu)
-        menu.addItem(.separator())
-        let updates = menu.addItem(withTitle: "Check for Updates…", action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)), keyEquivalent: "")
+        let settings = NSMenu()
+        settings.autoenablesItems = false
+        settings.addItem(.sectionHeader(title: tr("behavior")))
+        accumulateItem = toggle(tr("accumulate"), #selector(toggleAccumulate), to: settings)
+        meltItem = toggle(tr("melt.snow"), #selector(toggleMeltSnow), to: settings)
+        snowOnWindowsItem = toggle(tr("windows.snow"), #selector(toggleSnowOnWindows), to: settings)
+        deepInteractionItem = toggle(tr("deep"), #selector(toggleDeepInteraction), to: settings)
+        settings.addItem(.separator())
+        settings.addItem(.sectionHeader(title: tr("display")))
+        behindWindowsItem = toggle(tr("behind"), #selector(toggleBehindWindows), to: settings)
+        fullScreenItem = toggle(tr("full_screen"), #selector(toggleFullScreen), to: settings)
+        screenshotsItem = toggle(tr("screenshots"), #selector(toggleScreenshots), to: settings)
+        maxPerformanceItem = toggle(tr("performance"), #selector(toggleMaxPerformance), to: settings)
+        settings.addItem(.separator())
+        settings.addItem(.sectionHeader(title: tr("general")))
+        loginItem = toggle(tr("login"), #selector(toggleOpenAtLogin), to: settings)
+        let updates = settings.addItem(withTitle: tr("updates"), action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)), keyEquivalent: "")
         updates.target = updater
-        menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        menu.addItem(withTitle: tr("settings"), action: nil, keyEquivalent: "").submenu = settings
+        add(tr("support"), #selector(openSponsors), to: menu).attributedTitle = Self.supportTitle
+        menu.addItem(withTitle: tr("quit"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 
         item.menu = menu
         return item
     }
+
+    /// The site's sponsor heart, in its colour, ahead of the title: set as the item's image, the status menu doesn't
+    /// show it.
+    private static let supportTitle: NSAttributedString = {
+        let font = NSFont.menuFont(ofSize: 0)
+        let title = NSMutableAttributedString(string: tr("support"), attributes: [.font: font])
+        guard let heart = NSImage(systemSymbolName: "heart.fill", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: font.pointSize * 0.85, weight: .regular).applying(.init(paletteColors: [NSColor(srgbRed: 0.92, green: 0.51, blue: 0.51, alpha: 1)])))
+        else { return title }
+        heart.isTemplate = false
+        let attachment = NSTextAttachment()
+        attachment.image = heart
+        attachment.bounds = CGRect(x: 0, y: (font.capHeight - heart.size.height) / 2, width: heart.size.width, height: heart.size.height)
+        title.insert(NSAttributedString(string: "  ", attributes: [.font: font]), at: 0)
+        title.insert(NSAttributedString(attachment: attachment), at: 0)
+        return title
+    }()
 
     @discardableResult
     private func add(_ title: String, _ action: Selector, to menu: NSMenu) -> NSMenuItem {
@@ -163,25 +219,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         return item
     }
 
+    private func toggle(_ title: String, _ action: Selector, to menu: NSMenu) -> NSMenuItem {
+        let item = menu.addItem(withTitle: title, action: nil, keyEquivalent: "")
+        let toggle = MenuToggle(action: action, target: self)
+        toggle.fit(title)
+        item.view = toggle
+        return item
+    }
+
     func menuNeedsUpdate(_ menu: NSMenu) {
-        snowfallSlider.snowfall = snowfall
+        intensitySlider.value = Preferences.intensity
+        opacitySlider.value = Preferences.fallingOpacity
         accumulateItem.state = accumulates ? .on : .off
+        let modes = Mode.allCases.filter(Preferences.modes.contains)
+        mixedItem.state = Preferences.mixed ? .on : .off
+        for (item, mode) in modeItems { item.state = modes.contains(mode) ? .on : .off }
+        // Rain neither heaps up nor lies about to clear away.
+        let heaps = modes.filter { $0 != .rain }
+        accumulateItem.isHidden = heaps.isEmpty
+        meltItem.isHidden = heaps.isEmpty
+        clearItem.isHidden = heaps.isEmpty
+        meltItem.title = tr(heaps.contains(.snow) ? "melt.snow" : heaps == [.blossom] ? "melt.blossom" : "melt.autumn")
+        snowOnWindowsItem.title = tr("windows", modes)
+        clearItem.title = tr("clear", heaps)
+        for item: NSMenuItem in [meltItem, snowOnWindowsItem] { (item.view as? MenuToggle)?.fit(item.title) }
         meltItem.state = thaws ? .on : .off
         meltItem.isEnabled = accumulates
         snowOnWindowsItem.state = snowOnWindows ? .on : .off
-        snowOnWindowsItem.isEnabled = !behindWindows
+        deepInteractionItem.state = Preferences.deepInteraction ? .on : .off
+        deepInteractionItem.isEnabled = snowOnWindows
         clearItem.isEnabled = screens.contains { $0.simulation.hasSnow || $0.simulation.spriteCount > 0 }
-        halloweenItem.isHidden = !Halloween.isSeason()
-        halloweenItem.state = Preferences.halloween ? .on : .off
+        halloweenItem.state = Halloween.isWanted ? .on : .off
+        halloweenItem.isEnabled = modes == [.snow]
+        maxPerformanceItem.state = Preferences.maxPerformance ? .on : .off
         behindWindowsItem.state = behindWindows ? .on : .off
+        fullScreenItem.state = Preferences.showOverFullScreen ? .on : .off
+        fullScreenItem.isEnabled = !behindWindows
         screenshotsItem.state = Preferences.showInScreenshots ? .on : .off
         loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
     }
 
-    private func select(_ snowfall: Snowfall) {
-        self.snowfall = snowfall
-        Preferences.snowfall = snowfall
-        for snow in screens { snow.simulation.snowfall = snowfall }
+    private func select(intensity: Double) {
+        Preferences.intensity = intensity
+        for snow in screens { snow.simulation.intensity = Float(intensity) }
         updateStatusIcon()
     }
 
@@ -203,6 +283,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         if !snowOnWindows { screens.forEach { $0.dropWindowSnow() } }
     }
 
+    @objc private func toggleDeepInteraction() {
+        Preferences.deepInteraction.toggle()
+        Marquee.enabled = Preferences.deepInteraction
+    }
+
     @objc private func clearSnow() {
         let direction = screens.first?.simulation.breezeDirection ?? -1
         let calm = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
@@ -212,10 +297,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     @objc private func toggleBehindWindows() {
         behindWindows.toggle()
         Preferences.behindWindows = behindWindows
-        for snow in screens {
-            snow.window.behindWindows = behindWindows
-            if behindWindows { snow.dropWindowSnow() }
-        }
+        for snow in screens { snow.window.behindWindows = behindWindows }
+    }
+
+    @objc private func toggleFullScreen() {
+        Preferences.showOverFullScreen.toggle()
+        for snow in screens { snow.overFullScreen = Preferences.showOverFullScreen }
     }
 
     @objc private func toggleScreenshots() {
@@ -224,6 +311,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
             snow.window.showsInScreenshots = Preferences.showInScreenshots
             snow.dock.window.showsInScreenshots = Preferences.showInScreenshots
         }
+    }
+
+    @objc private func openSponsors() {
+        NSWorkspace.shared.open(URL(string: "https://github.com/sponsors/mbezruchko")!)
     }
 
     @objc private func toggleOpenAtLogin() {
@@ -239,19 +330,74 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         }
     }
 
+    /// Mixed, a third mode picked takes the place of the one picked before the other.
+    @objc private func chooseMode(_ sender: NSMenuItem) {
+        guard let mode = modeItems.first(where: { $0.item === sender })?.mode else { return }
+        if Preferences.mixed {
+            let mix = Preferences.mix
+            guard !mix.contains(mode) else { return }
+            Preferences.mix = [mix[1], mode]
+        } else {
+            guard mode != Preferences.mode else { return }
+        }
+        Preferences.mode = mode
+        switchModes()
+    }
+
+    /// Mixed, the mode picked last falls along with the one picked before it; unmixed, it falls alone.
+    @objc private func toggleMixed() {
+        Preferences.mixed.toggle()
+        let mode = Preferences.mode
+        if Preferences.mixed, !Preferences.mix.contains(mode) {
+            Preferences.mix = [Preferences.mix[1], mode]
+        } else if Preferences.mixed {
+            Preferences.mix = [Preferences.mix.first { $0 != mode } ?? .snow, mode]
+        }
+        switchModes()
+    }
+
+    private func switchModes() {
+        refreshHalloween()
+        updateStatusIcon()
+        let direction = screens.first?.simulation.breezeDirection ?? -1
+        let calm = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        for snow in screens { snow.simulation.switchMode(to: Preferences.modes, direction: direction, calm: calm) }
+    }
+
+    @objc private func toggleMaxPerformance() {
+        Preferences.maxPerformance.toggle()
+        for snow in screens { snow.maxFrameRate = Preferences.maxPerformance }
+    }
+
     @objc private func toggleHalloween() {
-        Preferences.halloween.toggle()
+        Halloween.toggle()
         refreshHalloween()
     }
 
     private func updateStatusIcon() {
-        statusItem.button?.appearsDisabled = snowfall == .off
+        statusItem.button?.image = Self.icon(halloween: halloween, dimmed: Preferences.intensity <= 0)
+    }
+
+    private static let symbol: [Mode: String] = [.snow: "snowflake", .autumn: "leaf", .rain: "cloud.rain"]
+
+    private static func icon(halloween: Bool, dimmed: Bool) -> NSImage? {
+        let image = halloween ? Halloween.icon : Preferences.mode == .blossom ? Blossom.icon
+            : NSImage(systemSymbolName: Self.symbol[Preferences.mode] ?? "snowflake", accessibilityDescription: "Snowhush")
+        guard dimmed, let image else { return image }
+        // Dimmed by hand: the button's appearsDisabled also disables the slider in its menu, so Off could not be left.
+        let faded = NSImage(size: image.size, flipped: false) { rect in
+            image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 0.4)
+            return true
+        }
+        faded.isTemplate = image.isTemplate
+        faded.accessibilityDescription = image.accessibilityDescription
+        return faded
     }
 
     private func refreshHalloween() {
         guard Halloween.isOn != halloween else { return }
         halloween.toggle()
-        statusItem.button?.image = halloween ? Halloween.icon : NSImage(systemSymbolName: "snowflake", accessibilityDescription: "Snowhush")
+        updateStatusIcon()
         for snow in screens { snow.halloween = halloween }
     }
 
@@ -290,7 +436,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private func updateActivity() {
         let awake = !screensAsleep && !screenLocked && !sessionInactive
         for snow in screens {
-            snow.setActive(awake && snow.window.occlusionState.contains(.visible))
+            snow.occlusionChanged()
+            snow.setActive(awake && !snow.givesWay && (snow.window.occlusionState.contains(.visible) || snow.fading), asleep: !awake)
         }
     }
 }

@@ -15,7 +15,7 @@
   &nbsp;·&nbsp;
   <a href="https://snowhush.pages.dev">snowhush.pages.dev</a>
   <br>
-  <sub>macOS 14 or later · Windows 10 or 11 · Linux with KDE Plasma 6, Hyprland, Sway or niri · free and open source</sub>
+  <sub>macOS 14 or later · Windows 10 or 11 · Linux with KDE Plasma 6, Hyprland, Sway or niri · free, source available</sub>
 </p>
 
 https://github.com/user-attachments/assets/291c3cd5-3563-4b86-8b66-dfd924f980fc
@@ -24,7 +24,7 @@ A tiny app that lives in the menu bar on macOS and in the tray on Windows and Li
 
 ## What the snow does
 
-- **Falls.** Every flake keeps its own pace and sways in a slow breeze. Variable lets the snowfall rise and ease on its own over the day.
+- **Falls.** Every flake keeps its own pace and sways in a slow breeze.
 - **Settles.** It piles up and slumps to a natural slope along the bottom of the screen, on any window with room above it, and on the Dock.
 - **Moves.** Push the cursor through a drift and it parts and sprays. Drag or shake a window and its snow slides off and lands below.
 - **Drops.** Close or minimize a window and its snow drops at once, in lumps that burst into powder where they land.
@@ -32,7 +32,23 @@ A tiny app that lives in the menu bar on macOS and in the tray on Windows and Li
 - **Hides.** Screenshots and screen sharing show your desktop without it, unless you turn on Show in Screenshots.
 - **Rests.** About 6% of one processor core and 65 MB of memory, and less on battery or in Low Power Mode. It pauses while your screen sleeps, locks or is covered.
 
-Everything else lives in the menu bar: Snowfall (Off, Light, Steady, Heavy, Variable), Accumulate, Melt Snow, Snow on Windows, Clear Snow, Behind Windows, Show in Screenshots and Open at Login. On Windows, Behind Taskbar lets the snow settle at the bottom of the screen under a see-through taskbar, such as one made clear with TranslucentTB.
+## Autumn Leaves
+
+Choose Mode › Autumn Leaves and leaves fall instead of snow. They turn and swing on the way down, settle in heaps you can see are made of leaves, scatter under the cursor and come off a window you shake or drag. Melt Snow, Snow on Windows and Clear Snow become Wither Leaves, Leaves on Windows and Clear Leaves.
+
+## Rain
+
+Choose Mode › Rain and rain beats down instead of snow, splashing where it lands. On the tops of your windows, the Dock and the taskbar it spatters the glass with spray and sets drops running down it like beads of water on a window: they catch on specks, gather the spray they meet and lurch on, leaving a wet film and a trail of droplets. Others hang under bottom edges until they grow heavy enough to let go. Drag the cursor through them to smear them, or shake or drag a window to throw them off. Rain doesn't pile up, so Accumulate, Melt Snow and Clear Snow step aside, and Snow on Windows becomes Rain on Windows.
+
+## Cherry Blossom
+
+Choose Mode › Cherry Blossom and pink petals fall instead of snow. Curved like a spoon, they glint as they tumble and glow where the light comes through them, and now and then a whole flower on its stalk spins down. They heap up and scatter just as leaves do, and with Wilt Petals on, the fallen ones brown from their edges before they go. Melt Snow, Snow on Windows and Clear Snow become Wilt Petals, Petals on Windows and Clear Petals.
+
+## Halloween
+
+From October 30 until dawn on November 1 the snow turns spooky: jack-o'-lanterns glow in the drift and ghosts pop up out of it with signs. Choose Mode › Halloween to have it any other day, as long as snow is falling.
+
+Everything else lives in the menu bar: Intensity and Opacity sliders (how much falls and how see-through it is; on Linux and in the plain Windows menu, submenus of steps), Mode (Snow, Autumn Leaves, Rain, Cherry Blossom, and Halloween on top of snow) and Clear Snow, with the rest under Settings: Accumulate, Melt Snow, Snow on Windows, Deep Interaction (on Windows and the Mac, the snow also settles on a selection dragged across the desktop), Behind Windows, Show over Full Screen, Show in Screenshots, Max Performance (draws every frame at the display's full rate) and Open at Login. On Windows and the Mac, Settings stays open while you switch its options. On Windows, Behind Taskbar lets the snow settle at the bottom of the screen under a see-through taskbar, such as one made clear with TranslucentTB.
 
 ## Building
 
@@ -59,4 +75,4 @@ Everything lives in the tray, as on Windows. Settings go to `~/.config/snowhush/
 
 ## License
 
-[MIT](LICENSE)
+[PolyForm Noncommercial 1.0.0](LICENSE): use, share and change Snowhush freely, keeping its copyright notice with it. Selling it, or anything built on its code, isn't allowed. Versions up to 0.6.1 were released under the MIT License.

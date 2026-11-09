@@ -1,6 +1,8 @@
 //! Draws the snow with OpenGL ES 3 through EGL, the same passes as the Windows renderer: Halloween's pumpkins, the
-//! piles, read from a height texture, the ghosts' signs, then every flake, grain, puff and ghost as an instanced quad.
+//! piles, read from a height texture, the ghosts' signs, then every flake, grain, puff and ghost as an instanced quad,
+//! and rain's drops on the glass, added up into a field first and drawn from it as glass.
 
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::mem::size_of;
 
@@ -22,6 +24,25 @@ const SIGN_VERTEX: &str = include_str!("shaders/sign.vert");
 const SIGN_FRAGMENT: &str = include_str!("shaders/sign.frag");
 const PUMPKIN_VERTEX: &str = include_str!("shaders/pumpkin.vert");
 const PUMPKIN_FRAGMENT: &str = include_str!("shaders/pumpkin.frag");
+const FIELD_FRAGMENT: &str = include_str!("shaders/field.frag");
+const GLASS_VERTEX: &str = include_str!("shaders/glass.vert");
+const GLASS_FRAGMENT: &str = include_str!("shaders/glass.frag");
+/// A drop on the glass, as both the sprites and the field draw it, put into each where it is included.
+const DROP: &str = include_str!("shaders/drop.glsl");
+const LEAVES: &str = include_str!("shaders/leaves.glsl");
+/// A quad over the whole surface, drawn with a blend that leaves what is there at the given opacity.
+const FADE_VERTEX: &str = "#version 300 es
+void main() {
+    gl_Position = vec4(float(gl_VertexID & 1) * 2.0 - 1.0, float(gl_VertexID >> 1) * 2.0 - 1.0, 0.0, 1.0);
+}
+";
+const FADE_FRAGMENT: &str = "#version 300 es
+precision mediump float;
+out vec4 color;
+void main() {
+    color = vec4(0.0);
+}
+";
 /// The ghosts' signs, one picture per caption at two pixels per point, the stick's foot at the middle of the bottom edge.
 const SIGNS: [&[u8]; SIGN_CAPTIONS.len()] = [
     include_bytes!("../../windows/assets/signs/sign-00.png"),
@@ -78,6 +99,15 @@ pub struct Gpu {
     pile: Program,
     sign: Program,
     pumpkin: Program,
+    fade: Program,
+    /// Drops on the glass: their bumps added up into a field, and the glass drawn from it.
+    field: Program,
+    glass: Program,
+    /// Whether the graphics driver can draw into a half-float texture, as the field needs; without, drops on the
+    /// glass are drawn as sprites.
+    fields_drawable: bool,
+    /// A field for each size of surface drawn, while it has drops on its glass.
+    fields: HashMap<(i32, i32), (glow::Texture, glow::Framebuffer)>,
     sprite_array: glow::VertexArray,
     sprite_buffer: glow::Buffer,
     /// Holds no attributes: the corners of the piles, the signs and the pumpkins come from the vertex index alone.
@@ -134,16 +164,37 @@ impl Gpu {
         };
         unsafe {
             let adapter = gl.get_parameter_string(glow::RENDERER);
+            let included = |source: &str| source.replace("#include \"drop.glsl\"", DROP).replace("#include \"leaves.glsl\"", LEAVES);
             let sprite = program(
                 &gl,
                 SPRITE_VERTEX,
-                SPRITE_FRAGMENT,
-                &["viewSize", "scale", "time", "light", "shadowTint", "rim", "lantern", "pumpkins", "shake", "panel"],
+                &included(SPRITE_FRAGMENT),
+                &[
+                    "viewSize",
+                    "scale",
+                    "time",
+                    "light",
+                    "shadowTint",
+                    "rim",
+                    "lantern",
+                    "pumpkins",
+                    "shake",
+                    "panel",
+                    "autumn",
+                    "blossom",
+                    "wilt",
+                    "glass",
+                ],
             )?;
+            let field =
+                program(&gl, SPRITE_VERTEX, &included(FIELD_FRAGMENT), &["viewSize", "scale", "time", "lantern", "pumpkins", "shake", "panel"])?;
+            let glass = program(&gl, GLASS_VERTEX, GLASS_FRAGMENT, &["field", "light", "scale"])?;
+            let extensions = gl.supported_extensions();
+            let fields_drawable = extensions.contains("GL_EXT_color_buffer_float") || extensions.contains("GL_EXT_color_buffer_half_float");
             let pile = program(
                 &gl,
                 PILE_VERTEX,
-                PILE_FRAGMENT,
+                &included(PILE_FRAGMENT),
                 &[
                     "viewSize",
                     "scale",
@@ -164,6 +215,8 @@ impl Gpu {
                     "occluders",
                     "heights",
                     "panel",
+                    "wilt",
+                    "drift",
                 ],
             )?;
             let sign = program(
@@ -179,15 +232,33 @@ impl Gpu {
                 &["viewSize", "shake", "anchor", "size", "wick", "seed", "time", "light", "night", "panel", "shell", "face"],
             )?;
 
+            let fade = program(&gl, FADE_VERTEX, FADE_FRAGMENT, &[])?;
+
             let sprite_array = gl.create_vertex_array()?;
             let sprite_buffer = gl.create_buffer()?;
             gl.bind_vertex_array(Some(sprite_array));
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(sprite_buffer));
             let stride = size_of::<Sprite>() as i32;
-            // Position, velocity, size, alpha, soft, tint amount, tint, lump, ghost, pose, mood: see `Sprite`.
-            for (location, components, offset) in
-                [(0, 2, 0), (1, 2, 8), (2, 1, 16), (3, 1, 20), (4, 1, 24), (5, 1, 28), (6, 3, 32), (7, 1, 44), (8, 4, 48), (9, 4, 64), (10, 2, 80)]
-            {
+            // Position, velocity, size, alpha, soft, tint amount, tint, lump, ghost, pose, mood, leaf, spin, rain, drop:
+            // see `Sprite`.
+            for (location, components, offset) in [
+                (0, 2, 0),
+                (1, 2, 8),
+                (2, 1, 16),
+                (3, 1, 20),
+                (4, 1, 24),
+                (5, 1, 28),
+                (6, 3, 32),
+                (7, 1, 44),
+                (8, 4, 48),
+                (9, 4, 64),
+                (10, 2, 80),
+                (11, 3, 88),
+                (12, 2, 100),
+                (13, 2, 108),
+                (14, 4, 116),
+                (15, 1, 132),
+            ] {
                 gl.enable_vertex_attrib_array(location);
                 gl.vertex_attrib_pointer_f32(location, components, glow::FLOAT, false, stride, offset);
                 gl.vertex_attrib_divisor(location, 1);
@@ -216,6 +287,11 @@ impl Gpu {
                 pile,
                 sign,
                 pumpkin,
+                fade,
+                field,
+                glass,
+                fields_drawable,
+                fields: HashMap::new(),
                 sprite_array,
                 sprite_buffer,
                 empty_array,
@@ -270,6 +346,7 @@ impl Gpu {
         ambient: Ambient,
         panel: Option<[f32; 4]>,
         time: f32,
+        opacity: f32,
     ) -> Result<(), String> {
         self.egl.make_current(self.display, Some(surface.surface), Some(surface.surface), Some(self.context)).map_err(|error| error.to_string())?;
         let sprite_count = simulation.sprite_count();
@@ -305,6 +382,9 @@ impl Gpu {
         let shake = [shake.x, shake.y];
         // An empty rectangle hides nothing.
         let panel = panel.unwrap_or([0.0; 4]);
+        let autumn = if simulation.leafy() { 1.0 } else { 0.0 };
+        let blossom = if simulation.blossom() { 1.0 } else { 0.0 };
+        let wilt = if simulation.wilts() { 1.0 } else { 0.0 };
         unsafe {
             gl.viewport(0, 0, surface.width, surface.height);
             gl.clear_color(0.0, 0.0, 0.0, 0.0);
@@ -365,6 +445,7 @@ impl Gpu {
                 gl.uniform_2_f32_slice(pile.location("shake"), &shake);
                 gl.uniform_1_i32(pile.location("heights"), 0);
                 gl.uniform_4_f32_slice(pile.location("panel"), &panel);
+                gl.uniform_1_f32(pile.location("wilt"), wilt);
                 for layer in &piles {
                     let count = layer.occluders.len().min(OCCLUDERS);
                     let occluders: Vec<f32> = layer.occluders[..count].iter().flatten().copied().collect();
@@ -372,6 +453,7 @@ impl Gpu {
                     gl.uniform_1_f32(pile.location("pileTop"), layer.top + 2.0);
                     gl.uniform_1_f32(pile.location("pileBottom"), layer.bottom);
                     gl.uniform_2_f32(pile.location("origin"), layer.origin.x, layer.origin.y);
+                    gl.uniform_1_f32(pile.location("drift"), layer.drift);
                     gl.uniform_1_i32(pile.location("heightOffset"), layer.offset as i32);
                     gl.uniform_1_i32(pile.location("occluderCount"), count as i32);
                     if count > 0 {
@@ -403,12 +485,66 @@ impl Gpu {
                     gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
                 }
             }
+            let size = (surface.width.max(1), surface.height.max(1));
+            let glass = sprites > 0 && self.fields_drawable && simulation.has_glass_drops();
+            if !glass && let Some((texture, framebuffer)) = self.fields.remove(&size) {
+                gl.delete_framebuffer(framebuffer);
+                gl.delete_texture(texture);
+            }
+            if glass && !self.fields.contains_key(&size) {
+                let texture = gl.create_texture()?;
+                gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+                for (parameter, value) in [
+                    (glow::TEXTURE_MIN_FILTER, glow::NEAREST),
+                    (glow::TEXTURE_MAG_FILTER, glow::NEAREST),
+                    (glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE),
+                    (glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE),
+                ] {
+                    gl.tex_parameter_i32(glow::TEXTURE_2D, parameter, value as i32);
+                }
+                gl.tex_image_2d(
+                    glow::TEXTURE_2D,
+                    0,
+                    glow::RG16F as i32,
+                    size.0,
+                    size.1,
+                    0,
+                    glow::RG,
+                    glow::HALF_FLOAT,
+                    glow::PixelUnpackData::Slice(None),
+                );
+                let framebuffer = gl.create_framebuffer()?;
+                gl.bind_framebuffer(glow::FRAMEBUFFER, Some(framebuffer));
+                gl.framebuffer_texture_2d(glow::FRAMEBUFFER, glow::COLOR_ATTACHMENT0, glow::TEXTURE_2D, Some(texture), 0);
+                gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+                self.fields.insert(size, (texture, framebuffer));
+            }
             if sprites > 0 {
-                let sprite = &self.sprite;
-                gl.use_program(Some(sprite.program));
                 gl.bind_vertex_array(Some(self.sprite_array));
                 gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.sprite_buffer));
                 gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes(&self.sprites[..sprites]), glow::STREAM_DRAW);
+                // Drops on the glass first add up into their field.
+                let field = if glass { self.fields.get(&size).copied() } else { None };
+                if let Some((_, framebuffer)) = field {
+                    let program = &self.field;
+                    gl.bind_framebuffer(glow::FRAMEBUFFER, Some(framebuffer));
+                    gl.clear(glow::COLOR_BUFFER_BIT);
+                    gl.blend_func(glow::ONE, glow::ONE);
+                    gl.use_program(Some(program.program));
+                    gl.uniform_2_f32_slice(program.location("viewSize"), &view);
+                    gl.uniform_1_f32(program.location("scale"), 1.0);
+                    gl.uniform_1_f32(program.location("time"), time);
+                    gl.uniform_4_f32_slice(program.location("lantern"), &lantern);
+                    gl.uniform_4_f32_slice(program.location("pumpkins"), candles);
+                    gl.uniform_2_f32_slice(program.location("shake"), &shake);
+                    gl.uniform_4_f32_slice(program.location("panel"), &panel);
+                    gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, 4, sprites as i32);
+                    gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+                    gl.blend_func_separate(glow::ONE, glow::ONE_MINUS_SRC_ALPHA, glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
+                }
+                let sprite = &self.sprite;
+                gl.use_program(Some(sprite.program));
+                gl.uniform_1_f32(sprite.location("glass"), if field.is_some() { 1.0 } else { 0.0 });
                 gl.uniform_2_f32_slice(sprite.location("viewSize"), &view);
                 gl.uniform_1_f32(sprite.location("scale"), 1.0);
                 gl.uniform_1_f32(sprite.location("time"), time);
@@ -419,7 +555,30 @@ impl Gpu {
                 gl.uniform_4_f32_slice(sprite.location("pumpkins"), candles);
                 gl.uniform_2_f32_slice(sprite.location("shake"), &shake);
                 gl.uniform_4_f32_slice(sprite.location("panel"), &panel);
+                gl.uniform_1_f32(sprite.location("autumn"), autumn);
+                gl.uniform_1_f32(sprite.location("blossom"), blossom);
+                gl.uniform_1_f32(sprite.location("wilt"), wilt);
                 gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, 4, sprites as i32);
+                if let Some((texture, _)) = field {
+                    let program = &self.glass;
+                    gl.bind_vertex_array(Some(self.empty_array));
+                    gl.use_program(Some(program.program));
+                    gl.active_texture(glow::TEXTURE0);
+                    gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+                    gl.uniform_1_i32(program.location("field"), 0);
+                    gl.uniform_4_f32_slice(program.location("light"), &light);
+                    gl.uniform_1_f32(program.location("scale"), 1.0);
+                    gl.draw_arrays(glow::TRIANGLES, 0, 3);
+                }
+            }
+            // Fading under a full-screen app or back: the snow as drawn, all of it at once, so where flakes cross a
+            // drift it fades as one.
+            if opacity < 1.0 {
+                gl.bind_vertex_array(Some(self.empty_array));
+                gl.use_program(Some(self.fade.program));
+                gl.blend_color(0.0, 0.0, 0.0, opacity);
+                gl.blend_func_separate(glow::ZERO, glow::CONSTANT_ALPHA, glow::ZERO, glow::CONSTANT_ALPHA);
+                gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
             }
             gl.bind_vertex_array(None);
         }

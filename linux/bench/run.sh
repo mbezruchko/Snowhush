@@ -6,11 +6,14 @@
 #   linux/bench/run.sh sway    snowfall and the drift on the ground
 #   linux/bench/run.sh niri    the same, in niri
 #   linux/bench/run.sh kwin    the KWin script reports windows, and goes quiet once the app is killed
+#
+# Settings for the app can follow the scene, as lines of its settings file: run.sh sway autumn=1
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
-scene=${1:?usage: run.sh sway|niri|kwin}
+scene=${1:?usage: run.sh sway|niri|kwin [setting=value…]}
+shift
 out=$here/out/$scene
 rm -rf "$out"
 mkdir -p "$out"
@@ -23,5 +26,5 @@ docker run --rm -v "$root:/src:ro" -v snowhush-bench-target:/target -v snowhush-
     bash -c "apt-get update -qq && apt-get install -y -qq libwayland-dev >/dev/null && cargo build --release --locked -q"
 echo "Running ${scene}…"
 docker run --rm -v "$here:/bench:ro" -v "$out:/out" -v snowhush-bench-target:/target:ro --user tester snowhush-bench \
-    dbus-run-session /bench/scene.sh "$scene"
+    dbus-run-session /bench/scene.sh "$scene" "$@"
 cat "$out/trace"

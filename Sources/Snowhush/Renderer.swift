@@ -11,13 +11,18 @@ struct Uniforms {
     var occluderCount: Int32 = 0
     var origin: SIMD2<Float> = .zero
     var pileBottom: Float = 0
-    var padding: Float = 0
+    /// One while leaves fall instead of snow, for a ghost; a pile has its own leaves and petals in each column.
+    var autumn: Float = 0
+    /// One while the leaves are cherry blossom petals.
+    var blossom: Float = 0
+    /// One while fallen leaves wither away.
+    var wilt: Float = 0
     var light = SIMD4<Float>(1, 1, 1, 1)
     var shadowTint = SIMD4<Float>(0, 0, 0, 0)
     var rim = SIMD4<Float>(0, 0, 0, 0)
     /// The cursor's glow: where it is, how far it reaches and how bright it is.
     var lantern = SIMD4<Float>(0, 0, 0, 0)
-    /// How far everything is jolted: x and y.
+    /// How far everything is jolted: x and y. For a pile, z is how far along its window its snow has drifted.
     var shake = SIMD4<Float>(0, 0, 0, 0)
     /// The pumpkins' candles: where each burns, how far its light reaches and how bright it is.
     var pumpkins = (SIMD4<Float>(0, 0, 0, 0), SIMD4<Float>(0, 0, 0, 0), SIMD4<Float>(0, 0, 0, 0))
@@ -50,6 +55,11 @@ final class Renderer: NSObject, MTKViewDelegate {
     /// Frames per second while the snow is being disturbed: the display's highest rate, up to 120 on ProMotion screens.
     var interactiveFrameRate = 60
     var budget = PowerBudget.full
+    /// Every frame at the display's highest rate, whatever the snow is doing and whatever the power.
+    var maxFrameRate = false
+    /// Called when there is nothing to draw and nothing on its way, for the view to stop until the snow is stirred.
+    var rest: () -> Void = {}
+    private static let lanternReach: Float = 130
     /// Where the Dock's snow is drawn; without one it stays in the main overlay.
     var dockOverlay: DockOverlay?
     var sceneLight: (CFTimeInterval) -> (light: SIMD3<Float>, shadowTint: SIMD4<Float>, rim: SIMD4<Float>, lantern: Float) = { _ in (SIMD3(repeating: 1), .zero, .zero, 0) }
@@ -63,6 +73,10 @@ final class Renderer: NSObject, MTKViewDelegate {
     private let pilePipeline: MTLRenderPipelineState
     private let signPipeline: MTLRenderPipelineState
     private let pumpkinPipeline: MTLRenderPipelineState
+    /// Drops on the glass: their bumps added up into a field, and the glass drawn from it.
+    private let fieldPipeline: MTLRenderPipelineState
+    private let glassPipeline: MTLRenderPipelineState
+    private var field: MTLTexture?
     /// The pumpkin's shell and its face, drawn the first time it is needed.
     private var pumpkinPictures: (shell: MTLTexture, face: MTLTexture)?
     /// Each caption's sign, drawn the first time a ghost holds it up, and its size in points.
@@ -106,6 +120,18 @@ final class Renderer: NSObject, MTKViewDelegate {
         self.pilePipeline = try pipeline("pileVertex", "pileFragment")
         self.signPipeline = try pipeline("signVertex", "signFragment")
         self.pumpkinPipeline = try pipeline("pumpkinVertex", "pumpkinFragment")
+        self.glassPipeline = try pipeline("glassVertex", "glassFragment")
+        let field = MTLRenderPipelineDescriptor()
+        field.vertexFunction = library.makeFunction(name: "spriteVertex")
+        field.fragmentFunction = library.makeFunction(name: "fieldFragment")
+        let adding = field.colorAttachments[0]!
+        adding.pixelFormat = .rg16Float
+        adding.isBlendingEnabled = true
+        adding.sourceRGBBlendFactor = .one
+        adding.destinationRGBBlendFactor = .one
+        adding.sourceAlphaBlendFactor = .one
+        adding.destinationAlphaBlendFactor = .one
+        self.fieldPipeline = try device.makeRenderPipelineState(descriptor: field)
         super.init()
     }
 
@@ -113,11 +139,63 @@ final class Renderer: NSObject, MTKViewDelegate {
         lastTime = 0
     }
 
+    /// Whether the lantern's glow at `point` reaches this screen: three times its reach out it is gone.
+    private func lights(_ point: SIMD2<Float>) -> Bool {
+        let reach: Float = Self.lanternReach * 3
+        return point.x > -reach && point.y > -reach && point.x < simulation.width + reach && point.y < simulation.height + reach
+    }
+
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
 
     /// Snow is soft enough that one pixel per point is indistinguishable from Retina, at a quarter of the fill and memory.
     static func fitDrawable(of view: MTKView) {
-        view.drawableSize = view.bounds.size
+        resize(view, to: view.bounds.size)
+    }
+
+    /// The view passes its size on to its layer only as it next draws; the layer gets it at once.
+    private static func resize(_ view: MTKView, to size: CGSize) {
+        view.drawableSize = size
+        (view.layer as? CAMetalLayer)?.drawableSize = size
+    }
+
+    /// Clears the screen and the Dock's strip down to a pixel, so the screen-sized frames held for drawing go back
+    /// until the next drawing fits them again. A layer lets go of frames of an old size only as it hands out new
+    /// ones, once the screen shows them no more, so a second clear frame follows the first.
+    func releaseFrames(of view: MTKView) {
+        guard view.drawableSize != Self.released else { return }
+        Self.resize(view, to: Self.released)
+        clear(view)
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.handBack) { [weak self, weak view] in
+            guard let self, let view, view.drawableSize == Self.released else { return }
+            clear(view)
+        }
+    }
+
+    private static let released = CGSize(width: 1, height: 1)
+    /// Long enough for a clear frame to reach the screen, so the frames it replaced can go.
+    private static let handBack: TimeInterval = 0.25
+
+    private func clear(_ view: MTKView) {
+        guard let commandBuffer = queue.makeCommandBuffer() else { return }
+        // Straight from the layer: the view would keep the pixel-sized drawable for its next frame.
+        if let drawable = (view.layer as? CAMetalLayer)?.nextDrawable() {
+            let pass = MTLRenderPassDescriptor()
+            pass.colorAttachments[0].texture = drawable.texture
+            pass.colorAttachments[0].loadAction = .clear
+            pass.colorAttachments[0].storeAction = .store
+            pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0)
+            commandBuffer.makeRenderCommandEncoder(descriptor: pass)?.endEncoding()
+            commandBuffer.present(drawable)
+        }
+        clearDock(into: commandBuffer)
+        commandBuffer.commit()
+    }
+
+    private func clearDock(into commandBuffer: MTLCommandBuffer) {
+        guard let frame = dockOverlay?.emptyFrame(), let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: frame.pass) else { return }
+        encoder.endEncoding()
+        commandBuffer.present(frame.drawable)
+        dockDrawn = false
     }
 
     func draw(in view: MTKView) {
@@ -134,8 +212,13 @@ final class Renderer: NSObject, MTKViewDelegate {
         let cursor = cursorLocation()
         let changed = simulation.step(dt: dt, cursor: cursor)
         stepped()
+        // The frame shown last stays up, as it would anyway with nothing to draw, without ticking over in vain.
+        if !changed && simulation.isEmpty {
+            rest()
+            return
+        }
         // The lantern follows the cursor even over snow that lies still.
-        let lanternMoved = ambient.lantern > 0 && simd_distance(cursor, lanternAt) > 0.5
+        let lanternMoved = ambient.lantern > 0 && simd_distance(cursor, lanternAt) > 0.5 && (lights(cursor) || lights(lanternAt))
         lanternAt = cursor
         let fastest = budget == .full ? interactiveFrameRate : min(60, interactiveFrameRate)
         // 24 only where it divides the display's rate evenly; elsewhere it would judder.
@@ -145,7 +228,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         case .lively: min(60, fastest)
         case .interactive: fastest
         }
-        let pace = lanternMoved ? max(frameRate, min(60, fastest)) : frameRate
+        let pace = maxFrameRate ? interactiveFrameRate : lanternMoved ? max(frameRate, min(60, fastest)) : frameRate
         if view.preferredFramesPerSecond != pace { view.preferredFramesPerSecond = pace }
         idleFrames = changed || lanternMoved ? 0 : idleFrames + 1
         // A still pile only needs a slow refresh for its glints.
@@ -167,8 +250,7 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     func encode(into commandBuffer: MTLCommandBuffer, pass: MTLRenderPassDescriptor, scale: Float, time: Float) {
         reserve(sprites: simulation.spriteCount, columns: simulation.columnCount)
-        guard spriteBuffers.count == framesInFlight, heightBuffers.count == framesInFlight,
-              let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return }
+        guard spriteBuffers.count == framesInFlight, heightBuffers.count == framesInFlight else { return }
 
         let index = slot % framesInFlight
         slot += 1
@@ -191,9 +273,12 @@ final class Renderer: NSObject, MTKViewDelegate {
             light: SIMD4(ambient.light, 1),
             shadowTint: ambient.shadowTint,
             rim: ambient.rim,
-            lantern: SIMD4(lowHalf: lanternAt, highHalf: SIMD2(130, ambient.lantern)),
+            lantern: SIMD4(lowHalf: lanternAt, highHalf: SIMD2(Self.lanternReach, ambient.lantern)),
             shake: SIMD4(lowHalf: simulation.shake, highHalf: .zero)
         )
+        uniforms.autumn = simulation.leafy ? 1 : 0
+        uniforms.blossom = simulation.leafy && simulation.modes.contains(.blossom) ? 1 : 0
+        uniforms.wilt = simulation.thaws && simulation.accumulates ? 1 : 0
         let pumpkins = simulation.pumpkins
         let candles = pumpkins.prefix(3).map { pumpkin in
             let height = pumpkin.width * HalloweenPumpkin.aspect
@@ -205,6 +290,9 @@ final class Renderer: NSObject, MTKViewDelegate {
         if candles.count > 2 { uniforms.pumpkins.2 = candles[2] }
         let uniformsLength = MemoryLayout<Uniforms>.stride
 
+        let glass = sprites > 0 && simulation.hasGlassDrops ? encodeField(sprites: spriteBuffer, count: sprites, into: commandBuffer, matching: pass, uniforms: uniforms) : nil
+        if !simulation.hasGlassDrops { field = nil }
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return }
         drawPumpkins(pumpkins, with: encoder, uniforms: uniforms)
         drawPiles(piles.filter { !$0.isDock }, with: encoder, uniforms: uniforms, heights: heightBuffer)
         drawSigns(simulation.signs, with: encoder, uniforms: uniforms)
@@ -215,15 +303,48 @@ final class Renderer: NSObject, MTKViewDelegate {
             encoder.setFragmentBytes(&uniforms, length: uniformsLength, index: 1)
             encoder.drawPrimitives(type: .point, vertexStart: 0, vertexCount: sprites)
         }
+        if let glass {
+            encoder.setRenderPipelineState(glassPipeline)
+            encoder.setFragmentTexture(glass, index: 0)
+            encoder.setFragmentBytes(&uniforms, length: uniformsLength, index: 1)
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        }
         encoder.endEncoding()
         encodeDock(piles.filter(\.isDock), into: commandBuffer, uniforms: uniforms, heights: heightBuffer)
+    }
+
+    /// Adds up the bumps of the drops on the glass into the field, as big as the frame drawn, for the glass to be drawn
+    /// from.
+    private func encodeField(sprites: MTLBuffer, count: Int, into commandBuffer: MTLCommandBuffer, matching pass: MTLRenderPassDescriptor, uniforms: Uniforms) -> MTLTexture? {
+        guard let target = pass.colorAttachments[0].texture else { return nil }
+        if field?.width != target.width || field?.height != target.height {
+            let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rg16Float, width: target.width, height: target.height, mipmapped: false)
+            descriptor.usage = [.renderTarget, .shaderRead]
+            descriptor.storageMode = .private
+            field = device.makeTexture(descriptor: descriptor)
+        }
+        guard let field else { return nil }
+        let fieldPass = MTLRenderPassDescriptor()
+        fieldPass.colorAttachments[0].texture = field
+        fieldPass.colorAttachments[0].loadAction = .clear
+        fieldPass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0)
+        fieldPass.colorAttachments[0].storeAction = .store
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: fieldPass) else { return nil }
+        var uniforms = uniforms
+        encoder.setRenderPipelineState(fieldPipeline)
+        encoder.setVertexBuffer(sprites, offset: 0, index: 0)
+        encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+        encoder.setFragmentBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+        encoder.drawPrimitives(type: .point, vertexStart: 0, vertexCount: count)
+        encoder.endEncoding()
+        return field
     }
 
     /// Draws the Dock's snow into its own strip below the Dock, and clears the strip once after the snow is gone.
     private func encodeDock(_ piles: [PileLayer], into commandBuffer: MTLCommandBuffer, uniforms: Uniforms, heights: MTLBuffer) {
         guard let dockOverlay, !piles.isEmpty || dockDrawn else { return }
         let top = piles.map { CGFloat($0.origin.y + $0.top + 2) }.max()
-        guard let frame = dockOverlay.nextFrame(reaching: top),
+        guard let frame = top.map({ dockOverlay.nextFrame(reaching: $0) }) ?? dockOverlay.emptyFrame(),
               let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: frame.pass) else { return }
         var uniforms = uniforms
         uniforms.viewSize = SIMD2(simulation.width, Float(dockOverlay.height))
@@ -231,6 +352,13 @@ final class Renderer: NSObject, MTKViewDelegate {
         encoder.endEncoding()
         commandBuffer.present(frame.drawable)
         dockDrawn = !piles.isEmpty
+        guard piles.isEmpty else { return }
+        // The strip shrank to a line; its larger frames go only once another is handed out.
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.handBack) { [weak self] in
+            guard let self, !dockDrawn, let commandBuffer = queue.makeCommandBuffer() else { return }
+            clearDock(into: commandBuffer)
+            commandBuffer.commit()
+        }
     }
 
     private func drawPiles(_ piles: [PileLayer], with encoder: MTLRenderCommandEncoder, uniforms: Uniforms, heights: MTLBuffer) {
@@ -243,6 +371,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             uniforms.pileTop = pile.top + 2
             uniforms.pileBottom = pile.bottom
             uniforms.origin = pile.origin
+            uniforms.shake.z = pile.drift
             uniforms.occluderCount = Int32(pile.occluders.count)
             var occluders = pile.occluders.isEmpty ? [SIMD4<Float>(repeating: 0)] : pile.occluders
             encoder.setVertexBytes(&uniforms, length: uniformsLength, index: 0)

@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::Receiver;
 
 use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, WPARAM};
@@ -14,16 +15,17 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{HSTRING, PCWSTR, Result, w};
 
 use snowhush_core::geometry::V2;
-use snowhush_core::simulation::{ScatterPiece, SnowSimulation, Snowfall};
+use snowhush_core::halloween::Choice;
+use snowhush_core::simulation::{Mode, ScatterPiece, SnowSimulation};
 
 use crate::desktop::{self, DesktopLayer};
-use crate::halloween::season;
+use crate::halloween;
 use crate::light::{Sky, Wallpapers};
 use crate::log;
 use crate::prefs::Settings;
 use crate::render::Gpu;
 use crate::screen::{BACKDROP_CHANGED, Clock, DISPLAYS_CHANGED, Monitor, PowerBudget, Screen, dip_size, listen, monitors, walls, watch_taskbar};
-use crate::tracker::Tracker;
+use crate::tracker::{self, Tracker};
 
 /// A piece of the welcome window crumbling into snow, in physical screen pixels.
 pub struct Piece {
@@ -34,15 +36,23 @@ pub struct Piece {
 }
 
 pub enum Command {
-    Snowfall(Snowfall),
+    /// How much falls, 0 to 1.
+    Intensity(f32),
+    /// How opaque what falls is drawn, 0.1 to 1.
+    FallingOpacity(f32),
     Accumulate(bool),
     Melt(bool),
     SnowOnWindows(bool),
     BehindWindows(bool),
+    OverFullScreen(bool),
+    /// Every frame at the display's highest rate, or as fast as what moves needs.
+    Performance(bool),
     BehindTaskbar(bool),
     /// Explorer started again, taking the desktop's wallpaper layer with it.
     ShellRestarted,
     ShowInScreenshots(bool),
+    /// The snow settles on a selection dragged across the desktop too.
+    DeepInteraction(bool),
     /// Off while the screen is locked, asleep or the session is away.
     Active(bool),
     Scatter(Vec<Piece>),
@@ -50,8 +60,16 @@ pub enum Command {
     ReleaseSnowfall,
     /// Blows all the snow away; when calm, for less motion, melts it where it lies instead.
     ClearSnow(bool),
-    /// Whether Halloween is wanted when it comes.
-    Halloween(bool),
+    /// Halloween turned on or off from the menu.
+    Halloween(Choice),
+    /// Other kinds fall, once a gust has blown what is there away; when calm, for less motion, it melts where it
+    /// lies instead. A kind only joining what falls starts at once.
+    SwitchMode {
+        mode: Mode,
+        mixed: bool,
+        mix: [Mode; 2],
+        calm: bool,
+    },
     Quit,
 }
 
@@ -78,7 +96,11 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
     log!("adapter: {}", gpu.adapter);
     let _listener = listen()?;
     let mut layer = settings.behind_windows.then(find_layer).flatten();
-    let mut screens = sync_screens(&gpu, &settings, Vec::new(), layer, false);
+    // The displays whose taskbar a full-screen app the snow shows over has put away, and since when each display has
+    // been seen that way or not.
+    let mut full_screen: HashSet<String> = HashSet::new();
+    let mut full_screen_seen: HashMap<String, (bool, i64)> = HashMap::new();
+    let mut screens = sync_screens(&gpu, &settings, &full_screen, Vec::new(), layer, false);
     let timer = unsafe {
         CreateWaitableTimerExW(None, PCWSTR::null(), CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS.0)
             .or_else(|_| CreateWaitableTimerW(None, false, PCWSTR::null()))?
@@ -88,8 +110,8 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
     let started = Clock::now();
     let mut active = true;
     let mut budget = PowerBudget::Full;
-    let mut halloween = settings.halloween && season();
-    let mut sky = Sky::now(halloween);
+    let mut spooky = halloween::shows(&settings);
+    let mut sky = Sky::now(spooky);
     let wallpapers = Wallpapers::new().inspect_err(|error| log!("wallpapers unavailable: {error}")).ok();
     let mut chores_at = 0;
     let mut light_at = 0;
@@ -104,9 +126,17 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
         while let Ok(command) = commands.try_recv() {
             match command {
                 Command::Quit => return Ok(()),
-                Command::Snowfall(snowfall) => {
-                    settings.snowfall = snowfall;
-                    screens.iter_mut().for_each(|screen| screen.simulation.set_snowfall(snowfall));
+                Command::Intensity(intensity) => {
+                    settings.intensity = (intensity * 100.0).round() as u32;
+                    let now = Clock::now();
+                    screens.iter_mut().for_each(|screen| {
+                        screen.simulation.set_intensity(intensity);
+                        screen.wake(now);
+                    });
+                }
+                Command::FallingOpacity(opacity) => {
+                    settings.opacity = (opacity * 100.0).round() as u32;
+                    screens.iter_mut().for_each(|screen| screen.simulation.falling_opacity = opacity);
                 }
                 Command::Accumulate(on) => {
                     settings.accumulate = on;
@@ -124,20 +154,34 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                 }
                 Command::BehindWindows(on) => {
                     settings.behind_windows = on;
-                    if on {
-                        screens.iter_mut().for_each(Screen::drop_window_snow);
-                    }
                     layer = on.then(find_layer).flatten();
-                    screens = sync_screens(&gpu, &settings, screens, layer, true);
+                    screens = sync_screens(&gpu, &settings, &full_screen, screens, layer, true);
+                }
+                Command::OverFullScreen(on) => {
+                    settings.over_full_screen = on;
+                    if !on && !full_screen.is_empty() {
+                        full_screen.clear();
+                        screens = sync_screens(&gpu, &settings, &full_screen, screens, layer, false);
+                    }
+                }
+                Command::DeepInteraction(on) => {
+                    settings.deep_interaction = on;
+                    if !on {
+                        tracker.drop_marquee();
+                    }
+                }
+                Command::Performance(max) => {
+                    settings.max_performance = max;
+                    screens.iter_mut().for_each(|screen| screen.max_rate = max);
                 }
                 Command::BehindTaskbar(on) => {
                     settings.behind_taskbar = on;
-                    screens = sync_screens(&gpu, &settings, screens, layer, true);
+                    screens = sync_screens(&gpu, &settings, &full_screen, screens, layer, true);
                 }
                 Command::ShellRestarted => {
                     if settings.behind_windows {
                         layer = find_layer();
-                        screens = sync_screens(&gpu, &settings, screens, layer, true);
+                        screens = sync_screens(&gpu, &settings, &full_screen, screens, layer, true);
                     }
                 }
                 Command::ShowInScreenshots(on) => {
@@ -153,6 +197,7 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                         .map(|piece| ScatterPiece { position: screen.local(piece.x, piece.y), velocity: piece.velocity, color: piece.color })
                         .collect();
                     screen.simulation.scatter(&local);
+                    screen.wake(Clock::now());
                 }
                 Command::ReleaseSnowfall => {
                     settings.welcomed = true;
@@ -162,15 +207,29 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                     let direction = screens.first().map_or(-1.0, |screen| screen.simulation.breeze_direction());
                     screens.iter_mut().for_each(|screen| screen.simulation.blow_away(direction, calm));
                 }
-                Command::Halloween(on) => {
-                    settings.halloween = on;
+                Command::Halloween(choice) => {
+                    settings.halloween = choice;
                     chores_at = 0;
                     light_at = 0;
+                }
+                Command::SwitchMode { mode, mixed, mix, calm } => {
+                    settings.mode = mode;
+                    settings.mixed = mixed;
+                    settings.mix = mix;
+                    light_at = 0;
+                    let modes = settings.modes();
+                    let direction = screens.first().map_or(-1.0, |screen| screen.simulation.breeze_direction());
+                    let now = Clock::now();
+                    screens.iter_mut().for_each(|screen| {
+                        screen.simulation.switch_modes(&modes, direction, calm);
+                        screen.wake(now);
+                    });
                 }
                 Command::Active(on) => {
                     if on && !active {
                         screens.iter_mut().for_each(Screen::resume);
                     }
+                    tracker::watch_shell_state(on);
                     active = on;
                     log!("active: {on}");
                 }
@@ -197,7 +256,7 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
             if settings.behind_windows {
                 layer = find_layer();
             }
-            screens = sync_screens(&gpu, &settings, screens, layer, false);
+            screens = sync_screens(&gpu, &settings, &full_screen, screens, layer, false);
             clock.refresh();
             light_at = 0;
         }
@@ -209,7 +268,7 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
             chores_at = now + clock.frequency;
             clock.refresh();
             // In case a display change went unannounced.
-            let current = monitors(settings.behind_taskbar);
+            let current = monitors(over_taskbar(&settings, &screens), &full_screen);
             if current.len() != screens.len() || screens.iter().any(|screen| !current.contains(&screen.monitor)) {
                 DISPLAYS_CHANGED.set(true);
             }
@@ -220,33 +279,40 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                 let density = if budget == PowerBudget::Saver { 0.75 } else { 1.0 };
                 screens.iter_mut().for_each(|screen| screen.simulation.set_density(density));
             }
-            screens.iter().for_each(Screen::raise);
+            // Behind windows, a SetWindowPos every second on every monitor's child overlay restacks them under the
+            // icons and the desktop layer blinks — often on one display, then another. Raise only when the
+            // wallpaper layer's children change (a live wallpaper landing on top, Explorer rebuilding, …).
+            if settings.behind_windows {
+                let tree = desktop::tree();
+                if tree != desktop_logged {
+                    log!("desktop: {tree}");
+                    desktop_logged = tree;
+                    screens.iter().for_each(Screen::raise);
+                }
+            } else {
+                screens.iter().for_each(Screen::raise);
+            }
             // Behind windows, the overlays live inside Explorer's windows and vanish when it restarts; until the
             // wallpaper layer is found they wait on top of everything instead.
             if settings.behind_windows && (layer.is_none() || screens.iter().any(|screen| !screen.alive())) {
                 let found = find_layer();
                 if found.is_some() || screens.iter().any(|screen| !screen.alive()) {
                     layer = found;
-                    screens = sync_screens(&gpu, &settings, screens, layer, true);
-                }
-            }
-            // Wallpaper apps share the layer the snow goes into; how they settle around it tells what went wrong.
-            if settings.behind_windows {
-                let tree = desktop::tree();
-                if tree != desktop_logged {
-                    log!("desktop: {tree}");
-                    desktop_logged = tree;
+                    screens = sync_screens(&gpu, &settings, &full_screen, screens, layer, true);
                 }
             }
             if now >= light_at {
                 light_at = now + clock.frequency * 60;
-                let on = settings.halloween && season();
-                if on != halloween {
-                    halloween = on;
+                let on = halloween::shows(&settings);
+                if on != spooky {
+                    spooky = on;
                     log!("halloween: {on}");
-                    screens.iter_mut().for_each(|screen| screen.simulation.set_halloween(on));
+                    screens.iter_mut().for_each(|screen| {
+                        screen.simulation.set_halloween(on);
+                        screen.wake(now);
+                    });
                 }
-                sky = Sky::now(halloween);
+                sky = Sky::now(spooky);
                 if let Some(wallpapers) = &wallpapers {
                     screens.iter_mut().for_each(|screen| screen.update_backdrop(wallpapers));
                 }
@@ -258,20 +324,53 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
             if tracker.take_started_moving() && settings.snow_on_windows {
                 screens.iter_mut().for_each(|screen| screen.wake(now));
             }
-            if screens.iter().any(|screen| screen.next_due <= now + clock.tolerance()) {
-                tracker.refresh(&clock, now);
+            // The desktop's rubber band moves with the pointer, so it is drawn right away too.
+            if settings.snow_on_windows && settings.deep_interaction && tracker.follow_marquee() {
+                screens.iter_mut().for_each(|screen| screen.wake(now));
             }
-            let windows = (settings.snow_on_windows && !settings.behind_windows).then_some(&tracker);
+            if screens.iter().any(|screen| screen.next_due <= now + clock.tolerance()) {
+                if tracker.refresh(&clock, now) && tracker.animating() {
+                    screens.iter_mut().for_each(|screen| screen.wake(now));
+                }
+            }
+            // Behind the windows the snow still settles on them: what lies on a window's top edge is above it, in plain view.
+            let windows = settings.snow_on_windows.then_some(&tracker);
             let time = (clock.seconds(now - started) % 1000.0) as f32;
             let mut lost = false;
             let mut released = false;
+            let mut reshaped = false;
             for screen in screens.iter_mut().filter(|screen| screen.next_due <= now + clock.tolerance()) {
-                let covering = tracker.covering(&screen.monitor.bounds);
+                let in_front = tracker.covering(&screen.monitor.bounds);
+                // Shown over a full-screen app, the snow reaches down to the bottom of the display while the app has put
+                // the taskbar away, so the drift lies along the bottom instead of over a taskbar no longer there; a
+                // change counts once it has lasted, as the app goes full screen or comes out of it in a few steps.
+                if settings.over_full_screen && !settings.behind_windows {
+                    let wanted = in_front.is_some();
+                    match full_screen_seen.get(&screen.monitor.name) {
+                        Some(&(state, _)) if state == wanted => {}
+                        _ => {
+                            full_screen_seen.insert(screen.monitor.name.clone(), (wanted, now));
+                        }
+                    }
+                    if let Some(&(state, since)) = full_screen_seen.get(&screen.monitor.name)
+                        && state != full_screen.contains(&screen.monitor.name)
+                        && clock.seconds(now - since) > 0.3
+                    {
+                        log!("{} {}", screen.monitor.name, if state { "taskbar put away by a full-screen app" } else { "taskbar back" });
+                        if state {
+                            full_screen.insert(screen.monitor.name.clone());
+                        } else {
+                            full_screen.remove(&screen.monitor.name);
+                        }
+                        reshaped = true;
+                    }
+                }
+                let covering = if settings.over_full_screen { None } else { in_front };
                 if covering.is_some() != screen.covered() {
                     log!("{} {}", screen.monitor.name, covering.map_or("uncovered".to_string(), |class| format!("covered by {class}")));
-                    screen.set_covered(covering.is_some());
+                    screen.set_covered(&gpu, covering.is_some());
                 }
-                if screen.covered() {
+                if screen.hidden() {
                     screen.next_due = now + clock.frequency / 4;
                     continue;
                 }
@@ -295,7 +394,9 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
             if lost {
                 screens.clear();
                 gpu = Gpu::new()?;
-                screens = sync_screens(&gpu, &settings, Vec::new(), layer, false);
+                screens = sync_screens(&gpu, &settings, &full_screen, Vec::new(), layer, false);
+            } else if reshaped {
+                screens = sync_screens(&gpu, &settings, &full_screen, screens, layer, false);
             }
             now = Clock::now();
             stats.report(&clock, now, &mut tracker);
@@ -319,9 +420,23 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
 /// One overlay per display: new displays get snow, removed ones lose theirs, and a display that changed
 /// size keeps its snow in a fresh overlay. `rebuild` gives every display a fresh overlay, as when the snow
 /// moves behind windows or back.
-fn sync_screens(gpu: &Gpu, settings: &Settings, mut current: Vec<Screen>, layer: Option<DesktopLayer>, rebuild: bool) -> Vec<Screen> {
+/// Whether the overlays reach down over the taskbar: behind it, or while it rains, which runs down the taskbar as down a
+/// window. Snow and leaves lie on its top edge. What falls is what the screens show, the switch to another kind
+/// coming only once the gust has cleared the screen.
+fn over_taskbar(settings: &Settings, screens: &[Screen]) -> bool {
+    settings.behind_taskbar || screens.first().map_or(settings.modes().contains(&Mode::Rain), |screen| screen.simulation.raining())
+}
+
+fn sync_screens(
+    gpu: &Gpu,
+    settings: &Settings,
+    full_screen: &HashSet<String>,
+    mut current: Vec<Screen>,
+    layer: Option<DesktopLayer>,
+    rebuild: bool,
+) -> Vec<Screen> {
     let mut result = Vec::new();
-    let displays = monitors(settings.behind_taskbar);
+    let displays = monitors(over_taskbar(settings, &current), full_screen);
     for monitor in displays.iter().cloned() {
         let kept = current.iter().position(|screen| screen.monitor.name == monitor.name);
         let simulation = match kept.map(|i| current.swap_remove(i)) {
@@ -332,7 +447,18 @@ fn sync_screens(gpu: &Gpu, settings: &Settings, mut current: Vec<Screen>, layer:
             Some(screen) => {
                 let mut simulation = screen.simulation;
                 let (width, height) = dip_size(&monitor);
-                simulation.resize(width as f32, height as f32);
+                // Reaching further down, as over a taskbar a full-screen app has put away, the drift falls from
+                // where it lay onto the new bottom; stopping short again, what lay along the bottom is under the
+                // taskbar. Everything else stays where it is on the screen.
+                let drop = monitor.rect.bottom - screen.monitor.rect.bottom;
+                let scale = monitor.dpi.max(96) as f32 / 96.0;
+                if drop > 0 && monitor.rect.top == screen.monitor.rect.top {
+                    simulation.lower_ground(width as f32, height as f32, drop as f32 / scale);
+                } else if drop < 0 && monitor.rect.top == screen.monitor.rect.top {
+                    simulation.raise_ground(width as f32, height as f32, -drop as f32 / scale);
+                } else {
+                    simulation.resize(width as f32, height as f32);
+                }
                 simulation
             }
             None => new_simulation(&monitor, settings),
@@ -365,11 +491,13 @@ fn find_layer() -> Option<DesktopLayer> {
 
 fn new_simulation(monitor: &Monitor, settings: &Settings) -> SnowSimulation {
     let (width, height) = dip_size(monitor);
-    let mut simulation = SnowSimulation::new(width as f32, height as f32, settings.snowfall);
+    let mut simulation = SnowSimulation::new(width as f32, height as f32, settings.intensity as f32 / 100.0);
     simulation.thaws = settings.melt;
     simulation.accumulates = settings.accumulate;
+    simulation.falling_opacity = settings.opacity as f32 / 100.0;
     simulation.set_snowfall_held(!settings.welcomed);
-    simulation.set_halloween(settings.halloween && season());
+    simulation.set_halloween(halloween::shows(settings));
+    simulation.set_modes(&settings.modes());
     simulation
 }
 

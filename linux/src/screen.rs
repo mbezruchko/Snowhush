@@ -29,8 +29,13 @@ pub enum PowerBudget {
     Saver,
 }
 
-/// How long a frame may go unshown before the display counts as off or hidden; the snow then only ticks over.
+/// How long a frame may go unshown before the display counts as off or hidden; the snow then waits for it.
 const STALLED: Duration = Duration::from_secs(1);
+/// How often a screen with nothing on it and nothing coming looks again, besides being woken.
+const RESTING: Duration = Duration::from_secs(1);
+/// Seconds the snow takes to fade out of a full-screen app's way, and back in once it goes.
+const FADE_OUT: f32 = 0.25;
+const FADE_IN: f32 = 0.35;
 
 pub struct Screen {
     pub name: String,
@@ -45,16 +50,33 @@ pub struct Screen {
     margins: (i32, i32, i32, i32),
     /// The bottom panel's visible part, which the snow lies on; the ground is then the display's bottom edge.
     shelf: Option<Shelf>,
+    /// Placed once already: a change of margins after that moves the ground.
+    placed: bool,
+    /// A full-screen app the snow shows over has put the panels away: the snow takes the whole display.
+    full_screen: bool,
+    /// Whether a full-screen app was last seen in front, and since when.
+    full_screen_seen: (bool, Instant),
+    /// The panel's shelf a full-screen app put away, which takes up the drift under it when it comes back.
+    shelf_put_away: bool,
+    /// How far the bottom of the overlay was last moved down, in logical pixels, up if negative: the size the
+    /// compositor settles on next comes with the ground moving that far.
+    ground_moved: Option<f32>,
     size: (u32, u32),
     last_step: Option<Instant>,
     idle_frames: u32,
     interactive_rate: u32,
+    /// Every frame at `interactive_rate`, whatever the snow is doing and whatever the power.
+    pub max_rate: bool,
     surfaces: Vec<WindowSurface>,
     windows_seen: u64,
     windows_changed_at: Instant,
     covered: bool,
+    /// How much of the snow shows, from 0 to 1.
+    opacity: f32,
     /// When the frame now waiting for the compositor was drawn.
     shown_pending: Option<Instant>,
+    /// Frames went unshown for a while, so the snow is waiting.
+    stalled: bool,
     backdrop: Option<Backdrop>,
     shadow_tint: [f32; 4],
     /// Where the cursor's candle was last drawn, in overlay coordinates.
@@ -64,8 +86,7 @@ pub struct Screen {
 }
 
 impl Screen {
-    /// `behind` puts the snow under the windows, just over the desktop; without it the snow is above them,
-    /// though under menus, notifications and full-screen windows.
+    /// `layer` is where the snow goes among the windows: see `layer_for`.
     pub fn new(
         app: (&CompositorState, &LayerShell, &QueueHandle<App>),
         output: WlOutput,
@@ -73,7 +94,7 @@ impl Screen {
         bounds: Area,
         refresh: u32,
         simulation: SnowSimulation,
-        behind: bool,
+        layer: Layer,
     ) -> Screen {
         let (compositor, layer_shell, qh) = app;
         let surface = compositor.create_surface(qh);
@@ -81,7 +102,7 @@ impl Screen {
         if let Ok(region) = Region::new(compositor) {
             surface.set_input_region(Some(region.wl_region()));
         }
-        let layer = layer_shell.create_layer_surface(qh, surface, layer_for(behind), Some("snowhush"), Some(&output));
+        let layer = layer_shell.create_layer_surface(qh, surface, layer, Some("snowhush"), Some(&output));
         layer.set_anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
         // Placed by its margins alone, over panels' reserved space as much as anything else.
         layer.set_exclusive_zone(-1);
@@ -97,15 +118,23 @@ impl Screen {
             surface: None,
             margins: (0, 0, 0, 0),
             shelf: None,
+            placed: false,
+            full_screen: false,
+            full_screen_seen: (false, Instant::now()),
+            shelf_put_away: false,
+            ground_moved: None,
             size: (bounds.w as u32, bounds.h as u32),
             last_step: None,
             idle_frames: 0,
             interactive_rate: refresh.clamp(60, 120),
+            max_rate: false,
             surfaces: Vec::new(),
             windows_seen: 0,
             windows_changed_at: Instant::now(),
             covered: false,
+            opacity: 1.0,
             shown_pending: None,
+            stalled: false,
             backdrop: None,
             shadow_tint: [0.0; 4],
             lantern: V2::new(-1e6, -1e6),
@@ -135,16 +164,53 @@ impl Screen {
             log!("{}: {width}x{height}", self.name);
         }
         self.size = (width, height);
-        self.simulation.resize(width as f32, height as f32);
+        // Reaching further down, as over a panel a full-screen app has put away, the drift falls from where it lay onto
+        // the new bottom; stopping short again, it comes up onto the panel. Everything else stays where it is.
+        match self.ground_moved.take() {
+            Some(by) if by > 0.0 => self.simulation.lower_ground(width as f32, height as f32, by),
+            Some(by) if by < 0.0 => self.simulation.raise_ground(width as f32, height as f32, -by),
+            _ => self.simulation.resize(width as f32, height as f32),
+        }
         self.resume();
+    }
+
+    /// Follows a full-screen app the snow shows over putting the panels away, or bringing them back, once the change has
+    /// lasted, as the app goes full screen or comes out of it in a few steps; returns whether to place the overlay again.
+    pub fn follow_full_screen(&mut self, in_front: bool, now: Instant) -> bool {
+        if self.full_screen_seen.0 != in_front {
+            self.full_screen_seen = (in_front, now);
+        }
+        if in_front == self.full_screen || now - self.full_screen_seen.1 < Duration::from_millis(300) {
+            return false;
+        }
+        log!("{}: {}", self.name, if in_front { "panels put away by a full-screen app" } else { "panels back" });
+        self.full_screen = in_front;
+        true
+    }
+
+    /// Back to the work area, as when the snow no longer shows over full-screen apps; returns whether it took more.
+    pub fn leave_full_screen(&mut self) -> bool {
+        std::mem::take(&mut self.full_screen)
     }
 
     /// Fits the snow to the display's work area, so the ground lies on top of the panel; with the bottom
     /// panel as a shelf, the snow reaches down to the display's edge instead, around and behind the panel.
     pub fn place(&mut self, bounds: Area, work: Area, shelf: Option<Shelf>) {
         self.bounds = bounds;
+        // Under a full-screen app the snow shows over, the panels are out of sight: no work area left out, and no
+        // panel for the snow to lie on, whose snow falls to the bottom of the display as off a window closing.
+        let work = if self.full_screen { bounds } else { work };
+        let shelf = if self.full_screen { None } else { shelf };
         if shelf != self.shelf {
             log!("{}: panel {shelf:?}", self.name);
+            // Given back, the panel comes up over the drift that fell from it and takes it up again.
+            if self.full_screen && self.shelf.is_some() {
+                self.shelf_put_away = true;
+            } else if let Some(back) = shelf
+                && std::mem::take(&mut self.shelf_put_away)
+            {
+                self.simulation.lift_onto(back.id);
+            }
             self.shelf = shelf;
             self.simulation.shelf = shelf.map(|shelf| shelf.id);
             self.windows_seen = 0;
@@ -159,13 +225,17 @@ impl Screen {
             return;
         }
         log!("{}: work area {work:?}", self.name);
+        if self.placed && margins.0 == self.margins.0 && margins.2 != self.margins.2 {
+            self.ground_moved = Some((self.margins.2 - margins.2) as f32);
+        }
+        self.placed = true;
         self.margins = margins;
         self.layer.set_margin(margins.0, margins.1, margins.2, margins.3);
         self.layer.commit();
     }
 
-    pub fn set_behind(&mut self, behind: bool) {
-        self.layer.set_layer(layer_for(behind));
+    pub fn set_layer(&mut self, behind: bool, over_full_screen: bool) {
+        self.layer.set_layer(layer_for(behind, over_full_screen));
         self.layer.commit();
         self.resume();
     }
@@ -191,6 +261,16 @@ impl Screen {
         report: Option<(&Report, u64, bool)>,
         snow_on_windows: bool,
     ) -> Result<bool, String> {
+        // The display is off or the overlay hidden, as behind a lock screen: the snow waits there as it does while
+        // locked, and a frame now and then asks to be shown again.
+        if self.shown_pending.is_some_and(|pending| now - pending >= STALLED) {
+            self.stalled = true;
+            self.last_step = None;
+            self.next_due = now + STALLED;
+            let pumpkins = !self.simulation.pumpkins().is_empty();
+            let lantern = self.lantern;
+            return self.present(gpu, qh, now, ambient, lantern, time, pumpkins);
+        }
         let dt = self.last_step.map_or(1.0 / 60.0, |last| (now - last).as_secs_f32().min(0.05));
         self.last_step = Some(now);
         if let Some((report, generation, moving)) = report {
@@ -200,10 +280,21 @@ impl Screen {
             }
         }
         let changed = self.simulation.step(dt, self.pointer(cursor));
+        // Nothing to draw and nothing on its way: the frame shown last stays up, as it would, till the snow is stirred.
+        if !changed && !self.pumpkins_shown && self.simulation.is_empty() {
+            self.fade(gpu, dt, true);
+            self.last_step = None;
+            self.next_due = now + RESTING;
+            return Ok(false);
+        }
         // The candle follows the cursor even over snow that lies still.
         let lantern = self.local(cursor.0, cursor.1);
         let lantern_moved = ambient.night > 0.0 && (lantern - self.lantern).length() > 0.5 && (self.lit_by(lantern) || self.lit_by(self.lantern));
         self.lantern = lantern;
+        let fading = self.fade(gpu, dt, false);
+        if self.hidden() {
+            return Ok(false);
+        }
 
         let fastest = if budget == PowerBudget::Full { self.interactive_rate } else { self.interactive_rate.min(60) };
         // 24 only where it divides the display's rate evenly; elsewhere it would judder.
@@ -213,24 +304,41 @@ impl Screen {
             Pace::Lively => fastest.min(60),
             Pace::Interactive => fastest,
         };
-        let rate = if lantern_moved { rate.max(fastest.min(60)) } else { rate };
+        let rate = if self.max_rate {
+            self.interactive_rate
+        } else if lantern_moved || fading {
+            rate.max(fastest.min(60))
+        } else {
+            rate
+        };
         self.next_due = now + Duration::from_secs_f64(1.0 / rate as f64);
         self.idle_frames = if changed || lantern_moved { 0 } else { self.idle_frames + 1 };
         // A still pile only needs a slow refresh for its glints, and the pumpkins for their candles' flicker; once
         // they are gone, until a frame without them is shown.
         let pumpkins = !self.simulation.pumpkins().is_empty();
         let slow_refresh = self.simulation.has_snow() || pumpkins || self.pumpkins_shown;
-        if !(changed || lantern_moved || (slow_refresh && self.idle_frames % 2 == 0)) {
+        if !(changed || lantern_moved || fading || (slow_refresh && self.idle_frames % 2 == 0)) {
             return Ok(false);
         }
         // The compositor hasn't shown the last frame yet: drawing another would only be thrown away.
-        if let Some(pending) = self.shown_pending {
-            if now - pending < STALLED {
-                return Ok(false);
-            }
-            // The display is off or the surface hidden: tick over slowly until frames are shown again.
-            self.next_due = now + Duration::from_millis(250);
+        if self.shown_pending.is_some() {
+            return Ok(false);
         }
+        self.present(gpu, qh, now, ambient, lantern, time, pumpkins)
+    }
+
+    /// Draws the snow as it is and asks the compositor to say when it shows it.
+    #[allow(clippy::too_many_arguments)]
+    fn present(
+        &mut self,
+        gpu: &mut Gpu,
+        qh: &QueueHandle<App>,
+        now: Instant,
+        ambient: Ambient,
+        lantern: V2,
+        time: f32,
+        pumpkins: bool,
+    ) -> Result<bool, String> {
         let Some(surface) = &self.surface else { return Ok(false) };
         let wl_surface = self.layer.wl_surface();
         wl_surface.frame(qh, FrameCallbackData(wl_surface.clone()));
@@ -240,7 +348,7 @@ impl Screen {
             let r = windows::local_rect(&shelf.rect, &self.area());
             [r.min_x(), r.min_y(), r.max_x(), r.max_y() - shelf.radius]
         });
-        gpu.draw(surface, &self.simulation, Ambient { shadow_tint: self.shadow_tint, lantern, ..ambient }, panel, time)?;
+        gpu.draw(surface, &self.simulation, Ambient { shadow_tint: self.shadow_tint, lantern, ..ambient }, panel, time, self.opacity)?;
         self.pumpkins_shown = pumpkins;
         Ok(true)
     }
@@ -254,6 +362,10 @@ impl Screen {
     /// The compositor showed the last frame.
     pub fn shown(&mut self) {
         self.shown_pending = None;
+        // Shown again after a while away: the snow goes on at once from where it waited.
+        if std::mem::take(&mut self.stalled) {
+            self.next_due = Instant::now();
+        }
     }
 
     /// The pointer in overlay coordinates. Down among the panel's icons it is behind the panel, as far as the
@@ -316,23 +428,39 @@ impl Screen {
         self.windows_seen = 0;
     }
 
-    /// Hides the snow while a full-screen app covers the display, and stops it, as it stops over a full-screen app on a Mac.
-    pub fn set_covered(&mut self, gpu: &Gpu, covered: bool) {
+    /// Fades the snow out while a full-screen app covers the display, still falling, then clears and stops it, as over
+    /// a full-screen app on a Mac; once the app goes, the snow fades back in from where it stopped.
+    pub fn set_covered(&mut self, covered: bool) {
         if covered == self.covered {
             return;
         }
         self.covered = covered;
-        if covered {
-            if let Some(surface) = &self.surface {
-                let _ = gpu.clear(surface);
-            }
-        } else {
-            self.resume();
-        }
+        self.resume();
     }
 
     pub fn covered(&self) -> bool {
         self.covered
+    }
+
+    /// Faded all the way out under a full-screen app: nothing to draw until it goes.
+    pub fn hidden(&self) -> bool {
+        self.covered && self.opacity <= 0.0
+    }
+
+    /// Takes the fade a step toward shown, or gone under a full-screen app; true while it lasts.
+    fn fade(&mut self, gpu: &Gpu, dt: f32, at_once: bool) -> bool {
+        let target = if self.covered { 0.0 } else { 1.0 };
+        if self.opacity == target {
+            return false;
+        }
+        let step = if at_once { 1.0 } else { dt / if self.covered { FADE_OUT } else { FADE_IN } };
+        self.opacity = if target > self.opacity { (self.opacity + step).min(1.0) } else { (self.opacity - step).max(0.0) };
+        if self.hidden()
+            && let Some(surface) = &self.surface
+        {
+            let _ = gpu.clear(surface);
+        }
+        true
     }
 
     /// Picks up the shadow colour again if the desktop picture changed.
@@ -355,6 +483,7 @@ impl Screen {
         self.last_step = None;
         self.next_due = Instant::now();
         self.shown_pending = None;
+        self.stalled = false;
     }
 
     /// A point in logical pixels on the shared desktop in overlay coordinates: up from the bottom left of the overlay.
@@ -370,6 +499,14 @@ impl Screen {
     }
 }
 
-fn layer_for(behind: bool) -> Layer {
-    if behind { Layer::Bottom } else { Layer::Top }
+/// `behind` puts the snow under the windows, just over the desktop; without it the snow is above them, though under
+/// menus, notifications and full-screen windows, unless `over_full_screen` puts it over all of them.
+pub fn layer_for(behind: bool, over_full_screen: bool) -> Layer {
+    if behind {
+        Layer::Bottom
+    } else if over_full_screen {
+        Layer::Overlay
+    } else {
+        Layer::Top
+    }
 }
