@@ -386,6 +386,31 @@ impl SnowSimulation {
         }
     }
 
+    /// Whether columns `from` to `to` of `layer` lie on this screen: a window's snow reaching over a neighbouring
+    /// display is drawn there, but its ghosts aren't.
+    fn on_screen(&self, layer: &SnowLayer, from: usize, to: usize) -> bool {
+        layer.center_x(from) >= 0.0 && layer.center_x(to) <= self.width
+    }
+
+    /// The ghosts on a window whose snow goes to another display crumble away as if leaving, their signs falling.
+    pub(super) fn release_ghosts(&mut self, id: WindowId, li: usize) {
+        let mut i = self.haunting.ghosts.len();
+        while i > 0 {
+            i -= 1;
+            let ghost = self.haunting.ghosts[i];
+            if ghost.layer != id {
+                continue;
+            }
+            if let Some(sign) = self.sign_of(&ghost, li) {
+                let random = &mut self.air.random;
+                let falling = FallingSign { sign, velocity: V2::new(random.range(-30.0, 30.0), 60.0), spin: random.range(-2.5, 2.5), age: 0.0 };
+                self.haunting.falling_signs.push(falling);
+            }
+            self.crumble(&ghost, li, false);
+            self.haunting.ghosts.swap_remove(i);
+        }
+    }
+
     fn layer_of(&self, ghost: &Ghost) -> Option<usize> {
         self.ids.iter().position(|&id| id == ghost.layer)
     }
@@ -501,7 +526,7 @@ impl SnowSimulation {
             let layer = &self.layers[li];
             let reach = (size * 0.4 / layer.column_width).ceil() as usize;
             let column = layer.clamped_index(layer.base().x + x);
-            if column >= reach * 3 && column + reach * 3 < layer.count() && layer.visible[column] {
+            if column >= reach * 3 && column + reach * 3 < layer.count() && layer.visible[column] && self.on_screen(layer, column, column) {
                 let ghost = Ghost::new(id, x, size, self.air.random.next(), false, true);
                 self.level(&ghost, li);
                 self.haunting.ghosts.push(ghost);
@@ -521,6 +546,7 @@ impl SnowSimulation {
             let id = self.ids[li];
             if layer.heights[column] <= 6.0
                 || !(column - reach..=column + reach).all(|j| layer.visible[j])
+                || !self.on_screen(layer, column - reach, column + reach)
                 || self.haunting.ghosts.iter().any(|other| other.layer == id && other.column(layer).abs_diff(column) < reach * 4)
             {
                 continue;
@@ -631,6 +657,7 @@ impl SnowSimulation {
             if to < reach * 3
                 || to + reach * 3 >= layer.count()
                 || !(column.min(to)..=column.max(to)).all(|j| layer.visible[j] && layer.heights[j] > 4.0)
+                || !self.on_screen(layer, to.saturating_sub(reach), to + reach)
                 || self
                     .haunting
                     .ghosts
