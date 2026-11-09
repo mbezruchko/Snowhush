@@ -13,7 +13,7 @@
   &nbsp;·&nbsp;
   <a href="https://github.com/mbezruchko/Snowhush/releases/latest/download/Snowhush-x86_64.AppImage"><b>Download for Linux</b></a>
   &nbsp;·&nbsp;
-  <a href="https://snowhush.pages.dev">snowhush.pages.dev</a>
+  <a href="https://snowhush.app">snowhush.app</a>
   <br>
   <sub>macOS 14 or later · Windows 10 or 11 · Linux with KDE Plasma 6, Hyprland, Sway or niri · free, source available</sub>
 </p>

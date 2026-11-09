@@ -29,4 +29,4 @@ Every pull request and every push to `main` runs `.github/workflows/ci.yml` on G
 
 ## Site
 
-`site/` is a static page served by Cloudflare Pages at [snowhush.pages.dev](https://snowhush.pages.dev): no build command, output directory `site`. Every push to `main` deploys it.
+`site/` is a static page served by Cloudflare Pages at [snowhush.app](https://snowhush.app): no build command, output directory `site`. Every push to `main` deploys it.

@@ -45,7 +45,7 @@ Maintainer: Mykhailo Bezruchko <michael.bezruchko@gmail.com>
 Depends: libc6 (>= 2.35), libgcc-s1, libwayland-client0, libwayland-egl1, libegl1
 Section: x11
 Priority: optional
-Homepage: https://snowhush.pages.dev
+Homepage: https://snowhush.app
 Description: Snow on your Wayland desktop
  Soft snow drifts across your desktop, settles on the tops of your windows,
  slides off when you drag them and parts around the cursor. Needs KDE Plasma 6,

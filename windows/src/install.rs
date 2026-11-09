@@ -60,7 +60,7 @@ pub fn install(app: &[u8], version: &str) -> Result<PathBuf, String> {
     write_string(UNINSTALL, w!("Publisher"), "Mykhailo Bezruchko");
     write_string(UNINSTALL, w!("DisplayIcon"), &exe.display().to_string());
     write_string(UNINSTALL, w!("InstallLocation"), &folder.display().to_string());
-    write_string(UNINSTALL, w!("URLInfoAbout"), "https://snowhush.pages.dev");
+    write_string(UNINSTALL, w!("URLInfoAbout"), "https://snowhush.app");
     write_string(UNINSTALL, w!("UninstallString"), &format!("{quoted} --uninstall"));
     write_string(UNINSTALL, w!("QuietUninstallString"), &format!("{quoted} --uninstall --silent"));
     write_number(UNINSTALL, w!("NoModify"), 1);

@@ -11,7 +11,7 @@ cask "snowhush" do
   url "https://github.com/mbezruchko/Snowhush/releases/download/v#{version}/Snowhush.dmg"
   name "Snowhush"
   desc "Soft snow that falls, drifts and settles on the desktop"
-  homepage "https://snowhush.pages.dev/"
+  homepage "https://snowhush.app/"
 
   livecheck do
     url :url
