@@ -68,6 +68,7 @@ const MIN_WIDTH: f32 = 160.0;
 const INSET: f32 = 12.0;
 /// A slider's row: the track with its thumb, the caption under it.
 const SLIDER: f32 = 46.0;
+const SLIDER_BARE: f32 = 32.0;
 const THUMB: f32 = 10.0;
 const TRACK: f32 = 4.0;
 /// A panel with a slider is at least this wide, for its steps to lie far enough apart.
@@ -111,22 +112,26 @@ pub enum Entry {
     Header(String),
     /// One of `stops` values along a track, `at` the one chosen. Moving it goes to the menu's `toggle` as `id + at`,
     /// leaving the menu open.
+    /// Empty while a `Disclosure` above has it folded away; with no caption, the row above shows its value.
     Slider {
         id: u32,
         at: u32,
         stops: u32,
         caption: String,
+        shown: bool,
     },
     Submenu {
         label: String,
         entries: Vec<Entry>,
     },
-    /// Folds the row of icons under it out or away, leaving the menu open; folded, `summary` trails it.
+    /// Folds the row under it out or away, leaving the menu open; folded, `summary` trails it, and unfolded too with
+    /// `keeps_summary`, for a value the row sets.
     Disclosure {
         id: u32,
         label: String,
         summary: String,
         open: bool,
+        keeps_summary: bool,
     },
     /// Icons that each switch something on or off, leaving the menu open: the row a `Disclosure` folds, empty while it
     /// is folded.
@@ -175,7 +180,12 @@ impl Entry {
     }
 
     pub fn slider(id: u32, at: u32, stops: u32, caption: &str) -> Entry {
-        Entry::Slider { id, at: at.min(stops - 1), stops, caption: caption.to_string() }
+        Entry::Slider { id, at: at.min(stops - 1), stops, caption: caption.to_string(), shown: true }
+    }
+
+    /// A slider with no caption, under a `Disclosure` that shows its value and folds it away.
+    pub fn folded_slider(id: u32, at: u32, stops: u32, shown: bool) -> Entry {
+        Entry::Slider { id, at: at.min(stops - 1), stops, caption: String::new(), shown }
     }
 
     fn label(&self) -> Option<&str> {
@@ -188,8 +198,8 @@ impl Entry {
     fn selectable(&self) -> bool {
         match self {
             Entry::Item { enabled, .. } => *enabled,
-            Entry::Submenu { .. } | Entry::Slider { .. } | Entry::Disclosure { .. } => true,
-            Entry::Icons { shown, .. } => *shown,
+            Entry::Submenu { .. } | Entry::Disclosure { .. } => true,
+            Entry::Icons { shown, .. } | Entry::Slider { shown, .. } => *shown,
             Entry::Separator | Entry::Header(_) => false,
         }
     }
@@ -198,6 +208,8 @@ impl Entry {
         match self {
             Entry::Separator => SEPARATOR,
             Entry::Header(_) => HEADER,
+            Entry::Slider { shown: false, .. } => 0.0,
+            Entry::Slider { caption, .. } if caption.is_empty() => SLIDER_BARE,
             Entry::Slider { .. } => SLIDER,
             Entry::Icons { shown, .. } => {
                 if *shown {
@@ -1162,7 +1174,10 @@ impl Menu {
                         target.DrawTextLayout(Vector2 { X: panel.label, Y: top }, &layout, &dim, D2D1_DRAW_TEXT_OPTIONS_NONE);
                         continue;
                     }
-                    &Entry::Slider { at, stops, ref caption, .. } => {
+                    &Entry::Slider { at, stops, ref caption, shown, .. } => {
+                        if !shown {
+                            continue;
+                        }
                         let state = if self.sliding == Some((p, i)) {
                             Thumb::Pressed
                         } else if panel.hover == Some(i) {
@@ -1179,7 +1194,7 @@ impl Menu {
                         }
                         continue;
                     }
-                    Entry::Disclosure { label, summary, open, .. } => {
+                    Entry::Disclosure { label, summary, open, keeps_summary, .. } => {
                         if panel.hover == Some(i) {
                             let rect = D2D_RECT_F { left: PAD, top, right: panel.width - PAD, bottom: top + ROW };
                             target.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect, radiusX: ROW_RADIUS, radiusY: ROW_RADIUS }, &hover);
@@ -1187,7 +1202,7 @@ impl Menu {
                         self.glyph(target, if *open { CHEVRON_DOWN } else { CHEVRON }, panel.width - PAD - 14.0, top, &ink);
                         let layout = self.layout(label, panel.width - panel.label - TRAILING / 2.0)?;
                         target.DrawTextLayout(Vector2 { X: panel.label, Y: top }, &layout, &ink, D2D1_DRAW_TEXT_OPTIONS_NONE);
-                        if !*open {
+                        if !*open || *keeps_summary {
                             let soft = target.CreateSolidColorBrush(&palette.soft, None)?;
                             let layout = self.layout(summary, panel.width - panel.label - PAD - 28.0)?;
                             layout.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING)?;
@@ -1323,9 +1338,11 @@ impl Menu {
             target.FillEllipse(&circle(THUMB), &fill);
             target.DrawEllipse(&circle(THUMB - 0.5), &rim, 1.0, None);
             target.FillEllipse(&circle(dot), &accent);
-            let units: Vec<u16> = caption.encode_utf16().collect();
-            let layout = self.write.CreateTextLayout(&units, &self.caption, right - left + 2.0 * THUMB, 16.0)?;
-            target.DrawTextLayout(Vector2 { X: left - THUMB, Y: top + 27.0 }, &layout, &soft, D2D1_DRAW_TEXT_OPTIONS_NONE);
+            if !caption.is_empty() {
+                let units: Vec<u16> = caption.encode_utf16().collect();
+                let layout = self.write.CreateTextLayout(&units, &self.caption, right - left + 2.0 * THUMB, 16.0)?;
+                target.DrawTextLayout(Vector2 { X: left - THUMB, Y: top + 27.0 }, &layout, &soft, D2D1_DRAW_TEXT_OPTIONS_NONE);
+            }
         }
         Ok(())
     }

@@ -60,6 +60,7 @@ const ID_BLOSSOM: u32 = 217;
 const ID_SPONSOR: u32 = 218;
 const ID_MIXED: u32 = 219;
 const ID_GROUND: u32 = 220;
+const ID_OPACITY_FOLD: u32 = 221;
 /// Opacity from 10% up in steps of 5%: `ID_OPACITY` + the step.
 const ID_OPACITY: u32 = 400;
 const OPACITY_STEPS: u32 = 19;
@@ -183,6 +184,8 @@ thread_local! {
     static APP: RefCell<Option<App>> = const { RefCell::new(None) };
     /// Whether Accumulate shows its row of icons, for as long as the app runs.
     static ACCUMULATE_OPEN: Cell<bool> = const { Cell::new(false) };
+    /// Whether Opacity shows its slider, for as long as the app runs.
+    static OPACITY_OPEN: Cell<bool> = const { Cell::new(false) };
 }
 
 /// The tray icon and its menu, and the system events that pause the snow, on the main thread;
@@ -412,8 +415,15 @@ fn entries(settings: &Settings, login: bool, sliders: bool) -> Vec<Entry> {
         vec![
             Entry::header(tr("intensity")),
             Entry::slider(ID_SNOWFALL, settings.intensity.clamp(0, 100) / 5, INTENSITY_STEPS, &percent(settings.intensity)),
-            Entry::header(tr("opacity")),
-            Entry::slider(ID_OPACITY, (settings.opacity.clamp(10, 100) - 10) / 5, OPACITY_STEPS, &format!("{}%", settings.opacity)),
+            // Opacity is set once and left, so it folds away like Accumulate, its value on the row.
+            Entry::Disclosure {
+                id: ID_OPACITY_FOLD,
+                label: tr("opacity").to_string(),
+                summary: format!("{}%", settings.opacity),
+                open: OPACITY_OPEN.get(),
+                keeps_summary: true,
+            },
+            Entry::folded_slider(ID_OPACITY, (settings.opacity.clamp(10, 100) - 10) / 5, OPACITY_STEPS, OPACITY_OPEN.get()),
             Entry::Separator,
         ]
     } else {
@@ -462,7 +472,10 @@ fn accumulate(settings: &Settings, heaps: bool, drawn: bool) -> Vec<Entry> {
     };
     let open = ACCUMULATE_OPEN.get();
     let tiles = surfaces.into_iter().map(|(id, icon, label, on)| Tile { id, icon, label: label.to_string(), on }).collect();
-    vec![Entry::Disclosure { id: ID_ACCUMULATE, label: tr("accumulate").to_string(), summary, open }, Entry::Icons { tiles, shown: open }]
+    vec![
+        Entry::Disclosure { id: ID_ACCUMULATE, label: tr("accumulate").to_string(), summary, open, keeps_summary: false },
+        Entry::Icons { tiles, shown: open },
+    ]
 }
 
 /// An intensity as its caption: a percentage, or Off.
@@ -525,6 +538,7 @@ fn choose(window: HWND, chosen: u32, login: bool) {
             }
         }),
         ID_ACCUMULATE => ACCUMULATE_OPEN.set(!ACCUMULATE_OPEN.get()),
+        ID_OPACITY_FOLD => OPACITY_OPEN.set(!OPACITY_OPEN.get()),
         ID_LOGIN => {
             let status = prefs::set_opens_at_login(!login);
             log!("open at login {}: {status:?}", !login);

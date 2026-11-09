@@ -9,6 +9,8 @@ final class MenuDisclosure: NSView {
         didSet { needsDisplay = true }
     }
     var toggled: () -> Void = {}
+    /// Shows the summary unfolded too, as a value the folded row sets.
+    var summaryWhileOpen = false
 
     /// Where a title starts in a menu with no checkmarks, as the menu bar menu's own rows have it.
     private static let titleX: CGFloat = MenuToggle.modern ? 15 : 14
@@ -75,7 +77,7 @@ final class MenuDisclosure: NSView {
             chevron.draw(in: NSRect(x: right + (12 - size.width) / 2, y: (bounds.height - size.height) / 2, width: size.width, height: size.height))
             right -= 8
         }
-        guard !open, !summary.isEmpty else { return }
+        guard !open || summaryWhileOpen, !summary.isEmpty else { return }
         let trailing = NSAttributedString(string: summary, attributes: [.font: font, .foregroundColor: soft])
         let width = trailing.size().width
         trailing.draw(at: NSPoint(x: max(right - width, Self.titleX + title.size().width + 12), y: (bounds.height - trailing.size().height) / 2))

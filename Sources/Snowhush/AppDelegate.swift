@@ -14,7 +14,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var halloween = false
     private var statusItem: NSStatusItem!
     private let intensitySlider = MenuSlider(range: 0...1)
-    private let opacitySlider = MenuSlider(range: Preferences.opacityRange)
+    private let opacitySlider = MenuSlider(range: Preferences.opacityRange, captioned: false)
+    private var opacityItem: NSMenuItem!
+    private let opacityRow = MenuDisclosure()
+    private var opacitySliderItem: NSMenuItem!
     private var accumulateItem: NSMenuItem!
     private let accumulateRow = MenuDisclosure()
     private var surfacesItem: NSMenuItem!
@@ -147,14 +150,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         let intensityItem = NSMenuItem()
         intensityItem.view = intensitySlider
         menu.addItem(intensityItem)
-        menu.addItem(.sectionHeader(title: tr("opacity")))
+        // Opacity is set once and left, so it folds away like Accumulate, its value on the row.
+        opacityItem = menu.addItem(withTitle: tr("opacity"), action: nil, keyEquivalent: "")
+        opacityItem.view = opacityRow
+        opacityRow.summaryWhileOpen = true
+        opacityRow.toggled = { [unowned self] in
+            opacityRow.open.toggle()
+            opacitySliderItem.isHidden = !opacityRow.open
+        }
         opacitySlider.changed = { [unowned self] opacity in
             Preferences.fallingOpacity = opacity
             for snow in screens { snow.simulation.fallingOpacity = Float(opacity) }
+            opacityRow.summary = MenuSlider.percent(opacity)
         }
-        let opacityItem = NSMenuItem()
-        opacityItem.view = opacitySlider
-        menu.addItem(opacityItem)
+        opacitySliderItem = NSMenuItem()
+        opacitySliderItem.view = opacitySlider
+        opacitySliderItem.isHidden = true
+        menu.addItem(opacitySliderItem)
         accumulateItem = menu.addItem(withTitle: tr("accumulate"), action: nil, keyEquivalent: "")
         accumulateItem.view = accumulateRow
         accumulateRow.toggled = { [unowned self] in
@@ -240,6 +252,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     func menuNeedsUpdate(_ menu: NSMenu) {
         intensitySlider.value = Preferences.intensity
         opacitySlider.value = Preferences.fallingOpacity
+        opacityRow.summary = MenuSlider.percent(Preferences.fallingOpacity)
+        opacityRow.fit(opacityItem.title, least: 0)
         let modes = Mode.allCases.filter(Preferences.modes.contains)
         mixedItem.state = Preferences.mixed ? .on : .off
         for (item, mode) in modeItems { item.state = modes.contains(mode) ? .on : .off }

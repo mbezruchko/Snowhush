@@ -2027,6 +2027,7 @@
       input.setAttribute('aria-valuetext', percent(value));
       const output = input.parentElement.querySelector('output');
       if (output) output.textContent = percent(value);
+      for (const shown of document.querySelectorAll(`[data-snow-menu] [data-value="${input.dataset.slider}"]`)) shown.textContent = percent(value);
     }
     const falling = MODE_ORDER.filter(mode => modesOf().includes(mode));
     // Rain neither heaps up nor lies about to clear away.
