@@ -184,9 +184,15 @@ impl Rain {
         taken
     }
 
-    pub(super) fn adopt(&mut self, drops: Vec<GlassDrop>) {
+    /// Puts drops taken off a window's glass on another display onto it here; `scale` takes that display's pixels to
+    /// these.
+    pub(super) fn adopt(&mut self, drops: Vec<GlassDrop>, scale: f32) {
         self.drops.retain(|drop| !drops.iter().any(|other| other.layer == drop.layer));
-        self.drops.extend(drops);
+        self.drops.extend(drops.into_iter().map(|mut drop| {
+            drop.offset *= scale;
+            drop.face *= scale;
+            drop
+        }));
     }
 
     pub(super) fn sprite_count(&self) -> usize {

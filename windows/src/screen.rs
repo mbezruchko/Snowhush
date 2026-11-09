@@ -381,7 +381,7 @@ impl Screen {
             self.windows_seen = tracker.generation;
             self.taskbar = taskbar;
             self.simulation.covers = tracker.covers(&self.monitor.rect, self.size);
-            let mut surfaces = tracker.surfaces(&self.monitor.rect, self.size);
+            let mut surfaces = tracker.surfaces(&self.monitor.name, &self.monitor.rect, self.size);
             surfaces.extend(self.taskbar.clone());
             if !(self.synced && surfaces == self.surfaces) {
                 self.synced = true;
@@ -488,6 +488,21 @@ impl Screen {
         self.shadow_tint = backdrop.as_ref().and_then(|backdrop| wallpapers.tint(backdrop)).unwrap_or([0.0; 4]);
         log!("backdrop of {}: {backdrop:?}, shadow {:?}", self.monitor.name, self.shadow_tint);
         self.backdrop = backdrop;
+    }
+
+    /// Reads the windows again at the next frame, as after another display handed over a window's snow.
+    pub fn rewatch(&mut self) {
+        self.windows_seen = 0;
+    }
+
+    /// The overlay's size in DIPs.
+    pub fn size(&self) -> (u32, u32) {
+        self.size
+    }
+
+    /// Physical pixels to a DIP across the overlay.
+    pub fn pixels_per_point(&self) -> f32 {
+        physical_size(&self.monitor).0 as f32 / self.size.0.max(1) as f32
     }
 
     pub fn wake(&mut self, now: i64) {

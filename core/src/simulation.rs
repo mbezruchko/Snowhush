@@ -13,7 +13,7 @@ mod pumpkins;
 mod rain;
 
 use ghosts::Haunting;
-pub use neighbours::{Borrowed, Carried, Caught, Stray};
+pub use neighbours::{Borrowed, Carried, Caught, Mapping, Stray};
 use pumpkins::Pumpkins;
 use rain::Rain;
 
