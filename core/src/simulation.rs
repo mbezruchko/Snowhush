@@ -425,6 +425,8 @@ pub struct SnowSimulation {
     density: f32,
     pub thaws: bool,
     pub accumulates: bool,
+    /// Whether snow and leaves settle along the bottom of the screen; rain splashes there either way.
+    pub ground_settles: bool,
     /// How opaque snow, leaves and rain are while they fall, from the sky or off a window; once settled they show in full.
     pub falling_opacity: f32,
     /// Side edges, left and right, with no display past them: a window slid past one leaves its snow heaped against the edge.
@@ -484,6 +486,7 @@ impl SnowSimulation {
             density: 1.0,
             thaws: false,
             accumulates: true,
+            ground_settles: true,
             falling_opacity: 1.0,
             walls: (false, false),
             neighbours: (false, false),
@@ -808,7 +811,9 @@ impl SnowSimulation {
             self.settle_pumpkins(dt);
         }
         for (area, x, blend) in self.air.overflow.drain(..) {
-            self.layers[0].deposit(area, x, true, blend);
+            if self.ground_settles {
+                self.layers[0].deposit(area, x, true, blend);
+            }
         }
 
         for layer in &mut self.layers {
@@ -1286,7 +1291,8 @@ impl SnowSimulation {
             }
 
             if flake.settles && (self.accumulates || flake.rain()) && flake.blown == 0.0 {
-                let hit = landing(&self.layers, flake.position.x, previous_y, flake.position.y, !self.crossed(flake.position));
+                let ground = self.ground_settles || flake.rain();
+                let hit = landing(&self.layers, flake.position.x, previous_y, flake.position.y, !self.crossed(flake.position), ground);
                 // Only snow is handed over: leaves and rain on a window kept by another display fall on past it.
                 if !flake.rain()
                     && flake.leaf <= 0.0
@@ -1326,7 +1332,8 @@ impl SnowSimulation {
                     self.recycle(i);
                     continue;
                 }
-            } else if flake.position.y < -flake.size * 2.0 {
+            }
+            if flake.position.y < -flake.size * 2.0 {
                 self.recycle(i);
                 continue;
             }
@@ -1376,7 +1383,7 @@ impl SnowSimulation {
             let hit = if grain.blown || grain.velocity.y > 0.0 {
                 None
             } else {
-                landing(&self.layers, grain.position.x, previous_y, grain.position.y, !self.crossed(grain.position))
+                landing(&self.layers, grain.position.x, previous_y, grain.position.y, !self.crossed(grain.position), self.ground_settles)
             };
 
             if grain.position.y >= -10.0 && self.crossed(grain.position) {
@@ -1670,8 +1677,9 @@ impl SnowSimulation {
             layer.outside = outside;
         }
         for (li, layer) in self.layers.iter_mut().enumerate() {
-            if !self.accumulates || self.thaws {
-                let floor = if !self.accumulates {
+            let bare = li == 0 && !self.ground_settles;
+            if !self.accumulates || self.thaws || bare {
+                let floor = if !self.accumulates || bare {
                     0.0
                 } else if li == 0 {
                     THAW_DEPTH
@@ -2992,7 +3000,7 @@ fn restore(ledge: &mut SnowLayer, left: f32, top: f32, columns: usize) {
 
 /// The highest visible snow surface crossed while falling from `from` to `to` at `x`, allowing for the surface moving meanwhile.
 /// Past an edge shared with another display only the ground counts: snow there is the other display's to land.
-fn landing(layers: &[SnowLayer], x: f32, from: f32, to: f32, here: bool) -> Option<(usize, usize)> {
+fn landing(layers: &[SnowLayer], x: f32, from: f32, to: f32, here: bool, ground: bool) -> Option<(usize, usize)> {
     let mut hit = None;
     let mut highest = -f32::MAX;
     for (li, ledge) in layers.iter().enumerate().skip(1).filter(|_| here) {
@@ -3007,7 +3015,7 @@ fn landing(layers: &[SnowLayer], x: f32, from: f32, to: f32, here: bool) -> Opti
             highest = surface;
         }
     }
-    if hit.is_some() {
+    if hit.is_some() || !ground {
         return hit;
     }
     let ground = &layers[0];

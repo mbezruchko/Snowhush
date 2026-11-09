@@ -13,6 +13,12 @@
 "display" = "表示";
 "general" = "一般";
 "accumulate" = "積もらせる";
+"surface.ground" = "地面";
+"surface.dock" = "Dock";
+"surface.widgets" = "ウィジェット";
+"surface.windows" = "ウインドウ";
+"surface.panel" = "パネル";
+"all" = "すべて";
 "melt.snow" = "雪を溶かす";
 "melt.autumn" = "葉を枯らす";
 "melt.blossom" = "花びらを枯らす";
@@ -26,17 +32,6 @@
 "updates" = "アップデートを確認…";
 "support" = "Snowhushを支援";
 "quit" = "終了";
-
-"windows.snow" = "ウインドウに雪";
-"windows.autumn" = "ウインドウに葉";
-"windows.rain" = "ウインドウに雨";
-"windows.blossom" = "ウインドウに花びら";
-"windows.snow.autumn" = "ウインドウに雪と葉";
-"windows.snow.rain" = "ウインドウに雪と雨";
-"windows.snow.blossom" = "ウインドウに雪と花びら";
-"windows.autumn.rain" = "ウインドウに葉と雨";
-"windows.autumn.blossom" = "ウインドウに葉と花びら";
-"windows.rain.blossom" = "ウインドウに雨と花びら";
 
 "clear.snow" = "雪を消す";
 "clear.autumn" = "葉を消す";

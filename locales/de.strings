@@ -13,6 +13,12 @@
 "display" = "Darstellung";
 "general" = "Allgemein";
 "accumulate" = "Anhäufen";
+"surface.ground" = "Boden";
+"surface.dock" = "Dock";
+"surface.widgets" = "Widgets";
+"surface.windows" = "Fenster";
+"surface.panel" = "Leiste";
+"all" = "Alle";
 "melt.snow" = "Schnee schmilzt";
 "melt.autumn" = "Laub verwelkt";
 "melt.blossom" = "Blüten welken";
@@ -26,17 +32,6 @@
 "updates" = "Nach Updates suchen …";
 "support" = "Snowhush unterstützen";
 "quit" = "Beenden";
-
-"windows.snow" = "Schnee auf Fenstern";
-"windows.autumn" = "Laub auf Fenstern";
-"windows.rain" = "Regen auf Fenstern";
-"windows.blossom" = "Blüten auf Fenstern";
-"windows.snow.autumn" = "Schnee und Laub auf Fenstern";
-"windows.snow.rain" = "Schnee und Regen auf Fenstern";
-"windows.snow.blossom" = "Schnee und Blüten auf Fenstern";
-"windows.autumn.rain" = "Laub und Regen auf Fenstern";
-"windows.autumn.blossom" = "Laub und Blüten auf Fenstern";
-"windows.rain.blossom" = "Regen und Blüten auf Fenstern";
 
 "clear.snow" = "Schnee entfernen";
 "clear.autumn" = "Laub entfernen";

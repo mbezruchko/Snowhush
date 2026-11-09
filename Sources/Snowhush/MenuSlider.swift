@@ -14,7 +14,8 @@ final class MenuSlider: NSView {
     private let slider = NSSlider()
     private let caption = NSTextField(labelWithString: "")
 
-    init(range: ClosedRange<Double>) {
+    /// `captioned` false leaves out the percentage under the track, for a slider whose row above already shows it.
+    init(range: ClosedRange<Double>, captioned: Bool = true) {
         super.init(frame: NSRect(x: 0, y: 0, width: 200, height: 50))
         autoresizingMask = .width
 
@@ -28,7 +29,7 @@ final class MenuSlider: NSView {
         caption.textColor = .secondaryLabelColor
         caption.alignment = .center
 
-        for view in [slider, caption] {
+        for view in captioned ? [slider, caption] : [slider] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
@@ -37,10 +38,13 @@ final class MenuSlider: NSView {
             slider.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
             slider.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
             slider.topAnchor.constraint(equalTo: topAnchor, constant: 4),
+        ] + (captioned ? [
             caption.centerXAnchor.constraint(equalTo: slider.centerXAnchor),
             caption.topAnchor.constraint(equalTo: slider.bottomAnchor, constant: 2),
             caption.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2),
-        ])
+        ] : [
+            slider.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6),
+        ]))
         setFrameSize(NSSize(width: frame.width, height: fittingSize.height))
         show()
     }
@@ -84,8 +88,12 @@ final class MenuSlider: NSView {
         describe(value)
     }
 
+    static func percent(_ value: Double) -> String {
+        value == 0 ? tr("off") : "\(Int((value * 100).rounded()))%"
+    }
+
     private func describe(_ value: Double) {
-        let text = value == 0 ? "Off" : "\(Int((value * 100).rounded()))%"
+        let text = Self.percent(value)
         slider.setAccessibilityValueDescription(text)
         caption.stringValue = text
     }

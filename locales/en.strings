@@ -16,6 +16,13 @@
 "display" = "Display";
 "general" = "General";
 "accumulate" = "Accumulate";
+/* What Accumulate lets snow settle on, and what it sums up as when every one is on. */
+"surface.ground" = "Ground";
+"surface.dock" = "Dock";
+"surface.widgets" = "Widgets";
+"surface.windows" = "Windows";
+"surface.panel" = "Panel";
+"all" = "All";
 "melt.snow" = "Melt Snow";
 "melt.autumn" = "Wither Leaves";
 "melt.blossom" = "Wilt Petals";
@@ -29,18 +36,6 @@
 "updates" = "Check for Updates…";
 "support" = "Support Snowhush";
 "quit" = "Quit";
-
-/* Snow on Windows, for what falls: one kind, or two in Mixed. */
-"windows.snow" = "Snow on Windows";
-"windows.autumn" = "Leaves on Windows";
-"windows.rain" = "Rain on Windows";
-"windows.blossom" = "Petals on Windows";
-"windows.snow.autumn" = "Snow and Leaves on Windows";
-"windows.snow.rain" = "Snow and Rain on Windows";
-"windows.snow.blossom" = "Snow and Petals on Windows";
-"windows.autumn.rain" = "Leaves and Rain on Windows";
-"windows.autumn.blossom" = "Leaves and Petals on Windows";
-"windows.rain.blossom" = "Rain and Petals on Windows";
 
 /* Clear Snow, for what lies about: rain never does. */
 "clear.snow" = "Clear Snow";

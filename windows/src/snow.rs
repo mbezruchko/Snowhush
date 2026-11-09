@@ -40,7 +40,7 @@ pub enum Command {
     Intensity(f32),
     /// How opaque what falls is drawn, 0.1 to 1.
     FallingOpacity(f32),
-    Accumulate(bool),
+    Ground(bool),
     Melt(bool),
     SnowOnWindows(bool),
     BehindWindows(bool),
@@ -140,9 +140,13 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                     settings.opacity = (opacity * 100.0).round() as u32;
                     screens.iter_mut().for_each(|screen| screen.simulation.falling_opacity = opacity);
                 }
-                Command::Accumulate(on) => {
-                    settings.accumulate = on;
-                    screens.iter_mut().for_each(|screen| screen.simulation.accumulates = on);
+                Command::Ground(on) => {
+                    settings.ground = on;
+                    let accumulates = settings.accumulates();
+                    screens.iter_mut().for_each(|screen| {
+                        screen.simulation.ground_settles = on;
+                        screen.simulation.accumulates = accumulates;
+                    });
                 }
                 Command::Melt(on) => {
                     settings.melt = on;
@@ -150,6 +154,8 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                 }
                 Command::SnowOnWindows(on) => {
                     settings.snow_on_windows = on;
+                    let accumulates = settings.accumulates();
+                    screens.iter_mut().for_each(|screen| screen.simulation.accumulates = accumulates);
                     if !on {
                         screens.iter_mut().for_each(Screen::drop_window_snow);
                     }
@@ -607,7 +613,8 @@ fn new_simulation(monitor: &Monitor, settings: &Settings) -> SnowSimulation {
     let (width, height) = dip_size(monitor);
     let mut simulation = SnowSimulation::new(width as f32, height as f32, settings.intensity as f32 / 100.0);
     simulation.thaws = settings.melt;
-    simulation.accumulates = settings.accumulate;
+    simulation.accumulates = settings.accumulates();
+    simulation.ground_settles = settings.ground;
     simulation.falling_opacity = settings.opacity as f32 / 100.0;
     simulation.set_snowfall_held(!settings.welcomed);
     simulation.set_halloween(halloween::shows(settings));

@@ -13,6 +13,12 @@
 "display" = "Відображення";
 "general" = "Загальні";
 "accumulate" = "Накопичення";
+"surface.ground" = "Земля";
+"surface.dock" = "Dock";
+"surface.widgets" = "Віджети";
+"surface.windows" = "Вікна";
+"surface.panel" = "Панель";
+"all" = "Усі";
 "melt.snow" = "Танення снігу";
 "melt.autumn" = "В'янення листя";
 "melt.blossom" = "В'янення пелюсток";
@@ -26,17 +32,6 @@
 "updates" = "Перевірити оновлення…";
 "support" = "Підтримати Snowhush";
 "quit" = "Вийти";
-
-"windows.snow" = "Сніг на вікнах";
-"windows.autumn" = "Листя на вікнах";
-"windows.rain" = "Дощ на вікнах";
-"windows.blossom" = "Пелюстки на вікнах";
-"windows.snow.autumn" = "Сніг і листя на вікнах";
-"windows.snow.rain" = "Сніг і дощ на вікнах";
-"windows.snow.blossom" = "Сніг і пелюстки на вікнах";
-"windows.autumn.rain" = "Листя і дощ на вікнах";
-"windows.autumn.blossom" = "Листя і пелюстки на вікнах";
-"windows.rain.blossom" = "Дощ і пелюстки на вікнах";
 
 "clear.snow" = "Прибрати сніг";
 "clear.autumn" = "Прибрати листя";

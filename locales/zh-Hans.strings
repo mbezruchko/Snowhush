@@ -13,6 +13,12 @@
 "display" = "显示";
 "general" = "通用";
 "accumulate" = "堆积";
+"surface.ground" = "地面";
+"surface.dock" = "程序坞";
+"surface.widgets" = "小组件";
+"surface.windows" = "窗口";
+"surface.panel" = "面板";
+"all" = "全部";
 "melt.snow" = "积雪融化";
 "melt.autumn" = "落叶枯萎";
 "melt.blossom" = "花瓣凋谢";
@@ -26,17 +32,6 @@
 "updates" = "检查更新…";
 "support" = "支持 Snowhush";
 "quit" = "退出";
-
-"windows.snow" = "窗口上的雪";
-"windows.autumn" = "窗口上的落叶";
-"windows.rain" = "窗口上的雨";
-"windows.blossom" = "窗口上的花瓣";
-"windows.snow.autumn" = "窗口上的雪和落叶";
-"windows.snow.rain" = "窗口上的雪和雨";
-"windows.snow.blossom" = "窗口上的雪和花瓣";
-"windows.autumn.rain" = "窗口上的落叶和雨";
-"windows.autumn.blossom" = "窗口上的落叶和花瓣";
-"windows.rain.blossom" = "窗口上的雨和花瓣";
 
 "clear.snow" = "清除积雪";
 "clear.autumn" = "清除落叶";

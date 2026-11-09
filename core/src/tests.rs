@@ -62,6 +62,31 @@ fn snow_falls_and_settles_on_the_ground() {
 }
 
 #[test]
+fn snow_passes_the_ground_it_may_not_settle_on_and_still_settles_on_a_window() {
+    let mut simulation = SnowSimulation::new(1280.0, 800.0, 0.75);
+    simulation.ground_settles = false;
+    let none = HashSet::new();
+    simulation.update_windows(&[surface(7, 300.0, 600.0, 500.0)], 0.2, &none, &none, false);
+    run(&mut simulation, 60.0, AWAY);
+    let piles = piles(&simulation);
+    assert!(ground(&simulation) < 1.0, "ground area {}: {piles:?}", ground(&simulation));
+    assert!(piles.iter().any(|(origin, area)| origin.y > 500.0 && *area > 200.0), "no snow on the window: {piles:?}");
+    simulation.set_intensity(0.0);
+    run(&mut simulation, 40.0, AWAY);
+    assert!(simulation.sprite_count() < 50, "flakes keep falling past the screen: {}", simulation.sprite_count());
+}
+
+#[test]
+fn snow_on_a_ground_switched_off_melts_away() {
+    let mut simulation = SnowSimulation::new(1280.0, 800.0, 0.75);
+    run(&mut simulation, 60.0, AWAY);
+    simulation.ground_settles = false;
+    simulation.set_intensity(0.0);
+    run(&mut simulation, 180.0, AWAY);
+    assert!(ground(&simulation) < 1.0, "ground area {}", ground(&simulation));
+}
+
+#[test]
 fn off_stops_the_snowfall() {
     let mut simulation = SnowSimulation::new(1280.0, 800.0, 0.0);
     run(&mut simulation, 30.0, AWAY);

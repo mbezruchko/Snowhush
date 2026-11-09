@@ -43,6 +43,7 @@ window.SnowhushEngine = (() => {
     intensity(value) { this.w.engine_intensity(this.e, value); }
     opacity(value) { this.w.engine_opacity(this.e, value); }
     accumulates(on) { this.w.engine_accumulates(this.e, on); }
+    ground(on) { this.w.engine_ground(this.e, on); }
     thaws(on) { this.w.engine_thaws(this.e, on); }
 
     /// The windows, in page points from the section's top left: x, y, w, h and their corner radius.

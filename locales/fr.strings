@@ -13,6 +13,12 @@
 "display" = "Affichage";
 "general" = "Général";
 "accumulate" = "Accumulation";
+"surface.ground" = "Sol";
+"surface.dock" = "Dock";
+"surface.widgets" = "Widgets";
+"surface.windows" = "Fenêtres";
+"surface.panel" = "Panneau";
+"all" = "Tout";
 "melt.snow" = "Fonte de la neige";
 "melt.autumn" = "Feuilles qui fanent";
 "melt.blossom" = "Pétales qui fanent";
@@ -26,17 +32,6 @@
 "updates" = "Rechercher les mises à jour…";
 "support" = "Soutenir Snowhush";
 "quit" = "Quitter";
-
-"windows.snow" = "Neige sur les fenêtres";
-"windows.autumn" = "Feuilles sur les fenêtres";
-"windows.rain" = "Pluie sur les fenêtres";
-"windows.blossom" = "Pétales sur les fenêtres";
-"windows.snow.autumn" = "Neige et feuilles sur les fenêtres";
-"windows.snow.rain" = "Neige et pluie sur les fenêtres";
-"windows.snow.blossom" = "Neige et pétales sur les fenêtres";
-"windows.autumn.rain" = "Feuilles et pluie sur les fenêtres";
-"windows.autumn.blossom" = "Feuilles et pétales sur les fenêtres";
-"windows.rain.blossom" = "Pluie et pétales sur les fenêtres";
 
 "clear.snow" = "Effacer la neige";
 "clear.autumn" = "Effacer les feuilles";

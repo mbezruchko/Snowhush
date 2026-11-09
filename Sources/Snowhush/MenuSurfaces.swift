@@ -1,0 +1,257 @@
+import AppKit
+
+/// A menu row that folds the row under it out or away, keeping the menu open. Folded, it sums up that row on its right.
+final class MenuDisclosure: NSView {
+    var open = false {
+        didSet { needsDisplay = true }
+    }
+    var summary = "" {
+        didSet { needsDisplay = true }
+    }
+    var toggled: () -> Void = {}
+    /// Shows the summary unfolded too, as a value the folded row sets.
+    var summaryWhileOpen = false
+
+    /// Where a title starts in a menu with no checkmarks, as the menu bar menu's own rows have it.
+    private static let titleX: CGFloat = MenuToggle.modern ? 15 : 14
+
+    init() {
+        super.init(frame: NSRect(x: 0, y: 0, width: 200, height: MenuToggle.rowHeight))
+        autoresizingMask = .width
+        setAccessibilityElement(true)
+        setAccessibilityRole(.disclosureTriangle)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override var isFlipped: Bool { true }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
+    }
+
+    override func mouseEntered(with event: NSEvent) { redrawRows() }
+
+    override func mouseExited(with event: NSEvent) { redrawRows() }
+
+    private func redrawRows() {
+        enclosingMenuItem?.menu?.items.forEach { $0.view?.needsDisplay = true }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
+        toggled()
+        redrawRows()
+    }
+
+    override func accessibilityPerformPress() -> Bool {
+        toggled()
+        return true
+    }
+
+    override func accessibilityLabel() -> String? { enclosingMenuItem?.title }
+
+    override func accessibilityValue() -> Any? { open ? 1 : 0 }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let item = enclosingMenuItem else { return }
+        let lit = item.isHighlighted
+        if lit {
+            NSColor.controlAccentColor.setFill()
+            let radius = MenuToggle.highlightRadius
+            NSBezierPath(roundedRect: bounds.insetBy(dx: 5, dy: 0), xRadius: radius, yRadius: radius).fill()
+        }
+        let color: NSColor = lit ? .selectedMenuItemTextColor : .labelColor
+        let soft: NSColor = lit ? .selectedMenuItemTextColor : .secondaryLabelColor
+        let font = NSFont.menuFont(ofSize: 0)
+        let title = NSAttributedString(string: item.title, attributes: [.font: font, .foregroundColor: color])
+        title.draw(at: NSPoint(x: Self.titleX, y: (bounds.height - title.size().height) / 2))
+        var right = bounds.width - 14
+        let symbol = open ? "chevron.down" : "chevron.right"
+        if let chevron = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 13, weight: .semibold).applying(.init(paletteColors: [color]))) {
+            let size = chevron.size
+            right -= 12
+            chevron.draw(in: NSRect(x: right + (12 - size.width) / 2, y: (bounds.height - size.height) / 2, width: size.width, height: size.height))
+            right -= 8
+        }
+        guard !open || summaryWhileOpen, !summary.isEmpty else { return }
+        let trailing = NSAttributedString(string: summary, attributes: [.font: font, .foregroundColor: soft])
+        let width = trailing.size().width
+        trailing.draw(at: NSPoint(x: max(right - width, Self.titleX + title.size().width + 12), y: (bounds.height - trailing.size().height) / 2))
+    }
+
+    /// Widens the row to fit its title and summary, and to `least`, the row it folds, so the menu keeps its width as
+    /// that row folds out: a menu sizes itself to its rows' views.
+    func fit(_ title: String, least: CGFloat) {
+        let font = NSFont.menuFont(ofSize: 0)
+        let width = [title, summary].map { NSAttributedString(string: $0, attributes: [.font: font]).size().width }.reduce(0, +)
+        setFrameSize(NSSize(width: max(200, least, ceil(Self.titleX + width + 56)), height: frame.height))
+    }
+}
+
+/// A row of icons, each over its name, that switch what snow settles on; lit in the accent colour while on. The menu
+/// stays open, so several can be switched in one go.
+final class SurfacePicker: NSView {
+    /// What can be switched, in the order shown.
+    var choices: [Surfaces] = [] {
+        didSet {
+            hovered = nil
+            needsDisplay = true
+            let font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+            let widest = choices.map { NSAttributedString(string: Self.name(of: $0), attributes: [.font: font]).size().width }.max() ?? 0
+            setFrameSize(NSSize(width: max(200, ceil(2 * Self.inset + CGFloat(choices.count) * max(widest + 14, 52))), height: frame.height))
+            setAccessibilityChildren(choices.map { surface in
+                let tile = Tile(surface)
+                tile.setAccessibilityParent(self)
+                return tile
+            })
+        }
+    }
+    var on: Surfaces = [] {
+        didSet { needsDisplay = true }
+    }
+    var toggled: (Surfaces) -> Void = { _ in }
+    private var hovered: Int?
+
+    private static let height: CGFloat = 54
+    private static let inset: CGFloat = 10
+    private static let icon: CGFloat = 20
+
+    init() {
+        super.init(frame: NSRect(x: 0, y: 0, width: 200, height: Self.height))
+        autoresizingMask = .width
+        setAccessibilityElement(true)
+        setAccessibilityRole(.group)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override var isFlipped: Bool { true }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect], owner: self))
+    }
+
+    override func mouseMoved(with event: NSEvent) { hover(event) }
+
+    override func mouseEntered(with event: NSEvent) {
+        hover(event)
+        enclosingMenuItem?.menu?.items.forEach { $0.view?.needsDisplay = true }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        hovered = nil
+        needsDisplay = true
+        enclosingMenuItem?.menu?.items.forEach { $0.view?.needsDisplay = true }
+    }
+
+    private func hover(_ event: NSEvent) {
+        let next = tile(at: convert(event.locationInWindow, from: nil))
+        guard next != hovered else { return }
+        hovered = next
+        needsDisplay = true
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard let k = tile(at: convert(event.locationInWindow, from: nil)) else { return }
+        toggled(choices[k])
+    }
+
+    private func tile(at point: NSPoint) -> Int? {
+        guard !choices.isEmpty, bounds.contains(point) else { return nil }
+        let k = Int((point.x - Self.inset) / tileWidth)
+        return k >= 0 && k < choices.count ? k : nil
+    }
+
+    private var tileWidth: CGFloat { (bounds.width - 2 * Self.inset) / CGFloat(max(choices.count, 1)) }
+
+    private func frame(of k: Int) -> NSRect {
+        NSRect(x: Self.inset + tileWidth * CGFloat(k), y: 2, width: tileWidth, height: bounds.height - 4)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+        for (k, surface) in choices.enumerated() {
+            let tile = frame(of: k)
+            if hovered == k {
+                NSColor.quaternaryLabelColor.setFill()
+                NSBezierPath(roundedRect: tile.insetBy(dx: 2, dy: 0), xRadius: MenuToggle.highlightRadius, yRadius: MenuToggle.highlightRadius).fill()
+            }
+            let lit = on.contains(surface)
+            let color: NSColor = lit ? .controlAccentColor : .tertiaryLabelColor
+            let box = NSRect(x: tile.midX - Self.icon / 2, y: tile.minY + 6, width: Self.icon, height: Self.icon)
+            Self.drawIcon(surface, in: box, color: color)
+            let name = NSAttributedString(string: Self.name(of: surface), attributes: [.font: font, .foregroundColor: lit ? NSColor.labelColor : .secondaryLabelColor])
+            let size = name.size()
+            name.draw(at: NSPoint(x: tile.midX - size.width / 2, y: tile.maxY - size.height - 4))
+        }
+    }
+
+    static func name(of surface: Surfaces) -> String {
+        switch surface {
+        case .ground: tr("surface.ground")
+        case .dock: tr("surface.dock")
+        case .widgets: tr("surface.widgets")
+        default: tr("surface.windows")
+        }
+    }
+
+    private static func drawIcon(_ surface: Surfaces, in box: NSRect, color: NSColor) {
+        guard surface == .ground else {
+            let symbol = surface == .dock ? "dock.rectangle" : surface == .widgets ? "widget.small" : "macwindow"
+            guard let image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
+                .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 17, weight: .regular).applying(.init(paletteColors: [color])))
+            else { return }
+            let size = image.size
+            image.draw(in: NSRect(x: box.midX - size.width / 2, y: box.midY - size.height / 2, width: size.width, height: size.height))
+            return
+        }
+        // A drift on the ground: no symbol shows one.
+        let base = box.maxY - 3
+        let mound = NSBezierPath()
+        mound.move(to: NSPoint(x: box.minX + 2, y: base))
+        mound.curve(to: NSPoint(x: box.maxX - 2, y: base), controlPoint1: NSPoint(x: box.minX + 4, y: base - 9), controlPoint2: NSPoint(x: box.maxX - 4, y: base - 9))
+        color.withAlphaComponent(color.alphaComponent * 0.3).setFill()
+        mound.fill()
+        color.setStroke()
+        mound.lineWidth = 1.4
+        mound.stroke()
+        let line = NSBezierPath()
+        line.move(to: NSPoint(x: box.minX, y: base))
+        line.line(to: NSPoint(x: box.maxX, y: base))
+        line.lineWidth = 1.4
+        line.lineCapStyle = .round
+        line.stroke()
+    }
+
+    /// One icon to accessibility: a checkbox named for its surface.
+    private final class Tile: NSAccessibilityElement {
+        let surface: Surfaces
+
+        init(_ surface: Surfaces) {
+            self.surface = surface
+            super.init()
+            setAccessibilityRole(.checkBox)
+            setAccessibilityLabel(SurfacePicker.name(of: surface))
+        }
+
+        private var picker: SurfacePicker? { accessibilityParent() as? SurfacePicker }
+
+        override func accessibilityValue() -> Any? { picker?.on.contains(surface) == true ? 1 : 0 }
+
+        override func accessibilityFrame() -> NSRect {
+            guard let picker, let k = picker.choices.firstIndex(of: surface), let window = picker.window else { return .zero }
+            return window.convertToScreen(picker.convert(picker.frame(of: k), to: nil))
+        }
+
+        override func accessibilityPerformPress() -> Bool {
+            picker?.toggled(surface)
+            return true
+        }
+    }
+}
