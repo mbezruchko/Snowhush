@@ -55,9 +55,37 @@ final class MenuSlider: NSView {
         frame.contains(point) ? self : nil
     }
 
-    override func mouseDown(with event: NSEvent) { follow(event) }
+    /// Where the knob was last pressed or dragged to, while it is: the slider's cell is told about the drag so its
+    /// knob turns to glass as under the system's own tracking, which the view does without.
+    private var pressed: NSPoint?
 
-    override func mouseDragged(with event: NSEvent) { follow(event) }
+    override func mouseDown(with event: NSEvent) {
+        let point = slider.convert(event.locationInWindow, from: nil)
+        _ = slider.cell?.startTracking(at: point, in: slider)
+        pressed = point
+        follow(event)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        let point = slider.convert(event.locationInWindow, from: nil)
+        if let last = pressed { _ = slider.cell?.continueTracking(last: last, current: point, in: slider) }
+        pressed = point
+        follow(event)
+    }
+
+    override func mouseUp(with event: NSEvent) { release() }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        release()
+    }
+
+    private func release() {
+        guard let last = pressed else { return }
+        pressed = nil
+        slider.cell?.stopTracking(last: last, current: last, in: slider, mouseIsUp: true)
+        slider.doubleValue = sent
+    }
 
     /// Moves the knob to the pointer, to the nearest step.
     private func follow(_ event: NSEvent) {
