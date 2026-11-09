@@ -3,14 +3,18 @@
 //! keeping it. The window's snow goes along when the window moves to another display, and snow thrown past an edge
 //! two displays share goes on falling on the other side.
 
-use super::{COLUMN_WIDTH, Flake, Grain, MAX_GRAINS, PileLayer, SnowSimulation, WindowId};
+use super::rain::GlassDrop;
+use super::{COLUMN_WIDTH, Flake, Grain, LyingLeaf, MAX_GRAINS, PileLayer, SnowSimulation, WindowId};
 use crate::geometry::V2;
-use crate::layer::SnowLayer;
+use crate::layer::{Blend, SnowLayer};
 
-/// A window's snow taken off one display to lie on another. Its times are kept as ages, since each simulation
+/// A window's snow taken off one display to lie on another, with the leaves lying on it and the rain on its glass,
+/// which are kept along its edge and so go along as they are. Its times are kept as ages, since each simulation
 /// keeps its own clock.
 pub struct Carried {
     layer: SnowLayer,
+    leaves: Vec<LyingLeaf>,
+    drops: Vec<GlassDrop>,
 }
 
 /// A window's snow as the display keeping it lends it to a neighbour the window reaches over.
@@ -19,12 +23,14 @@ pub struct Borrowed {
     id: WindowId,
     origin: V2,
     count: usize,
-    /// The smoothed surface of each column, then the bed under it, up from `origin`, as drawn.
+    /// What `SnowLayer::write_smoothed` writes: the smoothed surface of each column, then the bed under it, up from
+    /// `origin`, then what the snow is made of, as drawn.
     columns: Vec<f32>,
     visible: Vec<bool>,
     top: f32,
     bottom: f32,
     occluders: Vec<[f32; 4]>,
+    drift: f32,
 }
 
 impl Borrowed {
@@ -52,7 +58,15 @@ impl Borrowed {
             return None;
         }
         buffer.copy_from_slice(&self.columns);
-        Some(PileLayer { offset, count: self.count, origin: self.origin, top: self.top, bottom: self.bottom, occluders: &self.occluders })
+        Some(PileLayer {
+            offset,
+            count: self.count,
+            origin: self.origin,
+            top: self.top,
+            bottom: self.bottom,
+            occluders: &self.occluders,
+            drift: self.drift,
+        })
     }
 
     /// The column under `x` and its surface, when snow falling from `from` to `to` there comes down on it.
@@ -109,8 +123,11 @@ impl SnowSimulation {
         let mut layer = self.layers.remove(li);
         layer.moved_at -= self.air.clock;
         layer.returned_at -= self.air.clock;
+        let (leaves, lying) = std::mem::take(&mut self.lying).into_iter().partition(|leaf| leaf.layer == id);
+        self.lying = lying;
+        let drops = self.rain.take(id);
         self.air.windows_changed = true;
-        Some(Carried { layer })
+        Some(Carried { layer, leaves, drops })
     }
 
     /// Puts snow taken from another simulation onto its window here. `shift` takes the other simulation's
@@ -129,18 +146,21 @@ impl SnowSimulation {
         layer.origin += shift;
         layer.track += shift;
         layer.previous_base_y += shift.y;
-        for occluder in &mut layer.occluders {
+        for occluder in layer.occluders.iter_mut().chain(layer.face_occluders.iter_mut()) {
             *occluder = [occluder[0] + shift.x, occluder[1] + shift.y, occluder[2] + shift.x, occluder[3] + shift.y];
         }
         self.layers.push(layer);
         self.ids.push(id);
+        self.lying.retain(|leaf| leaf.layer != id);
+        self.lying.extend(carried.leaves);
+        self.rain.adopt(carried.drops);
         self.air.windows_changed = true;
     }
 
     /// The snow on a window kept here, to lend to a display it reaches over; `None` for a window without a ledge here.
     pub fn lend(&self, id: WindowId) -> Option<Borrowed> {
         let layer = &self.layers[self.layer_index(id)?];
-        let mut columns = vec![0.0; 2 * layer.count()];
+        let mut columns = vec![0.0; SnowLayer::ROWS * layer.count()];
         self.write_layer(layer, &mut columns);
         Some(Borrowed {
             id,
@@ -151,6 +171,7 @@ impl SnowSimulation {
             top: layer.top,
             bottom: -layer.bed_depth,
             occluders: layer.occluders.clone(),
+            drift: layer.drift,
         })
     }
 
@@ -178,7 +199,7 @@ impl SnowSimulation {
         let layer = &mut self.layers[li];
         let x = caught.x + shift;
         let fill = layer.index(x).map_or(1.0, |i| layer.fill(i));
-        layer.deposit(caught.area * fill, x, true);
+        layer.deposit(caught.area * fill, x, true, Blend::SNOW);
         self.air.heights_changed = true;
     }
 

@@ -11,10 +11,19 @@ products="$(swift build "${flags[@]}" --show-bin-path)"
 app=build/Snowhush.app
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$app/Contents/Frameworks"
-cp "$products/Snowhush" "$app/Contents/MacOS/"
+# Swift Build stamps the binary with the deployment target as its SDK, and macOS then draws the app in its old
+# look, without Liquid Glass.
+minimum=$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' Resources/Info.plist)
+vtool -set-build-version macos "$minimum" "$(xcrun --sdk macosx --show-sdk-version)" -replace \
+    -output "$app/Contents/MacOS/Snowhush" "$products/Snowhush"
 ditto "$products/Sparkle.framework" "$app/Contents/Frameworks/Sparkle.framework"
 cp Resources/Info.plist "$app/Contents/"
 cp Resources/AppIcon.icns "$app/Contents/Resources/"
+for strings in locales/*.strings; do
+    lproj="$app/Contents/Resources/$(basename "$strings" .strings).lproj"
+    mkdir -p "$lproj"
+    plutil -convert binary1 -o "$lproj/Localizable.strings" "$strings"
+done
 
 if [[ -n "${IDENTITY:-}" ]]; then
     # Sparkle's helpers are signed inside out, each with the hardened runtime, as notarization requires.

@@ -20,7 +20,8 @@ use wayland_client::{Connection, QueueHandle};
 use zbus::blocking::Connection as Bus;
 
 use snowhush_core::geometry::V2;
-use snowhush_core::simulation::{Borrowed, SnowSimulation, Snowfall, Stray, WindowId};
+use snowhush_core::halloween::{Choice, Today};
+use snowhush_core::simulation::{Borrowed, Mode, SnowSimulation, Stray, WindowId};
 
 use crate::chores;
 use crate::kwin;
@@ -28,27 +29,43 @@ use crate::light::{self, Shade, daylight};
 use crate::log;
 use crate::prefs::Settings;
 use crate::render::{Ambient, Gpu};
-use crate::screen::{PowerBudget, Screen};
+use crate::screen::{self, PowerBudget, Screen};
 use crate::source::{Report, Shared, Source};
 use crate::tray::Tray;
 use crate::windows::{self, Area};
 
 pub enum Command {
-    Snowfall(Snowfall),
+    /// How much falls, 0 to 1.
+    Intensity(f32),
+    /// How opaque what falls is drawn, 0.1 to 1.
+    FallingOpacity(f32),
     Accumulate(bool),
     Melt(bool),
     SnowOnWindows(bool),
     BehindWindows(bool),
+    OverFullScreen(bool),
+    /// Every frame at the display's highest rate, or as fast as what moves needs.
+    Performance(bool),
     ShowInScreenshots(bool),
-    /// Halloween wanted or not, while it is Halloween.
-    Halloween(bool),
+    /// Halloween turned on or off from the menu.
+    Halloween(Choice),
     /// The screen locked or unlocked.
     Locked(bool),
     /// Blows all the snow away; when calm, for less motion, melts it where it lies instead.
     ClearSnow(bool),
+    /// Other kinds fall, once what lies is cleared away as `ClearSnow` clears it; a kind only joining what falls
+    /// starts at once.
+    Mode {
+        mode: Mode,
+        mixed: bool,
+        mix: [Mode; 2],
+        calm: bool,
+    },
     Power(PowerBudget),
     /// Each display's desktop picture, with the tint it gives the shadows.
     Backdrops(Vec<Shade>),
+    /// The desktop turned light or dark.
+    Light(bool),
     Quit,
 }
 
@@ -72,9 +89,8 @@ pub struct App {
     owners: HashMap<WindowId, String>,
     budget: PowerBudget,
     light: [f32; 3],
-    /// Whether it is Halloween, wanted or not.
-    season: bool,
-    /// Whether the snow has Halloween's ghosts: in season and wanted.
+    today: Today,
+    /// Whether the snow has Halloween's ghosts: wanted, over snow, not leaves.
     halloween: bool,
     /// How far into Halloween night it is.
     night: f32,
@@ -145,7 +161,7 @@ pub fn run() -> Result<(), String> {
         owners: HashMap::new(),
         budget: PowerBudget::Full,
         light: daylight(),
-        season: false,
+        today: Today::default(),
         halloween: false,
         night: 0.0,
         tray: None,
@@ -220,9 +236,17 @@ impl App {
     fn command(&mut self, command: Command) {
         match command {
             Command::Quit => self.quit = true,
-            Command::Snowfall(snowfall) => {
-                self.settings.snowfall = snowfall;
-                self.screens.iter_mut().for_each(|screen| screen.simulation.set_snowfall(snowfall));
+            Command::Intensity(intensity) => {
+                self.settings.intensity = (intensity * 100.0).round() as u32;
+                let now = Instant::now();
+                self.screens.iter_mut().for_each(|screen| {
+                    screen.simulation.set_intensity(intensity);
+                    screen.wake(now);
+                });
+            }
+            Command::FallingOpacity(opacity) => {
+                self.settings.opacity = (opacity * 100.0).round() as u32;
+                self.screens.iter_mut().for_each(|screen| screen.simulation.falling_opacity = opacity);
             }
             Command::Accumulate(on) => {
                 self.settings.accumulate = on;
@@ -242,24 +266,45 @@ impl App {
             }
             Command::BehindWindows(on) => {
                 self.settings.behind_windows = on;
-                if on {
-                    self.screens.iter_mut().for_each(Screen::drop_window_snow);
-                } else {
-                    self.screens.iter_mut().for_each(Screen::rewatch);
+                let over = self.settings.over_full_screen;
+                self.screens.iter_mut().for_each(|screen| screen.set_layer(on, over));
+            }
+            Command::Performance(max) => {
+                self.settings.max_performance = max;
+                self.screens.iter_mut().for_each(|screen| screen.max_rate = max);
+            }
+            Command::OverFullScreen(on) => {
+                self.settings.over_full_screen = on;
+                let behind = self.settings.behind_windows;
+                self.screens.iter_mut().for_each(|screen| screen.set_layer(behind, on));
+                if !on && self.screens.iter_mut().fold(false, |left, screen| screen.leave_full_screen() || left) {
+                    self.place_screens();
                 }
-                self.screens.iter_mut().for_each(|screen| screen.set_behind(on));
             }
             Command::ShowInScreenshots(on) => {
                 self.settings.show_in_screenshots = on;
                 self.source.show_in_screenshots(&self.bus, on);
             }
-            Command::Halloween(on) => {
-                self.settings.halloween = on;
+            Command::Halloween(choice) => {
+                self.settings.halloween = choice;
                 self.update_light();
             }
             Command::ClearSnow(calm) => {
                 let direction = self.screens.first().map_or(-1.0, |screen| screen.simulation.breeze_direction());
                 self.screens.iter_mut().for_each(|screen| screen.simulation.blow_away(direction, calm));
+            }
+            Command::Mode { mode, mixed, mix, calm } => {
+                self.settings.mode = mode;
+                self.settings.mixed = mixed;
+                self.settings.mix = mix;
+                let modes = self.settings.modes();
+                let direction = self.screens.first().map_or(-1.0, |screen| screen.simulation.breeze_direction());
+                let now = Instant::now();
+                self.screens.iter_mut().for_each(|screen| {
+                    screen.simulation.switch_modes(&modes, direction, calm);
+                    screen.wake(now);
+                });
+                self.update_light();
             }
             Command::Locked(locked) => {
                 if locked == self.locked {
@@ -280,6 +325,11 @@ impl App {
                 self.screens.iter_mut().for_each(|screen| screen.simulation.set_density(density(budget)));
             }
             Command::Backdrops(shades) => self.screens.iter_mut().for_each(|screen| screen.update_backdrop(&shades)),
+            Command::Light(light) => {
+                if let Some(tray) = &self.tray {
+                    tray.update(|tray| tray.light = light);
+                }
+            }
         }
     }
 
@@ -327,7 +377,8 @@ impl App {
         if self.locked {
             return Ok(());
         }
-        let snow_on_windows = self.settings.snow_on_windows && !self.settings.behind_windows;
+        // Behind the windows the snow still settles on them: what lies on a window's top edge is above it, in plain view.
+        let snow_on_windows = self.settings.snow_on_windows;
         // A drag starting is drawn right away instead of at the next calm frame.
         if self.shared.take_started_moving() && snow_on_windows {
             self.screens.iter_mut().for_each(|screen| screen.wake(now));
@@ -341,13 +392,21 @@ impl App {
             self.lend(report, snow_on_windows, now);
         }
         let mut released = false;
+        let mut reshaped = false;
         for screen in self.screens.iter_mut().filter(|screen| screen.next_due <= now) {
-            let covering = report.as_deref().and_then(|report| windows::covering(report, &screen.bounds));
+            // Shown over a full-screen app, the snow reaches the display's edges while the app has put the panels away,
+            // so the drift lies along the bottom instead of over a panel no longer there. An overview isn't an app.
+            if self.settings.over_full_screen && !self.settings.behind_windows {
+                let in_front = report.as_deref().filter(|report| !report.hidden).and_then(|report| windows::covering(report, &screen.bounds));
+                reshaped |= screen.follow_full_screen(in_front.is_some(), now);
+            }
+            let covering =
+                if self.settings.over_full_screen { None } else { report.as_deref().and_then(|report| windows::covering(report, &screen.bounds)) };
             if covering.is_some() != screen.covered() {
                 log!("{} {}", screen.name, covering.map_or("uncovered".to_string(), |class| format!("covered by {class}")));
-                screen.set_covered(&self.gpu, covering.is_some());
+                screen.set_covered(covering.is_some());
             }
-            if screen.covered() {
+            if screen.hidden() {
                 screen.next_due = now + Duration::from_millis(250);
                 continue;
             }
@@ -364,24 +423,31 @@ impl App {
             self.screens.iter_mut().for_each(|screen| screen.simulation.set_snowfall_held(false));
         }
         self.pass_snow();
+        if reshaped {
+            self.place_screens();
+        }
         self.stats.report(Instant::now());
         Ok(())
     }
 
     /// The light of the hour, and Halloween with it: its ghosts, its night and the tray's pumpkin.
     fn update_light(&mut self) {
-        let season = light::is_halloween();
-        if season != self.season {
-            self.season = season;
+        let today = light::today();
+        if today != self.today {
+            self.today = today;
             if let Some(tray) = &self.tray {
-                tray.update(|tray| tray.season = season);
+                tray.update(|tray| tray.today = today);
             }
         }
-        let halloween = season && self.settings.halloween;
+        let halloween = self.settings.modes() == [Mode::Snow] && self.settings.halloween.wanted(today);
         if halloween != self.halloween {
             self.halloween = halloween;
             log!("halloween: {halloween}");
-            self.screens.iter_mut().for_each(|screen| screen.simulation.set_halloween(halloween));
+            let now = Instant::now();
+            self.screens.iter_mut().for_each(|screen| {
+                screen.simulation.set_halloween(halloween);
+                screen.wake(now);
+            });
         }
         self.light = daylight();
         self.night = light::night(halloween);
@@ -404,15 +470,16 @@ impl App {
             log!("display {name}: {bounds:?}, scale {}, {refresh} Hz", info.scale_factor);
             let mut simulation = new_simulation(&bounds, &self.settings, self.budget);
             simulation.set_halloween(self.halloween);
-            let screen = Screen::new(
+            let mut screen = Screen::new(
                 (&self.compositor, &self.layer_shell, &self.qh),
                 output.clone(),
                 name,
                 bounds,
                 refresh,
                 simulation,
-                self.settings.behind_windows,
+                screen::layer_for(self.settings.behind_windows, self.settings.over_full_screen),
             );
+            screen.max_rate = self.settings.max_performance;
             self.screens.push(screen);
         }
         for screen in current {
@@ -552,9 +619,11 @@ fn window_list(report: &Report) -> String {
 }
 
 fn new_simulation(bounds: &Area, settings: &Settings, budget: PowerBudget) -> SnowSimulation {
-    let mut simulation = SnowSimulation::new(bounds.w as f32, bounds.h as f32, settings.snowfall);
+    let mut simulation = SnowSimulation::new(bounds.w as f32, bounds.h as f32, settings.intensity as f32 / 100.0);
     simulation.thaws = settings.melt;
     simulation.accumulates = settings.accumulate;
+    simulation.falling_opacity = settings.opacity as f32 / 100.0;
+    simulation.set_modes(&settings.modes());
     simulation.set_density(density(budget));
     simulation
 }

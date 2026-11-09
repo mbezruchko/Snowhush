@@ -1,7 +1,7 @@
 import AppKit
 
-/// Halloween: from October 30, when the update bringing it comes, until dawn on November 1 the snow takes on a
-/// spooky mood.
+/// Halloween: the snow takes on a spooky mood from October 30 until dawn on November 1, and any other day it is
+/// turned on from the menu.
 enum Halloween {
     /// Whether it is Halloween, wanted or not.
     /// Lets it be previewed on any day: defaults write com.mbezruchko.Snowhush previewHalloween -bool true
@@ -11,7 +11,28 @@ enum Halloween {
         return parts.month == 10 && (parts.day ?? 0) >= 30 || parts.month == 11 && parts.day == 1 && (parts.hour ?? 0) < 6
     }
 
-    static var isOn: Bool { isSeason() && Preferences.halloween }
+    /// Whether Halloween is wanted today: turned on, or come with its season and not turned off for it.
+    static var isWanted: Bool {
+        Preferences.halloween || isSeason() && Preferences.halloweenSkipped != year
+    }
+
+    /// Whether the snow is spooky: Halloween wanted, and snow falling, not leaves or rain.
+    static var isOn: Bool { isWanted && Preferences.modes == [.snow] }
+
+    /// Turned on in season, Halloween ends with the season; any other day, it stays on.
+    static func toggle() {
+        let season = isSeason()
+        if isWanted {
+            Preferences.halloween = false
+            if season { Preferences.halloweenSkipped = year }
+        } else if season {
+            Preferences.halloweenSkipped = 0
+        } else {
+            Preferences.halloween = true
+        }
+    }
+
+    private static var year: Int { Calendar.current.component(.year, from: Date()) }
 
     /// A jack-o'-lantern in place of the snowflake in the menu bar.
     static let icon: NSImage = {
