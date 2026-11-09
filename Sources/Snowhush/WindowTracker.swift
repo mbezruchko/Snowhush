@@ -14,6 +14,8 @@ struct WindowUpdate {
     /// How fast the sliding Space carried its windows since the previous poll, in points a second, negative to
     /// the left; zero when it didn't.
     let slideVelocity: Float
+    /// Windows that moved on to another display, which their snow goes to, by that display.
+    let handed: [CGWindowID: CGDirectDisplayID]
 }
 
 struct WindowSurface: Equatable {
@@ -54,6 +56,8 @@ final class WindowTracker {
     var menuBarHeight: CGFloat = 0
     /// The primary display's height, which turns AppKit's coordinates into the window list's.
     var primaryHeight: CGFloat = 0
+    /// Which display each window's snow lies on.
+    private let displays: Displays
 
     private var currentSpace: UInt64?
     private var currentSpaceRead = false
@@ -145,7 +149,13 @@ final class WindowTracker {
     /// Every app window on the screen at the last poll, in overlay coordinates, those filling it or too tall to
     /// carry snow too.
     private(set) var covers: [CGRect] = []
+    /// Windows carrying snow here at the last poll that have moved on to another display since.
+    private var handed: [CGWindowID: CGDirectDisplayID] = [:]
     private var cards: [CGWindowID: (bounds: CGRect, card: Bool)] = [:]
+
+    init(displays: Displays) {
+        self.displays = displays
+    }
 
     /// Returns the windows when they changed since the last poll.
     /// `eager` polls every frame, e.g. while a mouse button is down and a drag may be starting.
@@ -202,7 +212,15 @@ final class WindowTracker {
         }
         let shown = lead == 0 ? surfaces : surfaces.map { $0.isDock || NotificationBanner.ids.contains($0.id) || staying.contains($0.id) ? $0 : $0.shifted(by: lead) }
         let slideVelocity = shift.map { Float($0) / Float(max(interval, 1.0 / 120)) } ?? 0
-        return WindowUpdate(surfaces: shown, interval: Float(min(interval, 0.25)), parked: parked, elsewhere: elsewhere, sliding: sliding, slideVelocity: slideVelocity)
+        return WindowUpdate(
+            surfaces: shown,
+            interval: Float(min(interval, 0.25)),
+            parked: parked,
+            elsewhere: elsewhere,
+            sliding: sliding,
+            slideVelocity: slideVelocity,
+            handed: handed
+        )
     }
 
     /// How far each window carried by the sliding Space is from where it rests on its own Space: the window server keeps
@@ -521,6 +539,7 @@ final class WindowTracker {
         var checked: [CGWindowID: (bounds: CGRect, card: Bool)] = [:]
         exposing = false
         sinkingDock = nil
+        handed = [:]
         fullScreenInView = fullScreenAppHidesDock(in: list)
         fullScreenShare = fullScreenShare(in: list)
         defer {
@@ -569,8 +588,14 @@ final class WindowTracker {
                 if isMissionControl(bounds, layer: layer) { exposing = true }
                 continue
             }
-            guard bounds.intersects(screen) else { continue }
-            if !showsOnDisplay(id, bounds: bounds, layer: layer, shelf: shelf) { continue }
+            guard bounds.intersects(screen) else {
+                // Gone over to another display altogether, as a window dropped there: its snow goes along.
+                if !shelf, previous.contains(where: { $0.id == id }), let display, let owner = displays.owner(of: id, bounds: bounds, now: now),
+                   owner != display {
+                    handed[id] = owner
+                }
+                continue
+            }
             // Screen-sized windows above the normal layer (Notification Center, Siri) are transparent overlays. Spotlight's
             // window turns into one for a moment on every keystroke, its bar still where it was, and keeps the bar meanwhile.
             if layer > 0 && fillsScreen(bounds) {
@@ -586,6 +611,17 @@ final class WindowTracker {
             }
 
             let frame = CGRect(x: bounds.minX - screen.minX, y: screen.maxY - bounds.maxY, width: bounds.width, height: bounds.height)
+            // A window lying across displays carries its snow on one of them. Where Spaces span the displays, its part
+            // here still hides the snow behind it; with Spaces of their own, that part isn't shown at all.
+            if !shelf, let display, let owner = displays.owner(of: id, bounds: bounds, now: now), owner != display {
+                handed[id] = owner
+                if displays.spanning {
+                    if layer < dockLevel && !fading { windows.append(frame) }
+                    blockers.append(frame)
+                }
+                continue
+            }
+            if !showsOnDisplay(id, bounds: bounds, layer: layer, shelf: shelf) { continue }
             let roomAbove = bounds.minY - screen.minY >= menuBarHeight + 6 && frame.maxY < screen.height
             let onScreen = frame.maxX > 0 && frame.minX < screen.width && frame.maxY > 0
             let fills = fillsScreen(bounds)
@@ -1052,6 +1088,20 @@ enum Spaces {
         else { return nil }
         let spaces = displays.compactMap { ($0["Current Space"] as? [String: Any]).flatMap(id) }
         return spaces.isEmpty ? nil : Set(spaces)
+    }
+
+    /// The Space showing on each display, by the display's UUID.
+    static func currentByDisplay() -> [String: UInt64]? {
+        guard let connection = SkyLight.connection,
+              let displays = displaySpaces?(connection)?.takeRetainedValue() as? [[String: Any]]
+        else { return nil }
+        var spaces: [String: UInt64] = [:]
+        for display in displays {
+            if let uuid = display["Display Identifier"] as? String, let current = (display["Current Space"] as? [String: Any]).flatMap(id) {
+                spaces[uuid] = current
+            }
+        }
+        return spaces.isEmpty ? nil : spaces
     }
 
     /// The Spaces of apps in full screen, on every display.
