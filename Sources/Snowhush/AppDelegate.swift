@@ -44,7 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
             return
         }
         Preferences.registerDefaults()
-        guard let device = MTLCreateSystemDefaultDevice() else {
+        guard let device = Self.lowPowerDevice() ?? MTLCreateSystemDefaultDevice() else {
             NSApp.terminate(nil)
             return
         }
@@ -376,6 +376,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     }
 
     private static let symbol: [Mode: String] = [.snow: "snowflake", .autumn: "leaf", .rain: "cloud.rain"]
+
+    /// The integrated GPU on a Mac with two: asking for the default device would wake the discrete one and hold it
+    /// awake for as long as the snow falls. The devices left unused are let go before the discrete GPU powers up.
+    private static func lowPowerDevice() -> MTLDevice? {
+        autoreleasepool { MTLCopyAllDevices().first { $0.isLowPower } }
+    }
 
     private static func icon(halloween: Bool, dimmed: Bool) -> NSImage? {
         let image = halloween ? Halloween.icon : Preferences.mode == .blossom ? Blossom.icon
