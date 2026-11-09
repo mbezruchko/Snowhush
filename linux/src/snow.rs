@@ -39,7 +39,8 @@ pub enum Command {
     Intensity(f32),
     /// How opaque what falls is drawn, 0.1 to 1.
     FallingOpacity(f32),
-    Accumulate(bool),
+    Ground(bool),
+    Panel(bool),
     Melt(bool),
     SnowOnWindows(bool),
     BehindWindows(bool),
@@ -248,9 +249,22 @@ impl App {
                 self.settings.opacity = (opacity * 100.0).round() as u32;
                 self.screens.iter_mut().for_each(|screen| screen.simulation.falling_opacity = opacity);
             }
-            Command::Accumulate(on) => {
-                self.settings.accumulate = on;
-                self.screens.iter_mut().for_each(|screen| screen.simulation.accumulates = on);
+            Command::Ground(on) => {
+                self.settings.ground = on;
+                let accumulates = self.settings.accumulates();
+                self.screens.iter_mut().for_each(|screen| {
+                    screen.simulation.ground_settles = on;
+                    screen.simulation.accumulates = accumulates;
+                });
+            }
+            Command::Panel(on) => {
+                self.settings.panel = on;
+                let (accumulates, windows) = (self.settings.accumulates(), self.settings.snow_on_windows);
+                self.screens.iter_mut().for_each(|screen| {
+                    screen.panel = on;
+                    screen.simulation.accumulates = accumulates;
+                    if windows { screen.rewatch() } else { screen.drop_window_snow() }
+                });
             }
             Command::Melt(on) => {
                 self.settings.melt = on;
@@ -258,6 +272,8 @@ impl App {
             }
             Command::SnowOnWindows(on) => {
                 self.settings.snow_on_windows = on;
+                let accumulates = self.settings.accumulates();
+                self.screens.iter_mut().for_each(|screen| screen.simulation.accumulates = accumulates);
                 if on {
                     self.screens.iter_mut().for_each(Screen::rewatch);
                 } else {
@@ -480,6 +496,7 @@ impl App {
                 screen::layer_for(self.settings.behind_windows, self.settings.over_full_screen),
             );
             screen.max_rate = self.settings.max_performance;
+            screen.panel = self.settings.panel;
             self.screens.push(screen);
         }
         for screen in current {
@@ -621,7 +638,8 @@ fn window_list(report: &Report) -> String {
 fn new_simulation(bounds: &Area, settings: &Settings, budget: PowerBudget) -> SnowSimulation {
     let mut simulation = SnowSimulation::new(bounds.w as f32, bounds.h as f32, settings.intensity as f32 / 100.0);
     simulation.thaws = settings.melt;
-    simulation.accumulates = settings.accumulate;
+    simulation.accumulates = settings.accumulates();
+    simulation.ground_settles = settings.ground;
     simulation.falling_opacity = settings.opacity as f32 / 100.0;
     simulation.set_modes(&settings.modes());
     simulation.set_density(density(budget));

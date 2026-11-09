@@ -50,6 +50,8 @@ pub struct Screen {
     margins: (i32, i32, i32, i32),
     /// The bottom panel's visible part, which the snow lies on; the ground is then the display's bottom edge.
     shelf: Option<Shelf>,
+    /// Whether snow settles on the shelf.
+    pub panel: bool,
     /// Placed once already: a change of margins after that moves the ground.
     placed: bool,
     /// A full-screen app the snow shows over has put the panels away: the snow takes the whole display.
@@ -118,6 +120,7 @@ impl Screen {
             surface: None,
             margins: (0, 0, 0, 0),
             shelf: None,
+            panel: true,
             placed: false,
             full_screen: false,
             full_screen_seen: (false, Instant::now()),
@@ -388,7 +391,7 @@ impl Screen {
         self.windows_seen = generation;
         let area = self.area();
         let listed = if snow_on_windows { report } else { &Report::default() };
-        let mut surfaces = windows::surfaces(listed, &area, self.shelf.as_ref(), &self.name);
+        let mut surfaces = windows::surfaces(listed, &area, self.shelf.as_ref().filter(|_| self.panel), &self.name);
         if report.switching {
             // Windows that came with the new desktop get their snow back once they have slid in; windows on every
             // desktop keep theirs throughout.
@@ -416,7 +419,7 @@ impl Screen {
 
     /// Lets the snow on windows fall, keeping what lies on the panel.
     pub fn drop_window_snow(&mut self) {
-        let surfaces = windows::surfaces(&Report::default(), &self.area(), self.shelf.as_ref(), &self.name);
+        let surfaces = windows::surfaces(&Report::default(), &self.area(), self.shelf.as_ref().filter(|_| self.panel), &self.name);
         self.simulation.update_windows(&surfaces, 0.1, &HashSet::new(), &HashSet::new(), false);
         self.simulation.covers.clear();
         self.surfaces = surfaces;

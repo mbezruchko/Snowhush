@@ -94,6 +94,11 @@ pub extern "C" fn engine_accumulates(e: *mut Engine, on: bool) {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn engine_ground(e: *mut Engine, on: bool) {
+    engine(e).sim.ground_settles = on;
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn engine_thaws(e: *mut Engine, on: bool) {
     engine(e).sim.thaws = on;
 }

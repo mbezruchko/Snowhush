@@ -64,9 +64,11 @@
   const ghostBulk = form => GHOST.size * GHOST.size * 0.04 * ghostHeight(form) / 0.425;
 
   const settings = {
-    mode: 'snow', mixed: false, mix: ['autumn', 'snow'], intensity: 0.5, opacity: 1, halloween: halloweenTime, accumulate: true, melt: true,
-    windows: true, deep: true, behind: false, fullscreen: false, screenshots: false, performance: false, login: false, quit: false,
+    mode: 'snow', mixed: false, mix: ['autumn', 'snow'], intensity: 0.5, opacity: 1, halloween: halloweenTime, melt: true,
+    ground: true, dock: true, widgets: true, windows: true, deep: true, behind: false, fullscreen: false, screenshots: false, performance: false, login: false, quit: false,
   };
+  /// Whether snow settles anywhere: on the ground, the Dock, widgets or windows.
+  Object.defineProperty(settings, 'accumulate', { get: () => settings.ground || settings.dock || settings.widgets || settings.windows });
   /// The kinds falling: the two mixed, or the one picked.
   const modesOf = () => settings.mixed ? settings.mix : [settings.mode];
   /// Snow alone falls: the page's own, with its ghosts on Halloween.
@@ -867,6 +869,7 @@
       engine.intensity(settings.intensity);
       engine.opacity(settings.opacity);
       engine.accumulates(settings.accumulate);
+      engine.ground(settings.ground);
       engine.thaws(settings.melt);
     }
 
@@ -885,7 +888,7 @@
           }
         }
       }
-      if (hit) return hit;
+      if (hit || !settings.ground) return hit;
       const i = this.ground.clamped(x);
       return to >= this.ground.surface(i) ? { layer: this.ground, i } : null;
     }
@@ -945,9 +948,8 @@
             this.dropPast(hit.layer, missed, f.x, 0);
             gone = true;
           }
-        } else if (f.y > this.height + f.size * 2) {
-          gone = true;
         }
+        if (f.y > this.height + f.size * 2) gone = true;
         if (!gone) continue;
         if (Math.random() * flakes.length < target) {
           flakes[i] = this.makeFlake(-rand(4, 40));
@@ -1065,8 +1067,9 @@
       const falling = density(settings.intensity);
       const meltPace = falling > 0 ? BUILDUP * (falling / THAW_BALANCE) ** THAW_EXPONENT : 1;
       for (const layer of this.layers) {
-        if (!settings.accumulate || settings.melt) {
-          const floor = !settings.accumulate ? 0 : layer === this.ground ? THAW_DEPTH : LEDGE_THAW_DEPTH;
+        const bare = layer === this.ground && !settings.ground;
+        if (!settings.accumulate || settings.melt || bare) {
+          const floor = !settings.accumulate || bare ? 0 : layer === this.ground ? THAW_DEPTH : LEDGE_THAW_DEPTH;
           layer.thaw(dt * meltPace, floor);
         }
         layer.relax(REPOSE);
@@ -1889,6 +1892,12 @@
     menu.addEventListener('click', event => {
       const item = event.target.closest('.menu-item');
       if (!item || item.getAttribute('aria-disabled') === 'true') return;
+      if (item.matches('[data-fold]')) {
+        const open = item.getAttribute('aria-expanded') !== 'true';
+        item.setAttribute('aria-expanded', String(open));
+        document.getElementById(item.getAttribute('aria-controls')).hidden = !open;
+        return;
+      }
       if (item.matches('[aria-haspopup]')) {
         openSubmenu(item);
         return;
@@ -2024,7 +2033,6 @@
     const heaps = falling.filter(mode => mode !== 'rain');
     const titles = {
       melt: heaps.includes('snow') ? 'Melt Snow' : heaps.join() === 'blossom' ? 'Wilt Petals' : 'Wither Leaves',
-      windows: `${names(falling)} on Windows`,
       clear: `Clear ${names(heaps)}`,
     };
     for (const item of document.querySelectorAll('[data-snow-menu] .menu-item')) {
@@ -2034,12 +2042,17 @@
       }
       const name = titles[item.dataset.toggle] ?? titles[item.dataset.action];
       if (name) item.textContent = name;
-      if (['accumulate', 'melt'].includes(item.dataset.toggle) || item.dataset.action === 'clear') item.hidden = heaps.length === 0;
+      // Rain splashes on the ground whatever Ground says.
+      if (['ground', 'melt'].includes(item.dataset.toggle) || item.dataset.action === 'clear') item.hidden = heaps.length === 0;
       if (item.dataset.toggle === 'halloween') item.setAttribute('aria-disabled', String(!onlySnow()));
       if (item.dataset.toggle) item.setAttribute('aria-checked', String(settings[item.dataset.toggle]));
       if (item.dataset.toggle === 'melt') item.setAttribute('aria-disabled', String(!settings.accumulate));
       if (item.dataset.toggle === 'windows') item.setAttribute('aria-disabled', String(settings.behind));
     }
+    const tiles = [...document.querySelectorAll('[data-snow-menu] .menu-tile')].filter(tile => !tile.hidden);
+    const lit = tiles.filter(tile => settings[tile.dataset.toggle]);
+    const summary = lit.length === tiles.length ? 'All' : lit.length ? lit.map(tile => tile.textContent).join(', ') : 'Off';
+    for (const element of document.querySelectorAll('[data-snow-menu] [data-summary]')) element.textContent = summary;
   }
 
   addEventListener('pointermove', event => { pointer = { x: event.clientX, y: event.clientY }; }, { passive: true });

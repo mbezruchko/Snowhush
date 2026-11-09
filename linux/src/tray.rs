@@ -187,6 +187,46 @@ impl ksni::Tray for Tray {
             }
             .into(),
         ]);
+        // Rain splashes on the ground whatever Ground says, so with only rain falling it isn't offered.
+        let surfaces = vec![
+            CheckmarkItem {
+                label: tr("surface.ground").into(),
+                checked: settings.ground,
+                visible: lies,
+                activate: Box::new(|tray: &mut Tray| {
+                    tray.change(|settings| {
+                        settings.ground = !settings.ground;
+                        Command::Ground(settings.ground)
+                    })
+                }),
+                ..Default::default()
+            }
+            .into(),
+            CheckmarkItem {
+                label: tr("surface.panel").into(),
+                checked: settings.panel,
+                activate: Box::new(|tray: &mut Tray| {
+                    tray.change(|settings| {
+                        settings.panel = !settings.panel;
+                        Command::Panel(settings.panel)
+                    })
+                }),
+                ..Default::default()
+            }
+            .into(),
+            CheckmarkItem {
+                label: tr("surface.windows").into(),
+                checked: settings.snow_on_windows,
+                activate: Box::new(|tray: &mut Tray| {
+                    tray.change(|settings| {
+                        settings.snow_on_windows = !settings.snow_on_windows;
+                        Command::SnowOnWindows(settings.snow_on_windows)
+                    })
+                }),
+                ..Default::default()
+            }
+            .into(),
+        ];
         vec![
             SubMenu {
                 label: tr("intensity").into(),
@@ -229,6 +269,7 @@ impl ksni::Tray for Tray {
                 ..Default::default()
             }
             .into(),
+            SubMenu { label: tr("accumulate").into(), submenu: surfaces, ..Default::default() }.into(),
             SubMenu { label: tr("mode").into(), submenu: kinds, ..Default::default() }.into(),
             StandardItem {
                 label: text::kinds("clear", &heaps).into(),
@@ -245,39 +286,14 @@ impl ksni::Tray for Tray {
                 submenu: vec![
                     StandardItem { label: tr("behavior").into(), enabled: false, ..Default::default() }.into(),
                     CheckmarkItem {
-                        label: tr("accumulate").into(),
-                        checked: settings.accumulate,
-                        visible: lies,
-                        activate: Box::new(|tray: &mut Tray| {
-                            tray.change(|settings| {
-                                settings.accumulate = !settings.accumulate;
-                                Command::Accumulate(settings.accumulate)
-                            })
-                        }),
-                        ..Default::default()
-                    }
-                    .into(),
-                    CheckmarkItem {
                         label: melt.into(),
                         checked: settings.melt,
-                        enabled: settings.accumulate,
+                        enabled: settings.accumulates(),
                         visible: lies,
                         activate: Box::new(|tray: &mut Tray| {
                             tray.change(|settings| {
                                 settings.melt = !settings.melt;
                                 Command::Melt(settings.melt)
-                            })
-                        }),
-                        ..Default::default()
-                    }
-                    .into(),
-                    CheckmarkItem {
-                        label: text::kinds("windows", &falling).into(),
-                        checked: settings.snow_on_windows,
-                        activate: Box::new(|tray: &mut Tray| {
-                            tray.change(|settings| {
-                                settings.snow_on_windows = !settings.snow_on_windows;
-                                Command::SnowOnWindows(settings.snow_on_windows)
                             })
                         }),
                         ..Default::default()

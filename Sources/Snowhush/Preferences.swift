@@ -1,5 +1,16 @@
 import AppKit
 
+/// What snow and leaves settle on.
+struct Surfaces: OptionSet {
+    let rawValue: Int
+    static let ground = Surfaces(rawValue: 1)
+    static let dock = Surfaces(rawValue: 2)
+    static let windows = Surfaces(rawValue: 4)
+    static let widgets = Surfaces(rawValue: 8)
+    /// What the window list is read for.
+    static let tracked: Surfaces = [.dock, .windows, .widgets]
+}
+
 enum Preferences {
     private static let defaults = UserDefaults.standard
     static let opacityRange = 0.1...1.0
@@ -9,7 +20,11 @@ enum Preferences {
     private static let behindWindowsKey = "behindWindows"
     private static let showOverFullScreenKey = "showOverFullScreen"
     private static let meltSnowKey = "meltSnow"
+    /// Before Accumulate picked where snow settles, it turned settling off everywhere at once.
     private static let accumulateKey = "accumulate"
+    private static let groundKey = "settleGround"
+    private static let dockKey = "settleDock"
+    private static let widgetsKey = "settleWidgets"
     private static let snowOnWindowsKey = "snowOnWindows"
     private static let welcomedKey = "welcomed"
     private static let installedAtKey = "installedAt"
@@ -32,7 +47,9 @@ enum Preferences {
             behindWindowsKey: false,
             showOverFullScreenKey: false,
             meltSnowKey: true,
-            accumulateKey: true,
+            groundKey: true,
+            dockKey: true,
+            widgetsKey: true,
             snowOnWindowsKey: true,
             showInScreenshotsKey: false,
             deepInteractionKey: false,
@@ -44,6 +61,12 @@ enum Preferences {
         ])
         if defaults.object(forKey: intensityKey) == nil, let stop = defaults.object(forKey: snowfallKey) as? Int {
             defaults.set([0, 0.25, 0.5, 0.75, 0.5][min(max(stop, 0), 4)], forKey: intensityKey)
+        }
+        if defaults.object(forKey: accumulateKey) != nil {
+            if !defaults.bool(forKey: accumulateKey) {
+                for key in [groundKey, dockKey, widgetsKey, snowOnWindowsKey] { defaults.set(false, forKey: key) }
+            }
+            defaults.removeObject(forKey: accumulateKey)
         }
         if defaults.object(forKey: installedAtKey) == nil {
             defaults.set(defaults.bool(forKey: welcomedKey) ? 0 : Date().timeIntervalSince1970, forKey: installedAtKey)
@@ -62,14 +85,21 @@ enum Preferences {
         set { defaults.set(newValue, forKey: intensityKey) }
     }
 
-    static var snowOnWindows: Bool {
-        get { defaults.bool(forKey: snowOnWindowsKey) }
-        set { defaults.set(newValue, forKey: snowOnWindowsKey) }
-    }
-
-    static var accumulate: Bool {
-        get { defaults.bool(forKey: accumulateKey) }
-        set { defaults.set(newValue, forKey: accumulateKey) }
+    /// Where snow settles; Windows is `snowOnWindows`.
+    static var surfaces: Surfaces {
+        get {
+            var surfaces: Surfaces = []
+            for (surface, key) in [(Surfaces.ground, groundKey), (.dock, dockKey), (.widgets, widgetsKey), (.windows, snowOnWindowsKey)]
+            where defaults.bool(forKey: key) {
+                surfaces.insert(surface)
+            }
+            return surfaces
+        }
+        set {
+            for (surface, key) in [(Surfaces.ground, groundKey), (.dock, dockKey), (.widgets, widgetsKey), (.windows, snowOnWindowsKey)] {
+                defaults.set(newValue.contains(surface), forKey: key)
+            }
+        }
     }
 
     static var meltSnow: Bool {

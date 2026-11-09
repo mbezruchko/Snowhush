@@ -20,7 +20,8 @@ const RUN_VALUE: PCWSTR = w!("Snowhush");
 pub struct Settings {
     /// How much falls, in percent: 0 to 100 in steps of 5.
     pub intensity: u32,
-    pub accumulate: bool,
+    /// Snow and leaves settle along the bottom of the screen.
+    pub ground: bool,
     pub melt: bool,
     pub snow_on_windows: bool,
     pub behind_windows: bool,
@@ -47,6 +48,11 @@ pub struct Settings {
 }
 
 impl Settings {
+    /// Whether snow settles anywhere.
+    pub fn accumulates(&self) -> bool {
+        self.ground || self.snow_on_windows
+    }
+
     pub fn load() -> Settings {
         let calm = !animations_enabled();
         // Before the slider, the intensity was one of Off, Light, Steady, Heavy and Variable.
@@ -62,11 +68,13 @@ impl Settings {
         } else {
             Mode::Snow
         });
+        // Before Accumulate picked where snow settles, it turned settling off everywhere at once.
+        let settled = read(w!("accumulate")).is_none_or(|v| v != 0) || read(w!("settleGround")).is_some();
         Settings {
             intensity: read(w!("intensity")).map(|v| v.clamp(0, 100)).or(stop.map(|i| [0, 25, 50, 75, 50][i])).unwrap_or(if calm { 25 } else { 50 }),
-            accumulate: read(w!("accumulate")).is_none_or(|v| v != 0),
+            ground: read(w!("settleGround")).map_or(settled, |v| v != 0),
             melt: read(w!("meltSnow")).is_none_or(|v| v != 0),
-            snow_on_windows: read(w!("snowOnWindows")).is_none_or(|v| v != 0),
+            snow_on_windows: settled && read(w!("snowOnWindows")).is_none_or(|v| v != 0),
             behind_windows: read(w!("behindWindows")).is_some_and(|v| v != 0),
             over_full_screen: read(w!("showOverFullScreen")).is_some_and(|v| v != 0),
             behind_taskbar: read(w!("behindTaskbar")).is_some_and(|v| v != 0),
@@ -86,7 +94,7 @@ impl Settings {
 
     pub fn save(&self) {
         write(w!("intensity"), self.intensity);
-        write(w!("accumulate"), self.accumulate as u32);
+        write(w!("settleGround"), self.ground as u32);
         write(w!("meltSnow"), self.melt as u32);
         write(w!("snowOnWindows"), self.snow_on_windows as u32);
         write(w!("behindWindows"), self.behind_windows as u32);

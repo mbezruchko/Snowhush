@@ -412,6 +412,8 @@ final class SnowSimulation {
     }
     var thaws = false
     var accumulates = true
+    /// Whether snow and leaves settle along the bottom of the screen; rain splashes there either way.
+    var groundSettles = true
     /// How opaque snow, leaves and rain are while they fall, from the sky or off a window; once settled they show in full.
     var fallingOpacity: Float = 1
     /// Screen edges with no display past them: a window slid past one leaves its snow heaped against the edge.
@@ -1576,7 +1578,7 @@ final class SnowSimulation {
         guard snow > 0.02 else { return }
         let room = maxGrains - grains.count
         guard room > 0 else {
-            ground.deposit(snow, at: position.x, wide: true)
+            if groundSettles { ground.deposit(snow, at: position.x, wide: true) }
             return
         }
         let count = min(room, max(1, min(6, Int(snow / 3))))
@@ -1614,7 +1616,7 @@ final class SnowSimulation {
         }
         let room = maxGrains - grains.count
         guard room > 0 else {
-            ground.deposit(area, at: position.x, wide: true, blend: Blend(leaves: 1, petals: petals))
+            if groundSettles { ground.deposit(area, at: position.x, wide: true, blend: Blend(leaves: 1, petals: petals)) }
             return
         }
         // The bulk goes unseen and makes up a heap again wherever it lands; whatever leaves show come off above.
@@ -1822,7 +1824,7 @@ final class SnowSimulation {
 
     /// The highest visible snow surface crossed while falling from `from` to `to` at `x`, allowing for the surface moving meanwhile.
     /// Past an edge shared with another display only the ground counts: snow there is the other display's to land.
-    private func landing(x: Float, from: Float, to: Float, here: Bool = true) -> (layer: SnowLayer, index: Int)? {
+    private func landing(x: Float, from: Float, to: Float, here: Bool = true, ground onGround: Bool) -> (layer: SnowLayer, index: Int)? {
         var hit: (layer: SnowLayer, index: Int)?
         var highest = -Float.greatestFiniteMagnitude
         for (k, span) in ledgeSpans.enumerated() where here {
@@ -1838,6 +1840,7 @@ final class SnowSimulation {
             }
         }
         if let hit { return hit }
+        guard onGround else { return nil }
         let i = ground.clampedIndex(at: x)
         return to <= ground.surface(i) ? (ground, i) : nil
     }
@@ -1889,7 +1892,7 @@ final class SnowSimulation {
             }
 
             if flake.settles && (accumulates || flake.rain) && flake.blown == 0 {
-                let hit = landing(x: flake.position.x, from: previousY, to: flake.position.y, here: !crossed(flake.position))
+                let hit = landing(x: flake.position.x, from: previousY, to: flake.position.y, here: !crossed(flake.position), ground: groundSettles || flake.rain)
                 // Only snow is handed over: leaves and rain on a window kept by another display fall on past it.
                 if !flake.rain && flake.leaf == 0,
                    landsOnBorrowed(below: hit, x: flake.position.x, from: previousY, to: flake.position.y, area: flake.size * flake.size * deposition * flake.mass) {
@@ -1929,7 +1932,8 @@ final class SnowSimulation {
                     i -= 1
                     continue
                 }
-            } else if flake.position.y < -flake.size * 2 {
+            }
+            if flake.position.y < -flake.size * 2 {
                 recycle(i)
                 i -= 1
                 continue
@@ -1994,7 +1998,7 @@ final class SnowSimulation {
                 grain.velocity *= damping
             }
             grain.position += grain.velocity * dt
-            let hit = grain.blown || grain.velocity.y > 0 ? nil : landing(x: grain.position.x, from: previousY, to: grain.position.y, here: !crossed(grain.position))
+            let hit = grain.blown || grain.velocity.y > 0 ? nil : landing(x: grain.position.x, from: previousY, to: grain.position.y, here: !crossed(grain.position), ground: groundSettles)
 
             if grain.position.y >= -10 && crossed(grain.position) {
                 strays.append(StraySnow(piece: .grain(grain)))
@@ -3591,9 +3595,10 @@ final class SnowSimulation {
         let meltPace = falling > 0 ? pow(falling / thawBalance, thawExponent) : 1
         for ledge in ledgeList { ledge.outside = (outside(of: ledge, left: true), outside(of: ledge, left: false)) }
         for layer in layers {
-            if !accumulates || thaws {
+            let bare = layer === ground && !groundSettles
+            if !accumulates || thaws || bare {
                 // Withered leaves leave nothing behind.
-                let floor = !accumulates ? 0 : (layer === ground ? thawDepth : ledgeThawDepth)
+                let floor = !accumulates || bare ? 0 : (layer === ground ? thawDepth : ledgeThawDepth)
                 if layer.thaw(dt: dt * meltPace, down: floor, rate: thawRate, settle: thawTime) { heightsChanged = true }
             }
             // Shaken harder than gravity, a granular pile fluidizes and slumps to a flatter slope.

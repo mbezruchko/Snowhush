@@ -10,11 +10,11 @@ final class MenuToggle: NSView {
 
     // Measured from a macOS 26 menu at 2x: rows 24 pt, titles and separators at 30 pt, checkmarks centred at 18 pt
     // and matching a 10.5 pt bold SF checkmark, not the older, thinner menuOnStateTemplate; lit in the accent colour.
-    private static let modern = ProcessInfo.processInfo.isOperatingSystemAtLeast(OperatingSystemVersion(majorVersion: 26, minorVersion: 0, patchVersion: 0))
-    private static let rowHeight: CGFloat = modern ? 24 : 22
-    private static let titleX: CGFloat = modern ? 30 : 22
+    static let modern = ProcessInfo.processInfo.isOperatingSystemAtLeast(OperatingSystemVersion(majorVersion: 26, minorVersion: 0, patchVersion: 0))
+    static let rowHeight: CGFloat = modern ? 24 : 22
+    static let titleX: CGFloat = modern ? 30 : 22
     private static let checkX: CGFloat = modern ? 18 : 12
-    private static let highlightRadius: CGFloat = modern ? 7 : 4
+    static let highlightRadius: CGFloat = modern ? 7 : 4
     private static let check = NSImage(systemSymbolName: "checkmark", accessibilityDescription: nil)
 
     init(action: Selector, target: AnyObject) {

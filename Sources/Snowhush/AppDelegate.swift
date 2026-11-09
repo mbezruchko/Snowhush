@@ -7,9 +7,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var device: MTLDevice!
     private var screens: [ScreenSnow] = []
     private let displays = Displays()
-    private var accumulates = true
+    private var surfaces: Surfaces = []
     private var thaws = true
-    private var snowOnWindows = true
     private var behindWindows = false
     private var snowfallHeld = false
     private var halloween = false
@@ -17,8 +16,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private let intensitySlider = MenuSlider(range: 0...1)
     private let opacitySlider = MenuSlider(range: Preferences.opacityRange)
     private var accumulateItem: NSMenuItem!
+    private let accumulateRow = MenuDisclosure()
+    private var surfacesItem: NSMenuItem!
+    private let surfacePicker = SurfacePicker()
     private var meltItem: NSMenuItem!
-    private var snowOnWindowsItem: NSMenuItem!
     private var clearItem: NSMenuItem!
     private var halloweenItem: NSMenuItem!
     private var mixedItem: NSMenuItem!
@@ -50,9 +51,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
             return
         }
         self.device = device
-        accumulates = Preferences.accumulate
+        surfaces = Preferences.surfaces
         thaws = Preferences.meltSnow
-        snowOnWindows = Preferences.snowOnWindows
         behindWindows = Preferences.behindWindows
         snowfallHeld = !Preferences.welcomed
         syncScreens()
@@ -91,7 +91,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         for screen in current {
             if let existing = screens.first(where: { $0.displayID == screen.displayID }) {
                 existing.fit(to: screen)
-            } else if let snow = ScreenSnow(screen: screen, device: device, displays: displays, snowOnWindows: { [unowned self] in snowOnWindows }) {
+            } else if let snow = ScreenSnow(screen: screen, device: device, displays: displays, surfaces: { [unowned self] in surfaces }) {
                 snow.simulation.snowfallHeld = snowfallHeld
                 snow.simulation.snowfallReleased = { [weak self] in self?.releaseSnowfall() }
                 snow.halloween = halloween
@@ -155,6 +155,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         let opacityItem = NSMenuItem()
         opacityItem.view = opacitySlider
         menu.addItem(opacityItem)
+        accumulateItem = menu.addItem(withTitle: tr("accumulate"), action: nil, keyEquivalent: "")
+        accumulateItem.view = accumulateRow
+        accumulateRow.toggled = { [unowned self] in
+            accumulateRow.open.toggle()
+            surfacesItem.isHidden = !accumulateRow.open
+            if !accumulateRow.open { accumulateRow.fit(accumulateItem.title, least: surfacePicker.frame.width) }
+        }
+        surfacesItem = NSMenuItem()
+        surfacesItem.view = surfacePicker
+        surfacesItem.isHidden = true
+        surfacePicker.toggled = { [unowned self] surface in toggle(surface) }
+        menu.addItem(surfacesItem)
         let modes = NSMenu()
         modes.autoenablesItems = false
         mixedItem = toggle(tr("mixed"), #selector(toggleMixed), to: modes)
@@ -172,9 +184,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         let settings = NSMenu()
         settings.autoenablesItems = false
         settings.addItem(.sectionHeader(title: tr("behavior")))
-        accumulateItem = toggle(tr("accumulate"), #selector(toggleAccumulate), to: settings)
         meltItem = toggle(tr("melt.snow"), #selector(toggleMeltSnow), to: settings)
-        snowOnWindowsItem = toggle(tr("windows.snow"), #selector(toggleSnowOnWindows), to: settings)
         deepInteractionItem = toggle(tr("deep"), #selector(toggleDeepInteraction), to: settings)
         settings.addItem(.separator())
         settings.addItem(.sectionHeader(title: tr("display")))
@@ -230,24 +240,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     func menuNeedsUpdate(_ menu: NSMenu) {
         intensitySlider.value = Preferences.intensity
         opacitySlider.value = Preferences.fallingOpacity
-        accumulateItem.state = accumulates ? .on : .off
         let modes = Mode.allCases.filter(Preferences.modes.contains)
         mixedItem.state = Preferences.mixed ? .on : .off
         for (item, mode) in modeItems { item.state = modes.contains(mode) ? .on : .off }
         // Rain neither heaps up nor lies about to clear away.
         let heaps = modes.filter { $0 != .rain }
-        accumulateItem.isHidden = heaps.isEmpty
         meltItem.isHidden = heaps.isEmpty
         clearItem.isHidden = heaps.isEmpty
         meltItem.title = tr(heaps.contains(.snow) ? "melt.snow" : heaps == [.blossom] ? "melt.blossom" : "melt.autumn")
-        snowOnWindowsItem.title = tr("windows", modes)
         clearItem.title = tr("clear", heaps)
-        for item: NSMenuItem in [meltItem, snowOnWindowsItem] { (item.view as? MenuToggle)?.fit(item.title) }
+        (meltItem.view as? MenuToggle)?.fit(meltItem.title)
+        // Top to bottom, as they lie on the screen. Rain splashes on the ground whatever it says.
+        let choices: [Surfaces] = [.widgets, .windows, .dock] + (heaps.isEmpty ? [] : [.ground])
+        if surfacePicker.choices != choices { surfacePicker.choices = choices }
+        surfacePicker.on = surfaces
+        let lit = choices.filter(surfaces.contains)
+        accumulateRow.summary = lit.count == choices.count ? tr("all") : lit.isEmpty ? tr("off") : lit.map(SurfacePicker.name).joined(separator: ", ")
+        // Unfolded, the summary isn't shown: the menu keeps its width while the icons are switched.
+        if !accumulateRow.open { accumulateRow.fit(accumulateItem.title, least: surfacePicker.frame.width) }
         meltItem.state = thaws ? .on : .off
-        meltItem.isEnabled = accumulates
-        snowOnWindowsItem.state = snowOnWindows ? .on : .off
+        meltItem.isEnabled = !surfaces.isEmpty
         deepInteractionItem.state = Preferences.deepInteraction ? .on : .off
-        deepInteractionItem.isEnabled = snowOnWindows
+        deepInteractionItem.isEnabled = surfaces.contains(.windows)
         clearItem.isEnabled = screens.contains { $0.simulation.hasSnow || $0.simulation.spriteCount > 0 }
         halloweenItem.state = Halloween.isWanted ? .on : .off
         halloweenItem.isEnabled = modes == [.snow]
@@ -265,22 +279,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         updateStatusIcon()
     }
 
-    @objc private func toggleAccumulate() {
-        accumulates.toggle()
-        Preferences.accumulate = accumulates
-        for snow in screens { snow.simulation.accumulates = accumulates }
+    private func toggle(_ surface: Surfaces) {
+        surfaces.formSymmetricDifference(surface)
+        Preferences.surfaces = surfaces
+        for snow in screens {
+            snow.simulation.accumulates = !surfaces.isEmpty
+            snow.simulation.groundSettles = surfaces.contains(.ground)
+        }
+        if surfaces.isDisjoint(with: .tracked) { screens.forEach { $0.dropWindowSnow() } }
+        if let menu = statusItem.menu {
+            menuNeedsUpdate(menu)
+            menu.items.forEach { $0.view?.needsDisplay = true }
+        }
     }
 
     @objc private func toggleMeltSnow() {
         thaws.toggle()
         Preferences.meltSnow = thaws
         for snow in screens { snow.simulation.thaws = thaws }
-    }
-
-    @objc private func toggleSnowOnWindows() {
-        snowOnWindows.toggle()
-        Preferences.snowOnWindows = snowOnWindows
-        if !snowOnWindows { screens.forEach { $0.dropWindowSnow() } }
     }
 
     @objc private func toggleDeepInteraction() {

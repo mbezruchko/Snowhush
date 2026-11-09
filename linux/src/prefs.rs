@@ -12,7 +12,10 @@ const MODES: [Mode; 4] = [Mode::Snow, Mode::Autumn, Mode::Rain, Mode::Blossom];
 pub struct Settings {
     /// How much falls, in percent.
     pub intensity: u32,
-    pub accumulate: bool,
+    /// Snow and leaves settle along the bottom of the screen.
+    pub ground: bool,
+    /// Snow and leaves settle on a floating panel.
+    pub panel: bool,
     pub melt: bool,
     pub snow_on_windows: bool,
     pub behind_windows: bool,
@@ -34,6 +37,11 @@ pub struct Settings {
 }
 
 impl Settings {
+    /// Whether snow settles anywhere.
+    pub fn accumulates(&self) -> bool {
+        self.ground || self.panel || self.snow_on_windows
+    }
+
     pub fn load() -> Settings {
         let text = config_dir().and_then(|folder| std::fs::read_to_string(folder.join("settings")).ok()).unwrap_or_default();
         let read = |key: &str| {
@@ -48,11 +56,14 @@ impl Settings {
             Mode::Snow
         });
         let stamped = read("installedAt");
+        // Before Accumulate picked where snow settles, it turned settling off everywhere at once.
+        let settled = read("accumulate").is_none_or(|v| v != 0) || read("settleGround").is_some();
         let settings = Settings {
             intensity: read("intensity").map(|v| v.clamp(0, 100)).or(stop.map(|i| [0, 25, 50, 75, 50][i])).unwrap_or(if calm { 25 } else { 50 }),
-            accumulate: read("accumulate").is_none_or(|v| v != 0),
+            ground: read("settleGround").map_or(settled, |v| v != 0),
+            panel: read("settlePanel").map_or(settled, |v| v != 0),
             melt: read("meltSnow").is_none_or(|v| v != 0),
-            snow_on_windows: read("snowOnWindows").is_none_or(|v| v != 0),
+            snow_on_windows: settled && read("snowOnWindows").is_none_or(|v| v != 0),
             behind_windows: read("behindWindows").is_some_and(|v| v != 0),
             over_full_screen: read("showOverFullScreen").is_some_and(|v| v != 0),
             show_in_screenshots: read("showInScreenshots").is_some_and(|v| v != 0),
@@ -74,9 +85,10 @@ impl Settings {
     pub fn save(&self) {
         let Some(folder) = config_dir() else { return };
         let text = format!(
-            "intensity={}\naccumulate={}\nmeltSnow={}\nsnowOnWindows={}\nbehindWindows={}\nshowOverFullScreen={}\nshowInScreenshots={}\ninstalledAt={}\nhalloweenOn={}\nhalloweenSkipped={}\nmode={}\nmixed={}\nmix0={}\nmix1={}\nautumn={}\nperformance={}\nfallingOpacity={}\n",
+            "intensity={}\nsettleGround={}\nsettlePanel={}\nmeltSnow={}\nsnowOnWindows={}\nbehindWindows={}\nshowOverFullScreen={}\nshowInScreenshots={}\ninstalledAt={}\nhalloweenOn={}\nhalloweenSkipped={}\nmode={}\nmixed={}\nmix0={}\nmix1={}\nautumn={}\nperformance={}\nfallingOpacity={}\n",
             self.intensity,
-            self.accumulate as u32,
+            self.ground as u32,
+            self.panel as u32,
             self.melt as u32,
             self.snow_on_windows as u32,
             self.behind_windows as u32,

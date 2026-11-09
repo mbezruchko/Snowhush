@@ -13,6 +13,12 @@
 "display" = "Pantalla";
 "general" = "General";
 "accumulate" = "Acumular";
+"surface.ground" = "Suelo";
+"surface.dock" = "Dock";
+"surface.widgets" = "Widgets";
+"surface.windows" = "Ventanas";
+"surface.panel" = "Panel";
+"all" = "Todo";
 "melt.snow" = "Derretir la nieve";
 "melt.autumn" = "Marchitar las hojas";
 "melt.blossom" = "Marchitar los pétalos";
@@ -26,17 +32,6 @@
 "updates" = "Buscar actualizaciones…";
 "support" = "Apoyar a Snowhush";
 "quit" = "Salir";
-
-"windows.snow" = "Nieve en las ventanas";
-"windows.autumn" = "Hojas en las ventanas";
-"windows.rain" = "Lluvia en las ventanas";
-"windows.blossom" = "Pétalos en las ventanas";
-"windows.snow.autumn" = "Nieve y hojas en las ventanas";
-"windows.snow.rain" = "Nieve y lluvia en las ventanas";
-"windows.snow.blossom" = "Nieve y pétalos en las ventanas";
-"windows.autumn.rain" = "Hojas y lluvia en las ventanas";
-"windows.autumn.blossom" = "Hojas y pétalos en las ventanas";
-"windows.rain.blossom" = "Lluvia y pétalos en las ventanas";
 
 "clear.snow" = "Quitar la nieve";
 "clear.autumn" = "Quitar las hojas";

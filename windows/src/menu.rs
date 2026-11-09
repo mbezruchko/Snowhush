@@ -8,16 +8,18 @@ use std::mem::size_of;
 use std::sync::Once;
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
-use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT};
+use windows::Win32::Graphics::Direct2D::Common::{
+    D2D_RECT_F, D2D_SIZE_F, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_FIGURE_BEGIN_FILLED, D2D1_FIGURE_END_OPEN, D2D1_PIXEL_FORMAT,
+};
 use windows::Win32::Graphics::Direct2D::{
-    D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_ELLIPSE, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES,
-    D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1_RENDER_TARGET_USAGE_NONE, D2D1_ROUNDED_RECT, D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE, D2D1CreateFactory,
-    ID2D1Factory, ID2D1RenderTarget, ID2D1SolidColorBrush,
+    D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_SMALL, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_ELLIPSE, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT,
+    D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1_RENDER_TARGET_USAGE_NONE, D2D1_ROUNDED_RECT, D2D1_SWEEP_DIRECTION_CLOCKWISE,
+    D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE, D2D1CreateFactory, ID2D1Factory, ID2D1RenderTarget, ID2D1SolidColorBrush,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT, DWRITE_FONT_WEIGHT_NORMAL,
-    DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_METRICS, DWriteCreateFactory,
-    IDWriteFactory, IDWriteTextFormat, IDWriteTextLayout,
+    DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_TRAILING,
+    DWRITE_TEXT_METRICS, DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, IDWriteTextLayout,
 };
 use windows::Win32::Graphics::Dwm::{
     DWMSBT_TRANSIENTWINDOW, DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
@@ -70,6 +72,10 @@ const THUMB: f32 = 10.0;
 const TRACK: f32 = 4.0;
 /// A panel with a slider is at least this wide, for its steps to lie far enough apart.
 const SLIDER_WIDTH: f32 = 240.0;
+/// A row of icons, each over its label, and the least width each takes.
+const ICONS: f32 = 56.0;
+const TILE_WIDTH: f32 = 72.0;
+const ICON: f32 = 20.0;
 const TEXT_SIZE: f32 = 14.0;
 const GLYPH_SIZE: f32 = 12.0;
 const HEADER_SIZE: f32 = 12.0;
@@ -80,6 +86,7 @@ const TINT_DARK: u32 = 0x732C_2C2C;
 const TINT_LIGHT: u32 = 0x80F3_F3F3;
 const CHECK: &str = "\u{E73E}";
 const CHEVRON: &str = "\u{E76C}";
+const CHEVRON_DOWN: &str = "\u{E70D}";
 const HEART: &str = "\u{EB52}";
 /// The site's sponsor heart, and how far the label after it moves over.
 const HEART_COLOR: D2D1_COLOR_F = D2D1_COLOR_F { r: 0.92, g: 0.51, b: 0.51, a: 1.0 };
@@ -114,7 +121,35 @@ pub enum Entry {
         label: String,
         entries: Vec<Entry>,
     },
+    /// Folds the row of icons under it out or away, leaving the menu open; folded, `summary` trails it.
+    Disclosure {
+        id: u32,
+        label: String,
+        summary: String,
+        open: bool,
+    },
+    /// Icons that each switch something on or off, leaving the menu open: the row a `Disclosure` folds, empty while it
+    /// is folded.
+    Icons {
+        tiles: Vec<Tile>,
+        shown: bool,
+    },
     Separator,
+}
+
+/// One icon of a row, lit while what it switches is on.
+#[derive(Clone)]
+pub struct Tile {
+    pub id: u32,
+    pub icon: Icon,
+    pub label: String,
+    pub on: bool,
+}
+
+#[derive(Clone, Copy)]
+pub enum Icon {
+    Ground,
+    Windows,
 }
 
 impl Entry {
@@ -145,15 +180,16 @@ impl Entry {
 
     fn label(&self) -> Option<&str> {
         match self {
-            Entry::Item { label, .. } | Entry::Submenu { label, .. } | Entry::Header(label) => Some(label),
-            Entry::Separator | Entry::Slider { .. } => None,
+            Entry::Item { label, .. } | Entry::Submenu { label, .. } | Entry::Header(label) | Entry::Disclosure { label, .. } => Some(label),
+            Entry::Separator | Entry::Slider { .. } | Entry::Icons { .. } => None,
         }
     }
 
     fn selectable(&self) -> bool {
         match self {
             Entry::Item { enabled, .. } => *enabled,
-            Entry::Submenu { .. } | Entry::Slider { .. } => true,
+            Entry::Submenu { .. } | Entry::Slider { .. } | Entry::Disclosure { .. } => true,
+            Entry::Icons { shown, .. } => *shown,
             Entry::Separator | Entry::Header(_) => false,
         }
     }
@@ -163,6 +199,13 @@ impl Entry {
             Entry::Separator => SEPARATOR,
             Entry::Header(_) => HEADER,
             Entry::Slider { .. } => SLIDER,
+            Entry::Icons { shown, .. } => {
+                if *shown {
+                    ICONS
+                } else {
+                    0.0
+                }
+            }
             _ => ROW,
         }
     }
@@ -173,6 +216,13 @@ impl Entry {
 
     fn is_slider(&self) -> bool {
         matches!(self, Entry::Slider { .. })
+    }
+
+    fn tiles(&self) -> usize {
+        match self {
+            Entry::Icons { tiles, .. } => tiles.len(),
+            _ => 0,
+        }
     }
 }
 
@@ -281,6 +331,8 @@ struct Panel {
     /// The panel on the screen, in physical pixels.
     frame: RECT,
     hover: Option<usize>,
+    /// The icon lit in a row of them, while that row is.
+    tile: usize,
     /// The entry of the panel before it that opened it.
     from: usize,
     /// Where labels start, in DIPs from the panel's left edge.
@@ -297,6 +349,8 @@ impl Panel {
 struct Menu {
     /// The menu, then each submenu open, each opened from an entry of the one before it.
     panels: Vec<Panel>,
+    /// Where the menu was asked to show, which places it again when it grows or shrinks.
+    anchor: POINT,
     scale: f32,
     work: RECT,
     light: bool,
@@ -651,6 +705,7 @@ impl Menu {
             glyphs.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
             Ok(Menu {
                 panels: Vec::new(),
+                anchor,
                 scale: dpi.max(96) as f32 / 96.0,
                 work: info.rcWork,
                 light,
@@ -677,8 +732,17 @@ impl Menu {
             let mut metrics = DWRITE_TEXT_METRICS::default();
             unsafe { self.layout(label, 10_000.0)?.GetMetrics(&mut metrics)? };
             let heart = if matches!(entry, Entry::Item { heart: true, .. }) { HEART_SPACE } else { 0.0 };
-            widest = widest.max(metrics.widthIncludingTrailingWhitespace + heart);
+            let summary = match entry {
+                Entry::Disclosure { summary, .. } => {
+                    let mut trailing = DWRITE_TEXT_METRICS::default();
+                    unsafe { self.layout(summary, 10_000.0)?.GetMetrics(&mut trailing)? };
+                    trailing.widthIncludingTrailingWhitespace + 16.0
+                }
+                _ => 0.0,
+            };
+            widest = widest.max(metrics.widthIncludingTrailingWhitespace + heart + summary);
         }
+        let tiles = entries.iter().map(Entry::tiles).max().unwrap_or(0) as f32 * TILE_WIDTH + 2.0 * PAD;
         let mut tops = Vec::with_capacity(entries.len());
         let mut y = PAD;
         for entry in &entries {
@@ -693,10 +757,11 @@ impl Menu {
             entries,
             tops,
             label,
-            width: (label + widest + TRAILING).ceil().max(least),
+            width: (label + widest + TRAILING).ceil().max(least).max(tiles),
             height: y + PAD,
             frame: RECT::default(),
             hover: None,
+            tile: 0,
             from,
             pixels: Vec::new(),
         })
@@ -725,6 +790,18 @@ impl Menu {
         }
         let i = panel.tops.iter().rposition(|&top| y >= top)?;
         (y < panel.tops[i] + panel.entries[i].height() && panel.entries[i].selectable()).then_some(i)
+    }
+
+    /// The icon under a point on the screen, if entry `i` of panel `p` is a row of them.
+    fn tile_at(&self, p: usize, i: usize, point: POINT) -> Option<usize> {
+        let panel = &self.panels[p];
+        let count = panel.entries[i].tiles();
+        if count == 0 {
+            return None;
+        }
+        let x = (point.x - panel.frame.left) as f32 / self.scale;
+        let width = (panel.width - 2.0 * PAD) / count as f32;
+        Some((((x - PAD) / width).max(0.0) as usize).min(count - 1))
     }
 
     fn set_hover(&mut self, p: usize, hover: Option<usize>) -> bool {
@@ -772,6 +849,13 @@ impl Menu {
         };
         let entry = self.entry_at(p, point);
         let mut changed = self.set_hover(p, entry);
+        if let Some(i) = entry
+            && let Some(tile) = self.tile_at(p, i, point)
+            && tile != self.panels[p].tile
+        {
+            self.panels[p].tile = tile;
+            changed = true;
+        }
         for q in 0..p {
             let from = self.panels[q + 1].from;
             changed |= self.set_hover(q, Some(from));
@@ -882,6 +966,16 @@ impl Menu {
                 CLOSED.set(true);
                 false
             }
+            Entry::Disclosure { id, .. } => {
+                TOGGLED.set(Some(*id));
+                false
+            }
+            Entry::Icons { tiles, shown: true } => {
+                if let Some(tile) = tiles.get(self.panels[p].tile) {
+                    TOGGLED.set(Some(tile.id));
+                }
+                false
+            }
             Entry::Submenu { .. } => {
                 let root = self.panels[0].window;
                 self.wait(root, None);
@@ -905,9 +999,43 @@ impl Menu {
                 CLOSED.set(true);
                 return false;
             }
+            let grown = list.iter().zip(&self.panels[p].entries).any(|(new, old)| new.height() != old.height());
             self.panels[p].entries = list;
+            if grown {
+                return self.reshape(p);
+            }
             let Some(Entry::Submenu { entries, .. }) = self.panels.get(p + 1).map(|next| self.panels[p].entries[next.from].clone()) else { break };
             list = entries;
+        }
+        true
+    }
+
+    /// Fits panel `p` to its entries again, as after a row in it folded out or away, the menu placed again where it was
+    /// asked to show and a submenu where it opened; the submenus it had open close.
+    fn reshape(&mut self, p: usize) -> bool {
+        self.close_after(p);
+        let scale = self.scale;
+        let panel = &mut self.panels[p];
+        let mut y = PAD;
+        for (top, entry) in panel.tops.iter_mut().zip(&panel.entries) {
+            *top = y;
+            y += entry.height();
+        }
+        panel.height = y + PAD;
+        if panel.hover.is_some_and(|i| !panel.entries[i].selectable()) {
+            panel.hover = None;
+        }
+        let size = SIZE { cx: (panel.width * scale).ceil() as i32, cy: (panel.height * scale).ceil() as i32 };
+        let mut frame = RECT { left: panel.frame.left, top: panel.frame.top, right: panel.frame.left + size.cx, bottom: panel.frame.top + size.cy };
+        if p == 0 {
+            let flags = (TPM_LEFTALIGN | TPM_TOPALIGN | TPM_WORKAREA).0;
+            if unsafe { CalculatePopupWindowPosition(&self.anchor, &size, flags, None, &mut frame) }.is_err() {
+                return false;
+            }
+        }
+        panel.frame = frame;
+        unsafe {
+            let _ = SetWindowPos(panel.window, None, frame.left, frame.top, size.cx, size.cy, SWP_NOZORDER | SWP_NOACTIVATE);
         }
         true
     }
@@ -921,6 +1049,15 @@ impl Menu {
             && self.panels[last].entries[i].is_slider()
         {
             return self.nudge(last, i, if is(VK_RIGHT.0) { 1 } else { -1 });
+        }
+        if (is(VK_LEFT.0) || is(VK_RIGHT.0))
+            && let Some(i) = self.panels[last].hover
+            && self.panels[last].entries[i].tiles() > 0
+        {
+            let count = self.panels[last].entries[i].tiles();
+            let panel = &mut self.panels[last];
+            panel.tile = if is(VK_RIGHT.0) { (panel.tile + 1) % count } else { (panel.tile + count - 1) % count };
+            return true;
         }
         if is(VK_ESCAPE.0) || is(VK_LEFT.0) {
             if last > 0 {
@@ -1036,6 +1173,28 @@ impl Menu {
                         self.slider(target, panel, top, at as f32 / (stops - 1).max(1) as f32, caption, state)?;
                         continue;
                     }
+                    Entry::Icons { tiles, shown } => {
+                        if *shown {
+                            self.icons(target, panel, i, tiles)?;
+                        }
+                        continue;
+                    }
+                    Entry::Disclosure { label, summary, open, .. } => {
+                        if panel.hover == Some(i) {
+                            let rect = D2D_RECT_F { left: PAD, top, right: panel.width - PAD, bottom: top + ROW };
+                            target.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect, radiusX: ROW_RADIUS, radiusY: ROW_RADIUS }, &hover);
+                        }
+                        self.glyph(target, if *open { CHEVRON_DOWN } else { CHEVRON }, panel.width - PAD - 14.0, top, &ink);
+                        let layout = self.layout(label, panel.width - panel.label - TRAILING / 2.0)?;
+                        target.DrawTextLayout(Vector2 { X: panel.label, Y: top }, &layout, &ink, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                        if !*open {
+                            let soft = target.CreateSolidColorBrush(&palette.soft, None)?;
+                            let layout = self.layout(summary, panel.width - panel.label - PAD - 28.0)?;
+                            layout.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING)?;
+                            target.DrawTextLayout(Vector2 { X: panel.label, Y: top }, &layout, &soft, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                        }
+                        continue;
+                    }
                     Entry::Item { label, checked, enabled, radio, .. } => (label.as_str(), *checked, *radio, *enabled),
                     Entry::Submenu { label, .. } => (label.as_str(), false, false, true),
                 };
@@ -1063,6 +1222,74 @@ impl Menu {
                 };
                 let layout = self.layout(label, panel.width - panel.label - shift - TRAILING / 2.0)?;
                 target.DrawTextLayout(Vector2 { X: panel.label + shift, Y: top }, &layout, brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
+            }
+        }
+        Ok(())
+    }
+
+    /// A row of icons, entry `i` of the panel: lit in the accent while on, each over its label.
+    fn icons(&self, target: &ID2D1RenderTarget, panel: &Panel, i: usize, tiles: &[Tile]) -> Result<()> {
+        let palette = self.palette;
+        let top = panel.tops[i];
+        let width = (panel.width - 2.0 * PAD) / tiles.len() as f32;
+        unsafe {
+            let accent = target.CreateSolidColorBrush(&palette.accent, None)?;
+            let ink = target.CreateSolidColorBrush(&palette.ink, None)?;
+            let dim = target.CreateSolidColorBrush(&palette.dim, None)?;
+            let hover = target.CreateSolidColorBrush(&palette.hover, None)?;
+            for (k, tile) in tiles.iter().enumerate() {
+                let left = PAD + width * k as f32;
+                if panel.hover == Some(i) && panel.tile == k {
+                    let rect = D2D_RECT_F { left: left + 2.0, top: top + 2.0, right: left + width - 2.0, bottom: top + ICONS - 2.0 };
+                    target.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect, radiusX: ROW_RADIUS, radiusY: ROW_RADIUS }, &hover);
+                }
+                let center = left + width / 2.0;
+                self.icon(target, tile.icon, center, top + 8.0, if tile.on { &accent } else { &dim })?;
+                let units: Vec<u16> = tile.label.encode_utf16().collect();
+                let layout = self.write.CreateTextLayout(&units, &self.caption, width, 16.0)?;
+                target.DrawTextLayout(
+                    Vector2 { X: left, Y: top + ICON + 12.0 },
+                    &layout,
+                    if tile.on { &ink } else { &dim },
+                    D2D1_DRAW_TEXT_OPTIONS_NONE,
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// An icon `ICON` across, centred on `x`, from `y` down, drawn in strokes like the system's line icons.
+    fn icon(&self, target: &ID2D1RenderTarget, icon: Icon, x: f32, y: f32, brush: &ID2D1SolidColorBrush) -> Result<()> {
+        let half = ICON / 2.0;
+        let stroke = 1.5;
+        unsafe {
+            match icon {
+                Icon::Windows => {
+                    let rect = D2D_RECT_F { left: x - half, top: y + 2.0, right: x + half, bottom: y + 18.0 };
+                    target.DrawRoundedRectangle(&D2D1_ROUNDED_RECT { rect, radiusX: 2.5, radiusY: 2.5 }, brush, stroke, None);
+                    target.DrawLine(Vector2 { X: x - half, Y: y + 6.5 }, Vector2 { X: x + half, Y: y + 6.5 }, brush, stroke, None);
+                }
+                Icon::Ground => {
+                    let base = y + 16.0;
+                    let mound = self.d2d.CreatePathGeometry()?;
+                    let sink = mound.Open()?;
+                    sink.BeginFigure(Vector2 { X: x - 8.0, Y: base }, D2D1_FIGURE_BEGIN_FILLED);
+                    sink.AddArc(&D2D1_ARC_SEGMENT {
+                        point: Vector2 { X: x + 8.0, Y: base },
+                        size: D2D_SIZE_F { width: 8.0, height: 6.0 },
+                        rotationAngle: 0.0,
+                        sweepDirection: D2D1_SWEEP_DIRECTION_CLOCKWISE,
+                        arcSize: D2D1_ARC_SIZE_SMALL,
+                    });
+                    sink.EndFigure(D2D1_FIGURE_END_OPEN);
+                    sink.Close()?;
+                    let opacity = brush.GetOpacity();
+                    brush.SetOpacity(opacity * 0.3);
+                    target.FillGeometry(&mound, brush, None);
+                    brush.SetOpacity(opacity);
+                    target.DrawGeometry(&mound, brush, stroke, None);
+                    target.DrawLine(Vector2 { X: x - half, Y: base }, Vector2 { X: x + half, Y: base }, brush, stroke, None);
+                }
             }
         }
         Ok(())

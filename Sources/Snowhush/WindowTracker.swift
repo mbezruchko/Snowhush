@@ -58,6 +58,8 @@ final class WindowTracker {
     var primaryHeight: CGFloat = 0
     /// Which display each window's snow lies on.
     private let displays: Displays
+    /// What collects snow: the Dock, desktop widgets and windows. The others still hide the snow behind them.
+    var collects: Surfaces = .tracked
 
     private var currentSpace: UInt64?
     private var currentSpaceRead = false
@@ -629,7 +631,8 @@ final class WindowTracker {
             if layer < dockLevel && !fading { windows.append(frame) }
             if layer == 0 && !fading && id != 0 { frames[id] = frame }
             let coverOnly = coverOnlyOwners.contains(owner) && !shelf
-            if roomAbove && onScreen && !fills && !coverOnly && !fading && bounds.width >= 80 && bounds.height >= 40, id != 0,
+            let kind: Surfaces = shelf ? .dock : layer < 0 ? .widgets : .windows
+            if collects.contains(kind), roomAbove && onScreen && !fills && !coverOnly && !fading && bounds.width >= 80 && bounds.height >= 40, id != 0,
                shelf || !isCard(id, bounds, into: &checked) {
                 // Search bars like Spotlight are capsules: low and wide, with fully rounded ends.
                 let capsule = !shelf && (owner.lowercased().contains("spotlight") || (bounds.height <= 90 && bounds.width >= bounds.height * 3))
@@ -658,7 +661,7 @@ final class WindowTracker {
             dockStays = false
         }
         dockWasOut = dockOut
-        if let band = Marquee.rect(over: list), band.intersects(screen), band.width >= 16 {
+        if collects.contains(.windows), let band = Marquee.rect(over: list), band.intersects(screen), band.width >= 16 {
             // The rubber band lies on the desktop, behind every window, and hides nothing: it is see-through.
             let frame = CGRect(x: band.minX - screen.minX, y: screen.maxY - band.maxY, width: band.width, height: band.height)
             let region = CGRect(x: frame.minX, y: frame.maxY, width: frame.width, height: 40)

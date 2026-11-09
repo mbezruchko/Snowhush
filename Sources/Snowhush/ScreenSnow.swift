@@ -90,7 +90,7 @@ final class ScreenSnow {
         set { simulation.modes = newValue }
     }
 
-    init?(screen: NSScreen, device: MTLDevice, displays: Displays, snowOnWindows: @escaping () -> Bool) {
+    init?(screen: NSScreen, device: MTLDevice, displays: Displays, surfaces: @escaping () -> Surfaces) {
         guard let displayID = screen.displayID else { return nil }
         let simulation = SnowSimulation(
             width: Float(screen.frame.width),
@@ -98,7 +98,9 @@ final class ScreenSnow {
             intensity: Float(Preferences.intensity)
         )
         simulation.thaws = Preferences.meltSnow
-        simulation.accumulates = Preferences.accumulate
+        let settled = Preferences.surfaces
+        simulation.accumulates = !settled.isEmpty
+        simulation.groundSettles = settled.contains(.ground)
         simulation.fallingOpacity = Float(Preferences.fallingOpacity)
         let renderer: Renderer
         do {
@@ -131,17 +133,19 @@ final class ScreenSnow {
         renderer.windowSurfaces = { [unowned self] now in
             // Behind the windows the snow still settles on them: what lies on a window's top edge is above it, in
             // plain view.
-            let onWindows = snowOnWindows()
-            let update = onWindows ? tracker.poll(now: now, eager: NSEvent.pressedMouseButtons != 0) : nil
-            window.notificationLevel = onWindows ? tracker.notificationLevel : nil
-            watchForFullScreen(now: now, tracked: onWindows)
-            guard onWindows else { return nil }
+            let settled = surfaces()
+            let tracked = !settled.isDisjoint(with: .tracked)
+            tracker.collects = settled.intersection(.tracked)
+            let update = tracked ? tracker.poll(now: now, eager: NSEvent.pressedMouseButtons != 0) : nil
+            window.notificationLevel = tracked ? tracker.notificationLevel : nil
+            watchForFullScreen(now: now, tracked: tracked)
+            guard tracked else { return nil }
             for (id, display) in update?.handed ?? [:] { displays.hand(id, from: self, to: display) }
             simulation.windowFrames = tracker.covers.map { SIMD4(Float($0.minX), Float($0.minY), Float($0.maxX), Float($0.maxY)) }
             return update
         }
         renderer.borrowedSnow = { [unowned self] in
-            snowOnWindows() ? displays.borrowed(by: self) : []
+            surfaces().contains(.windows) ? displays.borrowed(by: self) : []
         }
         renderer.stepped = { [unowned self] in displays.pass(from: self) }
         renderer.sceneLight = { [unowned self] now in
