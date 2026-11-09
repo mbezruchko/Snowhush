@@ -187,16 +187,16 @@ impl ksni::Tray for Tray {
             }
             .into(),
         ]);
-        // Rain splashes on the ground whatever Ground says, so with only rain falling it isn't offered.
+        // Top to bottom, as they lie on the screen. Rain splashes on the ground whatever Ground says, so with only rain
+        // falling it isn't offered.
         let surfaces = vec![
             CheckmarkItem {
-                label: tr("surface.ground").into(),
-                checked: settings.ground,
-                visible: lies,
+                label: tr("surface.windows").into(),
+                checked: settings.snow_on_windows,
                 activate: Box::new(|tray: &mut Tray| {
                     tray.change(|settings| {
-                        settings.ground = !settings.ground;
-                        Command::Ground(settings.ground)
+                        settings.snow_on_windows = !settings.snow_on_windows;
+                        Command::SnowOnWindows(settings.snow_on_windows)
                     })
                 }),
                 ..Default::default()
@@ -215,12 +215,13 @@ impl ksni::Tray for Tray {
             }
             .into(),
             CheckmarkItem {
-                label: tr("surface.windows").into(),
-                checked: settings.snow_on_windows,
+                label: tr("surface.ground").into(),
+                checked: settings.ground,
+                visible: lies,
                 activate: Box::new(|tray: &mut Tray| {
                     tray.change(|settings| {
-                        settings.snow_on_windows = !settings.snow_on_windows;
-                        Command::SnowOnWindows(settings.snow_on_windows)
+                        settings.ground = !settings.ground;
+                        Command::Ground(settings.ground)
                     })
                 }),
                 ..Default::default()

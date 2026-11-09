@@ -451,13 +451,13 @@ fn entries(settings: &Settings, login: bool, sliders: bool) -> Vec<Entry> {
 }
 
 /// Where snow settles: a row of icons Accumulate folds out in the drawn menu, a submenu of checkmarks in the system's.
-/// Rain splashes on the ground whatever it says, so with only rain falling there is just the windows.
+/// Top to bottom, as they lie on the screen. Rain splashes on the ground whatever it says, so with only rain falling
+/// there is just the windows.
 fn accumulate(settings: &Settings, heaps: bool, drawn: bool) -> Vec<Entry> {
-    let mut surfaces = Vec::new();
+    let mut surfaces = vec![(ID_WINDOWS, Icon::Windows, tr("surface.windows"), settings.snow_on_windows)];
     if heaps {
         surfaces.push((ID_GROUND, Icon::Ground, tr("surface.ground"), settings.ground));
     }
-    surfaces.push((ID_WINDOWS, Icon::Windows, tr("surface.windows"), settings.snow_on_windows));
     if !drawn {
         let entries = surfaces.iter().map(|&(id, _, label, on)| Entry::item(id, label, on, true)).collect();
         return vec![Entry::Submenu { label: tr("accumulate").to_string(), entries }];
