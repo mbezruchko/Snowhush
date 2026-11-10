@@ -13,26 +13,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var snowfallHeld = false
     private var halloween = false
     private var statusItem: NSStatusItem!
-    private let weatherRow = MenuDisclosure()
-    private var weatherItem: NSMenuItem!
-    private let modeTiles = MenuTiles()
-    private let extraTiles = MenuTiles()
+    private let headerRow = MenuDisclosure()
+    private let modeOrbs = MenuOrbs()
     private let intensityRow = MenuDisclosure()
-    private var intensityItem: NSMenuItem!
-    private let intensitySlider = MenuIntensitySlider()
-    private var intensitySliderItem: NSMenuItem!
-    private let opacityRow = MenuDisclosure()
+    private let intensitySlider = MenuBigSlider()
+    private let opacitySlider = MenuSlider(range: Preferences.opacityRange)
     private var opacityItem: NSMenuItem!
-    private let opacitySlider = MenuSlider(range: Preferences.opacityRange, captioned: false)
-    private var opacitySliderItem: NSMenuItem!
     private var windItem: NSMenuItem!
-    private let windRow = MenuDisclosure()
     private let windPad = MenuWindPad()
-    private var windPadItem: NSMenuItem!
+    private var windVaryItem: NSMenuItem!
+    private var windResetItem: NSMenuItem!
     private var accumulateItem: NSMenuItem!
-    private let accumulateRow = MenuDisclosure()
-    private var surfacesItem: NSMenuItem!
-    private let surfacePicker = SurfacePicker()
+    private var surfaceItems: [(item: NSMenuItem, surface: Surfaces)] = []
+    private var mixedItem: NSMenuItem!
+    private var halloweenItem: NSMenuItem!
     private var behaviorItems: [NSMenuItem] = []
     private var meltItem: NSMenuItem!
     private var clearItem: NSMenuItem!
@@ -153,92 +147,80 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         menu.delegate = self
         menu.autoenablesItems = false
 
-        // What falls.
-        // The app's name heads what falls, which always shows: it is what the menu is opened for most.
-        weatherItem = addView(weatherRow, title: "Snowhush", to: menu)
-        weatherRow.foldable = false
-        weatherRow.open = true
-        if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String { weatherRow.detail = "v\(version)" }
-        weatherRow.pill = tr("mix")
-        weatherRow.pillToggled = { [unowned self] in
-            toggleMixed()
-            refreshMenu()
-        }
-        modeTiles.tiles = Mode.allCases.map { MenuTiles.Tile(name: tr("tile.\($0.key)"), image: Self.tileImage($0)) }
-        modeTiles.toggled = { [unowned self] in choose(Mode.allCases[$0]) }
-        extraTiles.tiles = [MenuTiles.Tile(name: tr("halloween"), image: Halloween.icon)]
-        extraTiles.toggled = { [unowned self] _ in
-            spookySnow()
-            refreshMenu()
-        }
-        let names = modeTiles.tiles.map(\.name) + extraTiles.tiles.map(\.name)
-        modeTiles.fit(names)
-        extraTiles.fit(names)
-        addView(modeTiles, to: menu)
-        addView(extraTiles, to: menu)
+        // Laid out as Control Center lays a module out: what is touched every day large and in sight, the rest a
+        // panel to the side, so the menu never changes its height.
+        addView(headerRow, title: "Snowhush", to: menu)
+        headerRow.foldable = false
+        headerRow.style = .heading
+        if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String { headerRow.detail = "v\(version)" }
+        modeOrbs.orbs = Mode.allCases.map { MenuOrbs.Orb(name: tr("tile.\($0.key)"), image: Self.tileImage($0)) }
+        modeOrbs.fit()
+        modeOrbs.toggled = { [unowned self] in choose(Mode.allCases[$0]) }
+        addView(modeOrbs, to: menu)
 
-        // How much falls.
-        intensityItem = addView(intensityRow, title: tr("intensity"), to: menu)
-        intensityRow.summaryWhileOpen = true
-        intensityRow.toggled = { [unowned self] in fold(intensityRow) }
+        addView(intensityRow, title: tr("intensity"), to: menu)
+        intensityRow.foldable = false
+        intensityRow.open = true
+        intensityRow.style = .caption
+        intensityRow.pill = tr("variable")
         intensityRow.pillToggled = { [unowned self] in
-            let steady = Preferences.defaultIntensity
-            select(intensity: steady...steady)
+            let middle = intensitySlider.value
+            select(intensity: Preferences.intensityTop > Preferences.intensity ? middle...middle : Self.variableIntensity)
             refreshMenu()
         }
-        intensitySlider.changed = { [unowned self] value in
-            switch value {
-            case .steady(let intensity): select(intensity: intensity...intensity)
-            case .variable: select(intensity: Self.variableIntensity)
-            }
-            intensityRow.summary = MenuIntensitySlider.describe(value)
-            refreshPills()
+        intensitySlider.changed = { [unowned self] intensity in
+            select(intensity: intensity...intensity)
+            refreshMenu()
         }
-        intensitySliderItem = addView(intensitySlider, to: menu)
+        addView(intensitySlider, to: menu)
 
-        // How see-through it is on the way down.
-        opacityItem = addView(opacityRow, title: tr("opacity"), to: menu)
-        opacityRow.summaryWhileOpen = true
-        opacityRow.toggled = { [unowned self] in fold(opacityRow) }
-        opacityRow.pillToggled = { [unowned self] in
-            select(opacity: Preferences.opacityRange.upperBound)
-            refreshMenu()
-        }
-        opacitySlider.changed = { [unowned self] opacity in
-            select(opacity: opacity)
-            opacityRow.summary = MenuSlider.percent(opacity)
-            refreshPills()
-        }
-        opacitySliderItem = addView(opacitySlider, to: menu)
-
-        windItem = addView(windRow, title: tr("wind"), to: menu)
-        windRow.summaryWhileOpen = true
-        windRow.toggled = { [unowned self] in fold(windRow) }
-        windRow.pillToggled = { [unowned self] in
-            resetWind()
-            refreshMenu()
-        }
+        let wind = NSMenu()
+        wind.autoenablesItems = false
+        windPad.hasStop = false
+        windPad.setFrameSize(NSSize(width: 260, height: windPad.frame.height))
         windPad.changed = { [unowned self] wind in
             Preferences.wind = wind
             for snow in screens { snow.simulation.wind = wind.vector }
-            windRow.summary = wind.summary
-            refreshPills()
+            refreshMenu()
         }
         windPad.wanderChanged = { [unowned self] in wander($0) }
-        windPadItem = addView(windPad, to: menu)
-        menu.addItem(.separator())
+        addView(windPad, to: wind)
+        wind.addItem(.separator())
+        windVaryItem = toggle(tr("variable"), #selector(toggleWindVaries), to: wind)
+        windResetItem = wind.addItem(withTitle: tr("reset"), action: nil, keyEquivalent: "")
+        let windReset = MenuToggle(action: #selector(resetWindItem), target: self, checks: true)
+        windReset.fit(tr("reset"))
+        windResetItem.view = windReset
+        windItem = menu.addItem(withTitle: tr("wind"), action: nil, keyEquivalent: "")
+        windItem.submenu = wind
 
-        // What lies about: where it settles, and clearing it away.
-        accumulateItem = addView(accumulateRow, title: tr("accumulate"), to: menu)
-        accumulateRow.toggled = { [unowned self] in fold(accumulateRow) }
-        surfacePicker.toggled = { [unowned self] surface in toggle(surface) }
-        surfacesItem = addView(surfacePicker, to: menu)
+        let opacity = NSMenu()
+        opacitySlider.changed = { [unowned self] value in
+            select(opacity: value)
+            opacityItem.badge = NSMenuItemBadge(string: MenuSlider.percent(value))
+        }
+        addView(opacitySlider, to: opacity)
+        opacityItem = menu.addItem(withTitle: tr("opacity"), action: nil, keyEquivalent: "")
+        opacityItem.submenu = opacity
+
+        // Top to bottom, as they lie on the screen; a selection is snow on windows of a sort.
+        let accumulate = NSMenu()
+        accumulate.autoenablesItems = false
+        surfaceItems = [Surfaces.widgets, .windows, .dock, .ground, .selection].map { surface in
+            (toggle(SurfacePicker.name(of: surface), #selector(toggleSurfaceItem), to: accumulate), surface)
+        }
+        accumulateItem = menu.addItem(withTitle: tr("accumulate"), action: nil, keyEquivalent: "")
+        accumulateItem.submenu = accumulate
         clearItem = add(tr("clear.snow"), #selector(clearSnow), to: menu)
         menu.addItem(.separator())
 
         // The app itself: where the snow shows, and the rest.
         let settings = NSMenu()
         settings.autoenablesItems = false
+        settings.addItem(.sectionHeader(title: tr("mode")))
+        mixedItem = toggle(tr("mixed"), #selector(toggleMixedItem), to: settings)
+        halloweenItem = toggle(tr("halloween"), #selector(toggleHalloweenItem), to: settings)
+        settings.addItem(.separator())
         let behavior = NSMenuItem.sectionHeader(title: tr("behavior"))
         settings.addItem(behavior)
         meltItem = toggle(tr("melt.snow"), #selector(toggleMeltSnow), to: settings)
@@ -259,9 +241,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         add(tr("support"), #selector(openSponsors), to: menu).attributedTitle = Self.supportTitle
         menu.addItem(withTitle: tr("quit"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 
-        let open = Set(Preferences.openSections)
-        for (key, row) in sections { row.open = open.contains(key) }
-        refreshFolds()
         item.menu = menu
         return item
     }
@@ -271,35 +250,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         let item = menu.addItem(withTitle: title, action: nil, keyEquivalent: "")
         item.view = view
         return item
-    }
-
-    /// The folded rows, by the names their open state is kept under.
-    private var sections: [(key: String, row: MenuDisclosure)] {
-        [("intensity", intensityRow), ("opacity", opacityRow), ("wind", windRow), ("accumulate", accumulateRow)]
-    }
-
-    private func fold(_ row: MenuDisclosure) {
-        row.open.toggle()
-        Preferences.openSections = sections.filter(\.row.open).map(\.key)
-        refreshFolds()
-    }
-
-    /// Shows what each folded row holds while it is open; the melting switch only while something heaps up.
-    private func refreshFolds() {
-        intensitySliderItem.isHidden = !intensityRow.open
-        opacitySliderItem.isHidden = !opacityRow.open
-        windPadItem.isHidden = !windRow.open
-        surfacesItem.isHidden = !accumulateRow.open
-        // Unfolded, the summary isn't shown: the menu keeps its width while the icons are switched.
-        if !accumulateRow.open { accumulateRow.fit(accumulateItem.title, least: surfacePicker.frame.width) }
-    }
-
-    /// Reset shows on a section's row while what it sets is off its default.
-    private func refreshPills() {
-        let steady = Preferences.intensityTop <= Preferences.intensity
-        intensityRow.pill = steady && Preferences.intensity == Preferences.defaultIntensity ? nil : tr("reset")
-        opacityRow.pill = Preferences.fallingOpacity < Preferences.opacityRange.upperBound ? tr("reset") : nil
-        windRow.pill = Preferences.windVaries || Preferences.wind.strength > 0 ? tr("reset") : nil
     }
 
     /// Brings every row up to date while the menu stays open.
@@ -351,22 +301,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         let modes = Mode.allCases.filter(Preferences.modes.contains)
-        weatherRow.pillOn = Preferences.mixed
-        weatherRow.fit(weatherItem.title, least: modeTiles.frame.width)
-        modeTiles.on = Mode.allCases.map(modes.contains)
-        extraTiles.on = [Halloween.isOn]
-        let intensity: MenuIntensitySlider.Value = Preferences.intensityTop > Preferences.intensity ? .variable : .steady(Preferences.intensity)
-        intensityRow.summary = MenuIntensitySlider.describe(intensity)
-        intensityRow.fit(intensityItem.title, least: 0)
-        intensitySlider.value = intensity
-        opacityRow.summary = MenuSlider.percent(Preferences.fallingOpacity)
-        opacityRow.fit(opacityItem.title, least: 0)
+        headerRow.fit("Snowhush", least: modeOrbs.frame.width)
+        modeOrbs.on = Mode.allCases.map(modes.contains)
+        let varies = Preferences.intensityTop > Preferences.intensity
+        intensityRow.pillOn = varies
+        intensitySlider.value = (Preferences.intensity + Preferences.intensityTop) / 2
+        intensitySlider.dimmed = varies
         opacitySlider.value = Preferences.fallingOpacity
+        opacityItem.badge = NSMenuItemBadge(string: MenuSlider.percent(Preferences.fallingOpacity))
         if !Preferences.windVaries { windPad.wind = Preferences.wind }
         windPad.wanders = Preferences.windVaries
-        windRow.summary = Preferences.windVaries ? tr("variable") : Preferences.wind.summary
-        windRow.fit(windItem.title, least: 0)
-        refreshPills()
+        windItem.badge = NSMenuItemBadge(string: Preferences.windVaries ? tr("variable") : Preferences.wind.summary)
+        windVaryItem.state = Preferences.windVaries ? .on : .off
+        windResetItem.isEnabled = Preferences.windVaries || Preferences.wind.strength > 0
+        mixedItem.state = Preferences.mixed ? .on : .off
+        halloweenItem.state = Halloween.isOn ? .on : .off
         // Rain neither heaps up nor lies about to clear away.
         let heaps = modes.filter { $0 != .rain }
         clearItem.isHidden = heaps.isEmpty
@@ -375,21 +324,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         (meltItem.view as? MenuToggle)?.fit(meltItem.title)
         // Rain lies nowhere to melt: Behavior has nothing else in it, so it goes altogether.
         behaviorItems.forEach { $0.isHidden = heaps.isEmpty }
-        // Top to bottom, as they lie on the screen. Rain splashes on the ground whatever it says.
-        // A selection is snow on windows of a sort: it follows them.
+        // Rain splashes on the ground whatever it says.
         let settles: [Surfaces] = [.widgets, .windows, .dock] + (heaps.isEmpty ? [] : [.ground])
-        let choices = settles + [.selection]
-        if surfacePicker.choices != choices { surfacePicker.choices = choices }
-        surfacePicker.on = Preferences.deepInteraction ? surfaces.union(.selection) : surfaces
-        surfacePicker.disabled = surfaces.contains(.windows) ? [] : .selection
+        for (item, surface) in surfaceItems {
+            item.state = (surface == .selection ? Preferences.deepInteraction : surfaces.contains(surface)) ? .on : .off
+            item.isHidden = surface == .ground && heaps.isEmpty
+            item.isEnabled = surface != .selection || surfaces.contains(.windows)
+        }
         let lit = settles.filter(surfaces.contains)
-        let every = lit.count == settles.count
-        accumulateRow.summary = every ? tr("all") : lit.isEmpty ? tr("off") : ""
-        accumulateRow.summaryIcons = every || lit.isEmpty ? [] : lit
+        let summary = lit.count == settles.count ? tr("all") : lit.isEmpty ? tr("off") : "\(lit.count)/\(settles.count)"
+        accumulateItem.badge = NSMenuItemBadge(string: summary)
         meltItem.state = thaws ? .on : .off
         meltItem.isEnabled = !surfaces.isEmpty
         clearItem.isEnabled = screens.contains { $0.simulation.hasSnow || $0.simulation.spriteCount > 0 }
-        refreshFolds()
         maxPerformanceItem.state = Preferences.maxPerformance ? .on : .off
         behindWindowsItem.state = behindWindows ? .on : .off
         fullScreenItem.state = Preferences.showOverFullScreen ? .on : .off
@@ -415,8 +362,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
             snow.simulation.windWanders = on
             if !on { snow.simulation.wind = Preferences.wind.vector }
         }
-        windRow.summary = on ? tr("variable") : Preferences.wind.summary
-        refreshPills()
+        refreshMenu()
+    }
+
+    @objc private func toggleWindVaries() {
+        wander(!Preferences.windVaries)
+    }
+
+    @objc private func resetWindItem() {
+        resetWind()
+    }
+
+    @objc private func toggleSurfaceItem(_ sender: NSMenuItem) {
+        guard let surface = surfaceItems.first(where: { $0.item === sender })?.surface else { return }
+        toggle(surface)
+    }
+
+    @objc private func toggleMixedItem() {
+        toggleMixed()
+    }
+
+    @objc private func toggleHalloweenItem() {
+        spookySnow()
     }
 
     /// Back to the default: calm, set by hand.

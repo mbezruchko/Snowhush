@@ -30,6 +30,11 @@ final class MenuWindPad: NSView {
         }
     }
 
+    /// Without its last stop, the field takes the whole width, and wandering is switched on elsewhere.
+    var hasStop = true {
+        didSet { needsDisplay = true }
+    }
+
     private var timer: Timer?
 
     private var dragging = false {
@@ -63,7 +68,7 @@ final class MenuWindPad: NSView {
     }
 
     private var field: NSRect {
-        NSRect(x: Self.inset, y: Self.top, width: bounds.width - 2 * Self.inset - Self.stop, height: Self.height)
+        NSRect(x: Self.inset, y: Self.top, width: bounds.width - 2 * Self.inset - (hasStop ? Self.stop : 0), height: Self.height)
     }
 
     private var tick: CGFloat { field.maxX + Self.gap / 2 }
@@ -118,7 +123,7 @@ final class MenuWindPad: NSView {
     /// the eight compass points within a few degrees of one; or, past the tick, into the last stop.
     private func follow(_ event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
-        guard point.x < tick else {
+        guard !hasStop || point.x < tick else {
             if !wanders {
                 wanders = true
                 wanderChanged?(true)
@@ -177,7 +182,7 @@ final class MenuWindPad: NSView {
         let middle = middle
         let reach = reach
         let ink = NSColor.labelColor
-        drawStop(ink)
+        if hasStop { drawStop(ink) }
 
         let well = NSBezierPath(roundedRect: field.insetBy(dx: 0.5, dy: 0.5), xRadius: 10, yRadius: 10)
         ink.withAlphaComponent(0.06).setFill()

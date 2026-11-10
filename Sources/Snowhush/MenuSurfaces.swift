@@ -6,7 +6,16 @@ final class MenuDisclosure: NSView {
     var foldable = true {
         didSet { needsDisplay = true }
     }
-    /// Shown fainter after the title, as the app's version is on the header.
+    enum Style {
+        case row
+        /// The app's name at the top, in semibold, its detail at the right end.
+        case heading
+        /// A small grey title over a control, as a section header is.
+        case caption
+    }
+
+    var style = Style.row
+    /// Shown fainter after the title, or at the right end of a heading, as the app's version is.
     var detail = "" {
         didSet { needsDisplay = true }
     }
@@ -103,11 +112,15 @@ final class MenuDisclosure: NSView {
         let color: NSColor = lit ? .selectedMenuItemTextColor : .labelColor
         let soft: NSColor = lit ? .selectedMenuItemTextColor : .secondaryLabelColor
         let font = NSFont.menuFont(ofSize: 0)
-        let title = NSAttributedString(string: item.title, attributes: [.font: font, .foregroundColor: color])
+        let small = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+        let titleFont = style == .heading ? NSFont.systemFont(ofSize: font.pointSize, weight: .semibold)
+            : style == .caption ? NSFont.systemFont(ofSize: NSFont.smallSystemFontSize, weight: .semibold) : font
+        let title = NSAttributedString(string: item.title, attributes: [.font: titleFont, .foregroundColor: style == .caption ? soft : color])
         title.draw(at: NSPoint(x: Self.titleX, y: (bounds.height - title.size().height) / 2))
         if !detail.isEmpty {
-            let faint = NSAttributedString(string: detail, attributes: [.font: font, .foregroundColor: NSColor.tertiaryLabelColor])
-            faint.draw(at: NSPoint(x: Self.titleX + title.size().width + 6, y: (bounds.height - faint.size().height) / 2))
+            let faint = NSAttributedString(string: detail, attributes: [.font: style == .heading ? small : font, .foregroundColor: NSColor.tertiaryLabelColor])
+            let x = style == .heading ? bounds.width - 14 - faint.size().width : Self.titleX + title.size().width + 6
+            faint.draw(at: NSPoint(x: x, y: (bounds.height - faint.size().height) / 2))
         }
         var right = bounds.width - 14
         guard foldable else {
