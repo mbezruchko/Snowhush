@@ -419,6 +419,8 @@ final class SnowSimulation {
     /// The wind set from the menu, over the breeze: x to the right, y up, at most 1 long. Across, it carries what falls
     /// along; up, it holds the fall back, and down, it drives it.
     var wind: SIMD2<Float> = .zero
+    /// The wind wanders on its own, alike on every display, and `wind` follows it.
+    var windWanders = false
     /// Screen edges with no display past them: a window slid past one leaves its snow heaped against the edge.
     var walls: (left: Bool, right: Bool) = (false, false)
     /// Side edges past which lies a display with snow of its own that windows span onto: snow on a window reaching
@@ -717,6 +719,7 @@ final class SnowSimulation {
         leafBudget = nil
 
         releaseScattered()
+        if windWanders { wind = Wind.wandering(at: ProcessInfo.processInfo.systemUptime).vector }
         slideWind = abs(slideWind) < 1 ? 0 : slideWind * exp(-dt / slideCalm)
         expireParking()
         for ledge in ledgeList { carry(ledge, dt: dt) }

@@ -7,6 +7,7 @@ pub mod layer;
 pub mod simulation;
 pub mod text;
 pub mod version;
+pub mod wind;
 
 #[cfg(test)]
 mod tests;

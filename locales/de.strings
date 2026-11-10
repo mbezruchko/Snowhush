@@ -2,6 +2,7 @@
 "opacity" = "Deckkraft";
 "wind" = "Wind";
 "calm" = "Windstill";
+"random" = "Zufällig";
 "off" = "Aus";
 "mode" = "Modus";
 "mixed" = "Gemischt";

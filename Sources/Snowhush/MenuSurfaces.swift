@@ -17,7 +17,7 @@ final class MenuDisclosure: NSView {
     var summaryWhileOpen = false
 
     /// Where a title starts in a menu with no checkmarks, as the menu bar menu's own rows have it.
-    private static let titleX: CGFloat = MenuToggle.modern ? 15 : 14
+    static let titleX: CGFloat = MenuToggle.modern ? 15 : 14
     private static let summaryIcon: CGFloat = 15
     private static let summaryGap: CGFloat = 5
 

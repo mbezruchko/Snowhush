@@ -5,6 +5,7 @@
 "opacity" = "Opacity";
 "wind" = "Wind";
 "calm" = "Calm";
+"random" = "Random";
 "off" = "Off";
 "mode" = "Mode";
 "mixed" = "Mixed";

@@ -4,10 +4,30 @@ import AppKit
 /// dots fill. Back in the middle, or double-clicked, it is calm. Like `MenuSlider`, it follows the pointer itself.
 final class MenuWindPad: NSView {
     var changed: ((Wind) -> Void)?
+    /// Dragged while the wind wandered: it blows as set from now on.
+    var stoppedWandering: (() -> Void)?
 
     var wind = Wind.calm {
         didSet { needsDisplay = true }
     }
+
+    /// Shows the wind wandering on its own, as it blows over the snow, until dragged.
+    var wanders = false {
+        didSet {
+            if wanders { followWandering() }
+            updateTimer()
+        }
+    }
+
+    /// Whether the menu is open: only then does the wandering wind need following.
+    var showing = false {
+        didSet {
+            if showing && wanders { followWandering() }
+            updateTimer()
+        }
+    }
+
+    private var timer: Timer?
 
     private var dragging = false {
         didSet { needsDisplay = true }
@@ -40,6 +60,21 @@ final class MenuWindPad: NSView {
     }
 
     private var middle: NSPoint { NSPoint(x: square.midX, y: square.midY) }
+
+    private func updateTimer() {
+        let live = wanders && showing
+        guard live != (timer != nil) else { return }
+        timer?.invalidate()
+        timer = nil
+        guard live else { return }
+        let timer = Timer(timeInterval: 1.0 / 20, repeats: true) { [weak self] _ in self?.followWandering() }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+    }
+
+    private func followWandering() {
+        wind = Wind.wandering(at: ProcessInfo.processInfo.systemUptime)
+    }
 
     override func mouseDown(with event: NSEvent) {
         if event.clickCount == 2 {
@@ -80,6 +115,10 @@ final class MenuWindPad: NSView {
     }
 
     private func set(_ next: Wind) {
+        if wanders {
+            wanders = false
+            stoppedWandering?()
+        }
         guard next != wind else { return }
         wind = next
         changed?(next)

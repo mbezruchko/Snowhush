@@ -1264,3 +1264,22 @@ fn an_updraft_holds_the_snow_back_and_a_downdraft_drives_it_down() {
     let down = on_screen(V2::new(0.0, -1.0));
     assert!(up * 2 < still && still * 2 < down, "on screen: up {up}, still {still}, down {down}");
 }
+
+#[test]
+fn the_wandering_wind_stays_in_bounds_eases_and_blows_both_ways() {
+    let seed = 0x5EED_1234_ABCD;
+    let mut previous = crate::wind::wandering(100_000.0, seed);
+    let (mut left, mut right, mut lull, mut gale) = (false, false, false, false);
+    for i in 1..72_000 {
+        let wind = crate::wind::wandering(100_000.0 + i as f64 * 0.05, seed);
+        assert!(wind.length() <= 1.0 + 1e-5);
+        assert!((wind - previous).length() < 0.02, "the wind jumped at step {i}");
+        previous = wind;
+        left |= wind.x < -0.3;
+        right |= wind.x > 0.3;
+        lull |= wind.length() < 0.15;
+        gale |= wind.length() > 0.6;
+    }
+    assert!(left && right && lull && gale, "left {left}, right {right}, lull {lull}, gale {gale}");
+    assert_eq!(crate::wind::wandering(5000.0, seed), crate::wind::wandering(5000.0, seed));
+}

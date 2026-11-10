@@ -2,6 +2,7 @@
 "opacity" = "Opacidad";
 "wind" = "Viento";
 "calm" = "Calma";
+"random" = "Aleatorio";
 "off" = "No";
 "mode" = "Modo";
 "mixed" = "Mixto";

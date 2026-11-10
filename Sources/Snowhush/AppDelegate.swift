@@ -22,6 +22,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private let windRow = MenuDisclosure()
     private let windPad = MenuWindPad()
     private var windPadItem: NSMenuItem!
+    private let windRandom = MenuSwitch()
+    private var windRandomItem: NSMenuItem!
     private var accumulateItem: NSMenuItem!
     private let accumulateRow = MenuDisclosure()
     private var surfacesItem: NSMenuItem!
@@ -177,16 +179,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         windRow.toggled = { [unowned self] in
             windRow.open.toggle()
             windPadItem.isHidden = !windRow.open
+            windRandomItem.isHidden = !windRow.open
         }
         windPad.changed = { [unowned self] wind in
             Preferences.wind = wind
             for snow in screens { snow.simulation.wind = wind.vector }
             windRow.summary = wind.summary
         }
+        windPad.stoppedWandering = { [unowned self] in wander(false) }
         windPadItem = NSMenuItem()
         windPadItem.view = windPad
         windPadItem.isHidden = true
         menu.addItem(windPadItem)
+        windRandomItem = menu.addItem(withTitle: tr("random"), action: nil, keyEquivalent: "")
+        windRandomItem.view = windRandom
+        windRandomItem.isHidden = true
+        windRandom.toggled = { [unowned self] in wander($0) }
         accumulateItem = menu.addItem(withTitle: tr("accumulate"), action: nil, keyEquivalent: "")
         accumulateItem.view = accumulateRow
         accumulateRow.toggled = { [unowned self] in
@@ -274,8 +282,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         opacitySlider.value = Preferences.fallingOpacity
         opacityRow.summary = MenuSlider.percent(Preferences.fallingOpacity)
         opacityRow.fit(opacityItem.title, least: 0)
-        windPad.wind = Preferences.wind
-        windRow.summary = Preferences.wind.summary
+        if !Preferences.windRandom { windPad.wind = Preferences.wind }
+        windPad.wanders = Preferences.windRandom
+        windRandom.isOn = Preferences.windRandom
+        windRandom.fit(windRandomItem.title)
+        windRow.summary = Preferences.windRandom ? tr("random") : Preferences.wind.summary
         windRow.fit(windItem.title, least: 0)
         let modes = Mode.allCases.filter(Preferences.modes.contains)
         mixedItem.state = Preferences.mixed ? .on : .off
@@ -310,6 +321,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         fullScreenItem.isEnabled = !behindWindows
         screenshotsItem.state = Preferences.showInScreenshots ? .on : .off
         loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        if menu === statusItem.menu { windPad.showing = true }
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        if menu === statusItem.menu { windPad.showing = false }
+    }
+
+    /// Lets the wind wander on its own, or has it blow as set.
+    private func wander(_ on: Bool) {
+        Preferences.windRandom = on
+        windRandom.isOn = on
+        windPad.wanders = on
+        if !on { windPad.wind = Preferences.wind }
+        for snow in screens {
+            snow.simulation.windWanders = on
+            if !on { snow.simulation.wind = Preferences.wind.vector }
+        }
+        windRow.summary = on ? tr("random") : Preferences.wind.summary
     }
 
     private func select(intensity: Double) {
