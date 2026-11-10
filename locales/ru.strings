@@ -13,6 +13,10 @@
 "display" = "Отображение";
 "general" = "Общие";
 "accumulate" = "Накопление";
+"limit" = "Лимит";
+"limit.standard" = "Стандартный";
+"limit.increased" = "Увеличенный";
+"limit.unlimited" = "Без лимита";
 "surface.ground" = "Земля";
 "surface.dock" = "Dock";
 "surface.widgets" = "Виджеты";

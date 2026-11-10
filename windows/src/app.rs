@@ -28,7 +28,7 @@ use crate::prefs::{self, Settings};
 use crate::snow::{self, Command, Links};
 use crate::update::{self, Release};
 use crate::welcome::{self, Handlers};
-use snowhush_core::simulation::Mode;
+use snowhush_core::simulation::{DriftLimit, Mode};
 use snowhush_core::text::{self, tr};
 
 const CLASS: PCWSTR = w!("SnowhushController");
@@ -66,6 +66,10 @@ const ID_OPACITY: u32 = 400;
 const OPACITY_STEPS: u32 = 19;
 /// The system's menu can't hold a slider: its Opacity submenu offers these, in percent.
 const OPACITY_STOPS: [u32; 5] = [100, 80, 60, 40, 20];
+
+const ID_LIMIT_STANDARD: u32 = 500;
+const ID_LIMIT_INCREASED: u32 = 501;
+const ID_LIMIT_UNLIMITED: u32 = 502;
 
 const SPONSORS: &str = "https://github.com/sponsors/mbezruchko";
 const TIMER_WELCOME: usize = 1;
@@ -438,6 +442,12 @@ fn entries(settings: &Settings, login: bool, sliders: bool) -> Vec<Entry> {
         ]
     };
     entries.extend(accumulate(settings, !heaps.is_empty(), sliders));
+    let limit_entries = vec![
+        Entry::choice(ID_LIMIT_STANDARD, tr("limit.standard"), settings.limit == DriftLimit::Standard),
+        Entry::choice(ID_LIMIT_INCREASED, tr("limit.increased"), settings.limit == DriftLimit::Increased),
+        Entry::choice(ID_LIMIT_UNLIMITED, tr("limit.unlimited"), settings.limit == DriftLimit::Unlimited),
+    ];
+    entries.push(Entry::Submenu { label: tr("limit").to_string(), entries: limit_entries });
     entries.push(Entry::Submenu { label: tr("mode").to_string(), entries: modes });
     if !heaps.is_empty() {
         entries.push(Entry::item(ID_CLEAR, text::kinds("clear", &heaps), false, true));
@@ -616,6 +626,18 @@ fn choose(window: HWND, chosen: u32, login: bool) {
                 ID_MAX_PERFORMANCE => {
                     settings.max_performance = !settings.max_performance;
                     Command::Performance(settings.max_performance)
+                }
+                ID_LIMIT_STANDARD => {
+                    settings.limit = DriftLimit::Standard;
+                    Command::Limit(settings.limit)
+                }
+                ID_LIMIT_INCREASED => {
+                    settings.limit = DriftLimit::Increased;
+                    Command::Limit(settings.limit)
+                }
+                ID_LIMIT_UNLIMITED => {
+                    settings.limit = DriftLimit::Unlimited;
+                    Command::Limit(settings.limit)
                 }
                 id if (ID_OPACITY..ID_OPACITY + OPACITY_STEPS).contains(&id) => {
                     settings.opacity = 10 + 5 * (id - ID_OPACITY);

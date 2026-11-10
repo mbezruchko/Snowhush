@@ -16,7 +16,7 @@ use windows::core::{HSTRING, PCWSTR, Result, w};
 
 use snowhush_core::geometry::V2;
 use snowhush_core::halloween::Choice;
-use snowhush_core::simulation::{Borrowed, Mapping, Mode, ScatterPiece, SnowSimulation, Stray};
+use snowhush_core::simulation::{Borrowed, DriftLimit, Mapping, Mode, ScatterPiece, SnowSimulation, Stray};
 
 use crate::desktop::{self, DesktopLayer};
 use crate::halloween;
@@ -42,6 +42,7 @@ pub enum Command {
     FallingOpacity(f32),
     Ground(bool),
     Melt(bool),
+    Limit(DriftLimit),
     SnowOnWindows(bool),
     BehindWindows(bool),
     OverFullScreen(bool),
@@ -151,6 +152,10 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                 Command::Melt(on) => {
                     settings.melt = on;
                     screens.iter_mut().for_each(|screen| screen.simulation.thaws = on);
+                }
+                Command::Limit(limit) => {
+                    settings.limit = limit;
+                    screens.iter_mut().for_each(|screen| screen.simulation.set_limit(limit));
                 }
                 Command::SnowOnWindows(on) => {
                     settings.snow_on_windows = on;
@@ -615,6 +620,7 @@ fn new_simulation(monitor: &Monitor, settings: &Settings) -> SnowSimulation {
     simulation.thaws = settings.melt;
     simulation.accumulates = settings.accumulates();
     simulation.ground_settles = settings.ground;
+    simulation.set_limit(settings.limit);
     simulation.falling_opacity = settings.opacity as f32 / 100.0;
     simulation.set_snowfall_held(!settings.welcomed);
     simulation.set_halloween(halloween::shows(settings));

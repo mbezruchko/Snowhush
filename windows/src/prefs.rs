@@ -9,7 +9,7 @@ use windows::Win32::UI::WindowsAndMessaging::{SPI_GETCLIENTAREAANIMATION, SYSTEM
 use windows::core::{BOOL, PCWSTR, w};
 
 use snowhush_core::halloween::Choice;
-use snowhush_core::simulation::Mode;
+use snowhush_core::simulation::{DriftLimit, Mode};
 
 const KEY: PCWSTR = w!("Software\\Snowhush");
 const MODES: [Mode; 4] = [Mode::Snow, Mode::Autumn, Mode::Rain, Mode::Blossom];
@@ -45,6 +45,7 @@ pub struct Settings {
     pub max_performance: bool,
     /// How opaque what falls is drawn, in percent: 10 to 100 in steps of 5.
     pub opacity: u32,
+    pub limit: DriftLimit,
 }
 
 impl Settings {
@@ -70,6 +71,11 @@ impl Settings {
         });
         // Before Accumulate picked where snow settles, it turned settling off everywhere at once.
         let settled = read(w!("accumulate")).is_none_or(|v| v != 0) || read(w!("settleGround")).is_some();
+        let limit = match read(w!("driftLimit")) {
+            Some(1) => DriftLimit::Increased,
+            Some(2) => DriftLimit::Unlimited,
+            _ => DriftLimit::Standard,
+        };
         Settings {
             intensity: read(w!("intensity")).map(|v| v.clamp(0, 100)).or(stop.map(|i| [0, 25, 50, 75, 50][i])).unwrap_or(if calm { 25 } else { 50 }),
             ground: read(w!("settleGround")).map_or(settled, |v| v != 0),
@@ -89,6 +95,7 @@ impl Settings {
             mode,
             mixed: read(w!("mixed")).is_some_and(|v| v != 0),
             mix: mix_of(read(w!("mix0")), read(w!("mix1")), mode),
+            limit,
         }
     }
 
@@ -113,6 +120,11 @@ impl Settings {
         write(w!("autumn"), (self.mode == Mode::Autumn) as u32);
         write(w!("performance"), self.max_performance as u32);
         write(w!("fallingOpacity"), self.opacity);
+        write(w!("driftLimit"), match self.limit {
+            DriftLimit::Standard => 0,
+            DriftLimit::Increased => 1,
+            DriftLimit::Unlimited => 2,
+        });
     }
 
     /// The kinds falling: the two mixed, or the one picked.
