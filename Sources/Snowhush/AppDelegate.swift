@@ -25,7 +25,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private let accumulateRow = MenuDisclosure()
     private let windPad = MenuWindPad()
     private let windCaption = MenuDisclosure()
-    private var windResetItem: NSMenuItem!
+    private let opacityCaption = MenuDisclosure()
+    private let accumulateCaption = MenuDisclosure()
     private var surfaceItems: [(item: NSMenuItem, surface: Surfaces)] = []
     private var behaviorItems: [NSMenuItem] = []
     private var meltItem: NSMenuItem!
@@ -195,6 +196,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
             select(intensity: intensity...intensity)
             refreshMenu()
         }
+        intensityRow.actionPressed = { [unowned self] in
+            let steady = Preferences.defaultIntensity
+            select(intensity: steady...steady)
+            refreshMenu()
+        }
         addView(intensitySlider, to: menu)
 
         let wind = NSMenu()
@@ -214,18 +220,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         windCaption.style = .caption
         windCaption.pill = tr("variable")
         windCaption.pillToggled = { [unowned self] in wander(!Preferences.windVaries) }
+        windCaption.actionPressed = { [unowned self] in resetWind() }
         addView(windPad, to: wind)
-        windResetItem = wind.addItem(withTitle: tr("reset"), action: nil, keyEquivalent: "")
-        let windReset = MenuToggle(action: #selector(resetWindItem), target: self, checks: false)
-        windReset.fit(tr("reset"))
-        windResetItem.view = windReset
         // Rows of our own, their value in plain grey before the chevron: a badge crowds the system's arrow.
         addView(windRow, title: tr("wind"), to: menu).submenu = wind
 
         let opacity = NSMenu()
         opacitySlider.changed = { [unowned self] value in
             select(opacity: value)
-            opacityRow.summary = MenuSlider.percent(value)
+            refreshMenu()
+        }
+        caption(opacityCaption, tr("opacity"), in: opacity) { [unowned self] in
+            select(opacity: Preferences.opacityRange.upperBound)
+            refreshMenu()
         }
         addView(opacitySlider, to: opacity)
         addView(opacityRow, title: tr("opacity"), to: menu).submenu = opacity
@@ -233,6 +240,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         // Top to bottom, as they lie on the screen; a selection is snow on windows of a sort.
         let accumulate = NSMenu()
         accumulate.autoenablesItems = false
+        caption(accumulateCaption, tr("accumulate"), in: accumulate) { [unowned self] in resetSurfaces() }
         surfaceItems = [Surfaces.widgets, .windows, .dock, .ground, .selection].map { surface in
             (toggle(SurfacePicker.name(of: surface), #selector(toggleSurfaceItem), to: accumulate), surface)
         }
@@ -327,6 +335,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         modeOrbs.on = Mode.allCases.map(modes.contains)
         let varies = Preferences.intensityTop > Preferences.intensity
         intensityRow.pillOn = varies
+        // Every block is headed alike: its name, Variable where it has one, and Reset while it is off its default.
+        intensityRow.action = varies || Preferences.intensity != Preferences.defaultIntensity ? tr("reset") : nil
+        opacityCaption.action = Preferences.fallingOpacity < Preferences.opacityRange.upperBound ? tr("reset") : nil
+        let everywhere: Surfaces = [.ground, .dock, .windows, .widgets]
+        accumulateCaption.action = surfaces != everywhere || Preferences.deepInteraction ? tr("reset") : nil
         intensitySlider.value = (Preferences.intensity + Preferences.intensityTop) / 2
         intensitySlider.dimmed = varies
         opacitySlider.value = Preferences.fallingOpacity
@@ -337,7 +350,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         windRow.summary = Preferences.windVaries ? tr("variable") : Preferences.wind.summary
         windRow.fit(tr("wind"), least: 0)
         windCaption.pillOn = Preferences.windVaries
-        windResetItem.isEnabled = Preferences.windVaries || Preferences.wind.strength > 0
+        windCaption.action = Preferences.windVaries || Preferences.wind.strength > 0 ? tr("reset") : nil
         extraOrbs.on = [Preferences.mixed, Halloween.isOn]
         // Rain neither heaps up nor lies about to clear away.
         let heaps = modes.filter { $0 != .rain }
@@ -392,8 +405,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         refreshMenu()
     }
 
-    @objc private func resetWindItem() {
-        resetWind()
+    /// A panel's heading, as Intensity's is: its name small, and Reset at the right while there is something to set back.
+    private func caption(_ row: MenuDisclosure, _ title: String, in menu: NSMenu, reset: @escaping () -> Void) {
+        addView(row, title: title, to: menu)
+        row.foldable = false
+        row.open = true
+        row.style = .caption
+        row.actionPressed = reset
+    }
+
+    /// Snow settles everywhere again, and on no selection.
+    private func resetSurfaces() {
+        surfaces = [.ground, .dock, .windows, .widgets]
+        Preferences.surfaces = surfaces
+        for snow in screens {
+            snow.simulation.accumulates = true
+            snow.simulation.groundSettles = true
+        }
+        if Preferences.deepInteraction { toggleDeepInteraction() }
+        refreshMenu()
+        accumulateCaption.enclosingMenuItem?.menu?.items.forEach { $0.view?.needsDisplay = true }
     }
 
     @objc private func toggleSurfaceItem(_ sender: NSMenuItem) {
