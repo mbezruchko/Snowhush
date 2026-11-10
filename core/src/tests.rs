@@ -680,7 +680,7 @@ fn compare_with_swift() {
 #[test]
 fn survives_a_long_chaotic_session() {
     let mut simulation = SnowSimulation::new(1920.0, 1080.0, 0.5);
-    simulation.set_varies(true);
+    simulation.set_intensity_range(0.3, 0.8);
     let none = HashSet::new();
     let mut seed = 12345u64;
     let mut next = move || {
@@ -1283,4 +1283,18 @@ fn the_wandering_wind_stays_in_bounds_eases_and_blows_both_ways() {
     }
     assert!(left && right && lull && gale, "left {left}, right {right}, lull {lull}, gale {gale}");
     assert_eq!(crate::wind::wandering(5000.0, seed), crate::wind::wandering(5000.0, seed));
+}
+
+#[test]
+fn a_ranged_snowfall_falls_inside_its_range() {
+    let flakes = |low: f32, high: f32| {
+        let mut simulation = SnowSimulation::new(1000.0, 1000.0, 0.0);
+        simulation.set_intensity_range(low, high);
+        run(&mut simulation, 4.0, AWAY);
+        simulation.sprite_count()
+    };
+    let steady = flakes(0.5, 0.5);
+    let ranged = flakes(0.6, 1.0);
+    let heaviest = flakes(1.0, 1.0);
+    assert!(steady < ranged && ranged <= heaviest + heaviest / 20, "steady {steady}, ranged {ranged}, heaviest {heaviest}");
 }

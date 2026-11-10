@@ -393,8 +393,8 @@ struct Air {
     motes: Vec<Mote>,
     random: Random,
     clock: f64,
-    /// How much more than the intensity set falls while it varies.
-    strength: f32,
+    /// Where the snowfall stands in its range while it wanders, from 0 at the bottom to 1 at the top.
+    gusts: f32,
     cursor: Option<V2>,
     cursor_velocity: V2,
     held_layers: Vec<usize>,
@@ -426,10 +426,13 @@ pub struct SnowSimulation {
     width: f32,
     height: f32,
     pace: Pace,
-    /// How much falls, from 0 to 1.
+    /// How much falls, from 0 to 1: steadily, or, below a higher `intensity_top`, the least it eases off to.
     intensity: f32,
-    /// Whether the snowfall rises and eases on its own about the intensity set.
-    varies: bool,
+    /// The most the snowfall rises to as it wanders on its own; no higher than `intensity`, it falls steadily.
+    intensity_top: f32,
+    /// How much falls now, easing toward `level_target` while the snowfall wanders.
+    level: f32,
+    level_target: f32,
     density: f32,
     pub thaws: bool,
     pub accumulates: bool,
@@ -456,7 +459,6 @@ pub struct SnowSimulation {
     parking: Vec<(WindowId, SnowLayer, f64)>,
     space_changed_at: f64,
     target_flakes: usize,
-    strength_target: f32,
     next_shift: f64,
     /// Every app window on the screen, maximized and full-screen ones too, left, bottom, right, top in points:
     /// a pumpkin hides from any that covers it.
@@ -493,7 +495,9 @@ impl SnowSimulation {
             height,
             pace: Pace::Calm,
             intensity: intensity.clamp(0.0, 1.0),
-            varies: false,
+            intensity_top: intensity.clamp(0.0, 1.0),
+            level: intensity.clamp(0.0, 1.0),
+            level_target: intensity.clamp(0.0, 1.0),
             density: 1.0,
             thaws: false,
             accumulates: true,
@@ -510,7 +514,6 @@ impl SnowSimulation {
             parking: Vec::new(),
             space_changed_at: -10.0,
             target_flakes: 0,
-            strength_target: 1.0,
             next_shift: 0.0,
             covers: Vec::new(),
             sweep_edges: HashMap::new(),
@@ -533,7 +536,7 @@ impl SnowSimulation {
                 motes: Vec::new(),
                 random: Random::new(),
                 clock: 0.0,
-                strength: 1.0,
+                gusts: 0.5,
                 cursor: None,
                 cursor_velocity: V2::ZERO,
                 held_layers: Vec::new(),
@@ -568,22 +571,38 @@ impl SnowSimulation {
         self.pace
     }
 
+    /// A steady snowfall.
     pub fn set_intensity(&mut self, intensity: f32) {
-        self.intensity = intensity.clamp(0.0, 1.0);
+        self.set_intensity_range(intensity, intensity);
+    }
+
+    /// A snowfall that wanders on its own between `low` and `high`; at the same, it falls steadily.
+    pub fn set_intensity_range(&mut self, low: f32, high: f32) {
+        let was_varying = self.varies();
+        self.intensity = low.clamp(0.0, 1.0);
+        self.intensity_top = high.clamp(self.intensity, 1.0);
+        if self.varies() {
+            if !was_varying {
+                self.next_shift = self.air.clock;
+            }
+            self.level = self.level.clamp(self.intensity, self.intensity_top);
+            self.level_target = self.level_target.clamp(self.intensity, self.intensity_top);
+        } else {
+            self.level = self.intensity;
+            self.level_target = self.intensity;
+        }
+        self.update_gusts();
         self.update_target();
         self.thin_above();
     }
 
-    pub fn set_varies(&mut self, varies: bool) {
-        if varies && !self.varies {
-            self.next_shift = self.air.clock;
-        }
-        if !varies {
-            self.air.strength = 1.0;
-            self.strength_target = 1.0;
-        }
-        self.varies = varies;
-        self.update_target();
+    fn varies(&self) -> bool {
+        self.intensity_top > self.intensity
+    }
+
+    /// The breeze drops in a lull and picks up in a flurry.
+    fn update_gusts(&mut self) {
+        self.air.gusts = if self.varies() { (self.level - self.intensity) / (self.intensity_top - self.intensity) } else { 0.5 };
     }
 
     /// Flakes still above the screen, waiting to come in, outnumber a lighter snowfall's target as the ones on screen
@@ -708,7 +727,7 @@ impl SnowSimulation {
     /// Nothing falls, lies, waits for its window or haunts, and nothing will until the snowfall or Halloween is
     /// turned on: the screen can rest.
     pub fn is_empty(&self) -> bool {
-        self.intensity <= 0.0
+        self.intensity_top <= 0.0
             && !self.haunting.on
             && self.sprite_count() == 0
             && !self.haunting.moving()
@@ -1541,26 +1560,30 @@ impl SnowSimulation {
         }
     }
 
-    /// Wanders between light lulls, steady snow and heavy flurries, a new one every one to four minutes.
+    /// Wanders between lulls at the bottom of the range, steady snow in the middle and flurries at the top, a new one
+    /// every one to four minutes.
     fn vary(&mut self, dt: f32) {
-        if !self.varies {
-            self.strength_target = 1.0;
-        } else if self.air.clock >= self.next_shift {
-            let random = &mut self.air.random;
-            let roll = random.next();
-            self.strength_target = if roll < 0.25 {
-                random.range(0.25, 0.5)
-            } else if roll < 0.75 {
-                random.range(0.7, 1.3)
-            } else {
-                random.range(1.5, 2.1)
-            };
-            self.next_shift = self.air.clock + random.range(60.0, 240.0) as f64;
-        }
-        if (self.strength_target - self.air.strength).abs() <= 0.001 {
+        if !self.varies() {
             return;
         }
-        self.air.strength += (self.strength_target - self.air.strength) * (1.0 - (-dt / 25.0).exp());
+        if self.air.clock >= self.next_shift {
+            let random = &mut self.air.random;
+            let roll = random.next();
+            let at = if roll < 0.25 {
+                random.range(0.0, 0.25)
+            } else if roll < 0.75 {
+                random.range(0.25, 0.75)
+            } else {
+                random.range(0.75, 1.0)
+            };
+            self.level_target = self.intensity + (self.intensity_top - self.intensity) * at;
+            self.next_shift = self.air.clock + random.range(60.0, 240.0) as f64;
+        }
+        if (self.level_target - self.level).abs() <= 0.0005 {
+            return;
+        }
+        self.level += (self.level_target - self.level) * (1.0 - (-dt / 25.0).exp());
+        self.update_gusts();
         self.update_target();
     }
 
@@ -1728,7 +1751,7 @@ impl SnowSimulation {
     fn settle(&mut self, dt: f32) {
         // Melting nearly keeps pace with the snowfall, so heavier snowfall builds drifts only a little higher, and the
         // far sparser leaves wither as slowly.
-        let falling = flakes_per_megapoint(self.intensity) * self.air.strength * self.density * self.heaping();
+        let falling = flakes_per_megapoint(self.level) * self.density * self.heaping();
         let melt_pace = if falling > 0.0 { (falling / THAW_BALANCE).powf(THAW_EXPONENT) } else { 1.0 };
         let outside: Vec<[f32; 2]> = (0..self.layers.len())
             .map(|li| if li == 0 { [0.0; 2] } else { [outside(&self.layers, li, true), outside(&self.layers, li, false)] })
@@ -1782,8 +1805,8 @@ impl SnowSimulation {
     }
 
     fn update_target(&mut self) {
-        let per_megapoint = if self.snowfall_held { 0.0 } else { flakes_per_megapoint(self.intensity) };
-        let falling = per_megapoint * self.air.strength * self.density * self.width * self.height / 1_000_000.0;
+        let per_megapoint = if self.snowfall_held { 0.0 } else { flakes_per_megapoint(self.level) };
+        let falling = per_megapoint * self.density * self.width * self.height / 1_000_000.0;
         let count = self.air.modes.len() as f32;
         self.air.targets = [0; 4];
         for &mode in &self.air.modes {
@@ -2863,7 +2886,7 @@ impl Air {
     fn breeze(&self) -> f32 {
         let t = self.clock;
         let breeze = (10.0 * (t * 0.07).sin() + 6.0 * (t * 0.19 + 1.7).sin() + 3.0 * (t * 0.43 + 4.1).sin()) as f32;
-        breeze * (0.6 + 0.4 * self.strength) + self.wind.x * WIND_MAX
+        breeze * (0.6 + 0.8 * self.gusts) + self.wind.x * WIND_MAX
     }
 
     /// How much faster than in still air things fall in the menu's wind: an updraft holds them back to under a third,

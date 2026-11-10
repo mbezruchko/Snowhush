@@ -20,8 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var weatherItems: [NSMenuItem] = []
     private let intensityRow = MenuDisclosure()
     private var intensityItem: NSMenuItem!
-    private let intensitySlider = MenuSlider(range: 0...1, captioned: false)
-    private let varySwitch = MenuSwitch()
+    private let intensitySlider = MenuRangeSlider()
     private let opacitySlider = MenuSlider(range: Preferences.opacityRange, title: tr("opacity"))
     private var intensityItems: [NSMenuItem] = []
     private var windItem: NSMenuItem!
@@ -183,11 +182,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         intensityRow.toggled = { [unowned self] in fold(intensityRow) }
         intensitySlider.changed = { [unowned self] in
             select(intensity: $0)
-            intensityRow.summary = MenuSlider.percent($0)
-        }
-        varySwitch.toggled = { [unowned self] varies in
-            Preferences.variesIntensity = varies
-            for snow in screens { snow.simulation.variesIntensity = varies }
+            intensityRow.summary = MenuRangeSlider.describe($0)
         }
         opacitySlider.changed = { [unowned self] opacity in
             Preferences.fallingOpacity = opacity
@@ -195,7 +190,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         }
         intensityItems = [
             addView(intensitySlider, to: menu),
-            addView(varySwitch, title: tr("variable"), to: menu),
             addView(opacitySlider, to: menu),
         ]
 
@@ -337,11 +331,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         modeTiles.on = Mode.allCases.map(modes.contains)
         extraTiles.on = [Halloween.isWanted]
         extraTiles.enabled = [modes == [.snow]]
-        intensityRow.summary = MenuSlider.percent(Preferences.intensity)
+        intensityRow.summary = MenuRangeSlider.describe(Preferences.intensityRange)
         intensityRow.fit(intensityItem.title, least: 0)
-        intensitySlider.value = Preferences.intensity
-        varySwitch.isOn = Preferences.variesIntensity
-        varySwitch.fit(tr("variable"))
+        intensitySlider.range = Preferences.intensityRange
         opacitySlider.value = Preferences.fallingOpacity
         if !Preferences.windVaries { windPad.wind = Preferences.wind }
         windPad.wanders = Preferences.windVaries
@@ -415,9 +407,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         windResetItem.view?.needsDisplay = true
     }
 
-    private func select(intensity: Double) {
-        Preferences.intensity = intensity
-        for snow in screens { snow.simulation.intensity = Float(intensity) }
+    /// A steady snowfall, or a range it wanders in.
+    private func select(intensity range: ClosedRange<Double>) {
+        Preferences.intensity = range.lowerBound
+        Preferences.intensityTop = range.upperBound
+        for snow in screens {
+            snow.simulation.intensity = Float(range.lowerBound)
+            snow.simulation.intensityTop = Float(range.upperBound)
+        }
         updateStatusIcon()
     }
 
@@ -530,7 +527,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     }
 
     private func updateStatusIcon() {
-        statusItem.button?.image = Self.icon(halloween: halloween, dimmed: Preferences.intensity <= 0)
+        statusItem.button?.image = Self.icon(halloween: halloween, dimmed: Preferences.intensityTop <= 0)
     }
 
     private static let symbol: [Mode: String] = [.snow: "snowflake", .autumn: "leaf", .rain: "cloud.rain"]

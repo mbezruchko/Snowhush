@@ -372,26 +372,33 @@ final class SnowSimulation {
 
     private(set) var pace = Pace.calm
 
-    /// How much falls, from 0 to 1.
+    /// How much falls, from 0 to 1: steadily, or, below a higher `intensityTop`, the least it eases off to.
     var intensity: Float {
-        didSet {
-            updateTarget()
-            thinAbove()
-            stirred()
-        }
+        didSet { rangeChanged() }
     }
 
-    /// Whether the snowfall rises and eases on its own about the intensity set.
-    var variesIntensity = false {
-        didSet {
-            if variesIntensity && !oldValue { nextShift = clock }
-            if !variesIntensity {
-                strength = 1
-                strengthTarget = 1
-            }
-            updateTarget()
-            stirred()
+    /// The most the snowfall rises to as it wanders on its own between `intensity` and this; no higher than
+    /// `intensity`, it falls steadily.
+    var intensityTop: Float = 0 {
+        didSet { rangeChanged() }
+    }
+
+    private var varies: Bool { intensityTop > intensity }
+
+    /// Keeps the snowfall falling now inside the range; one newly wandering picks where to head at once.
+    private func rangeChanged() {
+        if varies {
+            if !varied { nextShift = clock }
+            level = min(max(level, intensity), intensityTop)
+            levelTarget = min(max(levelTarget, intensity), intensityTop)
+        } else {
+            level = intensity
+            levelTarget = intensity
         }
+        varied = varies
+        updateTarget()
+        thinAbove()
+        stirred()
     }
 
     /// Flakes still above the screen, waiting to come in, outnumber a lighter snowfall's target as the ones on screen
@@ -616,9 +623,10 @@ final class SnowSimulation {
     private var parking: [(id: CGWindowID, ledge: SnowLayer, since: Double)] = []
     private var spaceChangedAt: Double = -10
     private var scatteredUntil: Double = -10
-    /// How much more than the intensity set falls while it varies, easing toward `strengthTarget`.
-    private var strength: Float = 1
-    private var strengthTarget: Float = 1
+    /// How much falls now, easing toward `levelTarget` while the snowfall wanders.
+    private var level: Float = 0
+    private var levelTarget: Float = 0
+    private var varied = false
     private var nextShift: Double = 0
     /// A gust clearing the snow: its front sweeps across from the windward side, lifting the drifts behind it.
     private var gust: (start: Double, direction: Float, calm: Bool)?
@@ -688,6 +696,8 @@ final class SnowSimulation {
         self.width = width
         self.height = height
         self.intensity = min(max(intensity, 0), 1)
+        level = self.intensity
+        levelTarget = self.intensity
         var seed = RandomSource()
         ground = SnowLayer(
             origin: .zero,
@@ -705,7 +715,7 @@ final class SnowSimulation {
     var hasSnow: Bool { !lying.isEmpty || layers.contains { $0.top > 0.5 } }
     /// Nothing falls, lies, waits for its window or haunts, and nothing will until the snow is stirred.
     var isEmpty: Bool {
-        intensity <= 0 && !halloween && flakes.isEmpty && grains.isEmpty && motes.isEmpty && ghosts.isEmpty
+        max(intensity, intensityTop) <= 0 && !halloween && flakes.isEmpty && grains.isEmpty && motes.isEmpty && ghosts.isEmpty
             && fallingSigns.isEmpty && snowballs.isEmpty && gust == nil && dormant.isEmpty && parking.isEmpty && lying.isEmpty && nextMode == nil
             && splashes.isEmpty && glassDrops.isEmpty && !wet
             && !layers.contains { $0.top > 0 }
@@ -3170,7 +3180,9 @@ final class SnowSimulation {
     private func breeze() -> Float {
         let t = clock
         let breeze = Float(10 * sin(t * 0.07) + 6 * sin(t * 0.19 + 1.7) + 3 * sin(t * 0.43 + 4.1))
-        return breeze * (0.6 + 0.4 * strength) + wind.x * windMax
+        // The breeze drops in a lull and picks up in a flurry.
+        let gusts = varies ? 0.6 + 0.8 * (level - intensity) / (intensityTop - intensity) : 1
+        return breeze * gusts + wind.x * windMax
     }
 
     /// How much faster than in still air things fall in the menu's wind: an updraft holds them back to under a third,
@@ -3193,19 +3205,18 @@ final class SnowSimulation {
         }
     }
 
-    /// Wanders between light lulls, steady snow and heavy flurries, a new one every one to four minutes.
+    /// Wanders between lulls at the bottom of the range, steady snow in the middle and flurries at the top, a new one
+    /// every one to four minutes.
     private func vary(dt: Float) {
-        if !variesIntensity {
-            strengthTarget = 1
-        } else if clock >= nextShift {
+        guard varies else { return }
+        if clock >= nextShift {
             let roll = random.next()
-            strengthTarget = roll < 0.25 ? random.range(0.25, 0.5)
-                : roll < 0.75 ? random.range(0.7, 1.3)
-                : random.range(1.5, 2.1)
+            let at = roll < 0.25 ? random.range(0, 0.25) : roll < 0.75 ? random.range(0.25, 0.75) : random.range(0.75, 1)
+            levelTarget = intensity + (intensityTop - intensity) * at
             nextShift = clock + Double(random.range(60, 240))
         }
-        guard abs(strengthTarget - strength) > 0.001 else { return }
-        strength += (strengthTarget - strength) * (1 - exp(-dt / 25))
+        guard abs(levelTarget - level) > 0.0005 else { return }
+        level += (levelTarget - level) * (1 - exp(-dt / 25))
         updateTarget()
     }
 
@@ -3642,7 +3653,7 @@ final class SnowSimulation {
         // Melting nearly keeps pace with the snowfall, so heavier snowfall builds drifts only a little higher, and the
         // far sparser leaves wither as slowly.
         let heaping = modes.filter { $0 != .rain }.reduce(Float(0)) { $0 + share(of: $1) } / Float(modes.count)
-        let falling = Self.flakesPerMegapoint(intensity) * strength * density * (modes == [.rain] ? 1 : heaping)
+        let falling = Self.flakesPerMegapoint(level) * density * (modes == [.rain] ? 1 : heaping)
         let meltPace = falling > 0 ? pow(falling / thawBalance, thawExponent) : 1
         for ledge in ledgeList { ledge.outside = (outside(of: ledge, left: true), outside(of: ledge, left: false)) }
         for layer in layers {
@@ -3670,7 +3681,7 @@ final class SnowSimulation {
     }
 
     private func updateTarget() {
-        let falling = snowfallHeld ? 0 : Self.flakesPerMegapoint(intensity) * strength * density * width * height / 1_000_000
+        let falling = snowfallHeld ? 0 : Self.flakesPerMegapoint(level) * density * width * height / 1_000_000
         targets = targets.map { _ in 0 }
         for mode in modes { targets[mode.rawValue] = Int(falling * share(of: mode) / Float(modes.count)) }
         targetFlakes = targets.reduce(0, +)

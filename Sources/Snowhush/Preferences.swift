@@ -15,6 +15,8 @@ enum Preferences {
     private static let defaults = UserDefaults.standard
     static let opacityRange = 0.1...1.0
     private static let intensityKey = "intensity"
+    private static let intensityTopKey = "intensityTop"
+    /// Before the range, the snowfall could only vary about the intensity, or not.
     private static let varyIntensityKey = "variableIntensity"
     /// Before the slider, the intensity was one of Off, Light, Steady, Heavy and Variable.
     private static let snowfallKey = "snowfall"
@@ -66,7 +68,18 @@ enum Preferences {
             windVariesKey: false,
         ])
         if defaults.object(forKey: intensityKey) == nil, let stop = defaults.object(forKey: snowfallKey) as? Int {
-            defaults.set([0, 0.25, 0.5, 0.75, 0.5][min(max(stop, 0), 4)], forKey: intensityKey)
+            // Variable wandered about a steady fall.
+            let stop = min(max(stop, 0), 4)
+            defaults.set([0, 0.25, 0.5, 0.75, 0.25][stop], forKey: intensityKey)
+            if stop == 4 { defaults.set(0.75, forKey: intensityTopKey) }
+        }
+        if defaults.object(forKey: varyIntensityKey) != nil {
+            if defaults.bool(forKey: varyIntensityKey), defaults.object(forKey: intensityTopKey) == nil {
+                let middle = intensity
+                defaults.set(max(middle - 0.25, 0), forKey: intensityKey)
+                defaults.set(min(middle + 0.25, 1), forKey: intensityTopKey)
+            }
+            defaults.removeObject(forKey: varyIntensityKey)
         }
         if defaults.object(forKey: accumulateKey) != nil {
             if !defaults.bool(forKey: accumulateKey) {
@@ -91,11 +104,13 @@ enum Preferences {
         set { defaults.set(newValue, forKey: intensityKey) }
     }
 
-    /// Whether the snowfall rises and eases on its own about the intensity set.
-    static var variesIntensity: Bool {
-        get { defaults.bool(forKey: varyIntensityKey) }
-        set { defaults.set(newValue, forKey: varyIntensityKey) }
+    /// The most the snowfall rises to as it wanders on its own from `intensity` up; at `intensity`, it falls steadily.
+    static var intensityTop: Double {
+        get { max(intensity, min(defaults.object(forKey: intensityTopKey) as? Double ?? 0, 1)) }
+        set { defaults.set(newValue, forKey: intensityTopKey) }
     }
+
+    static var intensityRange: ClosedRange<Double> { intensity...intensityTop }
 
     /// Where snow settles; Windows is `snowOnWindows`.
     static var surfaces: Surfaces {
