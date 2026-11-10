@@ -109,9 +109,21 @@ final class TreeRenderer {
         }
         for present in tree.presents {
             decor.append(TreePiece(
-                a: SIMD4(tree.base.x + present.offset, present.bottom, present.width, present.height),
+                a: SIMD4(tree.base.x + present.offset + present.jiggle, present.bottom, present.width, present.height),
                 b: SIMD4(present.lid, present.snow / present.width, present.style, present.offset * 0.013),
                 c: SIMD4(0, 0, 0, 2)
+            ))
+            guard present.arm > 0.01 else { continue }
+            // The arm rises out of the box and bends over toward the hand.
+            let shoulder = tree.shoulder(of: present)
+            let out = present.arm * present.arm * (3 - 2 * present.arm)
+            let hand = shoulder + (present.hand - shoulder) * out
+            let length = simd_distance(hand, shoulder)
+            let bend = shoulder + SIMD2(0, length * 0.55)
+            decor.append(TreePiece(
+                a: SIMD4(shoulder, hand),
+                b: SIMD4(bend, present.grip, present.wave),
+                c: SIMD4(present.bottom + present.height, 0, 0, 4)
             ))
         }
 

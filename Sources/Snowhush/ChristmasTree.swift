@@ -64,10 +64,28 @@ final class ChristmasTree {
         let height: Float
         let style: Float
         var bottom: Float = 0
-        /// How far its lid is lifted, in radians about its left hinge.
+        /// How far its lid is lifted, in radians about its left hinge, and how fast.
         var lid: Float = 0
+        var lidVelocity: Float = 0
         var snow: Float = 0
         var capacity: Float { width * 4.5 }
+        /// Santa's hand inside: what it is doing and for how long, how far its arm is out, where the hand is and how
+        /// fast it moves, how tight it grips and how far it turns from the arm, for a shake or a wave.
+        var phase = HandPhase.shut
+        var since: Float = 0
+        var arm: Float = 0
+        var hand = SIMD2<Float>(repeating: 0)
+        var handVelocity = SIMD2<Float>(repeating: 0)
+        var grip: Float = 0
+        var wave: Float = 0
+        /// How far it rattles sideways before it opens.
+        var jiggle: Float = 0
+        /// When it may open again.
+        var rested: Float = 0
+    }
+
+    enum HandPhase {
+        case shut, rattling, reaching, holding, retreating
     }
 
     /// From the foot of the trunk to the top of its leader; the star sits above.
@@ -253,6 +271,7 @@ final class ChristmasTree {
         }
         swingBaubles(dt: dt, cursor: brushing, cursorVelocity: cursorVelocity)
         twinkle()
+        tendPresents(dt: dt, cursor: cursor, shed: shed)
         moving = energy > 0.4 || abs(wind) > 1 || touched
     }
 
@@ -438,6 +457,125 @@ final class ChristmasTree {
             boughs[i].snow = 0
         }
         for k in presents.indices { presents[k].snow = 0 }
+    }
+
+    // MARK: - Santa's hand
+
+    /// Where Santa's arm comes out of a present: inside its top, right of the middle, as its lid hinges on the left.
+    func shoulder(of present: Present) -> SIMD2<Float> {
+        SIMD2(base.x + present.offset + present.jiggle + present.width * 0.12, present.bottom + present.height - 1)
+    }
+
+    /// The cursor close above a present: its lid rattles and lifts, and Santa's hand comes out and reaches for the
+    /// cursor. Caught, the cursor gets its hand shaken; then the hand waves and goes back in, and the lid drops shut.
+    private func tendPresents(dt: Float, cursor: SIMD2<Float>?, shed: (Float, SIMD2<Float>, SIMD2<Float>) -> Void) {
+        let reach: Float = 80
+        let shown = base.y > -20
+        let chosen = cursor.flatMap { point -> Int? in
+            guard shown else { return nil }
+            return presents.indices.filter { k in
+                let present = presents[k]
+                let x = base.x + present.offset, top = present.bottom + present.height
+                return abs(point.x - x) < present.width / 2 + 28 && point.y > top - 4 && point.y < top + 95
+            }.min { abs(point.x - base.x - presents[$0].offset) < abs(point.x - base.x - presents[$1].offset) }
+        }
+        for k in presents.indices {
+            var present = presents[k]
+            present.since += dt
+            let wanted = chosen == k && time >= present.rested
+            let shoulder = shoulder(of: present)
+            var target = shoulder + SIMD2(0, 6)
+            if let cursor {
+                var toward = cursor - shoulder
+                toward.y = max(toward.y, 8)
+                let length = simd_length(toward)
+                if length > reach { toward *= reach / length }
+                target = shoulder + toward
+            }
+            let caught = cursor.map { simd_distance($0, present.hand) } ?? .infinity
+            var lidTarget: Float = 0
+            var stiffness: Float = 14
+            switch present.phase {
+            case .shut:
+                present.jiggle = 0
+                if wanted {
+                    present.phase = .rattling
+                    present.since = 0
+                }
+            case .rattling:
+                present.jiggle = sin(present.since * 55) * 1.1 * max(0, 1 - present.since / 0.45)
+                lidTarget = 0.08
+                if !wanted {
+                    present.phase = .shut
+                } else if present.since > 0.45 {
+                    present.phase = .reaching
+                    present.since = 0
+                    present.jiggle = 0
+                    present.hand = shoulder
+                    present.handVelocity = .zero
+                    if present.snow > 0.3 {
+                        shed(present.snow, shoulder + SIMD2(present.width * 0.4, 6), SIMD2(70, 40))
+                        present.snow = 0
+                    }
+                }
+            case .reaching:
+                lidTarget = 0.62
+                present.arm = min(1, present.arm + dt * 2.6)
+                present.grip = max(0, present.grip - dt * 6)
+                present.wave *= exp(-dt * 6)
+                if !wanted {
+                    present.phase = .retreating
+                    present.since = 0
+                } else if present.arm > 0.9, caught < 7 {
+                    present.phase = .holding
+                    present.since = 0
+                }
+            case .holding:
+                lidTarget = 0.62
+                stiffness = 30
+                present.grip = min(1, present.grip + dt * 7)
+                // A handshake, up and down a few times.
+                let shaking = min(max((present.since - 0.25) / 1.1, 0), 1)
+                present.wave = sin(present.since * 15) * 0.28 * (shaking > 0 && shaking < 1 ? 1 : 0)
+                if caught > 13 {
+                    // Slipped away: the hand shakes its fist after it and reaches again.
+                    present.phase = .reaching
+                    present.since = 0
+                    present.wave = 0.6
+                } else if present.since > 1.5 {
+                    present.phase = .retreating
+                    present.since = 0
+                }
+            case .retreating:
+                present.grip = max(0, present.grip - dt * 6)
+                // A wave goodbye, then back into the box.
+                let waving = present.since < 0.9
+                present.wave = waving ? sin(present.since * 12) * 0.45 : present.wave * exp(-dt * 8)
+                target = waving ? present.hand : shoulder
+                if !waving { present.arm = max(0, present.arm - dt * 2.4) }
+                lidTarget = present.arm > 0.05 ? 0.62 : 0
+                if present.arm <= 0, present.lid < 0.03 {
+                    present.phase = .shut
+                    present.rested = time + 1.5
+                    present.bottom += 1.5
+                }
+            }
+            if present.phase != .shut { touched = true }
+
+            let omega = stiffness, damping = 2 * 0.75 * omega
+            present.handVelocity += (omega * omega * (target - present.hand) - damping * present.handVelocity) * dt
+            present.hand += present.handVelocity * dt
+            if present.phase == .shut || present.phase == .rattling { present.hand = shoulder }
+
+            let lidOmega: Float = 16
+            present.lidVelocity += (lidOmega * lidOmega * (lidTarget - present.lid) - 2 * 0.3 * lidOmega * present.lidVelocity) * dt
+            present.lid += present.lidVelocity * dt
+            if present.lid < 0 {
+                present.lid = 0
+                present.lidVelocity = -present.lidVelocity * 0.35
+            }
+            presents[k] = present
+        }
     }
 
     /// Each present sits on the drift under it, sunk into it a little.

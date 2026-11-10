@@ -170,6 +170,8 @@ vertex DecorOut decorVertex(uint vid [[vertex_id]], uint iid [[instance_id]], co
         box = float4(p.a.xy - reach, p.a.xy + reach);
     } else if (kind == 2) {
         box = float4(p.a.x - p.a.z * 0.5 - 18.0, p.a.y - 2.0, p.a.x + p.a.z * 0.5 + 18.0, p.a.y + p.a.w + 38.0);
+    } else if (kind == 4) {
+        box = float4(min(min(p.a.xy, p.a.zw), p.b.xy) - 14.0, max(max(p.a.xy, p.a.zw), p.b.xy) + 14.0);
     } else {
         float reach = p.a.z * 4.5;
         box = float4(p.a.xy - reach, p.a.xy + reach);
@@ -385,6 +387,122 @@ static float4 presentAt(float2 p, TreePiece piece, float aa, constant TreeUnifor
     return over(bow, over(snow, over(lidColor, color)));
 }
 
+static float2 rotated(float2 p, float angle) {
+    float c = cos(angle), s = sin(angle);
+    return float2(c * p.x + s * p.y, -s * p.x + c * p.y);
+}
+
+static float capsule(float2 p, float2 a, float2 b, float r) {
+    return segmentDistance(p, a, b) - r;
+}
+
+static float smoothUnion(float a, float b, float k) {
+    float h = saturate(0.5 + 0.5 * (b - a) / k);
+    return mix(b, a, h) - k * h * (1.0 - h);
+}
+
+/// Santa's glove, in the hand's frame: x along the arm out of the cuff, y across with the thumb at +y. Open, the
+/// fingers spread to reach; gripping, they fold into a fist. Also how near the point is to a seam between fingers.
+static float2 glove(float2 q, float grip) {
+    float palm = length((q - float2(1.0, 0.0)) / float2(1.2, 1.0)) * 2.9 - 2.9;
+    palm = smoothUnion(palm, capsule(q, float2(-2.6, 0.0), float2(0.4, 0.0), 2.5), 0.8);
+    float open = 1.0 - grip;
+    float fingers = 1e9;
+    float seam = 1e9;
+    for (int k = 0; k < 4; k++) {
+        float i = float(k) - 1.5;
+        float2 from = float2(2.8, i * 1.4 * (0.8 + 0.2 * open));
+        float angle = i * 0.26 * open;
+        float length = (3.5 + (abs(i) < 1.0 ? 0.8 : 0.0)) * (0.38 + 0.62 * open);
+        float2 to = from + length * float2(cos(angle), sin(angle));
+        // Folding in, the tips curl back toward the palm.
+        to = mix(to, from + float2(0.9, -0.2 * i), grip * 0.5);
+        float finger = capsule(q, from, to, 0.85);
+        seam = min(seam, abs(finger));
+        fingers = min(fingers, finger);
+    }
+    float thumb = 1.05 - 0.85 * grip;
+    float2 base = float2(1.2, 2.2);
+    float thumbs = capsule(q, base, base + 3.1 * (0.75 + 0.25 * open) * float2(cos(thumb), sin(thumb)), 0.95);
+    seam = min(seam, abs(thumbs));
+    float d = smoothUnion(palm, min(fingers, thumbs), 0.35);
+    return float2(d, seam);
+}
+
+/// Santa's arm reaching out of a present: a red velvet sleeve along a curve from a.xy, bending at b.xy, to the hand
+/// at a.zw, a fur cuff and a white glove gripping b.z, turned b.w from the arm. Nothing shows inside the box, below c.x.
+static float4 armAt(float2 p, TreePiece piece, float aa, constant TreeUniforms &u) {
+    float2 shoulder = piece.a.xy;
+    float2 hand = piece.a.zw;
+    float2 bend = piece.b.xy;
+    float grip = piece.b.z;
+    float3 daylight = mix(float3(1.0), u.light.rgb, 0.8);
+    float inside = smoothstep(piece.c.x - aa, piece.c.x + aa, p.y);
+    if (inside <= 0.0) return float4(0.0);
+
+    // The sleeve ends at the wrist, a little short of the hand.
+    float2 last = hand - bend;
+    float2 direction = normalize(length(last) > 0.01 ? last : float2(0.0, 1.0));
+    float2 wrist = hand - direction * 3.0;
+    float best = 1e9;
+    float along = 0.0;
+    float2 nearest = shoulder;
+    float2 previous = shoulder;
+    for (int k = 1; k <= 14; k++) {
+        float t = float(k) / 14.0;
+        float2 point = mix(mix(shoulder, bend, t), mix(bend, wrist, t), t);
+        float2 ab = point - previous;
+        float h = saturate(dot(p - previous, ab) / max(dot(ab, ab), 1e-4));
+        float d = length(p - previous - ab * h);
+        if (d < best) {
+            best = d;
+            along = (float(k - 1) + h) / 14.0;
+            nearest = previous + ab * h;
+        }
+        previous = point;
+    }
+    float radius = 3.6 + 0.9 * along;
+    float4 color = float4(0.0);
+    float sleeve = smoothstep(radius + aa, radius - aa, best);
+    if (sleeve > 0.0) {
+        float across = best / radius;
+        float lit = saturate(0.5 + 0.5 * dot(normalize(p - nearest + float2(1e-4)), normalize(float2(-0.6, 0.8))) * across);
+        float3 velvet = mix(float3(0.42, 0.02, 0.04), float3(0.86, 0.12, 0.13), lit) * (1.0 - 0.25 * across * across);
+        velvet += float3(0.25, 0.08, 0.08) * pow(lit, 6.0) * across;
+        color = float4(velvet * daylight * sleeve, sleeve);
+    }
+    // The fur cuff round the wrist, fluffy at its edges and in tufts all over.
+    float2 cuffFrom = wrist - direction * 5.5;
+    float2 cuffTo = wrist - direction * 0.8;
+    float2 around = p - (cuffFrom + cuffTo) * 0.5;
+    float fluff = 0.9 * treeNoise(atan2(around.y, around.x) * 6.0 + length(around) * 1.5);
+    float cuff = smoothstep(6.0 + fluff + aa, 6.0 + fluff - aa, segmentDistance(p, cuffFrom, cuffTo));
+    if (cuff > 0.0) {
+        float tufts = treeNoise(p.x * 1.7 + treeNoise(p.y * 1.9) * 3.0);
+        float shade = 0.72 + 0.16 * tufts + 0.14 * saturate(dot(normalize(around + float2(1e-4)), normalize(float2(-0.6, 0.8))));
+        color = over(float4(float3(0.98, 0.96, 0.92) * shade * daylight * cuff, cuff), color);
+    }
+    // The glove.
+    float turn = atan2(direction.y, direction.x) + piece.b.w;
+    float2 q = rotated(p - wrist, turn) / 1.25;
+    if (direction.x < 0.0) q.y = -q.y;
+    float2 shape = glove(q, grip);
+    float d = shape.x * 1.25;
+    float e = 0.15;
+    float2 normal = normalize(float2(glove(q + float2(e, 0.0), grip).x - shape.x, glove(q + float2(0.0, e), grip).x - shape.x) + 1e-5);
+    float2 light = rotated(normalize(float2(-0.6, 0.8)), turn);
+    if (direction.x < 0.0) light.y = -light.y;
+    float rim = saturate(-d / 1.2);
+    float shade = 0.78 + 0.22 * saturate(dot(normal, light) * (1.0 - rim) + rim * 0.6);
+    float fill = smoothstep(aa, -aa, d);
+    float outline = max(smoothstep(0.45 + aa, 0.45 - aa, abs(d + 0.2)) * 0.55,
+                        smoothstep(0.3 + aa, 0.3 - aa, shape.y * 1.25) * smoothstep(-0.2, -0.6, d) * 0.35);
+    float3 white = float3(0.98, 0.97, 0.95) * shade;
+    float4 gloveColor = float4(mix(white, float3(0.45, 0.42, 0.44), outline) * daylight * fill, fill);
+    color = over(gloveColor, color);
+    return color * inside;
+}
+
 fragment float4 decorFragment(DecorOut in [[stage_in]], const device TreePiece *pieces [[buffer(0)]], constant TreeUniforms &u [[buffer(1)]],
                               const device TreeBulb *bulbs [[buffer(2)]]) {
     TreePiece p = pieces[in.piece];
@@ -397,6 +515,8 @@ fragment float4 decorFragment(DecorOut in [[stage_in]], const device TreePiece *
         color = bulbAt(in.world, p, aa);
     } else if (kind == 2) {
         color = presentAt(in.world, p, aa, u, bulbs);
+    } else if (kind == 4) {
+        color = armAt(in.world, p, aa, u);
     } else {
         color = starAt(in.world, p, aa, u);
     }
