@@ -1,0 +1,8 @@
+{
+  "uuid": "snowhush@mbezruchko.github.io",
+  "name": "Snowhush",
+  "description": "Snow, rain, autumn leaves and cherry blossom, drawn by Snowhush's native Rust engine on GNOME Wayland.",
+  "shell-version": ["46"],
+  "url": "https://github.com/mbezruchko/Snowhush",
+  "version": 1
+}

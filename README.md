@@ -15,7 +15,7 @@
   &nbsp;·&nbsp;
   <a href="https://snowhush.app">snowhush.app</a>
   <br>
-  <sub>macOS 14 or later · Windows 10 or 11 · Linux with KDE Plasma 6, Hyprland, Sway or niri · free, source available</sub>
+  <sub>macOS 14 or later · Windows 10 or 11 · Linux with GNOME 46, KDE Plasma 6, Hyprland, Sway or niri · free, source available</sub>
 </p>
 
 https://github.com/user-attachments/assets/291c3cd5-3563-4b86-8b66-dfd924f980fc
@@ -60,7 +60,9 @@ windows/build.sh      # dist/Snowhush-Setup.exe, cross-compiled from macOS
 
 ### Linux
 
-`linux/` is a native version for Wayland: KDE Plasma 6, Hyprland, Sway and niri. It shares the snow's physics with the Windows version and draws with OpenGL ES in a layer-shell overlay. Wayland doesn't tell apps where other windows are or where the pointer is, so each compositor is asked in its own way: on KDE, Snowhush loads a small KWin script (`linux/src/snowhush.js`) while it runs, which reports both; Hyprland answers over its IPC socket, which tells both too; Sway and niri answer over theirs, though they don't tell where the pointer is, and niri only where floating windows are, so on niri only those collect snow.
+`linux/` is a native Rust version for Wayland: GNOME 46, KDE Plasma 6, Hyprland, Sway and niri. It shares the snow's physics with the Windows version and draws with OpenGL ES in a layer-shell overlay. Wayland doesn't tell apps where other windows are or where the pointer is, so each compositor is asked in its own way: on KDE, Snowhush loads a small KWin script (`linux/src/snowhush.js`) while it runs, which reports both; Hyprland answers over its IPC socket, which tells both too; Sway and niri answer over theirs, though they don't tell where the pointer is, and niri only where floating windows are, so on niri only those collect snow.
+
+On GNOME, which does not implement layer-shell, a Shell extension starts the same Rust/OpenGL engine as a trusted Wayland client and integrates its transparent xdg-shell overlays with Mutter. It also supplies a native panel menu, window positions and the pointer, without needing an AppIndicator extension. See [`linux/gnome/README.md`](linux/gnome/README.md) for installation and the tested support scope.
 
 Each release carries an AppImage that runs on any distribution, a `.deb` and an `.rpm`. On Arch, `makepkg -si` in `linux/packaging/aur` installs the release's build as a package. To build it yourself:
 

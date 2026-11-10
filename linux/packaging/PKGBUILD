@@ -3,7 +3,7 @@
 pkgname=snowhush
 pkgver=0.13.1
 pkgrel=1
-pkgdesc="Snow on your Wayland desktop, in KDE Plasma, Hyprland, Sway or niri: it settles on windows and parts around the cursor"
+pkgdesc="Snow on your Wayland desktop, in GNOME 46, KDE Plasma, Hyprland, Sway or niri: it settles on windows and parts around the cursor"
 arch=('x86_64' 'aarch64')
 url="https://github.com/mbezruchko/Snowhush"
 license=('PolyForm-Noncommercial-1.0.0')
@@ -25,4 +25,9 @@ package() {
     install -Dm644 "$_root/site/assets/icon-512.png" "$pkgdir/usr/share/icons/hicolor/512x512/apps/snowhush.png"
     install -Dm644 "$_root/site/assets/icon-64.png" "$pkgdir/usr/share/icons/hicolor/64x64/apps/snowhush.png"
     install -Dm644 "$_root/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    local extension="$pkgdir/usr/share/gnome-shell/extensions/snowhush@mbezruchko.github.io"
+    install -d "$extension/bin"
+    install -m644 "$_root/linux/gnome/extension.js" "$_root/linux/gnome/metadata.json" "$extension/"
+    ln -s ../../../../../bin/snowhush "$extension/bin/snowhush"
+
 }

@@ -3,9 +3,9 @@
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
-use smithay_client_toolkit::compositor::{CompositorState, FrameCallbackData, Region};
-use smithay_client_toolkit::shell::WaylandSurface;
-use smithay_client_toolkit::shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer, LayerShell, LayerSurface};
+use smithay_client_toolkit::compositor::{CompositorState, FrameCallbackData};
+use smithay_client_toolkit::shell::wlr_layer::{Layer, LayerSurface};
+use smithay_client_toolkit::shell::xdg::window::Window;
 use wayland_client::QueueHandle;
 use wayland_client::protocol::wl_output::WlOutput;
 
@@ -14,6 +14,7 @@ use snowhush_core::simulation::{Pace, SnowSimulation, WindowId, WindowSurface};
 
 use crate::light::{self, Backdrop, Shade};
 use crate::log;
+use crate::overlay::{Overlay, Shell};
 use crate::render::{Ambient, Gpu, LANTERN_REACH, Surface};
 use crate::snow::App;
 use crate::source::Report;
@@ -44,7 +45,7 @@ pub struct Screen {
     pub next_due: Instant,
     /// The whole display, in logical pixels on the shared desktop.
     pub bounds: Area,
-    layer: LayerSurface,
+    layer: Overlay,
     surface: Option<Surface>,
     /// Space left free at the display's edges, top, right, bottom, left: the panels the work area leaves out.
     margins: (i32, i32, i32, i32),
@@ -90,7 +91,7 @@ pub struct Screen {
 impl Screen {
     /// `layer` is where the snow goes among the windows: see `layer_for`.
     pub fn new(
-        app: (&CompositorState, &LayerShell, &QueueHandle<App>),
+        app: (&CompositorState, &Shell, &QueueHandle<App>),
         output: WlOutput,
         name: String,
         bounds: Area,
@@ -98,18 +99,8 @@ impl Screen {
         simulation: SnowSimulation,
         layer: Layer,
     ) -> Screen {
-        let (compositor, layer_shell, qh) = app;
-        let surface = compositor.create_surface(qh);
-        // An empty input region: every click and scroll goes through to what is under the snow.
-        if let Ok(region) = Region::new(compositor) {
-            surface.set_input_region(Some(region.wl_region()));
-        }
-        let layer = layer_shell.create_layer_surface(qh, surface, layer, Some("snowhush"), Some(&output));
-        layer.set_anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
-        // Placed by its margins alone, over panels' reserved space as much as anything else.
-        layer.set_exclusive_zone(-1);
-        layer.set_keyboard_interactivity(KeyboardInteractivity::None);
-        layer.commit();
+        let (compositor, shell, qh) = app;
+        let layer = Overlay::new(compositor, shell, qh, &output, &name, bounds, layer);
         Screen {
             name,
             output,
@@ -146,7 +137,17 @@ impl Screen {
     }
 
     pub fn is(&self, layer: &LayerSurface) -> bool {
+        use smithay_client_toolkit::shell::WaylandSurface;
         self.layer.wl_surface() == layer.wl_surface()
+    }
+
+    pub fn is_window(&self, window: &Window) -> bool {
+        use smithay_client_toolkit::shell::WaylandSurface;
+        self.layer.wl_surface() == window.wl_surface()
+    }
+
+    pub fn size(&self) -> (u32, u32) {
+        self.size
     }
 
     pub fn owns(&self, surface: &wayland_client::protocol::wl_surface::WlSurface) -> bool {
@@ -224,7 +225,13 @@ impl Screen {
             if shelf.is_some() { 0 } else { (bounds.bottom() - work.bottom()).round() as i32 },
             (work.x - bounds.x).round() as i32,
         );
-        if margins == self.margins || margins.0 < 0 || margins.1 < 0 || margins.2 < 0 || margins.3 < 0 {
+        if margins.0 < 0 || margins.1 < 0 || margins.2 < 0 || margins.3 < 0 {
+            return;
+        }
+        if margins == self.margins {
+            if matches!(self.layer, Overlay::Gnome { .. }) {
+                self.layer.place(bounds, margins);
+            }
             return;
         }
         log!("{}: work area {work:?}", self.name);
@@ -233,13 +240,20 @@ impl Screen {
         }
         self.placed = true;
         self.margins = margins;
-        self.layer.set_margin(margins.0, margins.1, margins.2, margins.3);
-        self.layer.commit();
+        self.layer.place(bounds, margins);
     }
 
-    pub fn set_layer(&mut self, behind: bool, over_full_screen: bool) {
-        self.layer.set_layer(layer_for(behind, over_full_screen));
-        self.layer.commit();
+    pub fn set_layer(&mut self, app: (&Gpu, &CompositorState, &Shell, &QueueHandle<App>), behind: bool, over_full_screen: bool) {
+        let (gpu, compositor, shell, qh) = app;
+        // Mutter 46 can classify a trusted NORMAL window as DOCK/DESKTOP only once. Replace the surface
+        // when its layer changes, retaining the simulation and all accumulated snow.
+        if matches!(shell, Shell::Gnome(_)) {
+            if let Some(surface) = self.surface.take() {
+                gpu.release(surface);
+            }
+            self.layer = Overlay::new(compositor, shell, qh, &self.output, &self.name, self.bounds, layer_for(behind, over_full_screen));
+        }
+        self.layer.set_layer(layer_for(behind, over_full_screen), self.bounds, self.margins);
         self.resume();
     }
 

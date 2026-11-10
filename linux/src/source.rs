@@ -1,6 +1,6 @@
 //! Where the other windows are, which Wayland keeps from apps: each compositor tells it in its own way, and
 //! each way ends in the same report. KWin runs a script that calls the app; Hyprland, Sway and niri answer
-//! over their own sockets.
+//! over their own sockets. GNOME Shell runs a trusted-client extension and reports over D-Bus.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -150,13 +150,16 @@ pub enum Source {
     Niri,
     Sway,
     KWin,
+    Gnome,
 }
 
 impl Source {
     pub fn start(bus: &Bus, shared: Arc<Shared>, show_in_screenshots: bool) -> Source {
         // Hyprland's instance is checked against the app's own Wayland socket, so it is right wherever it runs.
         let hyprland = hyprland::instance();
-        let source = if hyprland.is_some() {
+        let source = if crate::gnome::is_engine() {
+            Source::Gnome
+        } else if hyprland.is_some() {
             Source::Hyprland
         } else if std::env::var_os("NIRI_SOCKET").is_some() {
             Source::Niri
@@ -170,6 +173,7 @@ impl Source {
             Source::Niri => niri::start(shared),
             Source::Sway => sway::start(shared),
             Source::KWin => kwin::load_script(bus, show_in_screenshots),
+            Source::Gnome => Ok(()),
         };
         match started {
             Ok(()) => log!("windows from {}", source.name()),
@@ -184,6 +188,7 @@ impl Source {
             Source::Niri => "niri",
             Source::Sway => "Sway",
             Source::KWin => "KWin",
+            Source::Gnome => "GNOME Shell",
         }
     }
 
