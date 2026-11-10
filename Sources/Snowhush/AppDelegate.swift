@@ -267,7 +267,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         [("weather", weatherRow), ("intensity", intensityRow), ("opacity", opacityRow), ("wind", windRow), ("accumulate", accumulateRow)]
     }
 
-    private func fold(_ row: MenuDisclosure) {        row.open.toggle()
+    private func fold(_ row: MenuDisclosure) {
+        row.open.toggle()
         Preferences.openSections = sections.filter(\.row.open).map(\.key)
         refreshFolds()
     }
