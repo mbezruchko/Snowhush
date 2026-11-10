@@ -17,10 +17,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var weatherItem: NSMenuItem!
     private let modeTiles = MenuTiles()
     private let extraTiles = MenuTiles()
-    private let intensitySlider = MenuSlider(range: 0...1, title: tr("intensity"))
+    private var weatherItems: [NSMenuItem] = []
+    private let intensityRow = MenuDisclosure()
+    private var intensityItem: NSMenuItem!
+    private let intensitySlider = MenuSlider(range: 0...1, captioned: false)
     private let varySwitch = MenuSwitch()
     private let opacitySlider = MenuSlider(range: Preferences.opacityRange, title: tr("opacity"))
-    private var weatherItems: [NSMenuItem] = []
+    private var intensityItems: [NSMenuItem] = []
     private var windItem: NSMenuItem!
     private let windRow = MenuDisclosure()
     private let windPad = MenuWindPad()
@@ -153,7 +156,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         menu.delegate = self
         menu.autoenablesItems = false
 
-        // What falls and how much, open from the start: it is what the menu is opened for most.
+        // What falls, open from the start: it is what the menu is opened for most.
         weatherItem = addView(weatherRow, title: tr("weather"), to: menu)
         weatherRow.open = true
         weatherRow.pill = tr("mix")
@@ -172,9 +175,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         let names = modeTiles.tiles.map(\.name) + extraTiles.tiles.map(\.name)
         modeTiles.fit(names)
         extraTiles.fit(names)
+        weatherItems = [addView(modeTiles, to: menu), addView(extraTiles, to: menu)]
+
+        // How much falls, and how see-through it is on the way down.
+        intensityItem = addView(intensityRow, title: tr("intensity"), to: menu)
+        intensityRow.summaryWhileOpen = true
+        intensityRow.toggled = { [unowned self] in fold(intensityRow) }
         intensitySlider.changed = { [unowned self] in
             select(intensity: $0)
-            weatherRow.summary = weatherSummary
+            intensityRow.summary = MenuSlider.percent($0)
         }
         varySwitch.toggled = { [unowned self] varies in
             Preferences.variesIntensity = varies
@@ -184,9 +193,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
             Preferences.fallingOpacity = opacity
             for snow in screens { snow.simulation.fallingOpacity = Float(opacity) }
         }
-        weatherItems = [
-            addView(modeTiles, to: menu),
-            addView(extraTiles, to: menu),
+        intensityItems = [
             addView(intensitySlider, to: menu),
             addView(varySwitch, title: tr("variable"), to: menu),
             addView(opacitySlider, to: menu),
@@ -263,6 +270,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     /// Shows what each folded row holds while it is open; the melting switch only while something heaps up.
     private func refreshFolds() {
         weatherItems.forEach { $0.isHidden = !weatherRow.open }
+        intensityItems.forEach { $0.isHidden = !intensityRow.open }
         windItems.forEach { $0.isHidden = !windRow.open }
         surfacesItem.isHidden = !accumulateRow.open
         meltItem.isHidden = !accumulateRow.open || !Preferences.modes.contains { $0 != .rain }
@@ -276,11 +284,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         menu.items.forEach { $0.view?.needsDisplay = true }
     }
 
-    /// What falls and how much, or Off.
+    /// What falls.
     private var weatherSummary: String {
-        guard Preferences.intensity > 0 else { return tr("off") }
-        let names = Mode.allCases.filter(Preferences.modes.contains).map { tr("tile.\($0.key)") }
-        return names.joined(separator: " + ") + " " + MenuSlider.percent(Preferences.intensity)
+        Mode.allCases.filter(Preferences.modes.contains).map { tr("tile.\($0.key)") }.joined(separator: " + ")
     }
 
     /// A mode's tile shows the icon the menu bar shows for it.
@@ -331,6 +337,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         modeTiles.on = Mode.allCases.map(modes.contains)
         extraTiles.on = [Halloween.isWanted]
         extraTiles.enabled = [modes == [.snow]]
+        intensityRow.summary = MenuSlider.percent(Preferences.intensity)
+        intensityRow.fit(intensityItem.title, least: 0)
         intensitySlider.value = Preferences.intensity
         varySwitch.isOn = Preferences.variesIntensity
         varySwitch.fit(tr("variable"))
