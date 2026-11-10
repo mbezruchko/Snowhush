@@ -3,6 +3,7 @@
 "wind" = "Viento";
 "calm" = "Calma";
 "random" = "Aleatorio";
+"reset" = "Restablecer";
 "off" = "No";
 "mode" = "Modo";
 "mixed" = "Mixto";

@@ -6,6 +6,7 @@
 "wind" = "Wind";
 "calm" = "Calm";
 "random" = "Random";
+"reset" = "Reset";
 "off" = "Off";
 "mode" = "Mode";
 "mixed" = "Mixed";

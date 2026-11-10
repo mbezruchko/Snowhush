@@ -2,9 +2,11 @@ import AppKit
 
 /// A checkmark menu row that keeps its menu open when clicked, so several options can be changed in one go.
 /// It draws its enclosing item's title, state and enabled flag, so the menu's delegate updates it like any other item.
+/// Without `checks`, it is a plain button row, its title in line with the rows of a menu that has no checkmarks.
 final class MenuToggle: NSView {
     private let action: Selector
     private weak var target: AnyObject?
+    private let checks: Bool
     /// Whether a click leaves the menu open; false closes it like a plain item.
     var staysOpen: () -> Bool = { true }
 
@@ -17,14 +19,17 @@ final class MenuToggle: NSView {
     static let highlightRadius: CGFloat = modern ? 7 : 4
     private static let check = NSImage(systemSymbolName: "checkmark", accessibilityDescription: nil)
 
-    init(action: Selector, target: AnyObject) {
+    init(action: Selector, target: AnyObject, checks: Bool = true) {
         self.action = action
         self.target = target
+        self.checks = checks
         super.init(frame: NSRect(x: 0, y: 0, width: 200, height: Self.rowHeight))
         autoresizingMask = .width
         setAccessibilityElement(true)
-        setAccessibilityRole(.checkBox)
+        setAccessibilityRole(checks ? .checkBox : .button)
     }
+
+    private var titleX: CGFloat { checks ? Self.titleX : MenuDisclosure.titleX }
 
     required init?(coder: NSCoder) { nil }
 
@@ -33,7 +38,7 @@ final class MenuToggle: NSView {
     /// Widens the row to fit `title`: a menu sizes itself to its rows' views, not to their items' titles.
     func fit(_ title: String) {
         let text = NSAttributedString(string: title, attributes: [.font: NSFont.menuFont(ofSize: 0)])
-        setFrameSize(NSSize(width: max(200, ceil(Self.titleX + text.size().width + 24)), height: frame.height))
+        setFrameSize(NSSize(width: max(200, ceil(titleX + text.size().width + 24)), height: frame.height))
     }
 
     override func updateTrackingAreas() {
@@ -64,7 +69,7 @@ final class MenuToggle: NSView {
 
     override func accessibilityLabel() -> String? { enclosingMenuItem?.title }
 
-    override func accessibilityValue() -> Any? { enclosingMenuItem?.state == .on ? 1 : 0 }
+    override func accessibilityValue() -> Any? { checks ? enclosingMenuItem?.state == .on ? 1 : 0 : nil }
 
     private func press() {
         guard let item = enclosingMenuItem, item.isEnabled else { return }
@@ -87,10 +92,10 @@ final class MenuToggle: NSView {
             NSBezierPath(roundedRect: bounds.insetBy(dx: 5, dy: 0), xRadius: Self.highlightRadius, yRadius: Self.highlightRadius).fill()
         }
         let color: NSColor = lit ? .selectedMenuItemTextColor : item.isEnabled ? .labelColor : .disabledControlTextColor
-        if item.state == .on, let check = Self.check?.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 10.5, weight: .bold).applying(.init(paletteColors: [color]))) {
+        if checks, item.state == .on, let check = Self.check?.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 10.5, weight: .bold).applying(.init(paletteColors: [color]))) {
             check.draw(in: NSRect(x: Self.checkX - check.size.width / 2, y: (bounds.height - check.size.height) / 2, width: check.size.width, height: check.size.height))
         }
         let title = NSAttributedString(string: item.title, attributes: [.font: NSFont.menuFont(ofSize: 0), .foregroundColor: color])
-        title.draw(at: NSPoint(x: Self.titleX, y: (bounds.height - title.size().height) / 2))
+        title.draw(at: NSPoint(x: titleX, y: (bounds.height - title.size().height) / 2))
     }
 }

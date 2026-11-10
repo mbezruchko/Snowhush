@@ -3,6 +3,7 @@
 "wind" = "Wind";
 "calm" = "Windstill";
 "random" = "Zufällig";
+"reset" = "Zurücksetzen";
 "off" = "Aus";
 "mode" = "Modus";
 "mixed" = "Gemischt";

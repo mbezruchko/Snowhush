@@ -3,6 +3,7 @@
 "wind" = "Vento";
 "calm" = "Calmaria";
 "random" = "Aleatório";
+"reset" = "Redefinir";
 "off" = "Desligado";
 "mode" = "Modo";
 "mixed" = "Misto";

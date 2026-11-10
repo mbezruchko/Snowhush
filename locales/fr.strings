@@ -3,6 +3,7 @@
 "wind" = "Vent";
 "calm" = "Calme";
 "random" = "Aléatoire";
+"reset" = "Réinitialiser";
 "off" = "Arrêt";
 "mode" = "Mode";
 "mixed" = "Mélange";

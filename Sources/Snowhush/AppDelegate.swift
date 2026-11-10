@@ -24,6 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var windPadItem: NSMenuItem!
     private let windRandom = MenuSwitch()
     private var windRandomItem: NSMenuItem!
+    private var windResetItem: NSMenuItem!
     private var accumulateItem: NSMenuItem!
     private let accumulateRow = MenuDisclosure()
     private var surfacesItem: NSMenuItem!
@@ -180,11 +181,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
             windRow.open.toggle()
             windPadItem.isHidden = !windRow.open
             windRandomItem.isHidden = !windRow.open
+            windResetItem.isHidden = !windRow.open
         }
         windPad.changed = { [unowned self] wind in
             Preferences.wind = wind
             for snow in screens { snow.simulation.wind = wind.vector }
             windRow.summary = wind.summary
+            refreshWindReset()
         }
         windPad.stoppedWandering = { [unowned self] in wander(false) }
         windPadItem = NSMenuItem()
@@ -195,6 +198,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         windRandomItem.view = windRandom
         windRandomItem.isHidden = true
         windRandom.toggled = { [unowned self] in wander($0) }
+        windResetItem = menu.addItem(withTitle: tr("reset"), action: nil, keyEquivalent: "")
+        let windReset = MenuToggle(action: #selector(resetWind), target: self, checks: false)
+        windReset.fit(windResetItem.title)
+        windResetItem.view = windReset
+        windResetItem.isHidden = true
         accumulateItem = menu.addItem(withTitle: tr("accumulate"), action: nil, keyEquivalent: "")
         accumulateItem.view = accumulateRow
         accumulateRow.toggled = { [unowned self] in
@@ -288,6 +296,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         windRandom.fit(windRandomItem.title)
         windRow.summary = Preferences.windRandom ? tr("random") : Preferences.wind.summary
         windRow.fit(windItem.title, least: 0)
+        refreshWindReset()
         let modes = Mode.allCases.filter(Preferences.modes.contains)
         mixedItem.state = Preferences.mixed ? .on : .off
         for (item, mode) in modeItems { item.state = modes.contains(mode) ? .on : .off }
@@ -342,6 +351,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
             if !on { snow.simulation.wind = Preferences.wind.vector }
         }
         windRow.summary = on ? tr("random") : Preferences.wind.summary
+        refreshWindReset()
+    }
+
+    /// Back to the default: calm, set by hand.
+    @objc private func resetWind() {
+        Preferences.wind = .calm
+        wander(false)
+    }
+
+    /// Reset is there only while the wind is off its default.
+    private func refreshWindReset() {
+        windResetItem.isEnabled = Preferences.windRandom || Preferences.wind.strength > 0
+        windResetItem.view?.needsDisplay = true
     }
 
     private func select(intensity: Double) {
