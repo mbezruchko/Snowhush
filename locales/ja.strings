@@ -1,5 +1,7 @@
 "intensity" = "強さ";
 "opacity" = "不透明度";
+"wind" = "風";
+"calm" = "無風";
 "off" = "オフ";
 "mode" = "モード";
 "mixed" = "ミックス";

@@ -3,6 +3,8 @@
 
 "intensity" = "Intensity";
 "opacity" = "Opacity";
+"wind" = "Wind";
+"calm" = "Calm";
 "off" = "Off";
 "mode" = "Mode";
 "mixed" = "Mixed";

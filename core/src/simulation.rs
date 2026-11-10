@@ -64,6 +64,8 @@ const MAX_MOTES: usize = 1500;
 const GUST_SWEEP: f32 = 0.6;
 const GUST_LENGTH: f32 = 2.2;
 const GUST_WIND: f32 = 1000.0;
+/// The menu's wind at full strength blows across this fast.
+const WIND_MAX: f32 = 150.0;
 /// The snowfall is caught this long after the drifts, so it trails behind their powder.
 const GUST_LAG: f32 = 0.3;
 /// Snow a wall scrapes up packs down to this share of its fresh bulk.
@@ -402,6 +404,8 @@ struct Air {
     overflow: Vec<(f32, f32, Blend)>,
     gust: Option<Gust>,
     slide_wind: f32,
+    /// The wind set from the menu, over the breeze: x to the right, y up, at most 1 long.
+    wind: V2,
     /// What falls, one kind or two mixed: leaves heap up where snow would, rain bursts on the windows and runs down
     /// the glass. Mixed, each falls half as thick, and what heaps up is a mixture.
     modes: Vec<Mode>,
@@ -530,6 +534,7 @@ impl SnowSimulation {
                 overflow: Vec::new(),
                 gust: None,
                 slide_wind: 0.0,
+                wind: V2::ZERO,
                 modes: vec![Mode::Snow],
                 targets: [0; 4],
                 airborne: [0; 4],
@@ -1241,6 +1246,7 @@ impl SnowSimulation {
         // A desktop's wind is short: the flakes take it up faster than the slow breeze, or it would be gone first.
         let follow = (dt * (1.2 + self.air.slide_wind.abs() * 0.03)).min(1.0);
         let settle = (dt * 1.6).min(1.0);
+        let lift = self.air.fall_scale();
         let wake = self.air.cursor_wake();
         self.air.airborne = self.kind_counts();
 
@@ -1256,7 +1262,7 @@ impl SnowSimulation {
                 let drive = if flake.rain() { 3.0 } else { 1.0 };
                 flake.velocity.x += (wind * drive * (0.35 + 0.65 * flake.depth) - flake.velocity.x) * follow;
             }
-            flake.velocity.y += (-flake.fall_speed - flake.velocity.y) * settle;
+            flake.velocity.y += (-flake.fall_speed * lift - flake.velocity.y) * settle;
 
             if let Some(wake) = wake
                 && !flake.rain()
@@ -1349,6 +1355,7 @@ impl SnowSimulation {
         let damping = (-GRAIN_DRAG * dt).exp();
         let air_drag = (-3.2 * dt).exp();
         let wind = self.air.breeze() + self.air.slide_wind;
+        let lift = self.air.fall_scale();
         let time = (self.air.clock % 1000.0) as f32;
         let wake = self.air.cursor_wake();
         let mut i = self.air.grains.len();
@@ -1364,7 +1371,7 @@ impl SnowSimulation {
             } else if grain.kind.leafy() {
                 // A leaf catches the air: flung up, it soon loses its speed and flutters down, swinging from side to side.
                 let phase = time * (1.2 + grain.seed) + grain.seed * 40.0;
-                let fall = (35.0 + 30.0 * grain.seed) * (0.3 + 1.1 * phase.cos().abs());
+                let fall = (35.0 + 30.0 * grain.seed) * (0.3 + 1.1 * phase.cos().abs()) * lift;
                 grain.velocity.x = (grain.velocity.x - wind) * air_drag + wind;
                 grain.velocity.y = (grain.velocity.y + fall) * air_drag - fall;
                 // Leaves falling off a window or swept out of a heap ride the cursor's wake as the falling ones do.
@@ -1514,6 +1521,13 @@ impl SnowSimulation {
     // Gust
 
     /// The way the breeze blows now: 1 to the right, -1 to the left.
+    /// Sets the menu's wind, which blows over the breeze: x to the right, y up, at most 1 long. Across, it carries what
+    /// falls along; up, it holds the fall back, and down, it drives it.
+    pub fn set_wind(&mut self, wind: V2) {
+        let length = wind.length();
+        self.air.wind = if length > 1.0 { wind * (1.0 / length) } else { wind };
+    }
+
     pub fn breeze_direction(&self) -> f32 {
         if self.air.breeze() < 0.0 { -1.0 } else { 1.0 }
     }
@@ -2683,13 +2697,14 @@ impl Air {
             return self.make_raindrop(width, y);
         }
         let wind = self.wind_speed();
+        let lift = self.fall_scale();
         let random = &mut self.random;
         let near = random.next() < 0.02;
         let depth = if near { 1.0 } else { random.next().powf(1.6) };
         let fall_speed = if near { random.range(75.0, 100.0) } else { 16.0 + depth * 50.0 + random.range(0.0, 10.0) };
         Flake {
             position: V2::new(random.range(-30.0, width + 30.0), y),
-            velocity: V2::new(wind * (0.35 + 0.65 * depth), -fall_speed),
+            velocity: V2::new(wind * (0.35 + 0.65 * depth), -fall_speed * lift),
             fall_speed,
             size: if near { random.range(8.0, 13.0) } else { 1.4 + depth * 4.4 + random.range(0.0, 1.0) },
             depth,
@@ -2712,12 +2727,13 @@ impl Air {
     /// A raindrop, drawn as the streak it leaves over the exposure: the nearer, the faster, longer and brighter.
     fn make_raindrop(&mut self, width: f32, y: f32) -> Flake {
         let wind = self.wind_speed();
+        let lift = self.fall_scale();
         let random = &mut self.random;
         let depth = random.next().powf(1.5);
         let fall_speed = 650.0 + depth * 550.0 + random.range(0.0, 80.0);
         Flake {
             position: V2::new(random.range(-30.0, width + 30.0), y),
-            velocity: V2::new(wind * 3.0 * (0.35 + 0.65 * depth), -fall_speed),
+            velocity: V2::new(wind * 3.0 * (0.35 + 0.65 * depth), -fall_speed * lift),
             fall_speed,
             size: 0.8 + depth * 0.9,
             depth,
@@ -2739,13 +2755,14 @@ impl Air {
 
     fn make_leaf(&mut self, width: f32, y: f32, petal: bool) -> Flake {
         let wind = self.wind_speed();
+        let lift = self.fall_scale();
         let depth = self.random.next().powf(1.2);
         let size = self.leaf_length(depth, petal);
         let random = &mut self.random;
         let fall_speed = 24.0 + depth * 36.0 + random.range(0.0, 12.0);
         Flake {
             position: V2::new(random.range(-30.0, width + 30.0), y),
-            velocity: V2::new(wind * (0.35 + 0.65 * depth), -fall_speed),
+            velocity: V2::new(wind * (0.35 + 0.65 * depth), -fall_speed * lift),
             fall_speed,
             size,
             depth,
@@ -2799,7 +2816,13 @@ impl Air {
 
     fn breeze(&self) -> f32 {
         let t = self.clock;
-        (10.0 * (t * 0.07).sin() + 6.0 * (t * 0.19 + 1.7).sin() + 3.0 * (t * 0.43 + 4.1).sin()) as f32
+        (10.0 * (t * 0.07).sin() + 6.0 * (t * 0.19 + 1.7).sin() + 3.0 * (t * 0.43 + 4.1).sin()) as f32 + self.wind.x * WIND_MAX
+    }
+
+    /// How much faster than in still air things fall in the menu's wind: an updraft holds them back to under a third,
+    /// a downdraft drives them two and a half times as fast.
+    fn fall_scale(&self) -> f32 {
+        if self.wind.y > 0.0 { 1.0 - 0.7 * self.wind.y } else { 1.0 - 1.5 * self.wind.y }
     }
 
     fn gust_speed(&self) -> f32 {

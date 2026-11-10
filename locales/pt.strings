@@ -1,5 +1,7 @@
 "intensity" = "Intensidade";
 "opacity" = "Opacidade";
+"wind" = "Vento";
+"calm" = "Calmaria";
 "off" = "Desligado";
 "mode" = "Modo";
 "mixed" = "Misto";

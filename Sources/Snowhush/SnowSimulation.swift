@@ -416,6 +416,9 @@ final class SnowSimulation {
     var groundSettles = true
     /// How opaque snow, leaves and rain are while they fall, from the sky or off a window; once settled they show in full.
     var fallingOpacity: Float = 1
+    /// The wind set from the menu, over the breeze: x to the right, y up, at most 1 long. Across, it carries what falls
+    /// along; up, it holds the fall back, and down, it drives it.
+    var wind: SIMD2<Float> = .zero
     /// Screen edges with no display past them: a window slid past one leaves its snow heaped against the edge.
     var walls: (left: Bool, right: Bool) = (false, false)
     /// Side edges past which lies a display with snow of its own that windows span onto: snow on a window reaching
@@ -483,6 +486,8 @@ final class SnowSimulation {
     private let slideDrag: Float = 0.025
     private let slideWindMax: Float = 160
     private let slideCalm: Float = 0.35
+    /// The menu's wind at full strength blows across this fast.
+    private let windMax: Float = 150
     /// Leaves fall this much sparser than snow, each one being so much bigger.
     private let leafShare: Float = 0.07
     /// The share of a heap one fallen leaf makes up.
@@ -1850,6 +1855,7 @@ final class SnowSimulation {
         // A Space's wind is short: the flakes take it up faster than the slow breeze, or it would be gone first.
         let follow = min(1, dt * (1.2 + abs(slideWind) * 0.03))
         let settle = min(1, dt * 1.6)
+        let lift = fallScale()
         let wake = cursorWake()
         airborne = kindCounts()
 
@@ -1863,7 +1869,7 @@ final class SnowSimulation {
                 // Rain falls slanted, as wind drives it; snow and leaves only drift.
                 flake.velocity.x += (wind * (flake.rain ? 3 : 1) * (0.35 + 0.65 * flake.depth) - flake.velocity.x) * follow
             }
-            flake.velocity.y += (-flake.fallSpeed - flake.velocity.y) * settle
+            flake.velocity.y += (-flake.fallSpeed * lift - flake.velocity.y) * settle
 
             if let wake, !flake.rain { stir(&flake.velocity, at: flake.position, in: wake, dt: dt) }
 
@@ -1966,6 +1972,7 @@ final class SnowSimulation {
         let damping = exp(-grainDrag * dt)
         let airDrag = exp(-3.2 * dt)
         let wind = breeze() + slideWind
+        let lift = fallScale()
         let time = Float(clock.truncatingRemainder(dividingBy: 1000))
         var i = grains.count - 1
         while i >= 0 {
@@ -1986,7 +1993,7 @@ final class SnowSimulation {
             } else if grain.kind.leafy {
                 // A leaf catches the air: flung up, it soon loses its speed and flutters down, swinging from side to side.
                 let phase = time * (1.2 + grain.seed) + grain.seed * 40
-                let fall = (35 + 30 * grain.seed) * (0.3 + 1.1 * abs(cos(phase)))
+                let fall = (35 + 30 * grain.seed) * (0.3 + 1.1 * abs(cos(phase))) * lift
                 grain.velocity.x = (grain.velocity.x - wind) * airDrag + wind
                 grain.velocity.y = (grain.velocity.y + fall) * airDrag - fall
                 // Leaves falling off a window or swept out of a heap ride the cursor's wake as the falling ones do.
@@ -2562,7 +2569,7 @@ final class SnowSimulation {
         let fallSpeed = near ? random.range(75, 100) : 16 + depth * 50 + random.range(0, 10)
         return Flake(
             position: SIMD2(random.range(-30, width + 30), y),
-            velocity: SIMD2(windSpeed() * (0.35 + 0.65 * depth), -fallSpeed),
+            velocity: SIMD2(windSpeed() * (0.35 + 0.65 * depth), -fallSpeed * fallScale()),
             fallSpeed: fallSpeed,
             size: near ? random.range(8, 13) : 1.4 + depth * 4.4 + random.range(0, 1),
             depth: depth,
@@ -2580,7 +2587,7 @@ final class SnowSimulation {
         let fallSpeed = 24 + depth * 36 + random.range(0, 12)
         return Flake(
             position: SIMD2(random.range(-30, width + 30), y),
-            velocity: SIMD2(windSpeed() * (0.35 + 0.65 * depth), -fallSpeed),
+            velocity: SIMD2(windSpeed() * (0.35 + 0.65 * depth), -fallSpeed * fallScale()),
             fallSpeed: fallSpeed,
             size: leafLength(depth: depth, petal: petal),
             depth: depth,
@@ -2601,7 +2608,7 @@ final class SnowSimulation {
         let fallSpeed = 650 + depth * 550 + random.range(0, 80)
         return Flake(
             position: SIMD2(random.range(-30, width + 30), y),
-            velocity: SIMD2(windSpeed() * 3 * (0.35 + 0.65 * depth), -fallSpeed),
+            velocity: SIMD2(windSpeed() * 3 * (0.35 + 0.65 * depth), -fallSpeed * fallScale()),
             fallSpeed: fallSpeed,
             size: 0.8 + depth * 0.9,
             depth: depth,
@@ -3141,7 +3148,13 @@ final class SnowSimulation {
 
     private func breeze() -> Float {
         let t = clock
-        return Float(10 * sin(t * 0.07) + 6 * sin(t * 0.19 + 1.7) + 3 * sin(t * 0.43 + 4.1))
+        return Float(10 * sin(t * 0.07) + 6 * sin(t * 0.19 + 1.7) + 3 * sin(t * 0.43 + 4.1)) + wind.x * windMax
+    }
+
+    /// How much faster than in still air things fall in the menu's wind: an updraft holds them back to under a third,
+    /// a downdraft drives them two and a half times as fast.
+    private func fallScale() -> Float {
+        wind.y > 0 ? 1 - 0.7 * wind.y : 1 - 1.5 * wind.y
     }
 
     private func gustSpeed() -> Float {

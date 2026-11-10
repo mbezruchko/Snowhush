@@ -1235,3 +1235,32 @@ fn picks_a_language_from_system_tags() {
     assert_eq!(code("C"), None);
     assert_eq!(code("nl-NL"), None);
 }
+
+#[test]
+fn the_wind_sets_which_way_the_snow_is_blown_clear() {
+    let mut simulation = SnowSimulation::new(1280.0, 800.0, 0.5);
+    for (x, way) in [(1.0, 1.0), (-1.0, -1.0), (0.4, 1.0), (-0.4, -1.0)] {
+        simulation.set_wind(V2::new(x, 0.0));
+        for _ in 0..20 {
+            run(&mut simulation, 7.0, AWAY);
+            assert_eq!(simulation.breeze_direction(), way);
+        }
+    }
+}
+
+#[test]
+fn an_updraft_holds_the_snow_back_and_a_downdraft_drives_it_down() {
+    let on_screen = |wind: V2| {
+        let mut simulation = SnowSimulation::new(1280.0, 800.0, 1.0);
+        simulation.set_wind(wind);
+        run(&mut simulation, 3.0, AWAY);
+        let mut sprites = vec![Sprite::default(); simulation.sprite_count()];
+        let count = simulation.write_sprites(&mut sprites);
+        assert_finite(&simulation);
+        sprites[..count].iter().filter(|sprite| sprite.position.y < 800.0).count()
+    };
+    let up = on_screen(V2::new(0.0, 1.0));
+    let still = on_screen(V2::ZERO);
+    let down = on_screen(V2::new(0.0, -1.0));
+    assert!(up * 2 < still && still * 2 < down, "on screen: up {up}, still {still}, down {down}");
+}

@@ -39,6 +39,8 @@ enum Preferences {
     private static let autumnKey = "autumn"
     private static let performanceKey = "performance"
     private static let fallingOpacityKey = "fallingOpacity"
+    private static let windKey = "wind"
+    private static let windDirectionKey = "windDirection"
 
     static func registerDefaults() {
         let calm = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
@@ -58,6 +60,7 @@ enum Preferences {
             autumnKey: false,
             mixedKey: false,
             fallingOpacityKey: 1.0,
+            windDirectionKey: Wind.calm.direction,
         ])
         if defaults.object(forKey: intensityKey) == nil, let stop = defaults.object(forKey: snowfallKey) as? Int {
             defaults.set([0, 0.25, 0.5, 0.75, 0.5][min(max(stop, 0), 4)], forKey: intensityKey)
@@ -177,9 +180,46 @@ enum Preferences {
         set { defaults.set(newValue, forKey: fallingOpacityKey) }
     }
 
+    static var wind: Wind {
+        get { Wind(strength: defaults.double(forKey: windKey), direction: defaults.double(forKey: windDirectionKey)) }
+        set {
+            defaults.set(newValue.strength, forKey: windKey)
+            defaults.set(newValue.direction, forKey: windDirectionKey)
+        }
+    }
+
     /// Drawn at the display's highest rate all the time, instead of only while something is pushed around.
     static var maxPerformance: Bool {
         get { defaults.integer(forKey: performanceKey) == 1 }
         set { defaults.set(newValue ? 1 : 0, forKey: performanceKey) }
+    }
+}
+
+/// The wind set from the menu, which blows over the breeze.
+struct Wind: Equatable {
+    /// From 0, still, to 1.
+    var strength: Double
+    /// Which way it blows, in degrees clockwise from straight up.
+    var direction: Double
+
+    static let calm = Wind(strength: 0, direction: 90)
+
+    init(strength: Double, direction: Double) {
+        self.strength = min(max(strength, 0), 1)
+        let degrees = direction.truncatingRemainder(dividingBy: 360)
+        self.direction = degrees < 0 ? degrees + 360 : degrees
+    }
+
+    /// x to the right, y up.
+    var vector: SIMD2<Float> {
+        let angle = direction * .pi / 180
+        return SIMD2(Float(strength * sin(angle)), Float(strength * cos(angle)))
+    }
+
+    /// The strength and an arrow the way it blows, or calm.
+    var summary: String {
+        guard strength > 0 else { return tr("calm") }
+        let arrows = ["↑", "↗", "→", "↘", "↓", "↙", "←", "↖"]
+        return "\(Int((strength * 100).rounded()))% \(arrows[Int((direction + 22.5) / 45) % 8])"
     }
 }

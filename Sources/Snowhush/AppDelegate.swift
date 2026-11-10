@@ -18,6 +18,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var opacityItem: NSMenuItem!
     private let opacityRow = MenuDisclosure()
     private var opacitySliderItem: NSMenuItem!
+    private var windItem: NSMenuItem!
+    private let windRow = MenuDisclosure()
+    private let windPad = MenuWindPad()
+    private var windPadItem: NSMenuItem!
     private var accumulateItem: NSMenuItem!
     private let accumulateRow = MenuDisclosure()
     private var surfacesItem: NSMenuItem!
@@ -167,6 +171,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         opacitySliderItem.view = opacitySlider
         opacitySliderItem.isHidden = true
         menu.addItem(opacitySliderItem)
+        windItem = menu.addItem(withTitle: tr("wind"), action: nil, keyEquivalent: "")
+        windItem.view = windRow
+        windRow.summaryWhileOpen = true
+        windRow.toggled = { [unowned self] in
+            windRow.open.toggle()
+            windPadItem.isHidden = !windRow.open
+        }
+        windPad.changed = { [unowned self] wind in
+            Preferences.wind = wind
+            for snow in screens { snow.simulation.wind = wind.vector }
+            windRow.summary = wind.summary
+        }
+        windPadItem = NSMenuItem()
+        windPadItem.view = windPad
+        windPadItem.isHidden = true
+        menu.addItem(windPadItem)
         accumulateItem = menu.addItem(withTitle: tr("accumulate"), action: nil, keyEquivalent: "")
         accumulateItem.view = accumulateRow
         accumulateRow.toggled = { [unowned self] in
@@ -254,6 +274,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         opacitySlider.value = Preferences.fallingOpacity
         opacityRow.summary = MenuSlider.percent(Preferences.fallingOpacity)
         opacityRow.fit(opacityItem.title, least: 0)
+        windPad.wind = Preferences.wind
+        windRow.summary = Preferences.wind.summary
+        windRow.fit(windItem.title, least: 0)
         let modes = Mode.allCases.filter(Preferences.modes.contains)
         mixedItem.state = Preferences.mixed ? .on : .off
         for (item, mode) in modeItems { item.state = modes.contains(mode) ? .on : .off }
