@@ -34,7 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private let accumulateRow = MenuDisclosure()
     private var surfacesItem: NSMenuItem!
     private let surfacePicker = SurfacePicker()
-    private let meltSwitch = MenuSwitch()
+    private var behaviorItems: [NSMenuItem] = []
     private var meltItem: NSMenuItem!
     private var clearItem: NSMenuItem!
     private var maxPerformanceItem: NSMenuItem!
@@ -225,19 +225,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         windPadItem = addView(windPad, to: menu)
         menu.addItem(.separator())
 
-        // What lies about: where it settles, how it melts, and clearing it away.
+        // What lies about: where it settles, and clearing it away.
         accumulateItem = addView(accumulateRow, title: tr("accumulate"), to: menu)
         accumulateRow.toggled = { [unowned self] in fold(accumulateRow) }
         surfacePicker.toggled = { [unowned self] surface in toggle(surface) }
         surfacesItem = addView(surfacePicker, to: menu)
-        meltSwitch.toggled = { [unowned self] _ in toggleMeltSnow() }
-        meltItem = addView(meltSwitch, title: tr("melt.snow"), to: menu)
         clearItem = add(tr("clear.snow"), #selector(clearSnow), to: menu)
         menu.addItem(.separator())
 
         // The app itself: where the snow shows, and the rest.
         let settings = NSMenu()
         settings.autoenablesItems = false
+        let behavior = NSMenuItem.sectionHeader(title: tr("behavior"))
+        settings.addItem(behavior)
+        meltItem = toggle(tr("melt.snow"), #selector(toggleMeltSnow), to: settings)
+        let afterBehavior = NSMenuItem.separator()
+        settings.addItem(afterBehavior)
+        behaviorItems = [behavior, meltItem, afterBehavior]
         settings.addItem(.sectionHeader(title: tr("display")))
         behindWindowsItem = toggle(tr("behind"), #selector(toggleBehindWindows), to: settings)
         fullScreenItem = toggle(tr("full_screen"), #selector(toggleFullScreen), to: settings)
@@ -284,7 +288,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         opacitySliderItem.isHidden = !opacityRow.open
         windPadItem.isHidden = !windRow.open
         surfacesItem.isHidden = !accumulateRow.open
-        meltItem.isHidden = !accumulateRow.open || !Preferences.modes.contains { $0 != .rain }
         // Unfolded, the summary isn't shown: the menu keeps its width while the icons are switched.
         if !accumulateRow.open { accumulateRow.fit(accumulateItem.title, least: surfacePicker.frame.width) }
     }
@@ -373,7 +376,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         clearItem.isHidden = heaps.isEmpty
         clearItem.title = tr("clear", heaps)
         meltItem.title = tr(heaps.contains(.snow) ? "melt.snow" : heaps == [.blossom] ? "melt.blossom" : "melt.autumn")
-        meltSwitch.fit(meltItem.title)
+        (meltItem.view as? MenuToggle)?.fit(meltItem.title)
+        // Rain lies nowhere to melt: Behavior has nothing else in it, so it goes altogether.
+        behaviorItems.forEach { $0.isHidden = heaps.isEmpty }
         // Top to bottom, as they lie on the screen. Rain splashes on the ground whatever it says.
         // A selection is snow on windows of a sort: it follows them.
         let settles: [Surfaces] = [.widgets, .windows, .dock] + (heaps.isEmpty ? [] : [.ground])
@@ -385,8 +390,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         let every = lit.count == settles.count
         accumulateRow.summary = every ? tr("all") : lit.isEmpty ? tr("off") : ""
         accumulateRow.summaryIcons = every || lit.isEmpty ? [] : lit
-        meltSwitch.isOn = thaws
-        meltSwitch.isEnabled = !surfaces.isEmpty
+        meltItem.state = thaws ? .on : .off
+        meltItem.isEnabled = !surfaces.isEmpty
         clearItem.isEnabled = screens.contains { $0.simulation.hasSnow || $0.simulation.spriteCount > 0 }
         refreshFolds()
         maxPerformanceItem.state = Preferences.maxPerformance ? .on : .off
@@ -459,7 +464,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         refreshMenu()
     }
 
-    private func toggleMeltSnow() {
+    @objc private func toggleMeltSnow() {
         thaws.toggle()
         Preferences.meltSnow = thaws
         for snow in screens { snow.simulation.thaws = thaws }
