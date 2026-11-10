@@ -381,6 +381,19 @@ final class SnowSimulation {
         }
     }
 
+    /// Whether the snowfall rises and eases on its own about the intensity set.
+    var variesIntensity = false {
+        didSet {
+            if variesIntensity && !oldValue { nextShift = clock }
+            if !variesIntensity {
+                strength = 1
+                strengthTarget = 1
+            }
+            updateTarget()
+            stirred()
+        }
+    }
+
     /// Flakes still above the screen, waiting to come in, outnumber a lighter snowfall's target as the ones on screen
     /// do: thinned in the same proportion, they come in at the new rate at once.
     private func thinAbove() {
@@ -603,6 +616,10 @@ final class SnowSimulation {
     private var parking: [(id: CGWindowID, ledge: SnowLayer, since: Double)] = []
     private var spaceChangedAt: Double = -10
     private var scatteredUntil: Double = -10
+    /// How much more than the intensity set falls while it varies, easing toward `strengthTarget`.
+    private var strength: Float = 1
+    private var strengthTarget: Float = 1
+    private var nextShift: Double = 0
     /// A gust clearing the snow: its front sweeps across from the windward side, lifting the drifts behind it.
     private var gust: (start: Double, direction: Float, calm: Bool)?
     private var slideWind: Float = 0
@@ -719,6 +736,7 @@ final class SnowSimulation {
         leafBudget = nil
 
         releaseScattered()
+        vary(dt: dt)
         if windWanders { wind = Wind.wandering(at: ProcessInfo.processInfo.systemUptime).vector }
         slideWind = abs(slideWind) < 1 ? 0 : slideWind * exp(-dt / slideCalm)
         expireParking()
@@ -3151,7 +3169,8 @@ final class SnowSimulation {
 
     private func breeze() -> Float {
         let t = clock
-        return Float(10 * sin(t * 0.07) + 6 * sin(t * 0.19 + 1.7) + 3 * sin(t * 0.43 + 4.1)) + wind.x * windMax
+        let breeze = Float(10 * sin(t * 0.07) + 6 * sin(t * 0.19 + 1.7) + 3 * sin(t * 0.43 + 4.1))
+        return breeze * (0.6 + 0.4 * strength) + wind.x * windMax
     }
 
     /// How much faster than in still air things fall in the menu's wind: an updraft holds them back to under a third,
@@ -3172,6 +3191,22 @@ final class SnowSimulation {
             snowfallHeld = false
             snowfallReleased()
         }
+    }
+
+    /// Wanders between light lulls, steady snow and heavy flurries, a new one every one to four minutes.
+    private func vary(dt: Float) {
+        if !variesIntensity {
+            strengthTarget = 1
+        } else if clock >= nextShift {
+            let roll = random.next()
+            strengthTarget = roll < 0.25 ? random.range(0.25, 0.5)
+                : roll < 0.75 ? random.range(0.7, 1.3)
+                : random.range(1.5, 2.1)
+            nextShift = clock + Double(random.range(60, 240))
+        }
+        guard abs(strengthTarget - strength) > 0.001 else { return }
+        strength += (strengthTarget - strength) * (1 - exp(-dt / 25))
+        updateTarget()
     }
 
     // MARK: - Gust
@@ -3607,7 +3642,7 @@ final class SnowSimulation {
         // Melting nearly keeps pace with the snowfall, so heavier snowfall builds drifts only a little higher, and the
         // far sparser leaves wither as slowly.
         let heaping = modes.filter { $0 != .rain }.reduce(Float(0)) { $0 + share(of: $1) } / Float(modes.count)
-        let falling = Self.flakesPerMegapoint(intensity) * density * (modes == [.rain] ? 1 : heaping)
+        let falling = Self.flakesPerMegapoint(intensity) * strength * density * (modes == [.rain] ? 1 : heaping)
         let meltPace = falling > 0 ? pow(falling / thawBalance, thawExponent) : 1
         for ledge in ledgeList { ledge.outside = (outside(of: ledge, left: true), outside(of: ledge, left: false)) }
         for layer in layers {
@@ -3635,7 +3670,7 @@ final class SnowSimulation {
     }
 
     private func updateTarget() {
-        let falling = snowfallHeld ? 0 : Self.flakesPerMegapoint(intensity) * density * width * height / 1_000_000
+        let falling = snowfallHeld ? 0 : Self.flakesPerMegapoint(intensity) * strength * density * width * height / 1_000_000
         targets = targets.map { _ in 0 }
         for mode in modes { targets[mode.rawValue] = Int(falling * share(of: mode) / Float(modes.count)) }
         targetFlakes = targets.reduce(0, +)

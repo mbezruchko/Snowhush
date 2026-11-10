@@ -2,6 +2,7 @@
    the Windows and Linux apps build them in through snowhush-core. Every file has every key of en.strings. */
 
 "intensity" = "Intensity";
+"variable" = "Variable";
 "opacity" = "Opacity";
 "wind" = "Wind";
 "calm" = "Calm";

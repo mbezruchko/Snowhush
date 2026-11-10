@@ -14,6 +14,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var halloween = false
     private var statusItem: NSStatusItem!
     private let intensitySlider = MenuSlider(range: 0...1)
+    private let varySwitch = MenuSwitch()
+    private var varyItem: NSMenuItem!
     private let opacitySlider = MenuSlider(range: Preferences.opacityRange, captioned: false)
     private var opacityItem: NSMenuItem!
     private let opacityRow = MenuDisclosure()
@@ -157,6 +159,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         let intensityItem = NSMenuItem()
         intensityItem.view = intensitySlider
         menu.addItem(intensityItem)
+        varyItem = menu.addItem(withTitle: tr("variable"), action: nil, keyEquivalent: "")
+        varyItem.view = varySwitch
+        varySwitch.toggled = { [unowned self] varies in
+            Preferences.variesIntensity = varies
+            for snow in screens { snow.simulation.variesIntensity = varies }
+        }
         // Opacity is set once and left, so it folds away like Accumulate, its value on the row.
         opacityItem = menu.addItem(withTitle: tr("opacity"), action: nil, keyEquivalent: "")
         opacityItem.view = opacityRow
@@ -287,6 +295,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         intensitySlider.value = Preferences.intensity
+        varySwitch.isOn = Preferences.variesIntensity
+        varySwitch.fit(varyItem.title)
         opacitySlider.value = Preferences.fallingOpacity
         opacityRow.summary = MenuSlider.percent(Preferences.fallingOpacity)
         opacityRow.fit(opacityItem.title, least: 0)

@@ -393,6 +393,8 @@ struct Air {
     motes: Vec<Mote>,
     random: Random,
     clock: f64,
+    /// How much more than the intensity set falls while it varies.
+    strength: f32,
     cursor: Option<V2>,
     cursor_velocity: V2,
     held_layers: Vec<usize>,
@@ -426,6 +428,8 @@ pub struct SnowSimulation {
     pace: Pace,
     /// How much falls, from 0 to 1.
     intensity: f32,
+    /// Whether the snowfall rises and eases on its own about the intensity set.
+    varies: bool,
     density: f32,
     pub thaws: bool,
     pub accumulates: bool,
@@ -452,6 +456,8 @@ pub struct SnowSimulation {
     parking: Vec<(WindowId, SnowLayer, f64)>,
     space_changed_at: f64,
     target_flakes: usize,
+    strength_target: f32,
+    next_shift: f64,
     /// Every app window on the screen, maximized and full-screen ones too, left, bottom, right, top in points:
     /// a pumpkin hides from any that covers it.
     pub covers: Vec<[f32; 4]>,
@@ -487,6 +493,7 @@ impl SnowSimulation {
             height,
             pace: Pace::Calm,
             intensity: intensity.clamp(0.0, 1.0),
+            varies: false,
             density: 1.0,
             thaws: false,
             accumulates: true,
@@ -503,6 +510,8 @@ impl SnowSimulation {
             parking: Vec::new(),
             space_changed_at: -10.0,
             target_flakes: 0,
+            strength_target: 1.0,
+            next_shift: 0.0,
             covers: Vec::new(),
             sweep_edges: HashMap::new(),
             shelf: None,
@@ -524,6 +533,7 @@ impl SnowSimulation {
                 motes: Vec::new(),
                 random: Random::new(),
                 clock: 0.0,
+                strength: 1.0,
                 cursor: None,
                 cursor_velocity: V2::ZERO,
                 held_layers: Vec::new(),
@@ -562,6 +572,18 @@ impl SnowSimulation {
         self.intensity = intensity.clamp(0.0, 1.0);
         self.update_target();
         self.thin_above();
+    }
+
+    pub fn set_varies(&mut self, varies: bool) {
+        if varies && !self.varies {
+            self.next_shift = self.air.clock;
+        }
+        if !varies {
+            self.air.strength = 1.0;
+            self.strength_target = 1.0;
+        }
+        self.varies = varies;
+        self.update_target();
     }
 
     /// Flakes still above the screen, waiting to come in, outnumber a lighter snowfall's target as the ones on screen
@@ -782,6 +804,7 @@ impl SnowSimulation {
         self.air.heights_changed = false;
 
         self.release_scattered();
+        self.vary(dt);
         let wind = self.air.slide_wind;
         self.air.slide_wind = if wind.abs() < 1.0 { 0.0 } else { wind * (-dt / SLIDE_CALM).exp() };
         self.air.leaf_budget = self.spare_leaves();
@@ -1518,9 +1541,31 @@ impl SnowSimulation {
         }
     }
 
+    /// Wanders between light lulls, steady snow and heavy flurries, a new one every one to four minutes.
+    fn vary(&mut self, dt: f32) {
+        if !self.varies {
+            self.strength_target = 1.0;
+        } else if self.air.clock >= self.next_shift {
+            let random = &mut self.air.random;
+            let roll = random.next();
+            self.strength_target = if roll < 0.25 {
+                random.range(0.25, 0.5)
+            } else if roll < 0.75 {
+                random.range(0.7, 1.3)
+            } else {
+                random.range(1.5, 2.1)
+            };
+            self.next_shift = self.air.clock + random.range(60.0, 240.0) as f64;
+        }
+        if (self.strength_target - self.air.strength).abs() <= 0.001 {
+            return;
+        }
+        self.air.strength += (self.strength_target - self.air.strength) * (1.0 - (-dt / 25.0).exp());
+        self.update_target();
+    }
+
     // Gust
 
-    /// The way the breeze blows now: 1 to the right, -1 to the left.
     /// Sets the menu's wind, which blows over the breeze: x to the right, y up, at most 1 long. Across, it carries what
     /// falls along; up, it holds the fall back, and down, it drives it.
     pub fn set_wind(&mut self, wind: V2) {
@@ -1528,6 +1573,7 @@ impl SnowSimulation {
         self.air.wind = if length > 1.0 { wind * (1.0 / length) } else { wind };
     }
 
+    /// The way the breeze blows now: 1 to the right, -1 to the left.
     pub fn breeze_direction(&self) -> f32 {
         if self.air.breeze() < 0.0 { -1.0 } else { 1.0 }
     }
@@ -1682,7 +1728,7 @@ impl SnowSimulation {
     fn settle(&mut self, dt: f32) {
         // Melting nearly keeps pace with the snowfall, so heavier snowfall builds drifts only a little higher, and the
         // far sparser leaves wither as slowly.
-        let falling = flakes_per_megapoint(self.intensity) * self.density * self.heaping();
+        let falling = flakes_per_megapoint(self.intensity) * self.air.strength * self.density * self.heaping();
         let melt_pace = if falling > 0.0 { (falling / THAW_BALANCE).powf(THAW_EXPONENT) } else { 1.0 };
         let outside: Vec<[f32; 2]> = (0..self.layers.len())
             .map(|li| if li == 0 { [0.0; 2] } else { [outside(&self.layers, li, true), outside(&self.layers, li, false)] })
@@ -1737,7 +1783,7 @@ impl SnowSimulation {
 
     fn update_target(&mut self) {
         let per_megapoint = if self.snowfall_held { 0.0 } else { flakes_per_megapoint(self.intensity) };
-        let falling = per_megapoint * self.density * self.width * self.height / 1_000_000.0;
+        let falling = per_megapoint * self.air.strength * self.density * self.width * self.height / 1_000_000.0;
         let count = self.air.modes.len() as f32;
         self.air.targets = [0; 4];
         for &mode in &self.air.modes {
@@ -2816,7 +2862,8 @@ impl Air {
 
     fn breeze(&self) -> f32 {
         let t = self.clock;
-        (10.0 * (t * 0.07).sin() + 6.0 * (t * 0.19 + 1.7).sin() + 3.0 * (t * 0.43 + 4.1).sin()) as f32 + self.wind.x * WIND_MAX
+        let breeze = (10.0 * (t * 0.07).sin() + 6.0 * (t * 0.19 + 1.7).sin() + 3.0 * (t * 0.43 + 4.1).sin()) as f32;
+        breeze * (0.6 + 0.4 * self.strength) + self.wind.x * WIND_MAX
     }
 
     /// How much faster than in still air things fall in the menu's wind: an updraft holds them back to under a third,
