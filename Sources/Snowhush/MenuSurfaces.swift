@@ -12,6 +12,10 @@ final class MenuDisclosure: NSView {
     var summaryIcons: [Surfaces] = [] {
         didSet { needsDisplay = true }
     }
+    /// Or as these images, drawn in the summary's colour.
+    var summaryImages: [NSImage] = [] {
+        didSet { needsDisplay = true }
+    }
     var toggled: () -> Void = {}
     /// Shows the summary unfolded too, as a value the folded row sets.
     var summaryWhileOpen = false
@@ -116,6 +120,16 @@ final class MenuDisclosure: NSView {
                 SurfacePicker.drawIcon(surface, in: NSRect(x: right, y: (bounds.height - side) / 2, width: side, height: side), color: soft, pointSize: 12)
                 right -= Self.summaryGap
             }
+        } else if !summaryImages.isEmpty {
+            let side = Self.summaryIcon
+            for image in summaryImages.reversed() {
+                let scale = min(1, side / max(image.size.width, image.size.height, 1))
+                let size = NSSize(width: image.size.width * scale, height: image.size.height * scale)
+                right -= side
+                let box = NSRect(x: right + (side - size.width) / 2, y: (bounds.height - size.height) / 2, width: size.width, height: size.height)
+                image.tinted(soft).draw(in: box, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+                right -= Self.summaryGap
+            }
         } else if !summary.isEmpty {
             let trailing = NSAttributedString(string: summary, attributes: [.font: font, .foregroundColor: soft])
             let x = max(right - trailing.size().width, Self.titleX + title.size().width + 12)
@@ -143,8 +157,9 @@ final class MenuDisclosure: NSView {
     /// that row folds out: a menu sizes itself to its rows' views.
     func fit(_ title: String, least: CGFloat) {
         let font = NSFont.menuFont(ofSize: 0)
-        let words = summaryIcons.isEmpty ? [title, summary] : [title]
-        let icons = summaryIcons.isEmpty ? 0 : CGFloat(summaryIcons.count) * (Self.summaryIcon + Self.summaryGap)
+        let pictures = summaryIcons.count + summaryImages.count
+        let words = pictures == 0 ? [title, summary] : [title]
+        let icons = CGFloat(pictures) * (Self.summaryIcon + Self.summaryGap)
         let width = words.map { NSAttributedString(string: $0, attributes: [.font: font]).size().width }.reduce(icons, +)
         setFrameSize(NSSize(width: max(200, least, ceil(Self.titleX + width + 56)), height: frame.height))
     }

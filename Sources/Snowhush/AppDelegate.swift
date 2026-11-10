@@ -298,9 +298,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         menu.items.forEach { $0.view?.needsDisplay = true }
     }
 
-    /// What falls.
-    private var weatherSummary: String {
-        Mode.allCases.filter(Preferences.modes.contains).map { tr("tile.\($0.key)") }.joined(separator: " + ")
+    /// What falls, as the tiles show it, and the pumpkin while Halloween is on.
+    private var weatherSummary: [NSImage] {
+        Mode.allCases.filter(Preferences.modes.contains).map(Self.tileImage) + (Halloween.isOn ? [Halloween.icon] : [])
     }
 
     /// A mode's tile shows the icon the menu bar shows for it.
@@ -345,7 +345,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         let modes = Mode.allCases.filter(Preferences.modes.contains)
-        weatherRow.summary = weatherSummary
+        weatherRow.summaryImages = weatherSummary
         weatherRow.pillOn = Preferences.mixed
         weatherRow.fit(weatherItem.title, least: modeTiles.frame.width)
         modeTiles.on = Mode.allCases.map(modes.contains)

@@ -114,23 +114,13 @@ final class MenuTiles: NSView {
             let scale = min(1, Self.icon / max(size.width, size.height))
             let icon = NSRect(x: box.midX - size.width * scale / 2, y: box.minY + 6 + (Self.icon - size.height * scale) / 2,
                               width: size.width * scale, height: size.height * scale)
-            Self.tinted(tile.image, ink).draw(in: icon, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+            tile.image.tinted(ink).draw(in: icon, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
             let name = NSAttributedString(string: tile.name, attributes: [
                 .font: font,
                 .foregroundColor: !usable ? NSColor.quaternaryLabelColor : lit ? .labelColor : .secondaryLabelColor,
             ])
             let text = name.size()
             name.draw(at: NSPoint(x: box.midX - text.width / 2, y: box.maxY - text.height - 4))
-        }
-    }
-
-    /// The image in one colour: symbols and drawn template icons alike. A see-through colour fills once, not twice.
-    private static func tinted(_ image: NSImage, _ color: NSColor) -> NSImage {
-        NSImage(size: image.size, flipped: false) { rect in
-            image.draw(in: rect)
-            color.set()
-            rect.fill(using: .sourceIn)
-            return true
         }
     }
 
@@ -160,6 +150,18 @@ final class MenuTiles: NSView {
         override func accessibilityPerformPress() -> Bool {
             guard let row, row.isEnabled(k) else { return false }
             row.toggled(k)
+            return true
+        }
+    }
+}
+
+extension NSImage {
+    /// The image in one colour: symbols and drawn template icons alike. A see-through colour fills once, not twice.
+    func tinted(_ color: NSColor) -> NSImage {
+        NSImage(size: size, flipped: false) { [self] rect in
+            draw(in: rect)
+            color.set()
+            rect.fill(using: .sourceIn)
             return true
         }
     }
