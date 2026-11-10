@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private let headerRow = MenuDisclosure()
     private let modeOrbs = MenuOrbs()
     private let extraOrbs = MenuOrbs(compact: true)
+    private var extrasItem: NSMenuItem!
     private let intensityRow = MenuDisclosure()
     private let intensitySlider = MenuBigSlider()
     private let opacitySlider = MenuSlider(range: Preferences.opacityRange)
@@ -152,9 +153,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         headerRow.foldable = false
         headerRow.style = .heading
         if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String { headerRow.detail = "v\(version)" }
-        modeOrbs.orbs = Mode.allCases.map { MenuOrbs.Orb(name: tr("tile.\($0.key)"), image: Self.tileImage($0)) }
+        // After the modes, More shows or hides the small row of what goes with them.
+        let more = NSImage(systemSymbolName: "ellipsis", accessibilityDescription: nil)?.withSymbolConfiguration(.init(pointSize: 17, weight: .regular)) ?? Blossom.icon
+        modeOrbs.orbs = Mode.allCases.map { MenuOrbs.Orb(name: tr("tile.\($0.key)"), image: Self.tileImage($0)) } + [MenuOrbs.Orb(name: tr("more"), image: more)]
         modeOrbs.fit()
-        modeOrbs.toggled = { [unowned self] in choose(Mode.allCases[$0]) }
+        modeOrbs.toggled = { [unowned self] k in
+            guard k < Mode.allCases.count else {
+                extrasItem.isHidden.toggle()
+                return
+            }
+            choose(Mode.allCases[k])
+        }
         addView(modeOrbs, to: menu)
         // What goes with the modes, as Display's Dark Mode and Night Shift go under its slider.
         let small = NSImage.SymbolConfiguration(pointSize: 12, weight: .medium)
@@ -167,7 +176,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
             if k == 0 { toggleMixed() } else { spookySnow() }
             refreshMenu()
         }
-        addView(extraOrbs, to: menu)
+        extrasItem = addView(extraOrbs, to: menu)
+        extrasItem.isHidden = true
 
         addView(intensityRow, title: tr("intensity"), to: menu)
         intensityRow.foldable = false
@@ -322,6 +332,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         windVaryItem.state = Preferences.windVaries ? .on : .off
         windResetItem.isEnabled = Preferences.windVaries || Preferences.wind.strength > 0
         extraOrbs.on = [Preferences.mixed, Halloween.isOn]
+        modeOrbs.tints = Preferences.mixed || Halloween.isOn ? [Mode.allCases.count: .controlAccentColor] : [:]
         // Rain neither heaps up nor lies about to clear away.
         let heaps = modes.filter { $0 != .rain }
         clearItem.isHidden = heaps.isEmpty

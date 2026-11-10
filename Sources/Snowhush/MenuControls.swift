@@ -22,6 +22,10 @@ final class MenuOrbs: NSView {
     var on: [Bool] = [] {
         didSet { needsDisplay = true }
     }
+    /// Icons drawn in a colour of their own while off, as More is in the accent while something under it is on.
+    var tints: [Int: NSColor] = [:] {
+        didSet { needsDisplay = true }
+    }
     var toggled: (Int) -> Void = { _ in }
     private var hovered: Int?
 
@@ -99,7 +103,7 @@ final class MenuOrbs: NSView {
             let scale = compact ? min(1, 15 / max(orb.image.size.width, orb.image.size.height)) : 1
             let size = NSSize(width: orb.image.size.width * scale, height: orb.image.size.height * scale)
             let icon = NSRect(x: circle.midX - size.width / 2, y: circle.midY - size.height / 2, width: size.width, height: size.height)
-            orb.image.tinted(lit ? .white : .labelColor).draw(in: icon, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+            orb.image.tinted(lit ? .white : tints[k] ?? .labelColor).draw(in: icon, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
             let name = NSAttributedString(string: orb.name, attributes: [.font: font, .foregroundColor: lit ? NSColor.labelColor : .secondaryLabelColor])
             let text = name.size()
             name.draw(at: compact ? NSPoint(x: circle.maxX + 7, y: circle.midY - text.height / 2) : NSPoint(x: box.midX - text.width / 2, y: circle.maxY + 6))

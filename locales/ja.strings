@@ -16,6 +16,7 @@
 "tile.autumn" = "紅葉";
 "tile.rain" = "雨";
 "tile.blossom" = "桜";
+"more" = "その他";
 "halloween" = "ハロウィン";
 "settings" = "設定";
 "behavior" = "動作";

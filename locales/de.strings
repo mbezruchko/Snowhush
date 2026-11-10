@@ -16,6 +16,7 @@
 "tile.autumn" = "Laub";
 "tile.rain" = "Regen";
 "tile.blossom" = "Blüten";
+"more" = "Mehr";
 "halloween" = "Halloween";
 "settings" = "Einstellungen";
 "behavior" = "Verhalten";
