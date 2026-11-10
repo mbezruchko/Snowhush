@@ -248,8 +248,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         add(tr("support"), #selector(openSponsors), to: menu).attributedTitle = Self.supportTitle
         menu.addItem(withTitle: tr("quit"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 
-        let open = Set(Preferences.openSections)
-        for (key, row) in sections { row.open = open.contains(key) }
+        let open = Preferences.openSections.first
+        for (key, row) in sections { row.open = key == open }
         refreshFolds()
         item.menu = menu
         return item
@@ -267,7 +267,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         [("weather", weatherRow), ("intensity", intensityRow), ("opacity", opacityRow), ("wind", windRow), ("accumulate", accumulateRow)]
     }
 
-    private func fold(_ row: MenuDisclosure) {        row.open.toggle()
+    /// One section open at a time: unfolding one folds the rest, so the menu never grows taller than one section.
+    private func fold(_ row: MenuDisclosure) {
+        let opening = !row.open
+        for (_, other) in sections { other.open = false }
+        row.open = opening
         Preferences.openSections = sections.filter(\.row.open).map(\.key)
         refreshFolds()
     }
