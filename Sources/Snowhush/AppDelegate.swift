@@ -333,7 +333,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         windVaryItem.state = Preferences.windVaries ? .on : .off
         windResetItem.isEnabled = Preferences.windVaries || Preferences.wind.strength > 0
         extraOrbs.on = [Preferences.mixed, Halloween.isOn]
-        modeOrbs.tints = Preferences.mixed || Halloween.isOn ? [Mode.allCases.count: .controlAccentColor] : [:]
+        modeOrbs.badges = Preferences.mixed || Halloween.isOn ? [Mode.allCases.count] : []
         // Rain neither heaps up nor lies about to clear away.
         let heaps = modes.filter { $0 != .rain }
         clearItem.isHidden = heaps.isEmpty
