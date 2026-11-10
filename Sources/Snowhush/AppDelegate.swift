@@ -20,12 +20,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private let intensityRow = MenuDisclosure()
     private let intensitySlider = MenuBigSlider()
     private let opacitySlider = MenuSlider(range: Preferences.opacityRange)
-    private var opacityItem: NSMenuItem!
-    private var windItem: NSMenuItem!
+    private let opacityRow = MenuDisclosure()
+    private let windRow = MenuDisclosure()
+    private let accumulateRow = MenuDisclosure()
     private let windPad = MenuWindPad()
     private var windVaryItem: NSMenuItem!
     private var windResetItem: NSMenuItem!
-    private var accumulateItem: NSMenuItem!
     private var surfaceItems: [(item: NSMenuItem, surface: Surfaces)] = []
     private var behaviorItems: [NSMenuItem] = []
     private var meltItem: NSMenuItem!
@@ -213,17 +213,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         let windReset = MenuToggle(action: #selector(resetWindItem), target: self, checks: true)
         windReset.fit(tr("reset"))
         windResetItem.view = windReset
-        windItem = menu.addItem(withTitle: tr("wind"), action: nil, keyEquivalent: "")
-        windItem.submenu = wind
+        // Rows of our own, their value in plain grey before the chevron: a badge crowds the system's arrow.
+        addView(windRow, title: tr("wind"), to: menu).submenu = wind
 
         let opacity = NSMenu()
         opacitySlider.changed = { [unowned self] value in
             select(opacity: value)
-            opacityItem.badge = NSMenuItemBadge(string: MenuSlider.percent(value))
+            opacityRow.summary = MenuSlider.percent(value)
         }
         addView(opacitySlider, to: opacity)
-        opacityItem = menu.addItem(withTitle: tr("opacity"), action: nil, keyEquivalent: "")
-        opacityItem.submenu = opacity
+        addView(opacityRow, title: tr("opacity"), to: menu).submenu = opacity
 
         // Top to bottom, as they lie on the screen; a selection is snow on windows of a sort.
         let accumulate = NSMenu()
@@ -231,8 +230,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         surfaceItems = [Surfaces.widgets, .windows, .dock, .ground, .selection].map { surface in
             (toggle(SurfacePicker.name(of: surface), #selector(toggleSurfaceItem), to: accumulate), surface)
         }
-        accumulateItem = menu.addItem(withTitle: tr("accumulate"), action: nil, keyEquivalent: "")
-        accumulateItem.submenu = accumulate
+        addView(accumulateRow, title: tr("accumulate"), to: menu).submenu = accumulate
         clearItem = add(tr("clear.snow"), #selector(clearSnow), to: menu)
         menu.addItem(.separator())
 
@@ -326,10 +324,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         intensitySlider.value = (Preferences.intensity + Preferences.intensityTop) / 2
         intensitySlider.dimmed = varies
         opacitySlider.value = Preferences.fallingOpacity
-        opacityItem.badge = NSMenuItemBadge(string: MenuSlider.percent(Preferences.fallingOpacity))
+        opacityRow.summary = MenuSlider.percent(Preferences.fallingOpacity)
+        opacityRow.fit(tr("opacity"), least: 0)
         if !Preferences.windVaries { windPad.wind = Preferences.wind }
         windPad.wanders = Preferences.windVaries
-        windItem.badge = NSMenuItemBadge(string: Preferences.windVaries ? tr("variable") : Preferences.wind.summary)
+        windRow.summary = Preferences.windVaries ? tr("variable") : Preferences.wind.summary
+        windRow.fit(tr("wind"), least: 0)
         windVaryItem.state = Preferences.windVaries ? .on : .off
         windResetItem.isEnabled = Preferences.windVaries || Preferences.wind.strength > 0
         extraOrbs.on = [Preferences.mixed, Halloween.isOn]
@@ -350,7 +350,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         }
         let lit = settles.filter(surfaces.contains)
         let summary = lit.count == settles.count ? tr("all") : lit.isEmpty ? tr("off") : "\(lit.count)/\(settles.count)"
-        accumulateItem.badge = NSMenuItemBadge(string: summary)
+        accumulateRow.summary = summary
+        accumulateRow.fit(tr("accumulate"), least: 0)
         meltItem.state = thaws ? .on : .off
         meltItem.isEnabled = !surfaces.isEmpty
         clearItem.isEnabled = screens.contains { $0.simulation.hasSnow || $0.simulation.spriteCount > 0 }
