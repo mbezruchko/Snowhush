@@ -50,7 +50,6 @@ enum Preferences {
     private static let openSectionsKey = "openSections"
 
     static func registerDefaults() {
-        let calm = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         defaults.register(defaults: [
             intensityKey: defaultIntensity,
             behindWindowsKey: false,

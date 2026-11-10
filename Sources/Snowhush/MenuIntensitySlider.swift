@@ -16,17 +16,19 @@ final class MenuIntensitySlider: NSView {
 
     private var held = false
 
-    // As the menu's own sliders draw them: a white capsule knob on a thin track, travelling as far in from the ends.
+    // Measured off an NSSlider in a window that isn't key, as the menu's are: a 20 by 16 pt knob, white and a little
+    // see-through in the dark, on a 6 pt track 23% opaque where filled and 10% beyond; set as Opacity's is, 16 pt in
+    // from either end and 4 pt down.
     private static let inset: CGFloat = 16
-    private static let knob = NSSize(width: 26, height: 18)
-    private static let track: CGFloat = 5
+    private static let knob = NSSize(width: 20, height: 16)
+    private static let track: CGFloat = 6
     /// The last stop's stretch of track, with the gap before it where the tick stands.
     private static let stop: CGFloat = 44
     private static let gap: CGFloat = 12
-    private static let trackMiddle: CGFloat = 14.5
+    private static let trackMiddle: CGFloat = 12
 
     init() {
-        super.init(frame: NSRect(x: 0, y: 0, width: 200, height: 44))
+        super.init(frame: NSRect(x: 0, y: 0, width: 200, height: 38))
         autoresizingMask = .width
         setAccessibilityElement(true)
         setAccessibilityRole(.slider)
@@ -128,15 +130,8 @@ final class MenuIntensitySlider: NSView {
         let knobX = x(value)
         let variable = value == .variable
 
-        NSColor.labelColor.withAlphaComponent(0.12).setFill()
-        NSBezierPath(roundedRect: main, xRadius: radius, yRadius: radius).fill()
-        NSBezierPath(roundedRect: last, xRadius: radius, yRadius: radius).fill()
-        NSColor.labelColor.withAlphaComponent(0.5).setFill()
-        let filled = NSRect(x: main.minX, y: main.minY, width: variable ? main.width : max(0, knobX - main.minX), height: Self.track)
-        NSBezierPath(roundedRect: filled, xRadius: radius, yRadius: radius).fill()
-        if variable {
-            NSBezierPath(roundedRect: NSRect(x: last.minX, y: last.minY, width: knobX - last.minX, height: Self.track), xRadius: radius, yRadius: radius).fill()
-        }
+        drawTrack(main, filledTo: variable ? main.maxX : knobX)
+        drawTrack(last, filledTo: variable ? knobX : last.minX)
 
         NSColor.labelColor.withAlphaComponent(0.35).setFill()
         NSRect(x: (tick - 0.5).rounded(), y: middle - 6, width: 1, height: 12).fill()
@@ -151,21 +146,31 @@ final class MenuIntensitySlider: NSView {
         drawKnob(at: knobX, middle: middle)
     }
 
+    /// Filled up to `x` and empty past it, the two never laid one over the other.
+    private func drawTrack(_ track: NSRect, filledTo x: CGFloat) {
+        let split = min(max(x, track.minX), track.maxX)
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(roundedRect: track, xRadius: track.height / 2, yRadius: track.height / 2).addClip()
+        NSColor.labelColor.withAlphaComponent(0.23).setFill()
+        NSRect(x: track.minX, y: track.minY, width: split - track.minX, height: track.height).fill()
+        NSColor.labelColor.withAlphaComponent(0.1).setFill()
+        NSRect(x: split, y: track.minY, width: track.maxX - split, height: track.height).fill()
+        NSGraphicsContext.restoreGraphicsState()
+    }
+
     private func drawKnob(at center: CGFloat, middle: CGFloat) {
         let size = Self.knob
         let rect = NSRect(x: center - size.width / 2, y: middle - size.height / 2, width: size.width, height: size.height)
         let shape = NSBezierPath(roundedRect: rect, xRadius: size.height / 2, yRadius: size.height / 2)
         NSGraphicsContext.saveGraphicsState()
         let shadow = NSShadow()
-        shadow.shadowColor = NSColor.black.withAlphaComponent(0.3)
-        shadow.shadowBlurRadius = 3
-        shadow.shadowOffset = NSSize(width: 0, height: -1)
+        shadow.shadowColor = NSColor.black.withAlphaComponent(0.12)
+        shadow.shadowBlurRadius = 1.5
+        shadow.shadowOffset = NSSize(width: 0, height: -0.5)
         shadow.set()
-        NSColor.white.withAlphaComponent(held ? 0.82 : 1).setFill()
+        let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        NSColor.white.withAlphaComponent((dark ? 0.85 : 1) * (held ? 0.8 : 1)).setFill()
         shape.fill()
         NSGraphicsContext.restoreGraphicsState()
-        NSColor.black.withAlphaComponent(0.06).setStroke()
-        shape.lineWidth = 0.5
-        shape.stroke()
     }
 }
