@@ -27,6 +27,7 @@
 "surface.dock" = "Dock";
 "surface.widgets" = "Widgets";
 "surface.windows" = "Janelas";
+"surface.selection" = "Seleção";
 "surface.panel" = "Painel";
 "all" = "Tudo";
 "melt.snow" = "Derreter a neve";

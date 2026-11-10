@@ -162,6 +162,17 @@ final class MenuWindPad: NSView {
         return true
     }
 
+    /// The last stop, out of reach of a slider's increments.
+    override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {
+        guard !wanders else { return nil }
+        return [NSAccessibilityCustomAction(name: tr("variable")) { [weak self] in
+            guard let self else { return false }
+            wanders = true
+            wanderChanged?(true)
+            return true
+        }]
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         let middle = middle
         let reach = reach

@@ -7,6 +7,8 @@ struct Surfaces: OptionSet {
     static let dock = Surfaces(rawValue: 2)
     static let windows = Surfaces(rawValue: 4)
     static let widgets = Surfaces(rawValue: 8)
+    /// A selection dragged across the desktop: shown among the surfaces, kept as Deep Interaction.
+    static let selection = Surfaces(rawValue: 16)
     /// What the window list is read for.
     static let tracked: Surfaces = [.dock, .windows, .widgets]
 }
@@ -45,11 +47,12 @@ enum Preferences {
     private static let windKey = "wind"
     private static let windDirectionKey = "windDirection"
     private static let windVariesKey = "windVaries"
+    private static let openSectionsKey = "openSections"
 
     static func registerDefaults() {
         let calm = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         defaults.register(defaults: [
-            intensityKey: calm ? 0.25 : 0.5,
+            intensityKey: defaultIntensity,
             behindWindowsKey: false,
             showOverFullScreenKey: false,
             meltSnowKey: true,
@@ -111,6 +114,15 @@ enum Preferences {
     }
 
     static var intensityRange: ClosedRange<Double> { intensity...intensityTop }
+
+    /// Light under Reduce Motion, steady otherwise.
+    static var defaultIntensity: Double { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0.25 : 0.5 }
+
+    /// The menu's sections left open, by name.
+    static var openSections: [String] {
+        get { defaults.stringArray(forKey: openSectionsKey) ?? ["weather"] }
+        set { defaults.set(newValue, forKey: openSectionsKey) }
+    }
 
     /// Where snow settles; Windows is `snowOnWindows`.
     static var surfaces: Surfaces {

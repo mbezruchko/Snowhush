@@ -27,6 +27,7 @@
 "surface.dock" = "Dock";
 "surface.widgets" = "Виджеты";
 "surface.windows" = "Окна";
+"surface.selection" = "Выделение";
 "surface.panel" = "Панель";
 "all" = "Все";
 "melt.snow" = "Таяние снега";

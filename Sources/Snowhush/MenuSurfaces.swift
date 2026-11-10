@@ -15,8 +15,10 @@ final class MenuDisclosure: NSView {
     var toggled: () -> Void = {}
     /// Shows the summary unfolded too, as a value the folded row sets.
     var summaryWhileOpen = false
-    /// A small button the unfolded row shows in place of its summary, lit while `pillOn`.
-    var pill: String?
+    /// A small button the unfolded row shows, left of its summary or in its place, lit while `pillOn`.
+    var pill: String? {
+        didSet { needsDisplay = true }
+    }
     var pillOn = false {
         didSet { needsDisplay = true }
     }
@@ -103,11 +105,10 @@ final class MenuDisclosure: NSView {
             chevron.draw(in: NSRect(x: right + (12 - size.width) / 2, y: (bounds.height - size.height) / 2, width: size.width, height: size.height))
             right -= 8
         }
-        if open, let pill {
-            drawPill(pill, right: right, lit: lit)
+        if open && !summaryWhileOpen {
+            if let pill { drawPill(pill, right: right, lit: lit) }
             return
         }
-        guard !open || summaryWhileOpen else { return }
         if !summaryIcons.isEmpty {
             let side = Self.summaryIcon
             for surface in summaryIcons.reversed() {
@@ -115,12 +116,13 @@ final class MenuDisclosure: NSView {
                 SurfacePicker.drawIcon(surface, in: NSRect(x: right, y: (bounds.height - side) / 2, width: side, height: side), color: soft, pointSize: 12)
                 right -= Self.summaryGap
             }
-            return
+        } else if !summary.isEmpty {
+            let trailing = NSAttributedString(string: summary, attributes: [.font: font, .foregroundColor: soft])
+            let x = max(right - trailing.size().width, Self.titleX + title.size().width + 12)
+            trailing.draw(at: NSPoint(x: x, y: (bounds.height - trailing.size().height) / 2))
+            right = x - 8
         }
-        guard !summary.isEmpty else { return }
-        let trailing = NSAttributedString(string: summary, attributes: [.font: font, .foregroundColor: soft])
-        let width = trailing.size().width
-        trailing.draw(at: NSPoint(x: max(right - width, Self.titleX + title.size().width + 12), y: (bounds.height - trailing.size().height) / 2))
+        if open, let pill { drawPill(pill, right: right, lit: lit) }
     }
 
     private func drawPill(_ text: String, right: CGFloat, lit: Bool) {
@@ -169,6 +171,10 @@ final class SurfacePicker: NSView {
     var on: Surfaces = [] {
         didSet { needsDisplay = true }
     }
+    /// Shown faint and left alone: a selection gathers no snow while windows don't.
+    var disabled: Surfaces = [] {
+        didSet { needsDisplay = true }
+    }
     var toggled: (Surfaces) -> Void = { _ in }
     private var hovered: Int?
 
@@ -207,14 +213,14 @@ final class SurfacePicker: NSView {
     }
 
     private func hover(_ event: NSEvent) {
-        let next = tile(at: convert(event.locationInWindow, from: nil))
+        let next = tile(at: convert(event.locationInWindow, from: nil)).flatMap { disabled.contains(choices[$0]) ? nil : $0 }
         guard next != hovered else { return }
         hovered = next
         needsDisplay = true
     }
 
     override func mouseUp(with event: NSEvent) {
-        guard let k = tile(at: convert(event.locationInWindow, from: nil)) else { return }
+        guard let k = tile(at: convert(event.locationInWindow, from: nil)), !disabled.contains(choices[k]) else { return }
         toggled(choices[k])
     }
 
@@ -239,10 +245,12 @@ final class SurfacePicker: NSView {
                 NSBezierPath(roundedRect: tile.insetBy(dx: 2, dy: 0), xRadius: MenuToggle.highlightRadius, yRadius: MenuToggle.highlightRadius).fill()
             }
             let lit = on.contains(surface)
-            let color: NSColor = lit ? .labelColor : .tertiaryLabelColor
+            let usable = !disabled.contains(surface)
+            let color: NSColor = !usable ? .quaternaryLabelColor : lit ? .labelColor : .tertiaryLabelColor
             let box = NSRect(x: tile.midX - Self.icon / 2, y: tile.minY + 6, width: Self.icon, height: Self.icon)
             Self.drawIcon(surface, in: box, color: color)
-            let name = NSAttributedString(string: Self.name(of: surface), attributes: [.font: font, .foregroundColor: lit ? NSColor.labelColor : .secondaryLabelColor])
+            let ink: NSColor = !usable ? .quaternaryLabelColor : lit ? .labelColor : .secondaryLabelColor
+            let name = NSAttributedString(string: Self.name(of: surface), attributes: [.font: font, .foregroundColor: ink])
             let size = name.size()
             name.draw(at: NSPoint(x: tile.midX - size.width / 2, y: tile.maxY - size.height - 4))
         }
@@ -253,13 +261,14 @@ final class SurfacePicker: NSView {
         case .ground: tr("surface.ground")
         case .dock: tr("surface.dock")
         case .widgets: tr("surface.widgets")
+        case .selection: tr("surface.selection")
         default: tr("surface.windows")
         }
     }
 
     static func drawIcon(_ surface: Surfaces, in box: NSRect, color: NSColor, pointSize: CGFloat = 18) {
         guard surface == .ground else {
-            let symbol = surface == .dock ? "dock.rectangle" : surface == .widgets ? "widget.small" : "macwindow"
+            let symbol = surface == .dock ? "dock.rectangle" : surface == .widgets ? "widget.small" : surface == .selection ? "rectangle.dashed" : "macwindow"
             guard let image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
                 .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: pointSize, weight: .medium).applying(.init(paletteColors: [color])))
             else { return }
@@ -303,6 +312,8 @@ final class SurfacePicker: NSView {
         private var picker: SurfacePicker? { accessibilityParent() as? SurfacePicker }
 
         override func accessibilityValue() -> Any? { picker?.on.contains(surface) == true ? 1 : 0 }
+
+        override func isAccessibilityEnabled() -> Bool { picker?.disabled.contains(surface) != true }
 
         override func accessibilityFrame() -> NSRect {
             guard let picker, let k = picker.choices.firstIndex(of: surface), let window = picker.window else { return .zero }

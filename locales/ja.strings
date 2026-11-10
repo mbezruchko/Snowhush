@@ -27,6 +27,7 @@
 "surface.dock" = "Dock";
 "surface.widgets" = "ウィジェット";
 "surface.windows" = "ウインドウ";
+"surface.selection" = "選択範囲";
 "surface.panel" = "パネル";
 "all" = "すべて";
 "melt.snow" = "雪を溶かす";

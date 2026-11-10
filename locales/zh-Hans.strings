@@ -27,6 +27,7 @@
 "surface.dock" = "程序坞";
 "surface.widgets" = "小组件";
 "surface.windows" = "窗口";
+"surface.selection" = "选区";
 "surface.panel" = "面板";
 "all" = "全部";
 "melt.snow" = "积雪融化";
