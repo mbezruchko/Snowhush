@@ -20,10 +20,48 @@ use rain::Rain;
 pub type WindowId = isize;
 
 pub const COLUMN_WIDTH: f32 = 2.0;
-const GROUND_DEPTH: f32 = 40.0;
-const LEDGE_DEPTH: f32 = 14.0;
-const THAW_DEPTH: f32 = 8.0;
-const LEDGE_THAW_DEPTH: f32 = 4.0;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DriftLimit {
+    Standard,
+    Increased,
+    Unlimited,
+}
+
+impl DriftLimit {
+    pub const ALL: [DriftLimit; 3] = [DriftLimit::Standard, DriftLimit::Increased, DriftLimit::Unlimited];
+
+    pub fn ground_depth(self) -> f32 {
+        match self {
+            DriftLimit::Standard => 40.0,
+            DriftLimit::Increased => 200.0,
+            DriftLimit::Unlimited => 1_000_000.0,
+        }
+    }
+
+    pub fn ledge_depth(self) -> f32 {
+        match self {
+            DriftLimit::Standard => 14.0,
+            DriftLimit::Increased => 70.0,
+            DriftLimit::Unlimited => 1_000_000.0,
+        }
+    }
+
+    pub fn thaw_depth(self) -> f32 {
+        match self {
+            DriftLimit::Standard => 8.0,
+            DriftLimit::Increased => 40.0,
+            DriftLimit::Unlimited => 1_000_000.0,
+        }
+    }
+
+    pub fn ledge_thaw_depth(self) -> f32 {
+        match self {
+            DriftLimit::Standard => 4.0,
+            DriftLimit::Increased => 20.0,
+            DriftLimit::Unlimited => 1_000_000.0,
+        }
+    }
+}
 const THAW_RATE: f32 = 0.02;
 const THAW_TIME: f32 = 30.0;
 const THAW_BALANCE: f32 = 184.0;
@@ -424,6 +462,7 @@ pub struct SnowSimulation {
     intensity: f32,
     density: f32,
     pub thaws: bool,
+    pub limit: DriftLimit,
     pub accumulates: bool,
     /// Whether snow and leaves settle along the bottom of the screen; rain splashes there either way.
     pub ground_settles: bool,
@@ -477,7 +516,7 @@ pub struct SnowSimulation {
 impl SnowSimulation {
     pub fn new(width: f32, height: f32, intensity: f32) -> SnowSimulation {
         let mut seed = Random::new();
-        let ground = SnowLayer::new(V2::ZERO, column_count(width), COLUMN_WIDTH, GROUND_DEPTH, false, (seed.range(0.0, TAU), seed.range(0.0, TAU)));
+        let ground = SnowLayer::new(V2::ZERO, column_count(width), COLUMN_WIDTH, DriftLimit::Standard.ground_depth(), false, (seed.range(0.0, TAU), seed.range(0.0, TAU)));
         let mut simulation = SnowSimulation {
             width,
             height,
@@ -485,6 +524,7 @@ impl SnowSimulation {
             intensity: intensity.clamp(0.0, 1.0),
             density: 1.0,
             thaws: false,
+            limit: DriftLimit::Standard,
             accumulates: true,
             ground_settles: true,
             falling_opacity: 1.0,
@@ -557,6 +597,23 @@ impl SnowSimulation {
         self.intensity = intensity.clamp(0.0, 1.0);
         self.update_target();
         self.thin_above();
+    }
+
+    pub fn set_limit(&mut self, limit: DriftLimit) {
+        self.limit = limit;
+        if !self.layers.is_empty() {
+            self.layers[0].set_depth(limit.ground_depth());
+            for ledge in self.layers.iter_mut().skip(1) {
+                ledge.set_depth(limit.ledge_depth());
+            }
+        }
+        for ledge in self.dormant.values_mut() {
+            ledge.set_depth(limit.ledge_depth());
+        }
+        for (_, ledge, _) in &mut self.parking {
+            ledge.set_depth(limit.ledge_depth());
+        }
+        self.air.heights_changed = true;
     }
 
     /// Flakes still above the screen, waiting to come in, outnumber a lighter snowfall's target as the ones on screen
@@ -732,7 +789,7 @@ impl SnowSimulation {
         self.parking.iter_mut().for_each(|(_, ledge, _)| ledge.raise(by));
         let ground = &mut self.layers[0];
         let count = ground.count();
-        let mut fallen = SnowLayer::new(V2::new(0.0, by), count, COLUMN_WIDTH, GROUND_DEPTH, true, (0.0, 0.0));
+        let mut fallen = SnowLayer::new(V2::new(0.0, by), count, COLUMN_WIDTH, self.limit.ground_depth(), true, (0.0, 0.0));
         fallen.replace(
             std::mem::replace(&mut ground.heights, vec![0.0; count]),
             std::mem::replace(&mut ground.leaves, vec![0.0; count]),
@@ -1103,7 +1160,7 @@ impl SnowSimulation {
                     }
                     None => {
                         let phases = (self.air.random.range(0.0, TAU), self.air.random.range(0.0, TAU));
-                        SnowLayer::new(V2::new(left, top), columns, COLUMN_WIDTH, LEDGE_DEPTH, true, phases)
+                        SnowLayer::new(V2::new(left, top), columns, COLUMN_WIDTH, self.limit.ledge_depth(), true, phases)
                     }
                 };
                 self.layers.push(ledge);
@@ -1599,7 +1656,7 @@ impl SnowSimulation {
                     continue;
                 }
                 let surface = layer.surface(i);
-                let rate = if gust.calm { height * 2.5 + 6.0 } else { height * 8.0 + 50.0 };
+                let rate = if gust.calm { (height * 2.5 + 6.0).max(100.0) } else { (height * 8.0 + 50.0).max(250.0) };
                 let loss = if finish { height } else { height.min(rate * dt) };
                 // Of a heap of leaves only the lying ones fly off; the bulk under them just goes.
                 let snow = 1.0 - layer.blend(i).leaves;
@@ -1678,13 +1735,13 @@ impl SnowSimulation {
         }
         for (li, layer) in self.layers.iter_mut().enumerate() {
             let bare = li == 0 && !self.ground_settles;
-            if !self.accumulates || self.thaws || bare {
+            if (!self.accumulates || self.thaws || bare) && self.limit != DriftLimit::Unlimited {
                 let floor = if !self.accumulates || bare {
                     0.0
                 } else if li == 0 {
-                    THAW_DEPTH
+                    self.limit.thaw_depth()
                 } else {
-                    LEDGE_THAW_DEPTH
+                    self.limit.ledge_thaw_depth()
                 };
                 if layer.thaw(dt * melt_pace, floor, THAW_RATE, THAW_TIME) {
                     self.air.heights_changed = true;
@@ -3020,7 +3077,10 @@ fn landing(layers: &[SnowLayer], x: f32, from: f32, to: f32, here: bool, ground:
     }
     let ground = &layers[0];
     let i = ground.clamped_index(x);
-    (to <= ground.surface(i)).then_some((0, i))
+    if to <= ground.surface(i) {
+        return Some((0, i));
+    }
+    None
 }
 
 /// Where snow leaves an open layer: just past its end, at the height the snow reaches on the end column,

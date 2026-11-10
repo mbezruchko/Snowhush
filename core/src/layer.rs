@@ -263,7 +263,13 @@ impl SnowLayer {
     }
 
     pub fn fill(&self, i: usize) -> f32 {
-        (1.0 - self.heights[i] / self.capacity[i]).max(0.0)
+        if self.depth <= 0.0 {
+            0.0
+        } else if self.depth >= 100_000.0 {
+            1.0
+        } else {
+            (1.0 - self.heights[i] / self.capacity[i]).max(0.0)
+        }
     }
 
     /// Snow taken off a column takes its leaves along in proportion; snow added to it is snow.
@@ -282,6 +288,11 @@ impl SnowLayer {
     pub fn remove_snow(&mut self, amount: f32, i: usize) {
         self.heights[i] = (self.heights[i] - amount).max(self.leaves[i]).max(0.0);
         self.packed[i] = self.packed[i].min(self.heights[i]);
+    }
+
+    pub fn set_depth(&mut self, depth: f32) {
+        self.depth = depth;
+        self.update_capacity();
     }
 
     pub fn replace(&mut self, fresh: Vec<f32>, leaves: Vec<f32>, petals: Vec<f32>) {

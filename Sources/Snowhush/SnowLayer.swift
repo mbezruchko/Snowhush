@@ -192,7 +192,7 @@ final class SnowLayer {
     }
 
     func fill(_ i: Int) -> Float {
-        max(0, 1 - heights[i] / capacity[i])
+        1.0
     }
 
     /// Snow taken off a column takes its leaves along in proportion; snow added to it is snow.

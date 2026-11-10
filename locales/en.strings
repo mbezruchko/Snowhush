@@ -16,6 +16,10 @@
 "display" = "Display";
 "general" = "General";
 "accumulate" = "Accumulate";
+"limit" = "Limit";
+"limit.standard" = "Standard";
+"limit.increased" = "Increased";
+"limit.unlimited" = "No Limit";
 /* What Accumulate lets snow settle on, and what it sums up as when every one is on. */
 "surface.ground" = "Ground";
 "surface.dock" = "Dock";
