@@ -1,7 +1,8 @@
 import AppKit
 
-/// Sets the wind by dragging out from the middle of a square: the farther out, the stronger, at most to the ring the
-/// dots fill. Back in the middle, or double-clicked, it is calm. Like `MenuSlider`, it follows the pointer itself.
+/// Sets the wind by dragging out from the middle of a field as wide as the menu: the farther out, the stronger, at
+/// most out to the dots' outer ring, which lies farther across than up and down. Back in the middle, or
+/// double-clicked, it is calm. Like `MenuSlider`, it follows the pointer itself.
 final class MenuWindPad: NSView {
     var changed: ((Wind) -> Void)?
     /// Dragged while the wind wandered: it blows as set from now on.
@@ -33,15 +34,16 @@ final class MenuWindPad: NSView {
         didSet { needsDisplay = true }
     }
 
-    private static let side: CGFloat = 156
+    private static let height: CGFloat = 156
     private static let top: CGFloat = 2
     private static let bottom: CGFloat = 8
-    /// The handle's ring, which stays inside the square at full strength.
+    /// In line with the rows' titles on the left and their chevrons on the right.
+    private static let inset: CGFloat = 14
+    /// The handle's ring, which stays inside the field at full strength.
     private static let handle: CGFloat = 11
-    private static var reach: CGFloat { side / 2 - handle - 5 }
 
     init() {
-        super.init(frame: NSRect(x: 0, y: 0, width: 200, height: Self.top + Self.side + Self.bottom))
+        super.init(frame: NSRect(x: 0, y: 0, width: 200, height: Self.top + Self.height + Self.bottom))
         autoresizingMask = .width
         setAccessibilityElement(true)
         setAccessibilityRole(.slider)
@@ -55,11 +57,17 @@ final class MenuWindPad: NSView {
         frame.contains(point) ? self : nil
     }
 
-    private var square: NSRect {
-        NSRect(x: ((bounds.width - Self.side) / 2).rounded(), y: Self.top, width: Self.side, height: Self.side)
+    private var field: NSRect {
+        NSRect(x: Self.inset, y: Self.top, width: bounds.width - 2 * Self.inset, height: Self.height)
     }
 
-    private var middle: NSPoint { NSPoint(x: square.midX, y: square.midY) }
+    private var middle: NSPoint { NSPoint(x: field.midX, y: field.midY) }
+
+    /// How far full strength reaches across and up and down.
+    private var reach: (x: CGFloat, y: CGFloat) {
+        let margin = Self.handle + 5
+        return (field.width / 2 - margin, field.height / 2 - margin)
+    }
 
     private func updateTimer() {
         let live = wanders && showing
@@ -101,9 +109,9 @@ final class MenuWindPad: NSView {
     /// the eight compass points within a few degrees of one.
     private func follow(_ event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
-        let x = (point.x - middle.x) / Self.reach
-        let y = (middle.y - point.y) / Self.reach
-        let strength = (min(hypot(x, y), 1) * 20).rounded() / 20
+        let x = point.x - middle.x
+        let y = middle.y - point.y
+        let strength = (min(max(abs(x) / reach.x, abs(y) / reach.y), 1) * 20).rounded() / 20
         guard strength >= 0.1 else {
             set(Wind(strength: 0, direction: wind.direction))
             return
@@ -139,12 +147,11 @@ final class MenuWindPad: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        let square = square
         let middle = middle
-        let reach = Self.reach
+        let reach = reach
         let ink = NSColor.labelColor
 
-        let well = NSBezierPath(roundedRect: square.insetBy(dx: 0.5, dy: 0.5), xRadius: 10, yRadius: 10)
+        let well = NSBezierPath(roundedRect: field.insetBy(dx: 0.5, dy: 0.5), xRadius: 10, yRadius: 10)
         ink.withAlphaComponent(0.06).setFill()
         well.fill()
         (dragging ? ink : NSColor.separatorColor).setStroke()
@@ -152,16 +159,19 @@ final class MenuWindPad: NSView {
         well.stroke()
 
         ink.withAlphaComponent(0.3).setFill()
-        let spacing = reach / 3
-        for i in -3...3 {
-            for j in -3...3 where i * i + j * j <= 10 {
-                let dot = NSPoint(x: middle.x + CGFloat(i) * spacing, y: middle.y + CGFloat(j) * spacing)
+        let columns = max(1, Int((reach.x / (reach.y / 3)).rounded()))
+        for i in -columns...columns {
+            for j in -3...3 {
+                let dot = NSPoint(x: middle.x + CGFloat(i) * reach.x / CGFloat(columns), y: middle.y + CGFloat(j) * reach.y / 3)
                 NSBezierPath(ovalIn: NSRect(x: dot.x - 1.5, y: dot.y - 1.5, width: 3, height: 3)).fill()
             }
         }
 
+        // Out along the wind's own direction to where the field puts its strength.
         let vector = wind.vector
-        let tip = NSPoint(x: middle.x + CGFloat(vector.x) * reach, y: middle.y - CGFloat(vector.y) * reach)
+        let share = max(abs(CGFloat(vector.x)) / reach.x, abs(CGFloat(vector.y)) / reach.y)
+        let out = share > 0 ? CGFloat(wind.strength) / share : 0
+        let tip = NSPoint(x: middle.x + CGFloat(vector.x) * out, y: middle.y - CGFloat(vector.y) * out)
         ink.withAlphaComponent(dragging ? 0.28 : 0.16).setFill()
         let ring = Self.handle
         NSBezierPath(ovalIn: NSRect(x: tip.x - ring, y: tip.y - ring, width: ring * 2, height: ring * 2)).fill()
