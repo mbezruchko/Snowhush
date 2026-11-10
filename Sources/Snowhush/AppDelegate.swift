@@ -15,7 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var statusItem: NSStatusItem!
     private let headerRow = MenuDisclosure()
     private let modeOrbs = MenuOrbs()
-    private let extraOrbs = MenuOrbs(compact: true)
+    private let extraOrbs = MenuOrbs()
     private var extrasItem: NSMenuItem!
     private let intensityRow = MenuDisclosure()
     private let intensitySlider = MenuBigSlider()
@@ -165,8 +165,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
             choose(Mode.allCases[k])
         }
         addView(modeOrbs, to: menu)
-        // What goes with the modes, as Display's Dark Mode and Night Shift go under its slider.
-        let small = NSImage.SymbolConfiguration(pointSize: 12, weight: .medium)
+        // What goes with the modes, on the modes' own grid: each stands under one of them.
+        let small = NSImage.SymbolConfiguration(pointSize: 17, weight: .regular)
+        extraOrbs.columns = modeOrbs.orbs.count
         extraOrbs.orbs = [
             MenuOrbs.Orb(name: tr("mixed"), image: NSImage(systemSymbolName: "square.on.square", accessibilityDescription: nil)?.withSymbolConfiguration(small) ?? Blossom.icon),
             MenuOrbs.Orb(name: tr("halloween"), image: Halloween.icon),

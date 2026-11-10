@@ -27,6 +27,9 @@ final class MenuOrbs: NSView {
         didSet { needsDisplay = true }
     }
     var toggled: (Int) -> Void = { _ in }
+    /// How many columns the row is ruled into, when more than it has buttons: a shorter row then lines up under a
+    /// fuller one.
+    var columns = 0
     private var hovered: Int?
 
     private let compact: Bool
@@ -50,7 +53,7 @@ final class MenuOrbs: NSView {
         let font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
         let widest = orbs.map { NSAttributedString(string: $0.name, attributes: [.font: font]).size().width }.max() ?? 0
         let column = compact ? circle + 7 + widest + 14 : max(widest + 12, 60)
-        setFrameSize(NSSize(width: max(200, ceil(2 * Self.inset + CGFloat(orbs.count) * column)), height: frame.height))
+        setFrameSize(NSSize(width: max(200, ceil(2 * Self.inset + CGFloat(max(orbs.count, columns)) * column)), height: frame.height))
     }
 
     private func isOn(_ k: Int) -> Bool { k < on.count && on[k] }
@@ -78,7 +81,7 @@ final class MenuOrbs: NSView {
         toggled(k)
     }
 
-    private var column: CGFloat { (bounds.width - 2 * Self.inset) / CGFloat(max(orbs.count, 1)) }
+    private var column: CGFloat { (bounds.width - 2 * Self.inset) / CGFloat(max(orbs.count, columns, 1)) }
 
     private func orb(at point: NSPoint) -> Int? {
         guard !orbs.isEmpty, bounds.contains(point) else { return nil }
