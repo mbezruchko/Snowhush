@@ -14,16 +14,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var halloween = false
     private var statusItem: NSStatusItem!
     private let header = MenuHeader(title: "Snowhush")
+    private let cards = MenuCards()
     private let modeOrbs = MenuOrbs()
     private let extraOrbs = MenuOrbs()
-    private var extrasItem: NSMenuItem!
     private let intensitySlider = MenuBigSlider()
-    private let windRow = MenuDisclosure()
+    private let opacitySlider = MenuSlider(range: Preferences.opacityRange, title: tr("opacity"))
     private let windPad = MenuWindPad()
-    private let windCaption = MenuDisclosure()
+    private let windBack = MenuBack(title: tr("wind"))
+    private let settleBack = MenuBack(title: tr("accumulate"))
     private let windValue = MenuNote()
+    private var pages: [Page: [NSMenuItem]] = [:]
+    private var page = Page.home
+    private var surfaceItems: [(item: NSMenuItem, surface: Surfaces)] = []
+    private var meltItem: NSMenuItem!
+    private var windVariesItem: NSMenuItem!
+    private var variableItem: NSMenuItem!
     private var clearItem: NSMenuItem!
-    private let settings = SettingsController()
+    private var maxPerformanceItem: NSMenuItem!
+    private var behindWindowsItem: NSMenuItem!
+    private var fullScreenItem: NSMenuItem!
+    private var screenshotsItem: NSMenuItem!
+    private var loginItem: NSMenuItem!
     private var observers: [NSObjectProtocol] = []
     private var screensAsleep = false
     private let screenshots = ScreenshotWatch()
@@ -136,85 +147,115 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         menu.delegate = self
         menu.autoenablesItems = false
 
-        // Laid out as the system lays a menu bar module out: its name and a switch, what is touched every day large
-        // and in sight, and one row that opens Settings for what is set once and left.
-        addView(header, title: "Snowhush", to: menu)
-        header.toggled = { [unowned self] on in
-            Preferences.paused = !on
-            if on, Preferences.intensityTop <= 0 {
-                Preferences.intensity = Preferences.defaultIntensity
-                Preferences.intensityTop = Preferences.defaultIntensity
+        // Laid out as Control Center is: the app's name and a switch, a tile for each thing that can be set, showing
+        // what it is set to, and the intensity under them. A tile opens its page in the menu's own place, so nothing
+        // flies out to the side and no window opens.
+        func lay(_ page: Page, _ build: () -> Void) {
+            let from = menu.items.count
+            build()
+            pages[page] = Array(menu.items[from...])
+        }
+        func back(_ row: MenuBack) {
+            row.back = { [unowned self] in open(.home) }
+            addView(row, to: menu)
+        }
+
+        lay(.home) {
+            addView(header, title: "Snowhush", to: menu)
+            header.toggled = { [unowned self] on in
+                Preferences.paused = !on
+                if on, Preferences.intensityTop <= 0 {
+                    Preferences.intensity = Preferences.defaultIntensity
+                    Preferences.intensityTop = Preferences.defaultIntensity
+                }
+                applyIntensity()
+                refreshMenu()
             }
-            applyIntensity()
-            refreshMenu()
-        }
-        // After the modes, More shows or hides the small row of what goes with them.
-        let more = NSImage(systemSymbolName: "ellipsis", accessibilityDescription: nil)?.withSymbolConfiguration(.init(pointSize: 17, weight: .regular)) ?? Blossom.icon
-        modeOrbs.orbs = Mode.allCases.map { MenuOrbs.Orb(name: tr("tile.\($0.key)"), image: Self.tileImage($0)) } + [MenuOrbs.Orb(name: tr("more"), image: more)]
-        modeOrbs.fit()
-        modeOrbs.toggled = { [unowned self] k in
-            guard k < Mode.allCases.count else {
-                extrasItem.isHidden.toggle()
-                return
+            cards.cards = Array(repeating: MenuCards.Card(title: "", detail: ""), count: 4)
+            cards.pressed = { [unowned self] k in open([.mode, .wind, .settle, .display][k]) }
+            addView(cards, to: menu)
+            intensitySlider.changed = { [unowned self] intensity in
+                Preferences.paused = false
+                let spread = Preferences.intensityTop > Preferences.intensity
+                select(intensity: spread ? Self.spread(about: intensity) : intensity...intensity)
+                refreshMenu()
             }
-            choose(Mode.allCases[k])
-        }
-        addView(modeOrbs, to: menu)
-        // What goes with the modes, on the modes' own grid: each stands under one of them.
-        let small = NSImage.SymbolConfiguration(pointSize: 17, weight: .regular)
-        extraOrbs.columns = modeOrbs.orbs.count
-        extraOrbs.orbs = [
-            MenuOrbs.Orb(name: tr("mixed"), image: NSImage(systemSymbolName: "square.on.square", accessibilityDescription: nil)?.withSymbolConfiguration(small) ?? Blossom.icon),
-            MenuOrbs.Orb(name: tr("halloween"), image: Halloween.icon),
-        ]
-        // As wide as the modes above and no wider, whatever its own names are: the menu keeps its width when it shows.
-        extraOrbs.setFrameSize(NSSize(width: modeOrbs.frame.width, height: extraOrbs.frame.height))
-        extraOrbs.toggled = { [unowned self] k in
-            if k == 0 { toggleMixed() } else { spookySnow() }
-            refreshMenu()
-        }
-        extrasItem = addView(extraOrbs, to: menu)
-        extrasItem.isHidden = true
+            addView(intensitySlider, title: tr("intensity"), to: menu)
+            menu.addItem(.separator())
+            clearItem = add(tr("clear.snow"), #selector(clearSnow), to: menu)
 
-        intensitySlider.changed = { [unowned self] intensity in
-            Preferences.paused = false
-            let spread = Preferences.intensityTop > Preferences.intensity
-            select(intensity: spread ? Self.spread(about: intensity) : intensity...intensity)
-            refreshMenu()
+            let settings = NSMenu()
+            settings.autoenablesItems = false
+            settings.addItem(.sectionHeader(title: tr("intensity")))
+            variableItem = toggle(tr("variable"), #selector(toggleVariableIntensity), to: settings)
+            settings.addItem(.separator())
+            settings.addItem(.sectionHeader(title: tr("general")))
+            loginItem = toggle(tr("login"), #selector(toggleOpenAtLogin), to: settings)
+            let updates = settings.addItem(withTitle: tr("updates"), action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)), keyEquivalent: "")
+            updates.target = updater
+            menu.addItem(withTitle: tr("settings"), action: nil, keyEquivalent: "").submenu = settings
+            add(tr("support"), #selector(openSponsors), to: menu).attributedTitle = Self.supportTitle
+            menu.addItem(withTitle: tr("quit"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         }
-        addView(intensitySlider, title: tr("intensity"), to: menu)
-        menu.addItem(.separator())
 
-        let wind = NSMenu()
-        wind.autoenablesItems = false
-        windPad.hasStop = false
-        windPad.setFrameSize(NSSize(width: 260, height: windPad.frame.height))
-        windPad.changed = { [unowned self] wind in
-            Preferences.wind = wind
-            for snow in screens { snow.simulation.wind = wind.vector }
-            refreshMenu()
+        lay(.mode) {
+            back(MenuBack(title: tr("mode")))
+            modeOrbs.orbs = Mode.allCases.map { MenuOrbs.Orb(name: tr("tile.\($0.key)"), image: Self.tileImage($0)) }
+            modeOrbs.toggled = { [unowned self] k in choose(Mode.allCases[k]) }
+            addView(modeOrbs, to: menu)
+            // What goes with the modes, on the modes' own grid: each stands under one of them.
+            let small = NSImage.SymbolConfiguration(pointSize: 17, weight: .regular)
+            extraOrbs.columns = modeOrbs.orbs.count
+            extraOrbs.orbs = [
+                MenuOrbs.Orb(name: tr("mixed"), image: NSImage(systemSymbolName: "square.on.square", accessibilityDescription: nil)?.withSymbolConfiguration(small) ?? Blossom.icon),
+                MenuOrbs.Orb(name: tr("halloween"), image: Halloween.icon),
+            ]
+            extraOrbs.toggled = { [unowned self] k in
+                if k == 0 { toggleMixed() } else { spookySnow() }
+                refreshMenu()
+            }
+            addView(extraOrbs, to: menu)
         }
-        windPad.wanderChanged = { [unowned self] in wander($0) }
-        addView(windCaption, title: tr("wind"), to: wind)
-        windCaption.foldable = false
-        windCaption.open = true
-        windCaption.style = .caption
-        windCaption.actionPressed = { [unowned self] in resetWind() }
-        addView(windPad, to: wind)
-        // Under each panel's control, what it is set to and a word on what it does.
-        addView(windValue, to: wind)
-        addView(MenuNote(tr("hint.wind"), faint: true), to: wind)
-        // Rows of our own, their value in plain grey before the chevron: a badge crowds the system's arrow.
-        addView(windRow, title: tr("wind"), to: menu).submenu = wind
 
-        clearItem = add(tr("clear.snow"), #selector(clearSnow), to: menu)
-        menu.addItem(.separator())
+        lay(.wind) {
+            back(windBack)
+            windBack.actionPressed = { [unowned self] in resetWind() }
+            windPad.hasStop = false
+            windPad.changed = { [unowned self] wind in
+                Preferences.wind = wind
+                for snow in screens { snow.simulation.wind = wind.vector }
+                refreshMenu()
+            }
+            windPad.wanderChanged = { [unowned self] in wander($0) }
+            addView(windPad, to: menu)
+            addView(windValue, to: menu)
+            addView(MenuNote(tr("hint.wind"), faint: true), to: menu)
+            windVariesItem = toggle(tr("variable"), #selector(toggleWindVaries), to: menu)
+        }
 
-        let open = menu.addItem(withTitle: tr("settings") + "…", action: #selector(openSettings), keyEquivalent: ",")
-        open.target = self
-        add(tr("support"), #selector(openSponsors), to: menu).attributedTitle = Self.supportTitle
-        menu.addItem(withTitle: tr("quit"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        settings.model.groups = settingsGroups()
+        // Top to bottom, as they lie on the screen; a selection is snow on windows of a sort.
+        lay(.settle) {
+            back(settleBack)
+            settleBack.actionPressed = { [unowned self] in resetSurfaces() }
+            surfaceItems = [Surfaces.widgets, .windows, .dock, .ground, .selection].map { surface in
+                (toggle(SurfacePicker.name(of: surface), #selector(toggleSurfaceItem), to: menu), surface)
+            }
+            menu.addItem(.separator())
+            meltItem = toggle(tr("melt.snow"), #selector(toggleMeltSnow), to: menu)
+        }
+
+        lay(.display) {
+            back(MenuBack(title: tr("display")))
+            opacitySlider.changed = { [unowned self] value in
+                select(opacity: value)
+                refreshMenu()
+            }
+            addView(opacitySlider, to: menu)
+            behindWindowsItem = toggle(tr("behind"), #selector(toggleBehindWindows), to: menu)
+            fullScreenItem = toggle(tr("full_screen"), #selector(toggleFullScreen), to: menu)
+            screenshotsItem = toggle(tr("screenshots"), #selector(toggleScreenshots), to: menu)
+            maxPerformanceItem = toggle(tr("performance"), #selector(toggleMaxPerformance), to: menu)
+        }
 
         item.menu = menu
         return item
@@ -227,62 +268,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         return item
     }
 
-    /// What Settings holds, top to bottom: how the weather behaves, where it settles, how it shows, and the app.
-    private func settingsGroups() -> [SettingsModel.Group] {
-        typealias Item = SettingsModel.Item
-        func heaps() -> [Mode] { Preferences.modes.filter { $0 != .rain } }
-        func check(_ title: String, _ isOn: @escaping () -> Bool, _ flip: @escaping () -> Void) -> Item {
-            Item(title: { title }, kind: .toggle(isOn: isOn, flip: flip))
-        }
-        var surfaceRows = [Surfaces.widgets, .windows, .dock, .ground, .selection].map { surface in
-            check(SurfacePicker.name(of: surface), { [unowned self] in
-                surface == .selection ? Preferences.deepInteraction : surfaces.contains(surface)
-            }, { [unowned self] in toggle(surface) })
-        }
-        // Rain splashes on the ground whatever it says; a selection is snow on windows of a sort.
-        surfaceRows[3].isHidden = { heaps().isEmpty }
-        surfaceRows[4].isEnabled = { [unowned self] in surfaces.contains(.windows) }
-        var melt = check("", { [unowned self] in thaws }, { [unowned self] in toggleMeltSnow() })
-        melt.title = { tr(heaps().contains(.snow) ? "melt.snow" : heaps() == [.blossom] ? "melt.blossom" : "melt.autumn") }
-        melt.isHidden = { heaps().isEmpty }
-        melt.isEnabled = { [unowned self] in !surfaces.isEmpty }
-        var fullScreen = check(tr("full_screen"), { Preferences.showOverFullScreen }, { [unowned self] in toggleFullScreen() })
-        fullScreen.isEnabled = { [unowned self] in !behindWindows }
-        let version = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String).map { "Snowhush \($0)" }
-        return [
-            .init(title: tr("variable"), items: [
-                check(tr("intensity"), { Preferences.intensityTop > Preferences.intensity }, { [unowned self] in
-                    let middle = (Preferences.intensity + Preferences.intensityTop) / 2
-                    select(intensity: Preferences.intensityTop > Preferences.intensity ? middle...middle : Self.spread(about: middle))
-                    refreshMenu()
-                }),
-                check(tr("wind"), { Preferences.windVaries }, { [unowned self] in wander(!Preferences.windVaries) }),
-            ]),
-            .init(title: tr("accumulate"), items: surfaceRows + [melt]),
-            .init(title: tr("display"), items: [
-                Item(title: { tr("opacity") }, kind: .slider(value: { Preferences.fallingOpacity }, set: { [unowned self] in select(opacity: $0) }, range: Preferences.opacityRange)),
-                check(tr("behind"), { [unowned self] in behindWindows }, { [unowned self] in toggleBehindWindows() }),
-                fullScreen,
-                check(tr("screenshots"), { Preferences.showInScreenshots }, { [unowned self] in toggleScreenshots() }),
-                check(tr("performance"), { Preferences.maxPerformance }, { [unowned self] in toggleMaxPerformance() }),
-            ]),
-            .init(title: tr("general"), items: [
-                check(tr("login"), { SMAppService.mainApp.status == .enabled }, { [unowned self] in toggleOpenAtLogin() }),
-                Item(title: { tr("updates") }, kind: .button { [unowned self] in updater.checkForUpdates(nil) }),
-            ], footer: version),
-        ]
+    /// What the menu shows in its one place: the tiles, or the page one of them opened.
+    private enum Page {
+        case home, mode, wind, settle, display
     }
 
-    @objc private func openSettings() {
-        settings.show()
+    private func open(_ next: Page) {
+        page = next
+        refreshMenu()
     }
 
-    /// Brings every row up to date while the menu stays open, and Settings with it.
+    private func toggle(_ title: String, _ action: Selector, to menu: NSMenu) -> NSMenuItem {
+        let item = menu.addItem(withTitle: title, action: nil, keyEquivalent: "")
+        let toggle = MenuToggle(action: action, target: self)
+        toggle.fit(title)
+        item.view = toggle
+        return item
+    }
+
+    @objc private func toggleSurfaceItem(_ sender: NSMenuItem) {
+        guard let surface = surfaceItems.first(where: { $0.item === sender })?.surface else { return }
+        toggle(surface)
+    }
+
+    @objc private func toggleWindVaries() {
+        wander(!Preferences.windVaries)
+    }
+
+    @objc private func toggleVariableIntensity() {
+        let middle = (Preferences.intensity + Preferences.intensityTop) / 2
+        select(intensity: Preferences.intensityTop > Preferences.intensity ? middle...middle : Self.spread(about: middle))
+    }
+
+    /// Snow settles everywhere again, and on no selection.
+    private func resetSurfaces() {
+        surfaces = [.ground, .dock, .windows, .widgets]
+        Preferences.surfaces = surfaces
+        for snow in screens {
+            snow.simulation.accumulates = true
+            snow.simulation.groundSettles = true
+        }
+        if Preferences.deepInteraction { toggleDeepInteraction() }
+        refreshMenu()
+    }
+
+    /// Brings every row up to date while the menu stays open.
     private func refreshMenu() {
         guard let menu = statusItem.menu else { return }
         menuNeedsUpdate(menu)
         menu.items.forEach { $0.view?.needsDisplay = true }
-        settings.model.touch()
     }
 
     /// A mode's tile shows the icon the menu bar shows for it.
@@ -318,32 +352,74 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
+        guard menu === statusItem?.menu else { return }
         let modes = Mode.allCases.filter(Preferences.modes.contains)
         let on = !Preferences.paused && Preferences.intensityTop > 0
+        let varies = Preferences.intensityTop > Preferences.intensity
         header.isOn = on
         modeOrbs.on = Mode.allCases.map(modes.contains)
         extraOrbs.on = [Preferences.mixed, Halloween.isOn]
         intensitySlider.value = (Preferences.intensity + Preferences.intensityTop) / 2
         intensitySlider.dimmed = !on
         intensitySlider.glyph = Self.tileImage(Preferences.mode, pointSize: 11, weight: .semibold)
+        variableItem.state = varies ? .on : .off
+        opacitySlider.value = Preferences.fallingOpacity
         if !Preferences.windVaries { windPad.wind = Preferences.wind }
         windPad.wanders = Preferences.windVaries
-        windRow.summary = Preferences.windVaries ? tr("variable") : Preferences.wind.summary
-        windRow.fit(tr("wind"), least: 0)
-        windValue.text = windRow.summary
-        windCaption.action = Preferences.windVaries || Preferences.wind.strength > 0 ? tr("reset") : nil
-        // Rain neither heaps up nor lies about to clear away.
+        let blows = Preferences.windVaries || Preferences.wind.strength > 0
+        let wind = Preferences.windVaries ? tr("variable") : Preferences.wind.summary
+        windValue.text = wind
+        windVariesItem.state = Preferences.windVaries ? .on : .off
+        windBack.action = blows ? tr("reset") : nil
+
+        // Rain neither heaps up nor lies about to clear away, and splashes on the ground whatever it says.
         let heaps = modes.filter { $0 != .rain }
-        clearItem.isHidden = heaps.isEmpty
+        let settles: [Surfaces] = [.widgets, .windows, .dock] + (heaps.isEmpty ? [] : [.ground])
+        var absent: [NSMenuItem] = heaps.isEmpty ? [clearItem, meltItem] : []
+        for (item, surface) in surfaceItems {
+            item.state = (surface == .selection ? Preferences.deepInteraction : surfaces.contains(surface)) ? .on : .off
+            item.isEnabled = surface != .selection || surfaces.contains(.windows)
+            if surface == .ground, heaps.isEmpty { absent.append(item) }
+        }
+        let lit = settles.filter(surfaces.contains)
+        let everywhere: Surfaces = [.ground, .dock, .windows, .widgets]
+        settleBack.action = surfaces != everywhere || Preferences.deepInteraction ? tr("reset") : nil
         clearItem.title = tr("clear", heaps)
         clearItem.isEnabled = screens.contains { $0.simulation.hasSnow || $0.simulation.spriteCount > 0 }
+        meltItem.title = tr(heaps.contains(.snow) ? "melt.snow" : heaps == [.blossom] ? "melt.blossom" : "melt.autumn")
+        (meltItem.view as? MenuToggle)?.fit(meltItem.title)
+        meltItem.state = thaws ? .on : .off
+        meltItem.isEnabled = !surfaces.isEmpty
+        maxPerformanceItem.state = Preferences.maxPerformance ? .on : .off
+        behindWindowsItem.state = behindWindows ? .on : .off
+        fullScreenItem.state = Preferences.showOverFullScreen ? .on : .off
+        fullScreenItem.isEnabled = !behindWindows
+        screenshotsItem.state = Preferences.showInScreenshots ? .on : .off
+        loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+
+        func symbol(_ name: String) -> NSImage? {
+            NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(.init(pointSize: 14, weight: .regular))
+        }
+        cards.cards = [
+            .init(title: modes.map { tr("tile.\($0.key)") }.joined(separator: " + "), detail: Halloween.isOn ? tr("halloween") : tr("mode"),
+                  image: Self.tileImage(Preferences.mode, pointSize: 14), lit: on),
+            .init(title: tr("wind"), detail: wind, image: symbol("wind"), lit: blows),
+            .init(title: tr("accumulate"), detail: lit.count == settles.count ? tr("all") : lit.isEmpty ? tr("off") : "\(lit.count)/\(settles.count)",
+                  image: symbol("square.3.layers.3d.down.right"), lit: !lit.isEmpty),
+            .init(title: tr("display"), detail: MenuSlider.percent(Preferences.fallingOpacity), image: symbol("eye"), lit: false),
+        ]
+
+        let shown = pages[page] ?? []
+        for item in menu.items {
+            item.isHidden = !shown.contains(item) || absent.contains(item)
+        }
     }
 
     func menuWillOpen(_ menu: NSMenu) {
         guard menu === statusItem.menu else { return }
         windPad.showing = true
-        // What is on under More shows without asking: the row opens with the menu while either is.
-        extrasItem.isHidden = !(Preferences.mixed || Halloween.isOn)
+        // The menu always opens on its tiles.
+        page = .home
     }
 
     func menuDidClose(_ menu: NSMenu) {
