@@ -103,15 +103,16 @@ final class MenuWindPad: NSView {
         let square = square
         let middle = middle
         let reach = Self.reach
+        let ink = NSColor.labelColor
 
         let well = NSBezierPath(roundedRect: square.insetBy(dx: 0.5, dy: 0.5), xRadius: 10, yRadius: 10)
-        NSColor.labelColor.withAlphaComponent(0.06).setFill()
+        ink.withAlphaComponent(0.06).setFill()
         well.fill()
-        (dragging ? NSColor.controlAccentColor : NSColor.separatorColor).setStroke()
+        (dragging ? ink : NSColor.separatorColor).setStroke()
         well.lineWidth = 1
         well.stroke()
 
-        NSColor.labelColor.withAlphaComponent(0.3).setFill()
+        ink.withAlphaComponent(0.3).setFill()
         let spacing = reach / 3
         for i in -3...3 {
             for j in -3...3 where i * i + j * j <= 10 {
@@ -120,14 +121,13 @@ final class MenuWindPad: NSView {
             }
         }
 
-        let accent = NSColor.controlAccentColor
         let vector = wind.vector
         let tip = NSPoint(x: middle.x + CGFloat(vector.x) * reach, y: middle.y - CGFloat(vector.y) * reach)
-        accent.withAlphaComponent(dragging ? 0.32 : 0.2).setFill()
+        ink.withAlphaComponent(dragging ? 0.28 : 0.16).setFill()
         let ring = Self.handle
         NSBezierPath(ovalIn: NSRect(x: tip.x - ring, y: tip.y - ring, width: ring * 2, height: ring * 2)).fill()
 
-        accent.set()
+        ink.set()
         let length = hypot(tip.x - middle.x, tip.y - middle.y)
         guard length > 0.5 else {
             NSBezierPath(ovalIn: NSRect(x: middle.x - 3.5, y: middle.y - 3.5, width: 7, height: 7)).fill()
