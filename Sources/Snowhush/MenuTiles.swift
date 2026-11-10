@@ -105,7 +105,7 @@ final class MenuTiles: NSView {
             let box = frame(of: k)
             if hovered == k {
                 NSColor.quaternaryLabelColor.setFill()
-                NSBezierPath(roundedRect: box.insetBy(dx: 2, dy: 0), xRadius: MenuMetrics.highlightRadius, yRadius: MenuMetrics.highlightRadius).fill()
+                NSBezierPath(roundedRect: box.insetBy(dx: 2, dy: 0), xRadius: MenuToggle.highlightRadius, yRadius: MenuToggle.highlightRadius).fill()
             }
             let lit = isOn(k)
             let usable = isEnabled(k)
