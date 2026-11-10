@@ -17,7 +17,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var weatherItem: NSMenuItem!
     private let modeTiles = MenuTiles()
     private let extraTiles = MenuTiles()
-    private var weatherItems: [NSMenuItem] = []
     private let intensityRow = MenuDisclosure()
     private var intensityItem: NSMenuItem!
     private let intensitySlider = MenuIntensitySlider()
@@ -155,9 +154,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         menu.autoenablesItems = false
 
         // What falls.
-        weatherItem = addView(weatherRow, title: tr("weather"), to: menu)
+        // The app's name heads what falls, which always shows: it is what the menu is opened for most.
+        weatherItem = addView(weatherRow, title: "Snowhush", to: menu)
+        weatherRow.foldable = false
+        weatherRow.open = true
+        if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String { weatherRow.detail = "v\(version)" }
         weatherRow.pill = tr("mix")
-        weatherRow.toggled = { [unowned self] in fold(weatherRow) }
         weatherRow.pillToggled = { [unowned self] in
             toggleMixed()
             refreshMenu()
@@ -172,7 +174,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         let names = modeTiles.tiles.map(\.name) + extraTiles.tiles.map(\.name)
         modeTiles.fit(names)
         extraTiles.fit(names)
-        weatherItems = [addView(modeTiles, to: menu), addView(extraTiles, to: menu)]
+        addView(modeTiles, to: menu)
+        addView(extraTiles, to: menu)
 
         // How much falls.
         intensityItem = addView(intensityRow, title: tr("intensity"), to: menu)
@@ -272,7 +275,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
 
     /// The folded rows, by the names their open state is kept under.
     private var sections: [(key: String, row: MenuDisclosure)] {
-        [("weather", weatherRow), ("intensity", intensityRow), ("opacity", opacityRow), ("wind", windRow), ("accumulate", accumulateRow)]
+        [("intensity", intensityRow), ("opacity", opacityRow), ("wind", windRow), ("accumulate", accumulateRow)]
     }
 
     private func fold(_ row: MenuDisclosure) {
@@ -283,7 +286,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
 
     /// Shows what each folded row holds while it is open; the melting switch only while something heaps up.
     private func refreshFolds() {
-        weatherItems.forEach { $0.isHidden = !weatherRow.open }
         intensitySliderItem.isHidden = !intensityRow.open
         opacitySliderItem.isHidden = !opacityRow.open
         windPadItem.isHidden = !windRow.open
@@ -305,11 +307,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         guard let menu = statusItem.menu else { return }
         menuNeedsUpdate(menu)
         menu.items.forEach { $0.view?.needsDisplay = true }
-    }
-
-    /// What falls, as the tiles show it, and the pumpkin while Halloween is on.
-    private var weatherSummary: [NSImage] {
-        Mode.allCases.filter(Preferences.modes.contains).map(Self.tileImage) + (Halloween.isOn ? [Halloween.icon] : [])
     }
 
     /// A mode's tile shows the icon the menu bar shows for it.
@@ -354,7 +351,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         let modes = Mode.allCases.filter(Preferences.modes.contains)
-        weatherRow.summaryImages = weatherSummary
         weatherRow.pillOn = Preferences.mixed
         weatherRow.fit(weatherItem.title, least: modeTiles.frame.width)
         modeTiles.on = Mode.allCases.map(modes.contains)

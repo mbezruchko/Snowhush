@@ -1,7 +1,6 @@
 /* Snowhush's words, one file per language. The Mac app ships each as <language>.lproj/Localizable.strings;
    the Windows and Linux apps build them in through snowhush-core. Every file has every key of en.strings. */
 
-"weather" = "Weather";
 "mix" = "Mix";
 "intensity" = "Intensity";
 "variable" = "Variable";

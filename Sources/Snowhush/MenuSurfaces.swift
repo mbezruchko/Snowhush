@@ -1,7 +1,15 @@
 import AppKit
 
 /// A menu row that folds the row under it out or away, keeping the menu open. Folded, it sums up that row on its right.
+/// Not `foldable`, it heads rows that always show: it lights for nothing, and only its pill answers a click.
 final class MenuDisclosure: NSView {
+    var foldable = true {
+        didSet { needsDisplay = true }
+    }
+    /// Shown fainter after the title, as the app's version is on the header.
+    var detail = "" {
+        didSet { needsDisplay = true }
+    }
     var open = false {
         didSet { needsDisplay = true }
     }
@@ -10,10 +18,6 @@ final class MenuDisclosure: NSView {
     }
     /// Sums the row up as these surfaces' icons instead, which take less room than their names.
     var summaryIcons: [Surfaces] = [] {
-        didSet { needsDisplay = true }
-    }
-    /// Or as these images, drawn in the summary's colour.
-    var summaryImages: [NSImage] = [] {
         didSet { needsDisplay = true }
     }
     var toggled: () -> Void = {}
@@ -64,20 +68,21 @@ final class MenuDisclosure: NSView {
         guard bounds.contains(point) else { return }
         if open, pill != nil, pillFrame.insetBy(dx: -4, dy: -3).contains(point) {
             pillToggled()
-        } else {
+        } else if foldable {
             toggled()
         }
         redrawRows()
     }
 
     override func accessibilityPerformPress() -> Bool {
+        guard foldable else { return false }
         toggled()
         return true
     }
 
     override func accessibilityLabel() -> String? { enclosingMenuItem?.title }
 
-    override func accessibilityValue() -> Any? { open ? 1 : 0 }
+    override func accessibilityValue() -> Any? { foldable ? open ? 1 : 0 : detail }
 
     override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {
         guard open, let pill else { return nil }
@@ -89,7 +94,7 @@ final class MenuDisclosure: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         guard let item = enclosingMenuItem else { return }
-        let lit = item.isHighlighted
+        let lit = foldable && item.isHighlighted
         if lit {
             NSColor.controlAccentColor.setFill()
             let radius = MenuToggle.highlightRadius
@@ -100,7 +105,15 @@ final class MenuDisclosure: NSView {
         let font = NSFont.menuFont(ofSize: 0)
         let title = NSAttributedString(string: item.title, attributes: [.font: font, .foregroundColor: color])
         title.draw(at: NSPoint(x: Self.titleX, y: (bounds.height - title.size().height) / 2))
+        if !detail.isEmpty {
+            let faint = NSAttributedString(string: detail, attributes: [.font: font, .foregroundColor: NSColor.tertiaryLabelColor])
+            faint.draw(at: NSPoint(x: Self.titleX + title.size().width + 6, y: (bounds.height - faint.size().height) / 2))
+        }
         var right = bounds.width - 14
+        guard foldable else {
+            if let pill { drawPill(pill, right: right, lit: false) }
+            return
+        }
         let symbol = open ? "chevron.down" : "chevron.right"
         if let chevron = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
             .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 13, weight: .semibold).applying(.init(paletteColors: [color]))) {
@@ -118,16 +131,6 @@ final class MenuDisclosure: NSView {
             for surface in summaryIcons.reversed() {
                 right -= side
                 SurfacePicker.drawIcon(surface, in: NSRect(x: right, y: (bounds.height - side) / 2, width: side, height: side), color: soft, pointSize: 12)
-                right -= Self.summaryGap
-            }
-        } else if !summaryImages.isEmpty {
-            let side = Self.summaryIcon
-            for image in summaryImages.reversed() {
-                let scale = min(1, side / max(image.size.width, image.size.height, 1))
-                let size = NSSize(width: image.size.width * scale, height: image.size.height * scale)
-                right -= side
-                let box = NSRect(x: right + (side - size.width) / 2, y: (bounds.height - size.height) / 2, width: size.width, height: size.height)
-                image.tinted(soft).draw(in: box, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
                 right -= Self.summaryGap
             }
         } else if !summary.isEmpty {
@@ -157,9 +160,8 @@ final class MenuDisclosure: NSView {
     /// that row folds out: a menu sizes itself to its rows' views.
     func fit(_ title: String, least: CGFloat) {
         let font = NSFont.menuFont(ofSize: 0)
-        let pictures = summaryIcons.count + summaryImages.count
-        let words = pictures == 0 ? [title, summary] : [title]
-        let icons = CGFloat(pictures) * (Self.summaryIcon + Self.summaryGap)
+        let words = summaryIcons.isEmpty ? [title, summary, detail] : [title, detail]
+        let icons = CGFloat(summaryIcons.count) * (Self.summaryIcon + Self.summaryGap)
         let width = words.map { NSAttributedString(string: $0, attributes: [.font: font]).size().width }.reduce(icons, +)
         setFrameSize(NSSize(width: max(200, least, ceil(Self.titleX + width + 56)), height: frame.height))
     }

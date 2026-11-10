@@ -119,7 +119,7 @@ enum Preferences {
 
     /// The menu's sections left open, by name.
     static var openSections: [String] {
-        get { defaults.stringArray(forKey: openSectionsKey) ?? ["weather"] }
+        get { defaults.stringArray(forKey: openSectionsKey) ?? [] }
         set { defaults.set(newValue, forKey: openSectionsKey) }
     }
 
