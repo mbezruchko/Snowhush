@@ -24,7 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private let windRow = MenuDisclosure()
     private let accumulateRow = MenuDisclosure()
     private let windPad = MenuWindPad()
-    private var windVaryItem: NSMenuItem!
+    private let windCaption = MenuDisclosure()
     private var windResetItem: NSMenuItem!
     private var surfaceItems: [(item: NSMenuItem, surface: Surfaces)] = []
     private var behaviorItems: [NSMenuItem] = []
@@ -207,11 +207,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
             refreshMenu()
         }
         windPad.wanderChanged = { [unowned self] in wander($0) }
+        // Headed as Intensity is: its name small, Variable a pill at the right.
+        addView(windCaption, title: tr("wind"), to: wind)
+        windCaption.foldable = false
+        windCaption.open = true
+        windCaption.style = .caption
+        windCaption.pill = tr("variable")
+        windCaption.pillToggled = { [unowned self] in wander(!Preferences.windVaries) }
         addView(windPad, to: wind)
-        wind.addItem(.separator())
-        windVaryItem = toggle(tr("variable"), #selector(toggleWindVaries), to: wind)
         windResetItem = wind.addItem(withTitle: tr("reset"), action: nil, keyEquivalent: "")
-        let windReset = MenuToggle(action: #selector(resetWindItem), target: self, checks: true)
+        let windReset = MenuToggle(action: #selector(resetWindItem), target: self, checks: false)
         windReset.fit(tr("reset"))
         windResetItem.view = windReset
         // Rows of our own, their value in plain grey before the chevron: a badge crowds the system's arrow.
@@ -331,7 +336,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         windPad.wanders = Preferences.windVaries
         windRow.summary = Preferences.windVaries ? tr("variable") : Preferences.wind.summary
         windRow.fit(tr("wind"), least: 0)
-        windVaryItem.state = Preferences.windVaries ? .on : .off
+        windCaption.pillOn = Preferences.windVaries
         windResetItem.isEnabled = Preferences.windVaries || Preferences.wind.strength > 0
         extraOrbs.on = [Preferences.mixed, Halloween.isOn]
         // Rain neither heaps up nor lies about to clear away.
@@ -385,10 +390,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
             if !on { snow.simulation.wind = Preferences.wind.vector }
         }
         refreshMenu()
-    }
-
-    @objc private func toggleWindVaries() {
-        wander(!Preferences.windVaries)
     }
 
     @objc private func resetWindItem() {
