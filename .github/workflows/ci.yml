@@ -37,6 +37,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: sudo apt-get update -q && sudo apt-get install -y -q libwayland-dev rpm file
+      - run: cargo test --locked --manifest-path linux/Cargo.toml
+      - run: bash -n linux/gnome/install.sh linux/bench/gnome.sh linux/packaging/package.sh
       - run: cargo build --locked --release --manifest-path linux/Cargo.toml
       - run: linux/packaging/package.sh linux/target/release/snowhush dist
       - uses: actions/upload-artifact@v7

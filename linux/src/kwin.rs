@@ -148,13 +148,14 @@ fn sliding(connection: &Connection) -> bool {
 
 /// Takes the app's name on the session bus, which also keeps a second copy from starting,
 /// and listens for the script's reports. `None` when another Snowhush already runs.
-pub fn serve(shared: Arc<Shared>) -> zbus::Result<Option<Connection>> {
-    let built = zbus::blocking::connection::Builder::session()?
+pub fn serve(shared: Arc<Shared>, commands: calloop::channel::Sender<crate::snow::Command>) -> zbus::Result<Option<Connection>> {
+    let builder = zbus::blocking::connection::Builder::session()?
         .name(SERVICE)?
         .allow_name_replacements(false)
         .replace_existing_names(false)
-        .serve_at(PATH, Reports { shared, switch: Arc::default() })?
-        .build();
+        .serve_at(PATH, Reports { shared: shared.clone(), switch: Arc::default() })?;
+    let builder = if crate::gnome::is_engine() { builder.serve_at(PATH, crate::gnome::bridge(shared, commands))? } else { builder };
+    let built = builder.build();
     match built {
         Ok(connection) => Ok(Some(connection)),
         Err(zbus::Error::NameTaken) => Ok(None),

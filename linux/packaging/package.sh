@@ -27,6 +27,12 @@ install -Dm644 "$root/site/assets/icon-64.png" "$stage/usr/share/icons/hicolor/6
 install -Dm644 "$root/windows/assets/icon-256.png" "$stage/usr/share/icons/hicolor/256x256/apps/snowhush.png"
 install -Dm644 "$root/site/assets/icon-512.png" "$stage/usr/share/icons/hicolor/512x512/apps/snowhush.png"
 install -Dm644 "$root/LICENSE" "$stage/usr/share/licenses/snowhush/LICENSE"
+# GNOME discovers this extension on the next login; users enable it explicitly.
+gnome=$stage/usr/share/gnome-shell/extensions/snowhush@mbezruchko.github.io
+install -d "$gnome/bin"
+install -m644 "$root/linux/gnome/extension.js" "$root/linux/gnome/metadata.json" "$gnome/"
+ln -s ../../../../../bin/snowhush "$gnome/bin/snowhush"
+
 
 echo "Tarball…"
 tar -C "$stage" --owner=0 --group=0 -czf "$out/snowhush-linux-x86_64.tar.gz" usr
@@ -49,7 +55,8 @@ Homepage: https://snowhush.app
 Description: Snow on your Wayland desktop
  Soft snow drifts across your desktop, settles on the tops of your windows,
  slides off when you drag them and parts around the cursor. Needs KDE Plasma 6,
- Hyprland, Sway or niri on Wayland.
+ Hyprland, Sway, niri or GNOME 46 on Wayland. On GNOME, enable the bundled
+ Snowhush Shell extension after logging in.
 EOF
 dpkg-deb --root-owner-group -Zxz --build "$deb" "$out/snowhush-x86_64.deb" > /dev/null
 

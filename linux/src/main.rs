@@ -1,9 +1,11 @@
 mod chores;
+mod gnome;
 mod hyprland;
 mod kwin;
 mod light;
 mod log;
 mod niri;
+mod overlay;
 mod prefs;
 mod render;
 mod screen;
@@ -15,7 +17,8 @@ mod windows;
 
 fn main() {
     snowhush_core::text::choose(&languages());
-    if let Err(error) = snow::run() {
+    let result = if gnome::should_launch() { gnome::launch() } else { snow::run() };
+    if let Err(error) = result {
         log!("failed: {error}");
         eprintln!("Snowhush couldn't start: {error}");
         std::process::exit(1);

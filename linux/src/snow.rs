@@ -13,6 +13,8 @@ use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState};
 use smithay_client_toolkit::output::{OutputHandler, OutputState};
 use smithay_client_toolkit::registry::{ProvidesRegistryState, RegistryState};
 use smithay_client_toolkit::shell::wlr_layer::{LayerShell, LayerShellHandler, LayerSurface, LayerSurfaceConfigure};
+use smithay_client_toolkit::shell::xdg::XdgShell;
+use smithay_client_toolkit::shell::xdg::window::{Window, WindowConfigure, WindowHandler};
 use smithay_client_toolkit::{delegate_dispatch2, delegate_registry, registry_handlers};
 use wayland_client::globals::registry_queue_init;
 use wayland_client::protocol::{wl_output, wl_surface};
@@ -27,6 +29,7 @@ use crate::chores;
 use crate::kwin;
 use crate::light::{self, Shade, daylight};
 use crate::log;
+use crate::overlay::Shell;
 use crate::prefs::Settings;
 use crate::render::{Ambient, Gpu};
 use crate::screen::{self, PowerBudget, Screen};
@@ -74,7 +77,7 @@ pub struct App {
     registry: RegistryState,
     outputs: OutputState,
     compositor: CompositorState,
-    layer_shell: LayerShell,
+    shell: Shell,
     qh: QueueHandle<App>,
     gpu: Gpu,
     bus: Bus,
@@ -116,7 +119,17 @@ pub fn run() -> Result<(), String> {
     let (ping, ping_source) = calloop::ping::make_ping().map_err(|error| error.to_string())?;
     event_loop.handle().insert_source(ping_source, |_, _, _| {}).map_err(|error| error.to_string())?;
     let shared = Arc::new(Shared::new(ping));
-    let Some(bus) = kwin::serve(shared.clone()).map_err(|error| format!("D-Bus: {error}"))? else {
+    let (commands, channel) = calloop::channel::channel::<Command>();
+    event_loop
+        .handle()
+        .insert_source(channel, |event, _, app| {
+            if let Event::Msg(command) = event {
+                app.command(command);
+            }
+        })
+        .map_err(|error| error.to_string())?;
+
+    let Some(bus) = kwin::serve(shared.clone(), commands.clone()).map_err(|error| format!("D-Bus: {error}"))? else {
         eprintln!("Snowhush is already running.");
         return Ok(());
     };
@@ -128,26 +141,23 @@ pub fn run() -> Result<(), String> {
     let (globals, mut queue) = registry_queue_init::<App>(&connection).map_err(|error| error.to_string())?;
     let qh = queue.handle();
     let compositor = CompositorState::bind(&globals, &qh).map_err(|error| error.to_string())?;
-    let layer_shell = LayerShell::bind(&globals, &qh).map_err(|_| "the compositor has no layer shell".to_string())?;
+    let shell = if crate::gnome::is_engine() {
+        Shell::Gnome(XdgShell::bind(&globals, &qh).map_err(|error| error.to_string())?)
+    } else {
+        Shell::Layer(
+            LayerShell::bind(&globals, &qh)
+                .map_err(|_| "the compositor has no layer shell; on GNOME install and enable linux/gnome's Shell extension".to_string())?,
+        )
+    };
     let gpu = Gpu::new(connection.backend().display_ptr().cast())?;
     log!("adapter: {}", gpu.adapter);
-
-    let (commands, channel) = calloop::channel::channel::<Command>();
-    event_loop
-        .handle()
-        .insert_source(channel, |event, _, app| {
-            if let Event::Msg(command) = event {
-                app.command(command);
-            }
-        })
-        .map_err(|error| error.to_string())?;
 
     let now = Instant::now();
     let mut app = App {
         registry: RegistryState::new(&globals),
         outputs: OutputState::new(&globals, &qh),
         compositor,
-        layer_shell,
+        shell,
         qh: qh.clone(),
         gpu,
         bus: bus.clone(),
@@ -178,7 +188,9 @@ pub fn run() -> Result<(), String> {
     WaylandSource::new(connection, queue).insert(event_loop.handle()).map_err(|error| error.to_string())?;
 
     use ksni::blocking::TrayMethods;
-    app.tray = Tray::new(settings, commands.clone()).spawn().inspect_err(|error| log!("tray: {error}")).ok();
+    if !crate::gnome::is_engine() {
+        app.tray = Tray::new(settings, commands.clone()).spawn().inspect_err(|error| log!("tray: {error}")).ok();
+    }
     watch_lock(&bus, commands);
 
     while !app.quit {
@@ -283,7 +295,7 @@ impl App {
             Command::BehindWindows(on) => {
                 self.settings.behind_windows = on;
                 let over = self.settings.over_full_screen;
-                self.screens.iter_mut().for_each(|screen| screen.set_layer(on, over));
+                self.screens.iter_mut().for_each(|screen| screen.set_layer((&self.gpu, &self.compositor, &self.shell, &self.qh), on, over));
             }
             Command::Performance(max) => {
                 self.settings.max_performance = max;
@@ -292,7 +304,7 @@ impl App {
             Command::OverFullScreen(on) => {
                 self.settings.over_full_screen = on;
                 let behind = self.settings.behind_windows;
-                self.screens.iter_mut().for_each(|screen| screen.set_layer(behind, on));
+                self.screens.iter_mut().for_each(|screen| screen.set_layer((&self.gpu, &self.compositor, &self.shell, &self.qh), behind, on));
                 if !on && self.screens.iter_mut().fold(false, |left, screen| screen.leave_full_screen() || left) {
                     self.place_screens();
                 }
@@ -346,6 +358,9 @@ impl App {
                     tray.update(|tray| tray.light = light);
                 }
             }
+        }
+        if crate::gnome::is_engine() {
+            self.settings.save();
         }
     }
 
@@ -487,7 +502,7 @@ impl App {
             let mut simulation = new_simulation(&bounds, &self.settings, self.budget);
             simulation.set_halloween(self.halloween);
             let mut screen = Screen::new(
-                (&self.compositor, &self.layer_shell, &self.qh),
+                (&self.compositor, &self.shell, &self.qh),
                 output.clone(),
                 name,
                 bounds,
@@ -612,7 +627,16 @@ impl App {
     fn place_screens(&mut self) {
         let Some(report) = self.report.1.clone() else { return };
         for screen in &mut self.screens {
-            let Some(display) = report.screens.iter().find(|display| display.name == screen.name) else { continue };
+            let display = report.screens.iter().find(|display| display.name == screen.name).or_else(|| {
+                // Before a GNOME overlay maps, or after monitors move, the Shell learns the output name
+                // from its first title. Coordinates bridge that short interval without losing the work area.
+                if matches!(self.shell, Shell::Gnome(_)) {
+                    report.screens.iter().find(|display| display.x == screen.bounds.x && display.y == screen.bounds.y)
+                } else {
+                    None
+                }
+            });
+            let Some(display) = display else { continue };
             screen.place(Area::bounds(display), Area::work(display), windows::shelf(&report, display));
             let walls = windows::walls(display, &report.screens);
             screen.simulation.walls = walls;
@@ -752,3 +776,16 @@ impl ProvidesRegistryState for App {
 
 delegate_registry!(App);
 delegate_dispatch2!(App);
+
+impl WindowHandler for App {
+    fn request_close(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &Window) {
+        self.quit = true;
+    }
+
+    fn configure(&mut self, _: &Connection, _: &QueueHandle<Self>, window: &Window, configure: WindowConfigure, _: u32) {
+        if let Some(screen) = self.screens.iter_mut().find(|screen| screen.is_window(window)) {
+            let (old_w, old_h) = screen.size();
+            screen.configure(&self.gpu, configure.new_size.0.map_or(old_w, |n| n.get()), configure.new_size.1.map_or(old_h, |n| n.get()));
+        }
+    }
+}
