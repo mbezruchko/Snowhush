@@ -5,6 +5,9 @@
 "wind" = "Vento";
 "calm" = "Calmaria";
 "reset" = "Redefinir";
+"hint.wind" = "Arraste a partir do centro para ajustar o vento";
+"hint.opacity" = "Quão opaco parece ao cair";
+"hint.accumulate" = "Onde se acumula";
 "off" = "Desligado";
 "mode" = "Modo";
 "mixed" = "Misto";

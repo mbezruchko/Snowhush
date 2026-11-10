@@ -5,6 +5,9 @@
 "wind" = "Wind";
 "calm" = "Windstill";
 "reset" = "Zurücksetzen";
+"hint.wind" = "Vom Mittelpunkt ziehen, um den Wind einzustellen";
+"hint.opacity" = "Wie deckend es beim Fallen wirkt";
+"hint.accumulate" = "Wo es liegen bleibt";
 "off" = "Aus";
 "mode" = "Modus";
 "mixed" = "Gemischt";

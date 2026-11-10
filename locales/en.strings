@@ -8,6 +8,9 @@
 "wind" = "Wind";
 "calm" = "Calm";
 "reset" = "Reset";
+"hint.wind" = "Drag from the center to set the wind";
+"hint.opacity" = "How solid it looks as it falls";
+"hint.accumulate" = "Where it settles";
 "off" = "Off";
 "mode" = "Mode";
 "mixed" = "Mixed";

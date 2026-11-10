@@ -229,3 +229,37 @@ final class MenuBigSlider: NSView {
         }
     }
 }
+
+/// A line of small text centred under a panel's control: the value it is set to, or, fainter, a word on what it does.
+final class MenuNote: NSView {
+    var text = "" {
+        didSet { needsDisplay = true }
+    }
+    private let faint: Bool
+
+    init(_ text: String = "", faint: Bool = false) {
+        self.text = text
+        self.faint = faint
+        super.init(frame: NSRect(x: 0, y: 0, width: 200, height: faint ? 22 : 16))
+        autoresizingMask = .width
+        let width = NSAttributedString(string: text, attributes: [.font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)]).size().width
+        setFrameSize(NSSize(width: max(200, ceil(width + 30)), height: frame.height))
+        setAccessibilityElement(true)
+        setAccessibilityRole(.staticText)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override var isFlipped: Bool { true }
+
+    override func accessibilityValue() -> Any? { text }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let line = NSAttributedString(string: text, attributes: [
+            .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
+            .foregroundColor: faint ? NSColor.tertiaryLabelColor : .secondaryLabelColor,
+        ])
+        let size = line.size()
+        line.draw(at: NSPoint(x: (bounds.width - size.width) / 2, y: faint ? 2 : (bounds.height - size.height) / 2))
+    }
+}

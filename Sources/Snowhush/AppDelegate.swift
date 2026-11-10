@@ -25,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private let accumulateRow = MenuDisclosure()
     private let windPad = MenuWindPad()
     private let windCaption = MenuDisclosure()
+    private let windValue = MenuNote()
     private let opacityCaption = MenuDisclosure()
     private let accumulateCaption = MenuDisclosure()
     private var surfaceItems: [(item: NSMenuItem, surface: Surfaces)] = []
@@ -222,6 +223,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         windCaption.pillToggled = { [unowned self] in wander(!Preferences.windVaries) }
         windCaption.actionPressed = { [unowned self] in resetWind() }
         addView(windPad, to: wind)
+        // Under each panel's control, what it is set to and a word on what it does.
+        addView(windValue, to: wind)
+        addView(MenuNote(tr("hint.wind"), faint: true), to: wind)
         // Rows of our own, their value in plain grey before the chevron: a badge crowds the system's arrow.
         addView(windRow, title: tr("wind"), to: menu).submenu = wind
 
@@ -235,6 +239,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
             refreshMenu()
         }
         addView(opacitySlider, to: opacity)
+        addView(MenuNote(tr("hint.opacity"), faint: true), to: opacity)
         addView(opacityRow, title: tr("opacity"), to: menu).submenu = opacity
 
         // Top to bottom, as they lie on the screen; a selection is snow on windows of a sort.
@@ -244,6 +249,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         surfaceItems = [Surfaces.widgets, .windows, .dock, .ground, .selection].map { surface in
             (toggle(SurfacePicker.name(of: surface), #selector(toggleSurfaceItem), to: accumulate), surface)
         }
+        addView(MenuNote(tr("hint.accumulate"), faint: true), to: accumulate)
         addView(accumulateRow, title: tr("accumulate"), to: menu).submenu = accumulate
         clearItem = add(tr("clear.snow"), #selector(clearSnow), to: menu)
         menu.addItem(.separator())
@@ -349,6 +355,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         windPad.wanders = Preferences.windVaries
         windRow.summary = Preferences.windVaries ? tr("variable") : Preferences.wind.summary
         windRow.fit(tr("wind"), least: 0)
+        windValue.text = windRow.summary
         windCaption.pillOn = Preferences.windVaries
         windCaption.action = Preferences.windVaries || Preferences.wind.strength > 0 ? tr("reset") : nil
         extraOrbs.on = [Preferences.mixed, Halloween.isOn]

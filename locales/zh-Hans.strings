@@ -5,6 +5,9 @@
 "wind" = "风";
 "calm" = "无风";
 "reset" = "重置";
+"hint.wind" = "从中心拖动以设置风向";
+"hint.opacity" = "飘落时的不透明程度";
+"hint.accumulate" = "堆积的位置";
 "off" = "关";
 "mode" = "模式";
 "mixed" = "混合";

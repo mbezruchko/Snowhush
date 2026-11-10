@@ -5,6 +5,9 @@
 "wind" = "Vent";
 "calm" = "Calme";
 "reset" = "Réinitialiser";
+"hint.wind" = "Faites glisser depuis le centre pour régler le vent";
+"hint.opacity" = "Opacité de ce qui tombe";
+"hint.accumulate" = "Où cela se dépose";
 "off" = "Arrêt";
 "mode" = "Mode";
 "mixed" = "Mélange";

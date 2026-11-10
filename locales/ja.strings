@@ -5,6 +5,9 @@
 "wind" = "風";
 "calm" = "無風";
 "reset" = "リセット";
+"hint.wind" = "中心からドラッグして風を設定";
+"hint.opacity" = "降るものの濃さ";
+"hint.accumulate" = "積もる場所";
 "off" = "オフ";
 "mode" = "モード";
 "mixed" = "ミックス";
