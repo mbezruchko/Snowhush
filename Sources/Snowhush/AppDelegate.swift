@@ -172,7 +172,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
             MenuOrbs.Orb(name: tr("mixed"), image: NSImage(systemSymbolName: "square.on.square", accessibilityDescription: nil)?.withSymbolConfiguration(small) ?? Blossom.icon),
             MenuOrbs.Orb(name: tr("halloween"), image: Halloween.icon),
         ]
-        extraOrbs.fit()
+        // As wide as the modes above and no wider, whatever its own names are: the menu keeps its width when it shows.
+        extraOrbs.setFrameSize(NSSize(width: modeOrbs.frame.width, height: extraOrbs.frame.height))
         extraOrbs.toggled = { [unowned self] k in
             if k == 0 { toggleMixed() } else { spookySnow() }
             refreshMenu()
