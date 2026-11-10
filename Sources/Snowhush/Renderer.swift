@@ -26,6 +26,9 @@ struct Uniforms {
     var shake = SIMD4<Float>(0, 0, 0, 0)
     /// The pumpkins' candles: where each burns, how far its light reaches and how bright it is.
     var pumpkins = (SIMD4<Float>(0, 0, 0, 0), SIMD4<Float>(0, 0, 0, 0), SIMD4<Float>(0, 0, 0, 0))
+    /// The New Year's garland lighting the snow round the tree's foot: where, how far and how brightly, and in what colour.
+    var garland = (SIMD4<Float>(0, 0, 0, 0), SIMD4<Float>(0, 0, 0, 0), SIMD4<Float>(0, 0, 0, 0))
+    var garlandColors = (SIMD4<Float>(0, 0, 0, 0), SIMD4<Float>(0, 0, 0, 0), SIMD4<Float>(0, 0, 0, 0))
 }
 
 struct PumpkinUniforms {
@@ -62,6 +65,10 @@ final class Renderer: NSObject, MTKViewDelegate {
     private static let lanternReach: Float = 130
     /// Where the Dock's snow is drawn; without one it stays in the main overlay.
     var dockOverlay: DockOverlay?
+    /// Where the New Year's tree is drawn, under the snow and at the screen's full resolution.
+    var treeView: TreeView?
+    private var treeRenderer: TreeRenderer?
+    private var treeDrawn = false
     var sceneLight: (CFTimeInterval) -> (light: SIMD3<Float>, shadowTint: SIMD4<Float>, rim: SIMD4<Float>, lantern: Float) = { _ in (SIMD3(repeating: 1), .zero, .zero, 0) }
     private var ambient: (light: SIMD3<Float>, shadowTint: SIMD4<Float>, rim: SIMD4<Float>, lantern: Float) = (SIMD3(repeating: 1), .zero, .zero, 0)
     private var lanternAt = SIMD2<Float>(-10_000, -10_000)
@@ -288,6 +295,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         if candles.count > 0 { uniforms.pumpkins.0 = candles[0] }
         if candles.count > 1 { uniforms.pumpkins.1 = candles[1] }
         if candles.count > 2 { uniforms.pumpkins.2 = candles[2] }
+        if let tree = simulation.tree { light(&uniforms, from: tree) }
         let uniformsLength = MemoryLayout<Uniforms>.stride
 
         let glass = sprites > 0 && simulation.hasGlassDrops ? encodeField(sprites: spriteBuffer, count: sprites, into: commandBuffer, matching: pass, uniforms: uniforms) : nil
@@ -311,6 +319,58 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
         encoder.endEncoding()
         encodeDock(piles.filter(\.isDock), into: commandBuffer, uniforms: uniforms, heights: heightBuffer)
+        encodeTree(into: commandBuffer, uniforms: uniforms)
+    }
+
+    /// The garland's lowest bulbs, in three bunches across the tree, light the drift round its foot.
+    private func light(_ uniforms: inout Uniforms, from tree: ChristmasTree) {
+        var sums = [(place: SIMD2<Float>, color: SIMD3<Float>, count: Float)](repeating: (.zero, .zero, 0), count: 3)
+        for bulb in tree.bulbs {
+            let place = tree.bulbPosition(bulb)
+            guard place.y < tree.base.y + 80 else { continue }
+            let side = place.x < tree.base.x - 18 ? 0 : place.x > tree.base.x + 18 ? 2 : 1
+            sums[side].place += place
+            sums[side].color += bulb.color * bulb.brightness
+            sums[side].count += 1
+        }
+        let lights = sums.map { sum -> (SIMD4<Float>, SIMD4<Float>) in
+            guard sum.count > 0 else { return (.zero, .zero) }
+            let place = sum.place / sum.count
+            return (SIMD4(place.x, max(place.y - 20, tree.base.y), 60, 0.32), SIMD4(sum.color / sum.count, 0))
+        }
+        uniforms.garland = (lights[0].0, lights[1].0, lights[2].0)
+        uniforms.garlandColors = (lights[0].1, lights[1].1, lights[2].1)
+    }
+
+    /// Draws the tree into its own layer, and clears that once after the tree is gone.
+    private func encodeTree(into commandBuffer: MTLCommandBuffer, uniforms: Uniforms) {
+        guard let treeView else { return }
+        let tree = simulation.tree.flatMap { $0.base.y > -ChristmasTree.height - 30 ? $0 : nil }
+        guard tree != nil || treeDrawn else { return }
+        if treeRenderer == nil { treeRenderer = try? TreeRenderer(device: device, queue: queue, pixelFormat: .bgra8Unorm) }
+        let layer = treeView.metalLayer
+        guard let treeRenderer, let drawable = layer.nextDrawable() else { return }
+        let pass = MTLRenderPassDescriptor()
+        pass.colorAttachments[0].texture = drawable.texture
+        pass.colorAttachments[0].loadAction = .clear
+        pass.colorAttachments[0].storeAction = .store
+        pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0)
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return }
+        if let tree {
+            let frame = treeView.frame
+            let treeUniforms = TreeUniforms(
+                origin: SIMD2(Float(frame.minX), Float(frame.minY)),
+                size: SIMD2(Float(frame.width), Float(frame.height)),
+                time: uniforms.time,
+                shake: SIMD2(uniforms.shake.x, uniforms.shake.y),
+                light: uniforms.light,
+                shadowTint: uniforms.shadowTint
+            )
+            treeRenderer.encode(tree, with: encoder, uniforms: treeUniforms)
+        }
+        encoder.endEncoding()
+        commandBuffer.present(drawable)
+        treeDrawn = tree != nil
     }
 
     /// Adds up the bumps of the drops on the glass into the field, as big as the frame drawn, for the glass to be drawn

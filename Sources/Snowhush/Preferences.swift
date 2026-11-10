@@ -32,6 +32,8 @@ enum Preferences {
     private static let deepInteractionKey = "deepInteraction"
     private static let halloweenKey = "halloweenOn"
     private static let halloweenSkippedKey = "halloweenSkipped"
+    private static let newYearKey = "newYearOn"
+    private static let newYearSkippedKey = "newYearSkipped"
     private static let modeKey = "mode"
     private static let mixedKey = "mixed"
     private static let mixKey = "mix"
@@ -55,6 +57,8 @@ enum Preferences {
             deepInteractionKey: false,
             halloweenKey: false,
             halloweenSkippedKey: 0,
+            newYearKey: false,
+            newYearSkippedKey: 0,
             autumnKey: false,
             mixedKey: false,
             fallingOpacityKey: 1.0,
@@ -143,6 +147,18 @@ enum Preferences {
     static var halloweenSkipped: Int {
         get { defaults.integer(forKey: halloweenSkippedKey) }
         set { defaults.set(newValue, forKey: halloweenSkippedKey) }
+    }
+
+    /// The New Year turned on from the menu, for every day.
+    static var newYear: Bool {
+        get { defaults.bool(forKey: newYearKey) }
+        set { defaults.set(newValue, forKey: newYearKey) }
+    }
+
+    /// The year whose New Year season, from its December, was turned off from the menu, zero for none.
+    static var newYearSkipped: Int {
+        get { defaults.integer(forKey: newYearSkippedKey) }
+        set { defaults.set(newValue, forKey: newYearSkippedKey) }
     }
 
     static var mode: Mode {

@@ -1,0 +1,406 @@
+let treeShaderSource = """
+#include <metal_stdlib>
+using namespace metal;
+
+struct TreeUniforms {
+    float2 origin;
+    float2 size;
+    float time;
+    float bulbCount;
+    float2 shake;
+    float4 light;
+    float4 shadowTint;
+};
+
+struct TreePiece {
+    float4 a;
+    float4 b;
+    float4 c;
+    float4 d;
+};
+
+struct TreeBulb {
+    float4 place;
+    float4 color;
+};
+
+static float2 treeClip(float2 world, constant TreeUniforms &u) {
+    return (world + u.shake - u.origin) / u.size * 2.0 - 1.0;
+}
+
+static float treeHash(float n) {
+    return fract(sin(n) * 43758.5453);
+}
+
+static float treeNoise(float x) {
+    float i = floor(x);
+    float f = fract(x);
+    return mix(treeHash(i), treeHash(i + 1.0), f * f * (3.0 - 2.0 * f));
+}
+
+static float boughProfile(float s) {
+    float rise = saturate(s / 0.25);
+    return 0.25 + 0.75 * rise * rise * (3.0 - 2.0 * rise) * pow(max(1.0 - s, 0.0), 0.7);
+}
+
+/// The garland's light falling on a point: the bulbs behind the tree reach it only through the needles.
+static float3 garlandLight(float2 p, constant TreeUniforms &u, const device TreeBulb *bulbs, float reach) {
+    float3 sum = float3(0.0);
+    int count = int(u.bulbCount);
+    for (int k = 0; k < count; k++) {
+        float2 d = p - bulbs[k].place.xy;
+        float fall = exp(-dot(d, d) / (reach * reach));
+        sum += bulbs[k].color.rgb * (bulbs[k].color.w * fall * (bulbs[k].place.w > 0.5 ? 1.0 : 0.4));
+    }
+    return sum;
+}
+
+static float segmentDistance(float2 p, float2 a, float2 b) {
+    float2 ab = b - a;
+    float t = saturate(dot(p - a, ab) / max(dot(ab, ab), 1e-4));
+    return length(p - (a + ab * t));
+}
+
+// MARK: Boughs
+
+constant int boughSegments = 10;
+
+struct BoughOut {
+    float4 position [[position]];
+    float2 uv;
+    float2 world;
+    float across;
+    uint piece [[flat]];
+};
+
+/// A strip bent along the bough: it leaves the trunk at a.xy, reaches a.zw at rest and its tip is pushed b.xy aside.
+vertex BoughOut boughVertex(uint vid [[vertex_id]], uint iid [[instance_id]], const device TreePiece *pieces [[buffer(0)]],
+                            constant TreeUniforms &u [[buffer(1)]]) {
+    TreePiece p = pieces[iid];
+    float s = float(vid / 2) / float(boughSegments);
+    float side = (vid & 1) ? 1.0 : -1.0;
+    float2 reach = p.a.zw;
+    float2 offset = p.b.xy;
+    float2 center = p.a.xy + reach * s + offset * s * s;
+    float2 tangent = normalize(reach + 2.0 * offset * s);
+    float2 normal = float2(-tangent.y, tangent.x);
+    if (dot(normal, p.d.xy) < 0.0) normal = -normal;
+    float spread = p.b.z * 0.5 + p.d.z + 3.0;
+    float across = side * spread;
+    float2 world = center + normal * across;
+    BoughOut out;
+    out.position = float4(treeClip(world, u), 0.0, 1.0);
+    out.uv = float2(s, 0.5 - across / p.b.z);
+    out.world = world;
+    out.across = across;
+    out.piece = iid;
+    return out;
+}
+
+fragment float4 boughFragment(BoughOut in [[stage_in]], texture2d_array<float> needles [[texture(0)]],
+                              const device TreePiece *pieces [[buffer(0)]], constant TreeUniforms &u [[buffer(1)]],
+                              const device TreeBulb *bulbs [[buffer(2)]]) {
+    TreePiece p = pieces[in.piece];
+    float width = p.b.z;
+    float aa = max(fwidth(in.across), 0.02);
+    float3 garland = garlandLight(in.world, u, bulbs, 12.0);
+    float3 daylight = mix(float3(1.0), u.light.rgb, 0.85);
+
+    if (p.c.w > 0.5) {
+        float s = in.uv.x;
+        float halfWidth = width * 0.5 * (1.0 - 0.7 * s);
+        float cover = smoothstep(halfWidth + aa, halfWidth - aa, abs(in.across)) * (1.0 - smoothstep(0.9, 1.0, s));
+        if (cover <= 0.0) discard_fragment();
+        float bark = treeNoise(in.world.y * 0.8 + floor((in.across / max(halfWidth, 0.5) + 1.0) * 2.5) * 13.0);
+        float round = 1.0 - pow(saturate(abs(in.across - halfWidth * 0.3) / max(halfWidth * 1.3, 0.01)), 2.0);
+        float3 color = mix(float3(0.16, 0.1, 0.06), float3(0.44, 0.3, 0.18), round) * (0.75 + 0.35 * bark);
+        color = color * daylight + garland * 0.12;
+        return float4(color * cover, cover);
+    }
+
+    constexpr sampler smooth(filter::linear, mip_filter::linear, address::clamp_to_zero);
+    float4 needle = needles.sample(smooth, in.uv, uint(p.c.z + 0.5));
+    float depth = saturate(p.b.w * 0.5 + 0.5);
+    needle.rgb *= mix(0.45, 1.0, depth) * daylight;
+    needle.rgb += garland * needle.a * 0.14;
+
+    // Snow lies along the top of the needles: lumpy, thickest midway, none at the trunk or the tip.
+    float s = in.uv.x;
+    float rest = width * 0.5 * boughProfile(s) * 0.62;
+    // In clumps, not a band: some stretches bare, each clump rounded on top.
+    float clumps = smoothstep(0.28, 0.68, treeNoise(s * 6.5 + p.c.y * 37.0));
+    float lumps = (0.15 + 0.85 * clumps) * (0.8 + 0.2 * treeNoise(s * 14.0 + p.c.y * 7.0));
+    float thick = p.d.z * lumps * smoothstep(0.08, 0.26, s) * (1.0 - smoothstep(0.75, 0.95, s));
+    float above = in.across - rest;
+    float4 snow = float4(0.0);
+    if (thick > 0.12) {
+        float bottom = -1.2 - thick * 0.3 + (treeNoise(s * 8.0 + p.c.y * 11.0) - 0.5) * 0.9;
+        float cover = smoothstep(thick + aa, thick - aa, above) * smoothstep(bottom - aa, bottom + aa, above);
+        float height = saturate((above - bottom) / max(thick - bottom, 0.01));
+        float3 shadow = mix(float3(0.68, 0.75, 0.87), u.shadowTint.rgb, u.shadowTint.a);
+        float3 color = mix(shadow, float3(0.97, 0.98, 1.0), smoothstep(0.05, 0.8, height));
+        color *= mix(0.7, 1.0, depth) * daylight;
+        color += garland * 0.4;
+        snow = float4(color * cover, cover);
+    }
+    float4 color = snow + needle * (1.0 - snow.a);
+    if (color.a <= 0.003) discard_fragment();
+    return color;
+}
+
+// MARK: Baubles, bulbs, the star and the presents
+
+struct DecorOut {
+    float4 position [[position]];
+    float2 world;
+    uint piece [[flat]];
+};
+
+vertex DecorOut decorVertex(uint vid [[vertex_id]], uint iid [[instance_id]], const device TreePiece *pieces [[buffer(0)]],
+                            constant TreeUniforms &u [[buffer(1)]]) {
+    TreePiece p = pieces[iid];
+    float2 corner = float2(float(vid & 1), float(vid >> 1));
+    int kind = int(p.c.w + 0.5);
+    float4 box;
+    if (kind == 0) {
+        float r = p.a.z;
+        box = float4(min(p.a.xy - r, p.c.xy) - 2.0, max(p.a.xy + r, p.c.xy) + 2.0);
+    } else if (kind == 1) {
+        float reach = p.a.z * 6.0;
+        box = float4(p.a.xy - reach, p.a.xy + reach);
+    } else if (kind == 2) {
+        box = float4(p.a.x - p.a.z * 0.5 - 18.0, p.a.y - 2.0, p.a.x + p.a.z * 0.5 + 18.0, p.a.y + p.a.w + 38.0);
+    } else {
+        float reach = p.a.z * 4.5;
+        box = float4(p.a.xy - reach, p.a.xy + reach);
+    }
+    float2 world = mix(box.xy, box.zw, corner);
+    DecorOut out;
+    out.position = float4(treeClip(world, u), 0.0, 1.0);
+    out.world = world;
+    out.piece = iid;
+    return out;
+}
+
+static float4 over(float4 top, float4 under) {
+    return top + under * (1.0 - top.a);
+}
+
+/// A glass ball on a thread: lit from the upper left, with the garland's bulbs mirrored in it.
+static float4 baubleAt(float2 p, TreePiece piece, float aa, constant TreeUniforms &u, const device TreeBulb *bulbs) {
+    float2 center = piece.a.xy;
+    float r = piece.a.z;
+    float2 pivot = piece.c.xy;
+    float3 base = piece.b.rgb;
+    float seed = piece.b.w;
+    float3 daylight = mix(float3(1.0), u.light.rgb, 0.8);
+    float2 up = normalize(pivot - center + float2(0.0, 1e-3));
+    float2 side = float2(up.y, -up.x);
+
+    float cord = segmentDistance(p, center + up * r * 1.15, pivot);
+    float4 color = float4(float3(0.75, 0.6, 0.3) * daylight, 0.85) * smoothstep(0.32 + aa, 0.32 - aa, cord);
+
+    float2 local = float2(dot(p - center, side), dot(p - center, up)) / r;
+    float cap = smoothstep(0.27 + aa / r, 0.27 - aa / r, abs(local.x)) * smoothstep(0.8, 0.84, local.y) * smoothstep(1.2 + aa / r, 1.2 - aa / r, local.y);
+    float3 gold = mix(float3(0.55, 0.42, 0.18), float3(1.0, 0.88, 0.55), 0.5 + 0.5 * sin(local.x * 18.0)) * daylight;
+    color = over(float4(gold * cap, cap), color);
+
+    float2 q = (p - center) / r;
+    float d = length(q);
+    float cover = smoothstep(1.0 + aa / r, 1.0 - aa / r, d);
+    if (cover <= 0.0) return color;
+    float3 n = float3(q, sqrt(max(1.0 - d * d, 0.0)));
+    float3 light = normalize(float3(-0.55, 0.65, 0.55));
+    float diffuse = saturate(dot(n, light));
+    float spec = pow(saturate(dot(n, normalize(light + float3(0.0, 0.0, 1.0)))), 70.0);
+    float fresnel = pow(1.0 - n.z, 2.2);
+    float3 sky = mix(float3(0.04, 0.05, 0.07), float3(0.85, 0.88, 0.95), smoothstep(-0.4, 0.9, n.y));
+    float3 ball = base * (0.22 + 0.78 * diffuse);
+    ball = mix(ball, sky * mix(float3(1.0), base, 0.55), 0.18 + 0.5 * fresnel);
+    if (seed > 0.62) {
+        // A frosted band around its middle.
+        float band = smoothstep(0.2, 0.14, abs(q.y + 0.05 - 0.1 * q.x));
+        float glitter = step(0.86, treeHash(floor(p.x * 3.0) * 17.0 + floor(p.y * 3.0) * 3.1 + floor(u.time * 3.0)));
+        ball = mix(ball, float3(0.95, 0.93, 0.88) * (0.75 + 0.25 * diffuse) + glitter * 0.4, band * 0.85);
+    }
+    ball = ball * daylight + spec * 0.9;
+    int count = int(u.bulbCount);
+    for (int k = 0; k < count; k++) {
+        float2 toward = bulbs[k].place.xy - center;
+        float distance = length(toward);
+        if (distance > 60.0 || bulbs[k].place.w < 0.5) continue;
+        float3 midway = normalize(normalize(float3(toward, 18.0)) + float3(0.0, 0.0, 1.0));
+        ball += bulbs[k].color.rgb * bulbs[k].color.w * pow(saturate(dot(n, midway)), 120.0) * 1.6 * exp(-distance / 40.0);
+    }
+    return over(float4(ball * cover, cover), color);
+}
+
+/// A bulb on the garland: a lit glass drop under its socket, glowing. One behind the tree only glows through it.
+static float4 bulbAt(float2 p, TreePiece piece, float aa) {
+    float2 d = p - piece.a.xy;
+    float size = piece.a.z;
+    float3 hue = piece.b.rgb;
+    float bright = piece.b.w;
+    float halo = exp(-dot(d, d) / (size * size * 7.0)) * 0.55 + exp(-dot(d, d) / (size * size * 1.4)) * 0.5;
+    if (piece.a.w < 0.5) {
+        float glow = halo * bright * 0.45;
+        return float4(hue * glow, glow * 0.15);
+    }
+    float body = smoothstep(1.0 + aa / size, 1.0 - aa / size, length((d + float2(0.0, size * 0.15)) / float2(size * 0.72, size * 0.95)));
+    float3 hot = mix(hue, float3(1.0), 0.45 * bright) * (0.45 + 0.7 * bright);
+    float4 color = float4(hot * body, body);
+    float glow = halo * bright;
+    color.rgb += hue * glow * (1.0 - color.a);
+    color.a += glow * 0.2 * (1.0 - color.a);
+    return color;
+}
+
+static float starDistance(float2 p, float r, float inner) {
+    const float2 k1 = float2(0.809016994375, -0.587785252292);
+    const float2 k2 = float2(-k1.x, k1.y);
+    p.x = abs(p.x);
+    p -= 2.0 * max(dot(k1, p), 0.0) * k1;
+    p -= 2.0 * max(dot(k2, p), 0.0) * k2;
+    p.x = abs(p.x);
+    p.y -= r;
+    float2 ba = inner * float2(-k1.y, k1.x) - float2(0.0, 1.0);
+    float h = clamp(dot(p, ba) / dot(ba, ba), 0.0, r);
+    return length(p - ba * h) * sign(p.y * ba.x - p.x * ba.y);
+}
+
+/// The star on top: faceted gold, glowing, with a slow glint.
+static float4 starAt(float2 p, TreePiece piece, float aa, constant TreeUniforms &u) {
+    float size = piece.a.z;
+    float angle = piece.a.w;
+    float2 d = p - piece.a.xy;
+    d = float2(cos(angle) * d.x + sin(angle) * d.y, -sin(angle) * d.x + cos(angle) * d.y);
+    float sd = starDistance(d, size, 0.42);
+    float cover = smoothstep(aa, -aa, sd);
+    float theta = atan2(d.y, d.x) - 1.5707963;
+    float facet = fract(theta * 5.0 / 6.2831853 + 0.5);
+    float lit = facet < 0.5 ? 1.05 : 0.72;
+    float centre = exp(-dot(d, d) / (size * size * 0.15));
+    float3 gold = mix(float3(0.85, 0.52, 0.1), float3(1.0, 0.86, 0.45), lit * 0.7) * lit + centre * float3(0.4, 0.35, 0.2);
+    float pulse = 0.85 + 0.15 * sin(u.time * 1.7);
+    float glow = exp(-dot(d, d) / (size * size * 2.0)) * 0.38 * pulse * piece.b.x;
+    float spin = u.time * 0.4;
+    float2 r = float2(cos(spin) * d.x + sin(spin) * d.y, -sin(spin) * d.x + cos(spin) * d.y);
+    float rays = (exp(-abs(r.x) * 2.2 / max(size * 0.08, 0.1)) * exp(-abs(r.y) / (size * 1.3))
+                + exp(-abs(r.y) * 2.2 / max(size * 0.08, 0.1)) * exp(-abs(r.x) / (size * 1.3))) * 0.22 * pulse * piece.b.x;
+    float4 color = float4(gold * cover, cover);
+    float shine = (glow + rays) * (1.0 - cover);
+    color.rgb += float3(1.0, 0.82, 0.45) * shine;
+    color.a += shine * 0.25;
+    return color;
+}
+
+/// A wrapped present sitting in the drift, its lid lifted b.x radians about its left hinge, b.y points of snow on it.
+static float4 presentAt(float2 p, TreePiece piece, float aa, constant TreeUniforms &u, const device TreeBulb *bulbs) {
+    float width = piece.a.z;
+    float height = piece.a.w;
+    float lid = piece.b.x;
+    float snowDepth = piece.b.y;
+    int style = int(piece.b.z + 0.5);
+    float2 local = p - piece.a.xy;
+    float3 daylight = mix(float3(1.0), u.light.rgb, 0.85);
+    float3 paper, ribbon;
+    if (style == 0) {
+        paper = float3(0.72, 0.07, 0.1);
+        ribbon = float3(0.95, 0.74, 0.3);
+    } else if (style == 1) {
+        paper = float3(0.1, 0.22, 0.58);
+        ribbon = float3(0.86, 0.88, 0.93);
+    } else {
+        paper = float3(0.08, 0.38, 0.22);
+        ribbon = float3(0.82, 0.1, 0.12);
+    }
+    float band = width * 0.09 + 1.0;
+
+    // Its pattern, fixed to the paper.
+    float3 face = paper;
+    if (style == 0) {
+        float2 cell = fract(local / 6.0 + float2(0.0, floor(local.x / 6.0) * 0.5)) - 0.5;
+        face = mix(face, float3(0.98, 0.95, 0.9), smoothstep(0.2, 0.15, length(cell)));
+    } else if (style == 1) {
+        float2 cell = fract(local / 7.0 + float2(floor(local.y / 7.0) * 0.5, 0.0)) - 0.5;
+        float sparkle = smoothstep(0.05, 0.0, abs(cell.x) * abs(cell.y) * 9.0 + length(cell) * 0.12 - 0.02);
+        face = mix(face, float3(0.85, 0.88, 0.95), sparkle);
+    } else {
+        float stripe = fract((local.x + local.y) / 5.0);
+        face = mix(face, float3(0.92, 0.75, 0.32), smoothstep(0.1, 0.16, stripe) * smoothstep(0.42, 0.36, stripe));
+    }
+
+    // The box: lit from the left, darker toward its bottom and in the lid's shadow.
+    float inside = smoothstep(width * 0.5 + aa, width * 0.5 - aa, abs(local.x)) * smoothstep(-aa, aa, local.y) * smoothstep(height + aa, height - aa, local.y);
+    float3 box = mix(face, ribbon, smoothstep(band + aa, band - aa, abs(local.x)));
+    float shade = 1.08 - 0.3 * saturate(local.x / width + 0.5);
+    shade *= 0.8 + 0.2 * saturate(local.y / height);
+    shade *= mix(0.68, 1.0, smoothstep(height - 3.0, height - 6.0, local.y) + saturate(lid * 3.0) * 0.0);
+    float3 lights = garlandLight(p, u, bulbs, 18.0);
+    float4 color = float4((box * shade * daylight + lights * 0.25) * inside, inside);
+
+    // The lid, turned about its left hinge.
+    float overhang = 1.5;
+    float thickness = 5.0;
+    float2 hinge = float2(-width * 0.5 - overhang, height);
+    float2 q = p - piece.a.xy - hinge;
+    float c = cos(lid), s = sin(lid);
+    q = float2(c * q.x + s * q.y, -s * q.x + c * q.y);
+    float span = width + 2.0 * overhang;
+    float lidCover = smoothstep(-aa, aa, q.x) * smoothstep(span + aa, span - aa, q.x) * smoothstep(-aa, aa, q.y) * smoothstep(thickness + aa, thickness - aa, q.y);
+    float lidX = q.x - span * 0.5;
+    float3 top = mix(face, ribbon, smoothstep(band + aa, band - aa, abs(lidX)));
+    float lidShade = (1.12 - 0.3 * saturate(q.x / span)) * mix(0.9, 1.12, smoothstep(thickness - 1.4, thickness - 0.6, q.y));
+    float4 lidColor = float4((top * lidShade * daylight + lights * 0.25) * lidCover, lidCover);
+
+    // Snow heaped on the lid, rounded off at its ends.
+    float4 snow = float4(0.0);
+    if (snowDepth > 0.15) {
+        float t = saturate(q.x / span) * 2.0 - 1.0;
+        float lumps = 0.8 + 0.2 * treeNoise(q.x * 0.7 + piece.b.w * 30.0);
+        float rise = snowDepth * lumps * sqrt(max(1.0 - pow(abs(t), 6.0), 0.0));
+        float snowCover = smoothstep(thickness - 1.0 - aa, thickness - 1.0 + aa, q.y) * smoothstep(thickness + rise + aa, thickness + rise - aa, q.y)
+                        * smoothstep(-0.5 - aa, -0.5 + aa, q.x) * smoothstep(span + 0.5 + aa, span + 0.5 - aa, q.x);
+        float3 shadow = mix(float3(0.7, 0.77, 0.88), u.shadowTint.rgb, u.shadowTint.a);
+        float3 white = mix(shadow, float3(0.97, 0.98, 1.0), smoothstep(thickness, thickness + rise, q.y + 0.6));
+        snow = float4((white * daylight + lights * 0.5) * snowCover, snowCover);
+    }
+
+    // The bow on top, standing out of the snow.
+    float2 knot = float2(lidX, q.y - thickness - 2.2 - snowDepth * 0.6);
+    float bowSize = min(width * 0.2, 5.5);
+    float4 bow = float4(0.0);
+    for (int k = 0; k < 2; k++) {
+        float flip = k == 0 ? -1.0 : 1.0;
+        float2 loopAt = knot - float2(flip * bowSize * 0.85, bowSize * 0.35);
+        float turn = -flip * 0.45;
+        float2 e = float2(cos(turn) * loopAt.x + sin(turn) * loopAt.y, -sin(turn) * loopAt.x + cos(turn) * loopAt.y);
+        float ring = length(e / float2(bowSize, bowSize * 0.62));
+        float loop = smoothstep(1.0 + aa / bowSize, 1.0 - aa / bowSize, ring) * smoothstep(0.42 - aa / bowSize, 0.42 + aa / bowSize, ring);
+        float3 tone = ribbon * (0.75 + 0.35 * saturate(0.5 - e.y / bowSize));
+        bow = over(float4(tone * daylight * loop, loop), bow);
+    }
+    float centre = smoothstep(bowSize * 0.32 + aa, bowSize * 0.32 - aa, length(knot));
+    bow = over(float4(ribbon * 0.85 * daylight * centre, centre), bow);
+    return over(bow, over(snow, over(lidColor, color)));
+}
+
+fragment float4 decorFragment(DecorOut in [[stage_in]], const device TreePiece *pieces [[buffer(0)]], constant TreeUniforms &u [[buffer(1)]],
+                              const device TreeBulb *bulbs [[buffer(2)]]) {
+    TreePiece p = pieces[in.piece];
+    float aa = max(fwidth(in.world.x), 0.02);
+    int kind = int(p.c.w + 0.5);
+    float4 color;
+    if (kind == 0) {
+        color = baubleAt(in.world, p, aa, u, bulbs);
+    } else if (kind == 1) {
+        color = bulbAt(in.world, p, aa);
+    } else if (kind == 2) {
+        color = presentAt(in.world, p, aa, u, bulbs);
+    } else {
+        color = starAt(in.world, p, aa, u);
+    }
+    if (color.a <= 0.002 && max(color.r, max(color.g, color.b)) <= 0.002) discard_fragment();
+    return color;
+}
+"""

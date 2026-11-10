@@ -85,6 +85,15 @@ final class ScreenSnow {
             simulation.halloween = halloween
         }
     }
+    var newYear = false {
+        didSet {
+            simulation.newYear = newYear
+            treeView.isHidden = !newYear
+            placeTree()
+            wake()
+        }
+    }
+    private let treeView: TreeView
     var modes: [Mode] {
         get { simulation.modes }
         set { simulation.modes = newValue }
@@ -123,6 +132,8 @@ final class ScreenSnow {
         dock.window.showsInScreenshots = Preferences.showInScreenshots
         renderer.dockOverlay = dock
         view = Self.makeView(device: device, size: screen.frame.size)
+        treeView = TreeView(device: device)
+        renderer.treeView = treeView
 
         renderer.cursorLocation = { [unowned self] in
             // Notification Center is in front of the snow then, which the pointer over it can't reach.
@@ -160,7 +171,13 @@ final class ScreenSnow {
         renderer.interactiveFrameRate = Self.interactiveFrameRate(of: screen)
         measure()
         view.delegate = renderer
-        window.contentView = view
+        // The tree goes under the snow, so the drift covers its foot and the snow falls in front of it.
+        let content = NSView(frame: CGRect(origin: .zero, size: screen.frame.size))
+        content.wantsLayer = true
+        content.autoresizingMask = [.width, .height]
+        content.addSubview(treeView)
+        content.addSubview(view)
+        window.contentView = content
         window.orderFrontRegardless()
         checkCovered()
     }
@@ -170,11 +187,20 @@ final class ScreenSnow {
         window.setFrame(screen.frame, display: true)
         dock.fit(to: screen)
         Renderer.fitDrawable(of: view)
+        placeTree()
         simulation.resize(width: Float(screen.frame.width), height: Float(screen.frame.height))
         light.invalidate()
         renderer.interactiveFrameRate = Self.interactiveFrameRate(of: screen)
         measure()
         checkCovered()
+    }
+
+    private func placeTree() {
+        guard newYear else { return }
+        let x = CGFloat(simulation.treeX)
+        let extent = ChristmasTree.extent
+        let frame = CGRect(x: max(0, x + CGFloat(extent.x)), y: 0, width: CGFloat(extent.z - extent.x), height: CGFloat(extent.w))
+        treeView.fit(frame, scale: screen.backingScaleFactor)
     }
 
     private static func interactiveFrameRate(of screen: NSScreen) -> Int {
@@ -457,6 +483,32 @@ final class ScreenSnow {
         view.autoResizeDrawable = false
         Renderer.fitDrawable(of: view)
         return view
+    }
+}
+
+/// The New Year's tree's own layer, drawn at the screen's full resolution: the snow is drawn at one pixel a point.
+final class TreeView: NSView {
+    let metalLayer = CAMetalLayer()
+
+    init(device: MTLDevice) {
+        super.init(frame: .zero)
+        metalLayer.device = device
+        metalLayer.pixelFormat = .bgra8Unorm
+        metalLayer.isOpaque = false
+        metalLayer.framebufferOnly = true
+        wantsLayer = true
+        isHidden = true
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    override func makeBackingLayer() -> CALayer { metalLayer }
+
+    func fit(_ frame: CGRect, scale: CGFloat) {
+        self.frame = frame
+        metalLayer.contentsScale = scale
+        metalLayer.drawableSize = CGSize(width: frame.width * scale, height: frame.height * scale)
     }
 }
 

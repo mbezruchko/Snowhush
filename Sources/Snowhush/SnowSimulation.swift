@@ -659,6 +659,17 @@ final class SnowSimulation {
     private var pumpkinsMoved = false
     /// The app windows on the screen, left, bottom, right, top: a pumpkin hides from any that covers it.
     var windowFrames: [SIMD4<Float>] = []
+    /// The New Year's fir, standing in the snow while it is the New Year.
+    var newYear = false {
+        didSet {
+            guard newYear != oldValue else { return }
+            tree = newYear ? ChristmasTree() : nil
+            tree?.base = SIMD2(treeX, -(ChristmasTree.height + 40))
+        }
+    }
+    private(set) var tree: ChristmasTree?
+    /// Where the tree's trunk stands, from the left edge of the screen.
+    let treeX: Float = 124
 
     init(width: Float, height: Float, intensity: Float) {
         self.width = width
@@ -681,7 +692,7 @@ final class SnowSimulation {
     var hasSnow: Bool { !lying.isEmpty || layers.contains { $0.top > 0.5 } }
     /// Nothing falls, lies, waits for its window or haunts, and nothing will until the snow is stirred.
     var isEmpty: Bool {
-        intensity <= 0 && !halloween && flakes.isEmpty && grains.isEmpty && motes.isEmpty && ghosts.isEmpty
+        intensity <= 0 && !halloween && tree == nil && flakes.isEmpty && grains.isEmpty && motes.isEmpty && ghosts.isEmpty
             && fallingSigns.isEmpty && snowballs.isEmpty && gust == nil && dormant.isEmpty && parking.isEmpty && lying.isEmpty && nextMode == nil
             && splashes.isEmpty && glassDrops.isEmpty && !wet
             && !layers.contains { $0.top > 0 }
@@ -735,6 +746,7 @@ final class SnowSimulation {
         }
         spawnFlakes()
         if halloween { settlePumpkins(dt: dt) }
+        if let tree { tend(tree, dt: dt) }
 
         for layer in layers {
             layer.refreshTop()
@@ -753,6 +765,7 @@ final class SnowSimulation {
         }
         let changed = wasMoving || !flakes.isEmpty || !grains.isEmpty || !motes.isEmpty || !ghosts.isEmpty || !fallingSigns.isEmpty || !snowballs.isEmpty
             || !splashes.isEmpty || !glassDrops.isEmpty || wet || heightsChanged || windowsChanged || pumpkinsMoved || restyled || borrowedChanged
+            || tree != nil
         restyled = false
         windowsChanged = false
         borrowedChanged = false
@@ -1011,6 +1024,34 @@ final class SnowSimulation {
             if abs(bottom - pumpkinBottoms[k]) > 0.01 { pumpkinsMoved = true }
             pumpkinBottoms[k] = bottom
         }
+    }
+
+    // MARK: - New Year
+
+    /// The tree belongs to the desktop, as the pumpkins do: one a window or the Dock covers sinks below the screen's
+    /// edge until it moves off it. Snow shaken off its boughs falls as loose snow and lumps.
+    private func tend(_ tree: ChristmasTree, dt: Float) {
+        let reach: Float = 24
+        let dock = layers.first(where: \.isDock).map { SIMD4($0.base.x - reach, 0, $0.base.x + $0.width + reach, $0.base.y + reach) }
+        let covers = windowFrames + (dock.map { [$0] } ?? [])
+        let left = treeX - 70, right = treeX + 70
+        let covered = covers.contains { $0.x < right && $0.z > left && $0.y < ChristmasTree.height + 20 && $0.w > 0 }
+        let target: Float = covered ? -(ChristmasTree.height + 40) : 0
+        tree.base = SIMD2(treeX, tree.base.y + (target - tree.base.y) * min(1, dt * 5))
+        let shown = tree.base.y > -ChristmasTree.height
+        tree.step(dt: dt, wind: windSpeed(), cursor: shown ? cursor : nil, cursorVelocity: cursorVelocity, thaws: thaws) { area, position, velocity in
+            // Just under the bough it came off, so that bough doesn't catch it straight back.
+            let at = position + SIMD2(0, -3)
+            if area > 12 {
+                let lump = area * random.range(0.4, 0.7)
+                throwLump(lump, at: at, velocity: velocity)
+                release(area - lump, at: at, velocity: velocity, spread: SIMD2(4, 1), scatter: 0.3)
+            } else {
+                release(area, at: at, velocity: velocity, spread: SIMD2(4, 1), scatter: 0.3)
+            }
+        }
+        tree.settlePresents(surface: { [ground] x in ground.surface(ground.clampedIndex(at: x)) }, dt: dt)
+        if tree.touched { lastCursorPush = clock }
     }
 
     // MARK: - Windows
@@ -1891,6 +1932,13 @@ final class SnowSimulation {
                 flake.position.x -= width + 60
             }
 
+            if flake.settles && accumulates && flake.blown == 0 && flake.kind == .snow, let tree,
+               let perch = tree.catcher(x: flake.position.x, from: previousY, to: flake.position.y, chance: 0.75) {
+                tree.add(flake.size * flake.size * deposition * flake.mass, to: perch, falling: flake.velocity)
+                recycle(i)
+                i -= 1
+                continue
+            }
             if flake.settles && (accumulates || flake.rain) && flake.blown == 0 {
                 let hit = landing(x: flake.position.x, from: previousY, to: flake.position.y, here: !crossed(flake.position), ground: groundSettles || flake.rain)
                 // Only snow is handed over: leaves and rain on a window kept by another display fall on past it.
@@ -1998,6 +2046,13 @@ final class SnowSimulation {
                 grain.velocity *= damping
             }
             grain.position += grain.velocity * dt
+            if let tree, accumulates, !grain.blown, !grain.kind.leafy, grain.velocity.y < 0,
+               let perch = tree.catcher(x: grain.position.x, from: previousY, to: grain.position.y, chance: 0.6) {
+                tree.add(grain.area, to: perch, falling: grain.velocity)
+                removeGrain(i)
+                i -= 1
+                continue
+            }
             let hit = grain.blown || grain.velocity.y > 0 ? nil : landing(x: grain.position.x, from: previousY, to: grain.position.y, here: !crossed(grain.position), ground: groundSettles)
 
             if grain.position.y >= -10 && crossed(grain.position) {
@@ -3167,6 +3222,9 @@ final class SnowSimulation {
     /// or, `calm`, it melts away where it lies.
     func blowAway(direction: Float, calm: Bool) {
         gust = (clock, direction < 0 ? -1 : 1, calm)
+        tree?.clearSnow { area, position, _ in
+            if !calm { release(area, at: position + SIMD2(0, -3), velocity: SIMD2(direction < 0 ? -500 : 500, 60), spread: SIMD2(6, 2), scatter: 0.4) }
+        }
         // Snow kept for windows on other Spaces goes too, out of sight.
         dormant.removeAll()
         for entry in parking {

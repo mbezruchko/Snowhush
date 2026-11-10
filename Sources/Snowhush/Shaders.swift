@@ -21,6 +21,8 @@ struct Uniforms {
     float4 lantern;
     float4 shake;
     float4 pumpkins[3];
+    float4 garland[3];
+    float4 garlandColors[3];
 };
 
 struct Sprite {
@@ -526,6 +528,18 @@ static float candlelight(constant Uniforms &u, float2 point) {
         glow += pumpkin.w * flicker(u.time, float(k + 1)) * exp(-dot(e, e) / (pumpkin.z * pumpkin.z));
     }
     return min(glow, 1.0);
+}
+
+/// The New Year's garland's light on the snow round the tree's foot.
+static float3 garlandGlow(constant Uniforms &u, float2 point) {
+    float3 sum = float3(0.0);
+    for (int k = 0; k < 3; k++) {
+        float4 light = u.garland[k];
+        if (light.w <= 0.0) continue;
+        float2 d = point - light.xy;
+        sum += u.garlandColors[k].rgb * (light.w * exp(-dot(d, d) / (light.z * light.z)));
+    }
+    return sum;
 }
 
 /// A drop hanging under an edge, in radii of the drop, from where it clings. Up to one along, it fills: a small one is
@@ -1170,6 +1184,7 @@ fragment float4 pileFragment(PileOut in [[stage_in]],
     color *= mix(u.light.rgb, mix(float3(1.0), u.light.rgb, 0.4), leafy);
     color = mix(color, u.rim.rgb, u.rim.a * exp(-depth / 2.5) * (1.0 - leafy));
     color = mix(color, candle, candlelight(u, world) * (0.35 + 0.65 * exp(-depth / 14.0)) * 0.55);
+    color += garlandGlow(u, world) * (0.35 + 0.65 * exp(-depth / 14.0)) * (1.0 - leafy);
     return float4(color * coverage, coverage);
 }
 

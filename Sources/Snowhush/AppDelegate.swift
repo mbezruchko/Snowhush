@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var behindWindows = false
     private var snowfallHeld = false
     private var halloween = false
+    private var newYear = false
     private var statusItem: NSStatusItem!
     private let intensitySlider = MenuSlider(range: 0...1)
     private let opacitySlider = MenuSlider(range: Preferences.opacityRange, captioned: false)
@@ -25,6 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var meltItem: NSMenuItem!
     private var clearItem: NSMenuItem!
     private var halloweenItem: NSMenuItem!
+    private var newYearItem: NSMenuItem!
     private var mixedItem: NSMenuItem!
     private var modeItems: [(item: NSMenuItem, mode: Mode)] = []
     private var maxPerformanceItem: NSMenuItem!
@@ -98,6 +100,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
                 snow.simulation.snowfallHeld = snowfallHeld
                 snow.simulation.snowfallReleased = { [weak self] in self?.releaseSnowfall() }
                 snow.halloween = halloween
+                snow.newYear = newYear
                 snow.modes = Preferences.modes
                 snow.maxFrameRate = Preferences.maxPerformance
                 snow.activityChanged = { [weak self] in self?.updateActivity() }
@@ -190,6 +193,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         }
         modes.addItem(.separator())
         halloweenItem = add(tr("halloween"), #selector(toggleHalloween), to: modes)
+        newYearItem = add(tr("newyear"), #selector(toggleNewYear), to: modes)
         menu.addItem(withTitle: tr("mode"), action: nil, keyEquivalent: "").submenu = modes
         clearItem = add(tr("clear.snow"), #selector(clearSnow), to: menu)
         menu.addItem(.separator())
@@ -281,6 +285,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         clearItem.isEnabled = screens.contains { $0.simulation.hasSnow || $0.simulation.spriteCount > 0 }
         halloweenItem.state = Halloween.isWanted ? .on : .off
         halloweenItem.isEnabled = modes == [.snow]
+        newYearItem.state = NewYear.isWanted ? .on : .off
+        newYearItem.isEnabled = modes == [.snow]
         maxPerformanceItem.state = Preferences.maxPerformance ? .on : .off
         behindWindowsItem.state = behindWindows ? .on : .off
         fullScreenItem.state = Preferences.showOverFullScreen ? .on : .off
@@ -406,8 +412,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         refreshHalloween()
     }
 
+    @objc private func toggleNewYear() {
+        NewYear.toggle()
+        refreshHalloween()
+    }
+
     private func updateStatusIcon() {
-        statusItem.button?.image = Self.icon(halloween: halloween, dimmed: Preferences.intensity <= 0)
+        statusItem.button?.image = Self.icon(halloween: halloween, newYear: newYear, dimmed: Preferences.intensity <= 0)
     }
 
     private static let symbol: [Mode: String] = [.snow: "snowflake", .autumn: "leaf", .rain: "cloud.rain"]
@@ -418,8 +429,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         autoreleasepool { MTLCopyAllDevices().first { $0.isLowPower } }
     }
 
-    private static func icon(halloween: Bool, dimmed: Bool) -> NSImage? {
-        let image = halloween ? Halloween.icon : Preferences.mode == .blossom ? Blossom.icon
+    private static func icon(halloween: Bool, newYear: Bool, dimmed: Bool) -> NSImage? {
+        let image = halloween ? Halloween.icon : newYear ? NewYear.icon : Preferences.mode == .blossom ? Blossom.icon
             : NSImage(systemSymbolName: Self.symbol[Preferences.mode] ?? "snowflake", accessibilityDescription: "Snowhush")
         guard dimmed, let image else { return image }
         // Dimmed by hand: the button's appearsDisabled also disables the slider in its menu, so Off could not be left.
@@ -432,11 +443,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         return faded
     }
 
+    /// Halloween or the New Year, whichever the snow keeps now. A season that comes round puts away the other
+    /// holiday turned on for every day, so only one of them is ticked.
     private func refreshHalloween() {
-        guard Halloween.isOn != halloween else { return }
-        halloween.toggle()
+        if NewYear.isSeason(), NewYear.isWanted, Preferences.halloween { Preferences.halloween = false }
+        if Halloween.isSeason(), Halloween.isWanted, Preferences.newYear { Preferences.newYear = false }
+        let holiday = Holiday.current
+        let spooky = holiday == .halloween, festive = holiday == .newYear
+        guard spooky != halloween || festive != newYear else { return }
+        halloween = spooky
+        newYear = festive
         updateStatusIcon()
-        for snow in screens { snow.halloween = halloween }
+        for snow in screens {
+            snow.halloween = halloween
+            snow.newYear = newYear
+        }
     }
 
     // MARK: - System
