@@ -26,7 +26,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var windItem: NSMenuItem!
     private let windRow = MenuDisclosure()
     private let windPad = MenuWindPad()
-    private let windVary = MenuSwitch()
     private var windResetItem: NSMenuItem!
     private var windItems: [NSMenuItem] = []
     private var accumulateItem: NSMenuItem!
@@ -205,14 +204,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
             windRow.summary = wind.summary
             refreshWindReset()
         }
-        windPad.stoppedWandering = { [unowned self] in wander(false) }
-        windVary.toggled = { [unowned self] in wander($0) }
+        windPad.wanderChanged = { [unowned self] in wander($0) }
         let windPadItem = addView(windPad, to: menu)
-        let windVaryItem = addView(windVary, title: tr("variable"), to: menu)
         let windReset = MenuToggle(action: #selector(resetWind), target: self, checks: false)
         windReset.fit(tr("reset"))
         windResetItem = addView(windReset, title: tr("reset"), to: menu)
-        windItems = [windPadItem, windVaryItem, windResetItem]
+        windItems = [windPadItem, windResetItem]
         menu.addItem(.separator())
 
         // What lies about: where it settles, how it melts, and clearing it away.
@@ -341,8 +338,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         opacitySlider.value = Preferences.fallingOpacity
         if !Preferences.windVaries { windPad.wind = Preferences.wind }
         windPad.wanders = Preferences.windVaries
-        windVary.isOn = Preferences.windVaries
-        windVary.fit(tr("variable"))
         windRow.summary = Preferences.windVaries ? tr("variable") : Preferences.wind.summary
         windRow.fit(windItem.title, least: 0)
         refreshWindReset()
@@ -388,7 +383,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     /// Lets the wind wander on its own, or has it blow as set.
     private func wander(_ on: Bool) {
         Preferences.windVaries = on
-        windVary.isOn = on
         windPad.wanders = on
         if !on { windPad.wind = Preferences.wind }
         for snow in screens {

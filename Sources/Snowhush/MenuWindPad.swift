@@ -2,11 +2,13 @@ import AppKit
 
 /// Sets the wind by dragging out from the middle of a field as wide as the menu: the farther out, the stronger, at
 /// most out to the dots' outer ring, which lies farther across than up and down. Back in the middle, or
-/// double-clicked, it is calm. Like `MenuSlider`, it follows the pointer itself.
+/// double-clicked, it is calm. Past the field's right edge, set apart by a tick as on the Intensity slider, a last
+/// stop lets the wind wander on its own; the field then shows it as it blows. Like `MenuSlider`, it follows the
+/// pointer itself.
 final class MenuWindPad: NSView {
     var changed: ((Wind) -> Void)?
-    /// Dragged while the wind wandered: it blows as set from now on.
-    var stoppedWandering: (() -> Void)?
+    /// Dropped into the last stop, the wind wanders; dragged back out, it blows as set.
+    var wanderChanged: ((Bool) -> Void)?
 
     var wind = Wind.calm {
         didSet { needsDisplay = true }
@@ -41,6 +43,9 @@ final class MenuWindPad: NSView {
     private static let inset: CGFloat = 14
     /// The handle's ring, which stays inside the field at full strength.
     private static let handle: CGFloat = 11
+    /// The last stop's stretch, with the gap before it where the tick stands.
+    private static let stop: CGFloat = 44
+    private static let gap: CGFloat = 12
 
     init() {
         super.init(frame: NSRect(x: 0, y: 0, width: 200, height: Self.top + Self.height + Self.bottom))
@@ -58,8 +63,12 @@ final class MenuWindPad: NSView {
     }
 
     private var field: NSRect {
-        NSRect(x: Self.inset, y: Self.top, width: bounds.width - 2 * Self.inset, height: Self.height)
+        NSRect(x: Self.inset, y: Self.top, width: bounds.width - 2 * Self.inset - Self.stop, height: Self.height)
     }
+
+    private var tick: CGFloat { field.maxX + Self.gap / 2 }
+
+    private var slot: NSPoint { NSPoint(x: bounds.width - Self.inset - (Self.stop - Self.gap) / 2, y: field.midY) }
 
     private var middle: NSPoint { NSPoint(x: field.midX, y: field.midY) }
 
@@ -106,9 +115,16 @@ final class MenuWindPad: NSView {
     }
 
     /// Moves the handle to the pointer: strength in steps of 5%, calm near the middle, and the direction caught on
-    /// the eight compass points within a few degrees of one.
+    /// the eight compass points within a few degrees of one; or, past the tick, into the last stop.
     private func follow(_ event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        guard point.x < tick else {
+            if !wanders {
+                wanders = true
+                wanderChanged?(true)
+            }
+            return
+        }
         let x = point.x - middle.x
         let y = middle.y - point.y
         let strength = (min(max(abs(x) / reach.x, abs(y) / reach.y), 1) * 20).rounded() / 20
@@ -125,7 +141,7 @@ final class MenuWindPad: NSView {
     private func set(_ next: Wind) {
         if wanders {
             wanders = false
-            stoppedWandering?()
+            wanderChanged?(false)
         }
         guard next != wind else { return }
         wind = next
@@ -150,11 +166,12 @@ final class MenuWindPad: NSView {
         let middle = middle
         let reach = reach
         let ink = NSColor.labelColor
+        drawStop(ink)
 
         let well = NSBezierPath(roundedRect: field.insetBy(dx: 0.5, dy: 0.5), xRadius: 10, yRadius: 10)
         ink.withAlphaComponent(0.06).setFill()
         well.fill()
-        (dragging ? ink : NSColor.separatorColor).setStroke()
+        (dragging && !wanders ? ink : NSColor.separatorColor).setStroke()
         well.lineWidth = 1
         well.stroke()
 
@@ -172,11 +189,14 @@ final class MenuWindPad: NSView {
         let share = max(abs(CGFloat(vector.x)) / reach.x, abs(CGFloat(vector.y)) / reach.y)
         let out = share > 0 ? CGFloat(wind.strength) / share : 0
         let tip = NSPoint(x: middle.x + CGFloat(vector.x) * out, y: middle.y - CGFloat(vector.y) * out)
-        ink.withAlphaComponent(dragging ? 0.28 : 0.16).setFill()
+        // Wandering, the handle rests in the last stop and the arrow only shows how the wind blows.
         let ring = Self.handle
-        NSBezierPath(ovalIn: NSRect(x: tip.x - ring, y: tip.y - ring, width: ring * 2, height: ring * 2)).fill()
+        if !wanders {
+            ink.withAlphaComponent(dragging ? 0.28 : 0.16).setFill()
+            NSBezierPath(ovalIn: NSRect(x: tip.x - ring, y: tip.y - ring, width: ring * 2, height: ring * 2)).fill()
+        }
 
-        ink.set()
+        (wanders ? ink.withAlphaComponent(0.55) : ink).set()
         let length = hypot(tip.x - middle.x, tip.y - middle.y)
         guard length > 0.5 else {
             NSBezierPath(ovalIn: NSRect(x: middle.x - 3.5, y: middle.y - 3.5, width: 7, height: 7)).fill()
@@ -203,5 +223,32 @@ final class MenuWindPad: NSView {
         arrow.lineWidth = 1.5
         arrow.fill()
         arrow.stroke()
+    }
+
+    /// The tick and the last stop, a round well the handle rests in, named underneath.
+    private func drawStop(_ ink: NSColor) {
+        let slot = slot
+        ink.withAlphaComponent(0.35).setFill()
+        NSRect(x: (tick - 0.5).rounded(), y: slot.y - 12, width: 1, height: 24).fill()
+        let radius = Self.handle + 4
+        let well = NSBezierPath(ovalIn: NSRect(x: slot.x - radius + 0.5, y: slot.y - radius + 0.5, width: radius * 2 - 1, height: radius * 2 - 1))
+        ink.withAlphaComponent(0.06).setFill()
+        well.fill()
+        (dragging && wanders ? ink : NSColor.separatorColor).setStroke()
+        well.lineWidth = 1
+        well.stroke()
+        if wanders {
+            let ring = Self.handle
+            ink.withAlphaComponent(dragging ? 0.28 : 0.16).setFill()
+            NSBezierPath(ovalIn: NSRect(x: slot.x - ring, y: slot.y - ring, width: ring * 2, height: ring * 2)).fill()
+            ink.setFill()
+            NSBezierPath(ovalIn: NSRect(x: slot.x - 3.5, y: slot.y - 3.5, width: 7, height: 7)).fill()
+        }
+        let caption = NSAttributedString(string: tr("variable"), attributes: [
+            .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize - 1),
+            .foregroundColor: wanders ? NSColor.labelColor : .tertiaryLabelColor,
+        ])
+        let size = caption.size()
+        caption.draw(at: NSPoint(x: bounds.width - Self.inset - size.width, y: slot.y + radius + 4))
     }
 }
