@@ -197,10 +197,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         opacityItem = addView(opacityRow, title: tr("opacity"), to: menu)
         opacityRow.summaryWhileOpen = true
         opacityRow.toggled = { [unowned self] in fold(opacityRow) }
+        opacityRow.pillToggled = { [unowned self] in
+            select(opacity: Preferences.opacityRange.upperBound)
+            refreshMenu()
+        }
         opacitySlider.changed = { [unowned self] opacity in
-            Preferences.fallingOpacity = opacity
-            for snow in screens { snow.simulation.fallingOpacity = Float(opacity) }
+            select(opacity: opacity)
             opacityRow.summary = MenuSlider.percent(opacity)
+            refreshPills()
         }
         opacitySliderItem = addView(opacitySlider, to: menu)
 
@@ -289,6 +293,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private func refreshPills() {
         let steady = Preferences.intensityTop <= Preferences.intensity
         intensityRow.pill = steady && Preferences.intensity == Preferences.defaultIntensity ? nil : tr("reset")
+        opacityRow.pill = Preferences.fallingOpacity < Preferences.opacityRange.upperBound ? tr("reset") : nil
         windRow.pill = Preferences.windVaries || Preferences.wind.strength > 0 ? tr("reset") : nil
     }
 
@@ -417,6 +422,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private func resetWind() {
         Preferences.wind = .calm
         wander(false)
+    }
+
+    private func select(opacity: Double) {
+        Preferences.fallingOpacity = opacity
+        for snow in screens { snow.simulation.fallingOpacity = Float(opacity) }
     }
 
     /// Variable wanders about a steady fall.
