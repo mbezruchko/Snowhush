@@ -31,6 +31,9 @@ final class TreeRenderer {
     private let queue: MTLCommandQueue
     private let boughPipeline: MTLRenderPipelineState
     private let decorPipeline: MTLRenderPipelineState
+    private let sparkPipeline: MTLRenderPipelineState
+    private var sparkBuffers: [MTLBuffer] = []
+    private var sparkSlot = 0
     private var needles: MTLTexture?
     private var buffers: [MTLBuffer] = []
     private var slot = 0
@@ -56,6 +59,7 @@ final class TreeRenderer {
         }
         boughPipeline = try pipeline("boughVertex", "boughFragment")
         decorPipeline = try pipeline("decorVertex", "decorFragment")
+        sparkPipeline = try pipeline("sparkVertex", "sparkFragment")
         buffers = (0..<3).compactMap { _ in device.makeBuffer(length: Self.bufferLength, options: .storageModeShared) }
     }
 
@@ -105,7 +109,7 @@ final class TreeRenderer {
             let tip = tree.point(leader, 1)
             let lean = tree.point(leader, 1) - tree.point(leader, 0.8)
             let angle = atan2(lean.x, lean.y)
-            decor.append(TreePiece(a: SIMD4(tip + simd_normalize(lean) * 6, 8.5, angle), b: SIMD4(1, 0, 0, 0), c: SIMD4(0, 0, 0, 3)))
+            decor.append(TreePiece(a: SIMD4(tip + simd_normalize(lean) * 6, 8.5, angle), b: SIMD4(tree.starGlow, 0, 0, 0), c: SIMD4(0, 0, 0, 3)))
         }
         for present in tree.presents {
             decor.append(TreePiece(
@@ -161,6 +165,28 @@ final class TreeRenderer {
         encoder.setVertexBuffer(buffer, offset: decorOffset, index: 0)
         encoder.setFragmentBuffer(buffer, offset: decorOffset, index: 0)
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: decor.count)
+    }
+
+    /// The fireworks' sparks, each a glowing streak along its flight.
+    func encode(_ fireworks: Fireworks, with encoder: MTLRenderCommandEncoder, uniforms: TreeUniforms) {
+        let sparks = fireworks.sparks
+        guard !sparks.isEmpty else { return }
+        let length = sparks.count * MemoryLayout<TreePiece>.stride
+        if sparkBuffers.first.map({ $0.length < length }) ?? true {
+            sparkBuffers = (0..<3).compactMap { _ in device.makeBuffer(length: max(length * 2, 64 * 1024), options: .storageModeShared) }
+        }
+        guard sparkBuffers.count == 3 else { return }
+        let buffer = sparkBuffers[sparkSlot % 3]
+        sparkSlot += 1
+        let pieces = buffer.contents().bindMemory(to: TreePiece.self, capacity: sparks.count)
+        for (k, spark) in sparks.enumerated() {
+            pieces[k] = TreePiece(a: SIMD4(spark.position, spark.velocity), b: SIMD4(spark.color, spark.brightness), c: SIMD4(spark.size, spark.flash ? 1 : 0, 0, 5))
+        }
+        var uniforms = uniforms
+        encoder.setRenderPipelineState(sparkPipeline)
+        encoder.setVertexBuffer(buffer, offset: 0, index: 0)
+        encoder.setVertexBytes(&uniforms, length: MemoryLayout<TreeUniforms>.stride, index: 1)
+        encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: sparks.count)
     }
 
     private func align(_ offset: Int) -> Int {

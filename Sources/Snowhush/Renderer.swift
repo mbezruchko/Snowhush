@@ -216,6 +216,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             if update.slideVelocity != 0 { simulation.spaceSlid(velocity: update.slideVelocity) }
         }
         simulation.setBorrowed(borrowedSnow())
+        simulation.celebration = simulation.tree != nil ? NewYear.celebration() : nil
         let cursor = cursorLocation()
         let changed = simulation.step(dt: dt, cursor: cursor)
         stepped()
@@ -302,6 +303,10 @@ final class Renderer: NSObject, MTKViewDelegate {
         if !simulation.hasGlassDrops { field = nil }
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return }
         drawPumpkins(pumpkins, with: encoder, uniforms: uniforms)
+        // Far off in the sky: behind the snow.
+        if let fireworks = simulation.fireworks, !fireworks.isEmpty, let treeRenderer = treeRenderer ?? makeTreeRenderer() {
+            treeRenderer.encode(fireworks, with: encoder, uniforms: TreeUniforms(origin: .zero, size: uniforms.viewSize, time: uniforms.time, shake: SIMD2(uniforms.shake.x, uniforms.shake.y)))
+        }
         drawPiles(piles.filter { !$0.isDock }, with: encoder, uniforms: uniforms, heights: heightBuffer)
         drawSigns(simulation.signs, with: encoder, uniforms: uniforms)
         if sprites > 0 {
@@ -340,6 +345,20 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
         uniforms.garland = (lights[0].0, lights[1].0, lights[2].0)
         uniforms.garlandColors = (lights[0].1, lights[1].1, lights[2].1)
+        // At midnight the bursts light the snow instead, the brightest ones.
+        guard let flashes = simulation.fireworks?.lights, !flashes.isEmpty else { return }
+        let slots = (0..<3).map { k -> (SIMD4<Float>, SIMD4<Float>) in
+            guard k < flashes.count else { return (.zero, .zero) }
+            let flash = flashes[k]
+            return (SIMD4(flash.position.x, flash.position.y, 420, flash.strength * 0.5), SIMD4(flash.color, 0))
+        }
+        uniforms.garland = (slots[0].0, slots[1].0, slots[2].0)
+        uniforms.garlandColors = (slots[0].1, slots[1].1, slots[2].1)
+    }
+
+    private func makeTreeRenderer() -> TreeRenderer? {
+        treeRenderer = try? TreeRenderer(device: device, queue: queue, pixelFormat: .bgra8Unorm)
+        return treeRenderer
     }
 
     /// Draws the tree into its own layer, and clears that once after the tree is gone.
@@ -347,9 +366,8 @@ final class Renderer: NSObject, MTKViewDelegate {
         guard let treeView else { return }
         let tree = simulation.tree.flatMap { $0.base.y > -ChristmasTree.height - 30 ? $0 : nil }
         guard tree != nil || treeDrawn else { return }
-        if treeRenderer == nil { treeRenderer = try? TreeRenderer(device: device, queue: queue, pixelFormat: .bgra8Unorm) }
         let layer = treeView.metalLayer
-        guard let treeRenderer, let drawable = layer.nextDrawable() else { return }
+        guard let treeRenderer = treeRenderer ?? makeTreeRenderer(), let drawable = layer.nextDrawable() else { return }
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = drawable.texture
         pass.colorAttachments[0].loadAction = .clear

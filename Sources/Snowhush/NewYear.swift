@@ -11,6 +11,27 @@ enum NewYear {
         return parts.month == 12 && (parts.day ?? 0) >= 20 || parts.month == 1 && ((parts.day ?? 0) < 8 || parts.day == 8 && (parts.hour ?? 0) < 6)
     }
 
+    /// Seconds past the New Year's midnight, from ten seconds before it, for the countdown, until the fireworks are
+    /// over; nil at any other time.
+    /// Lets it be previewed, 5 seconds after launch and every two minutes after:
+    /// defaults write com.mbezruchko.Snowhush previewMidnight -bool true
+    static func celebration(at date: Date = Date()) -> Double? {
+        let t: Double
+        if previewsMidnight {
+            t = date.timeIntervalSince(launched).truncatingRemainder(dividingBy: 120) - 15
+        } else {
+            let parts = Calendar.current.dateComponents([.year, .month], from: date)
+            guard parts.month == 12 || parts.month == 1,
+                  let midnight = Calendar.current.date(from: DateComponents(year: (parts.year ?? 0) + (parts.month == 12 ? 1 : 0), month: 1, day: 1))
+            else { return nil }
+            t = date.timeIntervalSince(midnight)
+        }
+        return t >= -10 && t < 75 ? t : nil
+    }
+
+    private static let previewsMidnight = UserDefaults.standard.bool(forKey: "previewMidnight")
+    private static let launched = Date()
+
     /// Whether the New Year is wanted today: turned on, or come with its season and not turned off for it.
     static var isWanted: Bool {
         Preferences.newYear || isSeason() && Preferences.newYearSkipped != season

@@ -85,7 +85,7 @@ final class ChristmasTree {
     }
 
     enum HandPhase {
-        case shut, rattling, reaching, holding, retreating
+        case shut, rattling, reaching, holding, retreating, cheering
     }
 
     /// From the foot of the trunk to the top of its leader; the star sits above.
@@ -108,6 +108,12 @@ final class ChristmasTree {
     private(set) var touched = false
     /// Whether anything still moves enough to be seen.
     private(set) var moving = true
+    /// Seconds past the New Year's midnight, from the countdown before it until the fireworks are over; nil otherwise.
+    var celebration: Float?
+    /// How brightly the star shines.
+    private(set) var starGlow: Float = 1
+    /// Where the hands out of the presents hold sparklers, at midnight.
+    private(set) var sparklers: [SIMD2<Float>] = []
 
     init() {
         var random = TreeRandom()
@@ -391,7 +397,25 @@ final class ChristmasTree {
         }
     }
 
+    /// The garland twinkles, each bulb in its own time. Over the last ten seconds of the year it flashes all at once
+    /// every second, the star with it; from midnight lights chase up it.
     private func twinkle() {
+        starGlow = 1
+        if let t = celebration, t < 0 {
+            let tick = t - t.rounded(.down)
+            let flash = 0.1 + 0.9 * exp(-tick * 4)
+            for k in bulbs.indices { bulbs[k].brightness = flash }
+            starGlow = 1 + (t > -3.5 ? 2.2 : 1.2) * exp(-tick * 3)
+            return
+        }
+        if let t = celebration, t < 60 {
+            for k in bulbs.indices {
+                let chase = max(0, sin(time * 9 - Float(k) * 0.7))
+                bulbs[k].brightness = t < 1.5 ? 1 : 0.25 + 0.75 * chase * chase
+            }
+            starGlow = 1.4 + 2 * exp(-t * 1.5)
+            return
+        }
         for k in bulbs.indices {
             let bulb = bulbs[k]
             let wave = max(0, sin(time * bulb.rate + bulb.phase))
@@ -479,9 +503,16 @@ final class ChristmasTree {
                 return abs(point.x - x) < present.width / 2 + 28 && point.y > top - 4 && point.y < top + 95
             }.min { abs(point.x - base.x - presents[$0].offset) < abs(point.x - base.x - presents[$1].offset) }
         }
+        let cheering = celebration.map { $0 >= 0 && $0 < 55 } ?? false
+        sparklers.removeAll(keepingCapacity: true)
         for k in presents.indices {
             var present = presents[k]
             present.since += dt
+            if cheering, shown, present.phase != .cheering {
+                present.phase = .cheering
+                present.since = 0
+                if present.arm == 0 { present.hand = shoulder(of: present) }
+            }
             let wanted = chosen == k && time >= present.rested
             let shoulder = shoulder(of: present)
             var target = shoulder + SIMD2(0, 6)
@@ -496,6 +527,22 @@ final class ChristmasTree {
             var lidTarget: Float = 0
             var stiffness: Float = 14
             switch present.phase {
+            case .cheering:
+                // Midnight: every hand is out, waving a sparkler.
+                lidTarget = 0.62
+                present.arm = min(1, present.arm + dt * 2.6)
+                present.grip = min(0.85, present.grip + dt * 4)
+                let k = Float(k)
+                target = shoulder + SIMD2(sin(time * 1.3 + k * 2) * 12, 40 + 5 * sin(time * 2.1 + k))
+                present.wave = sin(time * 9 + k * 1.7) * 0.4
+                if present.arm > 0.6 {
+                    let direction = simd_normalize(present.hand - shoulder + SIMD2(0, 0.01))
+                    sparklers.append(present.hand + direction * 2 + SIMD2(0, 9))
+                }
+                if !cheering {
+                    present.phase = .retreating
+                    present.since = 0
+                }
             case .shut:
                 present.jiggle = 0
                 if wanted {

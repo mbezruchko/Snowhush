@@ -668,6 +668,9 @@ final class SnowSimulation {
         }
     }
     private(set) var tree: ChristmasTree?
+    /// Seconds past the New Year's midnight while it is celebrated, from the countdown on; nil otherwise.
+    var celebration: Double?
+    private(set) var fireworks: Fireworks?
     /// Where the tree's trunk stands, from the left edge of the screen.
     let treeX: Float = 124
 
@@ -746,14 +749,18 @@ final class SnowSimulation {
         }
         spawnFlakes()
         if halloween { settlePumpkins(dt: dt) }
-        if let tree { tend(tree, dt: dt) }
+        if let tree {
+            tree.celebration = celebration.map(Float.init)
+            tend(tree, dt: dt)
+            celebrate(around: tree, dt: dt)
+        }
 
         for layer in layers {
             layer.refreshTop()
             layer.previousBaseY = layer.base.y
         }
         // Only a cursor that actually displaces snow needs the full rate; one passing near it or resting in it changes nothing.
-        let pushed = clock - lastWindowMotion < 0.6 || clock - lastCursorPush < 0.3 || gust != nil || !snowballs.isEmpty || clock - hitAt < 0.6
+        let pushed = clock - lastWindowMotion < 0.6 || clock - lastCursorPush < 0.3 || gust != nil || fireworks != nil || !snowballs.isEmpty || clock - hitAt < 0.6
         // The steady trickle off window corners is a few tiny grains at a time; they read fine at the calm rate.
         let flying = grains.count > 24 || clock < scatteredUntil || abs(slideWind) > 20
         if pushed {
@@ -1052,6 +1059,17 @@ final class SnowSimulation {
         }
         tree.settlePresents(surface: { [ground] x in ground.surface(ground.clampedIndex(at: x)) }, dt: dt)
         if tree.touched { lastCursorPush = clock }
+    }
+
+    /// Midnight: fireworks over the screen, and sparklers in the hands come out of the presents.
+    private func celebrate(around tree: ChristmasTree, dt: Float) {
+        if let t = celebration, t >= 0, t < 75, fireworks == nil {
+            fireworks = Fireworks(width: width, height: height, left: treeX + 150)
+        }
+        guard let fireworks else { return }
+        fireworks.step(dt: dt, time: Float(celebration ?? 1000))
+        for point in tree.sparklers { fireworks.sparkle(at: point, dt: dt) }
+        if celebration == nil, fireworks.isEmpty { self.fireworks = nil }
     }
 
     // MARK: - Windows

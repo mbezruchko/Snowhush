@@ -1,0 +1,192 @@
+import simd
+
+/// The New Year's midnight over the screen: rockets rise from behind the drifts and burst into sparks that droop
+/// and fade, a big volley near the end. Each burst flashes, lighting the snow in its colour.
+final class Fireworks {
+    struct Spark {
+        var position: SIMD2<Float>
+        var velocity: SIMD2<Float>
+        var color: SIMD3<Float>
+        var age: Float = 0
+        let life: Float
+        let size: Float
+        let drag: Float
+        let gravity: Float
+        /// Crackles, flashing white, toward its end.
+        var crackles = false
+        /// A rising rocket, which bursts at the top of its climb into `shell`.
+        var shell: Shell?
+        /// The sky lit up round a burst for a moment: drawn as a wide glow only.
+        var flash = false
+
+        var brightness: Float {
+            let share = min(age / life, 1)
+            var shine = 1 - share * share
+            if crackles, share > 0.6 { shine *= Float.random(in: 0...1) < 0.35 ? 1.8 : 0.15 }
+            return shine
+        }
+    }
+
+    enum Shell: CaseIterable {
+        case peony, willow, ring, crackle
+    }
+
+    struct Flash {
+        let position: SIMD2<Float>
+        let color: SIMD3<Float>
+        var strength: Float
+    }
+
+    private(set) var sparks: [Spark] = []
+    private(set) var flashes: [Flash] = []
+    private let width: Float
+    private let height: Float
+    /// Where rockets may rise: clear of the tree on the left.
+    private let left: Float
+    private var nextLaunch: Float = 0
+    private var shown: Float = -1
+    private static let colors: [SIMD3<Float>] = [
+        SIMD3(1, 0.25, 0.2), SIMD3(0.3, 1, 0.45), SIMD3(0.35, 0.55, 1), SIMD3(1, 0.8, 0.35),
+        SIMD3(0.85, 0.4, 1), SIMD3(1, 1, 1), SIMD3(0.3, 0.95, 1), SIMD3(1, 0.5, 0.8),
+    ]
+    private static let maxSparks = 1600
+
+    init(width: Float, height: Float, left: Float) {
+        self.width = width
+        self.height = height
+        self.left = min(left, width * 0.5)
+    }
+
+    var isEmpty: Bool { sparks.isEmpty }
+
+    /// Launches per second at `time` seconds past midnight: a steady start, a lull, the finale, then a few stragglers.
+    private static func rate(at time: Float) -> Float {
+        switch time {
+        case ..<0: 0
+        case ..<12: 2.4
+        case ..<38: 1.1
+        case ..<44: 6
+        case ..<58: 0.5
+        default: 0
+        }
+    }
+
+    func step(dt: Float, time: Float) {
+        if shown < 0 { nextLaunch = time }
+        shown = time
+        let rate = Self.rate(at: time)
+        while rate > 0, time >= nextLaunch, sparks.count < Self.maxSparks {
+            launch()
+            nextLaunch += 1 / rate * Float.random(in: 0.6...1.4)
+        }
+        if rate == 0 { nextLaunch = time }
+
+        var bursts: [(SIMD2<Float>, Shell)] = []
+        var i = sparks.count - 1
+        while i >= 0 {
+            var spark = sparks[i]
+            spark.age += dt
+            spark.velocity *= exp(-spark.drag * dt)
+            spark.velocity.y -= spark.gravity * dt
+            spark.position += spark.velocity * dt
+            if let shell = spark.shell {
+                // A rocket leaves a short trail of embers as it climbs, and bursts as it slows.
+                if sparks.count < Self.maxSparks, Float.random(in: 0...1) < dt * 50 {
+                    sparks.append(Spark(position: spark.position, velocity: SIMD2(Float.random(in: -12...12), -20), color: SIMD3(1, 0.7, 0.35),
+                                        life: Float.random(in: 0.25...0.45), size: 1.1, drag: 3, gravity: 60))
+                }
+                if spark.velocity.y < 40 || spark.age > 3 {
+                    bursts.append((spark.position, shell))
+                    sparks.swapAt(i, sparks.count - 1)
+                    sparks.removeLast()
+                    i -= 1
+                    continue
+                }
+            } else if spark.age >= spark.life {
+                sparks.swapAt(i, sparks.count - 1)
+                sparks.removeLast()
+                i -= 1
+                continue
+            }
+            sparks[i] = spark
+            i -= 1
+        }
+        for (position, shell) in bursts { burst(shell, at: position) }
+        for k in flashes.indices.reversed() {
+            flashes[k].strength *= exp(-dt / 0.35)
+            if flashes[k].strength < 0.02 { flashes.remove(at: k) }
+        }
+    }
+
+    private func launch() {
+        let top = Float.random(in: 0.45...0.85) * height
+        let rise: Float = 240
+        sparks.append(Spark(
+            position: SIMD2(Float.random(in: max(left, width * 0.08)...width * 0.94), -4),
+            velocity: SIMD2(Float.random(in: -35...35), (2 * rise * top).squareRoot() * 1.05),
+            color: SIMD3(1, 0.85, 0.6), life: 4, size: 1.6, drag: 0, gravity: rise,
+            shell: Shell.allCases.randomElement()
+        ))
+    }
+
+    private func burst(_ shell: Shell, at position: SIMD2<Float>) {
+        let color = Self.colors.randomElement()!
+        let second = Bool.random() ? Self.colors.randomElement()! : color
+        let room = Self.maxSparks - sparks.count
+        switch shell {
+        case .peony, .crackle:
+            let count = min(room, 100)
+            let speed = Float.random(in: 170...230)
+            for k in 0..<count {
+                let angle = Float(k) / Float(count) * 2 * .pi + Float.random(in: -0.05...0.05)
+                // Seen from the side, a sphere of sparks: those flying toward or away from the viewer seem slower.
+                let depth = Float.random(in: -1...1)
+                let along = speed * (1 - depth * depth).squareRoot()
+                sparks.append(Spark(
+                    position: position, velocity: SIMD2(cos(angle), sin(angle)) * along, color: k % 2 == 0 ? color : second,
+                    life: Float.random(in: 1.4...2), size: 2.6, drag: 1.5, gravity: 90, crackles: shell == .crackle
+                ))
+            }
+        case .willow:
+            let count = min(room, 64)
+            for k in 0..<count {
+                let angle = Float(k) / Float(count) * 2 * .pi
+                sparks.append(Spark(
+                    position: position, velocity: SIMD2(cos(angle), sin(angle)) * Float.random(in: 90...170), color: SIMD3(1, 0.72, 0.32),
+                    life: Float.random(in: 2.6...3.4), size: 2.2, drag: 2.2, gravity: 70
+                ))
+            }
+        case .ring:
+            let count = min(room, 48)
+            let tilt = Float.random(in: 0...(.pi)), squash = Float.random(in: 0.35...0.8)
+            for k in 0..<count {
+                let angle = Float(k) / Float(count) * 2 * .pi
+                let flat = SIMD2(cos(angle), sin(angle) * squash) * 190
+                let velocity = SIMD2(flat.x * cos(tilt) - flat.y * sin(tilt), flat.x * sin(tilt) + flat.y * cos(tilt))
+                sparks.append(Spark(position: position, velocity: velocity, color: color, life: Float.random(in: 1.5...1.9), size: 2.6, drag: 1.4, gravity: 80))
+            }
+        }
+        let tone = shell == .willow ? SIMD3<Float>(1, 0.72, 0.32) : color
+        flashes.append(Flash(position: position, color: tone, strength: 1))
+        if sparks.count < Self.maxSparks {
+            sparks.append(Spark(position: position, velocity: .zero, color: tone, life: 0.45, size: 70, drag: 0, gravity: 0, flash: true))
+        }
+    }
+
+    /// A sparkler held at `point`: a few tiny golden sparks spit out of it every frame.
+    func sparkle(at point: SIMD2<Float>, dt: Float) {
+        let count = Int(dt * 140 + Float.random(in: 0...1))
+        for _ in 0..<count where sparks.count < Self.maxSparks {
+            let angle = Float.random(in: 0...(2 * .pi))
+            sparks.append(Spark(
+                position: point, velocity: SIMD2(cos(angle), sin(angle)) * Float.random(in: 40...120), color: SIMD3(1, 0.85, 0.5),
+                life: Float.random(in: 0.15...0.35), size: 0.9, drag: 4, gravity: 120, crackles: true
+            ))
+        }
+    }
+
+    /// The brightest flashes, at most three.
+    var lights: [Flash] {
+        Array(flashes.sorted { $0.strength > $1.strength }.prefix(3))
+    }
+}

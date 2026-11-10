@@ -523,4 +523,56 @@ fragment float4 decorFragment(DecorOut in [[stage_in]], const device TreePiece *
     if (color.a <= 0.002 && max(color.r, max(color.g, color.b)) <= 0.002) discard_fragment();
     return color;
 }
+
+// MARK: Fireworks
+
+struct SparkOut {
+    float4 position [[position]];
+    float2 local;
+    float3 color;
+    float bright;
+    float trail;
+    float size;
+    float flash;
+};
+
+/// A quad along the spark's flight, reaching back over the streak it leaves.
+vertex SparkOut sparkVertex(uint vid [[vertex_id]], uint iid [[instance_id]], const device TreePiece *pieces [[buffer(0)]],
+                            constant TreeUniforms &u [[buffer(1)]]) {
+    TreePiece p = pieces[iid];
+    float size = p.c.x;
+    float speed = length(p.a.zw);
+    float2 direction = speed > 1.0 ? p.a.zw / speed : float2(0.0, 1.0);
+    float flash = p.c.y;
+    float trail = flash > 0.5 ? 0.0 : size * 1.5 + speed * 0.075;
+    float glow = size * (flash > 0.5 ? 1.6 : 3.2);
+    float2 corner = float2(float(vid & 1), float(vid >> 1));
+    float2 local = float2(mix(-trail - glow, glow, corner.x), mix(-glow, glow, corner.y));
+    float2 world = p.a.xy + direction * local.x + float2(-direction.y, direction.x) * local.y;
+    SparkOut out;
+    out.position = float4(treeClip(world, u), 0.0, 1.0);
+    out.local = local;
+    out.color = p.b.rgb;
+    out.bright = p.b.w;
+    out.trail = trail;
+    out.size = size;
+    out.flash = flash;
+    return out;
+}
+
+fragment float4 sparkFragment(SparkOut in [[stage_in]]) {
+    if (in.flash > 0.5) {
+        float d = length(in.local) / in.size;
+        float glow = exp(-d * d * 2.5) * 0.22 * max(in.bright, 0.0);
+        return float4(in.color * glow, glow * 0.25);
+    }
+    float t = clamp(in.local.x, -in.trail, 0.0);
+    float d = length(float2(in.local.x - t, in.local.y));
+    float fade = mix(0.15, 1.0, (t + in.trail) / max(in.trail, 1e-3));
+    float core = exp(-d * d / (in.size * in.size * 0.3)) * fade;
+    float halo = exp(-d * d / (in.size * in.size * 4.0)) * 0.6 * fade;
+    float shine = max(in.bright, 0.0);
+    float3 color = (in.color * (core + halo) + float3(1.0) * core * 0.45) * shine;
+    return float4(color, saturate((core * 0.6 + halo * 0.15) * shine));
+}
 """
