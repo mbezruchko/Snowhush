@@ -2,7 +2,7 @@
   <a href="https://snowhush.app"><img src="site/assets/icon-512.png" width="128" height="128" alt="Snowhush icon"></a>
 </p>
 
-<h1 align="center"><a href="https://snowhush.app">Snowhush</a></h1>
+<h1 align="center">Snowhush</h1>
 
 <p align="center">It's snowing on your desktop.</p>
 
