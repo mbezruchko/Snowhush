@@ -333,7 +333,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         windVaryItem.state = Preferences.windVaries ? .on : .off
         windResetItem.isEnabled = Preferences.windVaries || Preferences.wind.strength > 0
         extraOrbs.on = [Preferences.mixed, Halloween.isOn]
-        modeOrbs.badges = Preferences.mixed || Halloween.isOn ? [Mode.allCases.count] : []
         // Rain neither heaps up nor lies about to clear away.
         let heaps = modes.filter { $0 != .rain }
         clearItem.isHidden = heaps.isEmpty
@@ -364,7 +363,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     }
 
     func menuWillOpen(_ menu: NSMenu) {
-        if menu === statusItem.menu { windPad.showing = true }
+        guard menu === statusItem.menu else { return }
+        windPad.showing = true
+        // What is on under More shows without asking: the row opens with the menu while either is.
+        extrasItem.isHidden = !(Preferences.mixed || Halloween.isOn)
     }
 
     func menuDidClose(_ menu: NSMenu) {

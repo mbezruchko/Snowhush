@@ -22,10 +22,6 @@ final class MenuOrbs: NSView {
     var on: [Bool] = [] {
         didSet { needsDisplay = true }
     }
-    /// Buttons that carry a small accent dot at their corner, as More does while something under it is on.
-    var badges: Set<Int> = [] {
-        didSet { needsDisplay = true }
-    }
     var toggled: (Int) -> Void = { _ in }
     /// How many columns the row is ruled into, when more than it has buttons: a shorter row then lines up under a
     /// fuller one.
@@ -52,7 +48,7 @@ final class MenuOrbs: NSView {
     func fit() {
         let font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
         let widest = orbs.map { NSAttributedString(string: $0.name, attributes: [.font: font]).size().width }.max() ?? 0
-        let column = compact ? circle + 7 + widest + 14 : max(widest + 12, 60)
+        let column = compact ? circle + 7 + widest + 14 : max(widest + 10, 50)
         setFrameSize(NSSize(width: max(200, ceil(2 * Self.inset + CGFloat(max(orbs.count, columns)) * column)), height: frame.height))
     }
 
@@ -107,11 +103,6 @@ final class MenuOrbs: NSView {
             let size = NSSize(width: orb.image.size.width * scale, height: orb.image.size.height * scale)
             let icon = NSRect(x: circle.midX - size.width / 2, y: circle.midY - size.height / 2, width: size.width, height: size.height)
             orb.image.tinted(lit ? .white : .labelColor).draw(in: icon, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
-            if badges.contains(k) {
-                let dot = NSRect(x: circle.maxX - 11, y: circle.minY + 1, width: 10, height: 10)
-                NSColor.controlAccentColor.setFill()
-                NSBezierPath(ovalIn: dot).fill()
-            }
             let name = NSAttributedString(string: orb.name, attributes: [.font: font, .foregroundColor: lit ? NSColor.labelColor : .secondaryLabelColor])
             let text = name.size()
             name.draw(at: compact ? NSPoint(x: circle.maxX + 7, y: circle.midY - text.height / 2) : NSPoint(x: box.midX - text.width / 2, y: circle.maxY + 6))
