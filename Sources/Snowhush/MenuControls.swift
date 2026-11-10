@@ -152,11 +152,13 @@ final class MenuBigSlider: NSView {
 
     private static let inset: CGFloat = 15
     private static let thickness: CGFloat = 24
-    private static let glyph = NSImage(systemSymbolName: "snowflake", accessibilityDescription: nil)?
-        .withSymbolConfiguration(.init(pointSize: 11, weight: .semibold))
+    /// Drawn at the slider's start: what falls.
+    var glyph: NSImage? {
+        didSet { needsDisplay = true }
+    }
 
     init() {
-        super.init(frame: NSRect(x: 0, y: 0, width: 200, height: 36))
+        super.init(frame: NSRect(x: 0, y: 0, width: 200, height: 40))
         autoresizingMask = .width
         setAccessibilityElement(true)
         setAccessibilityRole(.slider)
@@ -222,8 +224,9 @@ final class MenuBigSlider: NSView {
         NSColor.white.withAlphaComponent((dark ? 0.88 : 1) * (dimmed ? 0.5 : 1)).setFill()
         NSBezierPath(roundedRect: filled, xRadius: radius, yRadius: radius).fill()
         NSGraphicsContext.restoreGraphicsState()
-        if let glyph = Self.glyph {
-            let size = glyph.size
+        if let glyph {
+            let scale = min(1, 14 / max(glyph.size.width, glyph.size.height))
+            let size = NSSize(width: glyph.size.width * scale, height: glyph.size.height * scale)
             let box = NSRect(x: capsule.minX + radius - size.width / 2, y: capsule.midY - size.height / 2, width: size.width, height: size.height)
             glyph.tinted(NSColor.black.withAlphaComponent(0.55)).draw(in: box, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
         }

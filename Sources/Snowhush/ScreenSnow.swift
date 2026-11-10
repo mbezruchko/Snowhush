@@ -95,9 +95,9 @@ final class ScreenSnow {
         let simulation = SnowSimulation(
             width: Float(screen.frame.width),
             height: Float(screen.frame.height),
-            intensity: Float(Preferences.intensity)
+            intensity: Float(Preferences.falling.lowerBound)
         )
-        simulation.intensityTop = Float(Preferences.intensityTop)
+        simulation.intensityTop = Float(Preferences.falling.upperBound)
         simulation.thaws = Preferences.meltSnow
         let settled = Preferences.surfaces
         simulation.accumulates = !settled.isEmpty

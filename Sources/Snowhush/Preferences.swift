@@ -18,6 +18,7 @@ enum Preferences {
     static let opacityRange = 0.1...1.0
     private static let intensityKey = "intensity"
     private static let intensityTopKey = "intensityTop"
+    private static let pausedKey = "paused"
     /// Before the range, the snowfall could only vary about the intensity, or not.
     private static let varyIntensityKey = "variableIntensity"
     /// Before the slider, the intensity was one of Off, Light, Steady, Heavy and Variable.
@@ -113,6 +114,15 @@ enum Preferences {
     }
 
     static var intensityRange: ClosedRange<Double> { intensity...intensityTop }
+
+    /// Switched off from the menu's header: nothing falls, and the intensity is kept for when it is switched back on.
+    static var paused: Bool {
+        get { defaults.bool(forKey: pausedKey) }
+        set { defaults.set(newValue, forKey: pausedKey) }
+    }
+
+    /// What falls now: the range set, or nothing while paused.
+    static var falling: ClosedRange<Double> { paused ? 0...0 : intensityRange }
 
     /// Light under Reduce Motion, steady otherwise.
     static var defaultIntensity: Double { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0.25 : 0.5 }
