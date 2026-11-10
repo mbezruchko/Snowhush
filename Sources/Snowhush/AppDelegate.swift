@@ -20,7 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var weatherItems: [NSMenuItem] = []
     private let intensityRow = MenuDisclosure()
     private var intensityItem: NSMenuItem!
-    private let intensitySlider = MenuRangeSlider()
+    private let intensitySlider = MenuIntensitySlider()
     private let opacitySlider = MenuSlider(range: Preferences.opacityRange, title: tr("opacity"))
     private var intensityItems: [NSMenuItem] = []
     private var windItem: NSMenuItem!
@@ -180,9 +180,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         intensityItem = addView(intensityRow, title: tr("intensity"), to: menu)
         intensityRow.summaryWhileOpen = true
         intensityRow.toggled = { [unowned self] in fold(intensityRow) }
-        intensitySlider.changed = { [unowned self] in
-            select(intensity: $0)
-            intensityRow.summary = MenuRangeSlider.describe($0)
+        intensitySlider.changed = { [unowned self] value in
+            switch value {
+            case .steady(let intensity): select(intensity: intensity...intensity)
+            case .variable: select(intensity: Self.variableIntensity)
+            }
+            intensityRow.summary = MenuIntensitySlider.describe(value)
         }
         opacitySlider.changed = { [unowned self] opacity in
             Preferences.fallingOpacity = opacity
@@ -331,9 +334,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         modeTiles.on = Mode.allCases.map(modes.contains)
         extraTiles.on = [Halloween.isWanted]
         extraTiles.enabled = [modes == [.snow]]
-        intensityRow.summary = MenuRangeSlider.describe(Preferences.intensityRange)
+        let intensity: MenuIntensitySlider.Value = Preferences.intensityTop > Preferences.intensity ? .variable : .steady(Preferences.intensity)
+        intensityRow.summary = MenuIntensitySlider.describe(intensity)
         intensityRow.fit(intensityItem.title, least: 0)
-        intensitySlider.range = Preferences.intensityRange
+        intensitySlider.value = intensity
         opacitySlider.value = Preferences.fallingOpacity
         if !Preferences.windVaries { windPad.wind = Preferences.wind }
         windPad.wanders = Preferences.windVaries
@@ -406,6 +410,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         windResetItem.isEnabled = Preferences.windVaries || Preferences.wind.strength > 0
         windResetItem.view?.needsDisplay = true
     }
+
+    /// Variable wanders about a steady fall.
+    private static let variableIntensity = 0.25...0.75
 
     /// A steady snowfall, or a range it wanders in.
     private func select(intensity range: ClosedRange<Double>) {
