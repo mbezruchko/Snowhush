@@ -1,9 +1,10 @@
+"weather" = "Météo";
+"mix" = "Mélanger";
 "intensity" = "Intensité";
 "variable" = "Variable";
 "opacity" = "Opacité";
 "wind" = "Vent";
 "calm" = "Calme";
-"random" = "Aléatoire";
 "reset" = "Réinitialiser";
 "off" = "Arrêt";
 "mode" = "Mode";
@@ -12,6 +13,10 @@
 "autumn" = "Feuilles d'automne";
 "rain" = "Pluie";
 "blossom" = "Fleurs de cerisier";
+"tile.snow" = "Neige";
+"tile.autumn" = "Feuilles";
+"tile.rain" = "Pluie";
+"tile.blossom" = "Cerisier";
 "halloween" = "Halloween";
 "settings" = "Réglages";
 "behavior" = "Comportement";

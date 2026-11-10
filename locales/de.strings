@@ -1,9 +1,10 @@
+"weather" = "Wetter";
+"mix" = "Mischen";
 "intensity" = "Intensität";
 "variable" = "Wechselnd";
 "opacity" = "Deckkraft";
 "wind" = "Wind";
 "calm" = "Windstill";
-"random" = "Zufällig";
 "reset" = "Zurücksetzen";
 "off" = "Aus";
 "mode" = "Modus";
@@ -12,6 +13,10 @@
 "autumn" = "Herbstlaub";
 "rain" = "Regen";
 "blossom" = "Kirschblüte";
+"tile.snow" = "Schnee";
+"tile.autumn" = "Laub";
+"tile.rain" = "Regen";
+"tile.blossom" = "Blüten";
 "halloween" = "Halloween";
 "settings" = "Einstellungen";
 "behavior" = "Verhalten";

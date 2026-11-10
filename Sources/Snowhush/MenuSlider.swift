@@ -1,8 +1,8 @@
 import AppKit
 
-/// A slider in the menu, in steps of 5%, with the percentage under it: Intensity, Opacity. The view follows the
-/// pointer itself: the slider's own tracking runs a nested event loop, which falls out of step with the menu's and
-/// leaves the knob stuck now and then.
+/// A slider in the menu, in steps of 5%, with the percentage under it, or with its name over it and the percentage on
+/// the name's right: Intensity, Opacity. The view follows the pointer itself: the slider's own tracking runs a nested
+/// event loop, which falls out of step with the menu's and leaves the knob stuck now and then.
 final class MenuSlider: NSView {
     var changed: ((Double) -> Void)?
 
@@ -13,9 +13,11 @@ final class MenuSlider: NSView {
 
     private let slider = NSSlider()
     private let caption = NSTextField(labelWithString: "")
+    private let heading = NSTextField(labelWithString: "")
 
     /// `captioned` false leaves out the percentage under the track, for a slider whose row above already shows it.
-    init(range: ClosedRange<Double>, captioned: Bool = true) {
+    /// With a `title`, the percentage shows on the title's line instead.
+    init(range: ClosedRange<Double>, captioned: Bool = true, title: String? = nil) {
         super.init(frame: NSRect(x: 0, y: 0, width: 200, height: 50))
         autoresizingMask = .width
 
@@ -29,7 +31,14 @@ final class MenuSlider: NSView {
         caption.textColor = .secondaryLabelColor
         caption.alignment = .center
 
-        for view in captioned ? [slider, caption] : [slider] {
+        if let title {
+            heading.stringValue = title
+            heading.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .semibold)
+            heading.textColor = .secondaryLabelColor
+            caption.alignment = .right
+        }
+        let views = title != nil ? [heading, caption, slider] : captioned ? [slider, caption] : [slider]
+        for view in views {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
@@ -37,8 +46,16 @@ final class MenuSlider: NSView {
         NSLayoutConstraint.activate([
             slider.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
             slider.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+        ] + (title != nil ? [
+            heading.leadingAnchor.constraint(equalTo: leadingAnchor, constant: MenuDisclosure.titleX),
+            heading.topAnchor.constraint(equalTo: topAnchor, constant: 5),
+            caption.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
+            caption.firstBaselineAnchor.constraint(equalTo: heading.firstBaselineAnchor),
+            slider.topAnchor.constraint(equalTo: heading.bottomAnchor, constant: 3),
+            slider.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6),
+        ] : [
             slider.topAnchor.constraint(equalTo: topAnchor, constant: 4),
-        ] + (captioned ? [
+        ]) + (title != nil ? [] : captioned ? [
             caption.centerXAnchor.constraint(equalTo: slider.centerXAnchor),
             caption.topAnchor.constraint(equalTo: slider.bottomAnchor, constant: 2),
             caption.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2),

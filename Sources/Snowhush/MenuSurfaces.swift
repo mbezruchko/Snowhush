@@ -15,6 +15,13 @@ final class MenuDisclosure: NSView {
     var toggled: () -> Void = {}
     /// Shows the summary unfolded too, as a value the folded row sets.
     var summaryWhileOpen = false
+    /// A small button the unfolded row shows in place of its summary, lit while `pillOn`.
+    var pill: String?
+    var pillOn = false {
+        didSet { needsDisplay = true }
+    }
+    var pillToggled: () -> Void = {}
+    private var pillFrame: NSRect = .zero
 
     /// Where a title starts in a menu with no checkmarks, as the menu bar menu's own rows have it.
     static let titleX: CGFloat = MenuToggle.modern ? 15 : 14
@@ -47,8 +54,13 @@ final class MenuDisclosure: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
-        guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
-        toggled()
+        let point = convert(event.locationInWindow, from: nil)
+        guard bounds.contains(point) else { return }
+        if open, pill != nil, pillFrame.insetBy(dx: -4, dy: -3).contains(point) {
+            pillToggled()
+        } else {
+            toggled()
+        }
         redrawRows()
     }
 
@@ -60,6 +72,14 @@ final class MenuDisclosure: NSView {
     override func accessibilityLabel() -> String? { enclosingMenuItem?.title }
 
     override func accessibilityValue() -> Any? { open ? 1 : 0 }
+
+    override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {
+        guard open, let pill else { return nil }
+        return [NSAccessibilityCustomAction(name: pill) { [weak self] in
+            self?.pillToggled()
+            return true
+        }]
+    }
 
     override func draw(_ dirtyRect: NSRect) {
         guard let item = enclosingMenuItem else { return }
@@ -83,6 +103,10 @@ final class MenuDisclosure: NSView {
             chevron.draw(in: NSRect(x: right + (12 - size.width) / 2, y: (bounds.height - size.height) / 2, width: size.width, height: size.height))
             right -= 8
         }
+        if open, let pill {
+            drawPill(pill, right: right, lit: lit)
+            return
+        }
         guard !open || summaryWhileOpen else { return }
         if !summaryIcons.isEmpty {
             let side = Self.summaryIcon
@@ -97,6 +121,20 @@ final class MenuDisclosure: NSView {
         let trailing = NSAttributedString(string: summary, attributes: [.font: font, .foregroundColor: soft])
         let width = trailing.size().width
         trailing.draw(at: NSPoint(x: max(right - width, Self.titleX + title.size().width + 12), y: (bounds.height - trailing.size().height) / 2))
+    }
+
+    private func drawPill(_ text: String, right: CGFloat, lit: Bool) {
+        let font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize, weight: .semibold)
+        let ink: NSColor = pillOn ? (lit ? .controlAccentColor : .selectedMenuItemTextColor) : lit ? .selectedMenuItemTextColor : .secondaryLabelColor
+        let title = NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: ink])
+        let size = title.size()
+        let height = ceil(size.height) + 4
+        pillFrame = NSRect(x: right - ceil(size.width) - 18, y: (bounds.height - height) / 2, width: ceil(size.width) + 18, height: height)
+        let fill: NSColor = pillOn ? (lit ? .selectedMenuItemTextColor : .controlAccentColor)
+            : lit ? NSColor.selectedMenuItemTextColor.withAlphaComponent(0.22) : NSColor.labelColor.withAlphaComponent(0.08)
+        fill.setFill()
+        NSBezierPath(roundedRect: pillFrame, xRadius: height / 2, yRadius: height / 2).fill()
+        title.draw(at: NSPoint(x: pillFrame.midX - size.width / 2, y: pillFrame.midY - size.height / 2))
     }
 
     /// Widens the row to fit its title and summary, and to `least`, the row it folds, so the menu keeps its width as

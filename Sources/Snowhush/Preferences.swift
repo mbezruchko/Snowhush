@@ -42,7 +42,7 @@ enum Preferences {
     private static let fallingOpacityKey = "fallingOpacity"
     private static let windKey = "wind"
     private static let windDirectionKey = "windDirection"
-    private static let windRandomKey = "windRandom"
+    private static let windVariesKey = "windVaries"
 
     static func registerDefaults() {
         let calm = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
@@ -63,7 +63,7 @@ enum Preferences {
             mixedKey: false,
             fallingOpacityKey: 1.0,
             windDirectionKey: Wind.calm.direction,
-            windRandomKey: false,
+            windVariesKey: false,
         ])
         if defaults.object(forKey: intensityKey) == nil, let stop = defaults.object(forKey: snowfallKey) as? Int {
             defaults.set([0, 0.25, 0.5, 0.75, 0.5][min(max(stop, 0), 4)], forKey: intensityKey)
@@ -198,9 +198,9 @@ enum Preferences {
     }
 
     /// The wind wanders on its own instead of blowing as set.
-    static var windRandom: Bool {
-        get { defaults.bool(forKey: windRandomKey) }
-        set { defaults.set(newValue, forKey: windRandomKey) }
+    static var windVaries: Bool {
+        get { defaults.bool(forKey: windVariesKey) }
+        set { defaults.set(newValue, forKey: windVariesKey) }
     }
 
     /// Drawn at the display's highest rate all the time, instead of only while something is pushed around.

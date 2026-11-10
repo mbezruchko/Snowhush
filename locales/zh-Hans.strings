@@ -1,9 +1,10 @@
+"weather" = "天气";
+"mix" = "混合";
 "intensity" = "强度";
 "variable" = "变化";
 "opacity" = "不透明度";
 "wind" = "风";
 "calm" = "无风";
-"random" = "随机";
 "reset" = "重置";
 "off" = "关";
 "mode" = "模式";
@@ -12,6 +13,10 @@
 "autumn" = "秋叶";
 "rain" = "雨";
 "blossom" = "樱花";
+"tile.snow" = "雪";
+"tile.autumn" = "秋叶";
+"tile.rain" = "雨";
+"tile.blossom" = "樱花";
 "halloween" = "万圣节";
 "settings" = "设置";
 "behavior" = "行为";

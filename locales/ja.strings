@@ -1,9 +1,10 @@
+"weather" = "天気";
+"mix" = "ミックス";
 "intensity" = "強さ";
 "variable" = "変動";
 "opacity" = "不透明度";
 "wind" = "風";
 "calm" = "無風";
-"random" = "ランダム";
 "reset" = "リセット";
 "off" = "オフ";
 "mode" = "モード";
@@ -12,6 +13,10 @@
 "autumn" = "紅葉";
 "rain" = "雨";
 "blossom" = "桜";
+"tile.snow" = "雪";
+"tile.autumn" = "紅葉";
+"tile.rain" = "雨";
+"tile.blossom" = "桜";
 "halloween" = "ハロウィン";
 "settings" = "設定";
 "behavior" = "動作";

@@ -10,6 +10,13 @@ final class MenuSwitch: NSView {
         set { toggle.state = newValue ? .on : .off }
     }
 
+    var isEnabled = true {
+        didSet {
+            toggle.isEnabled = isEnabled
+            needsDisplay = true
+        }
+    }
+
     private let toggle = NSSwitch()
 
     init() {
@@ -36,7 +43,7 @@ final class MenuSwitch: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
-        guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
+        guard isEnabled, bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
         toggle.performClick(nil)
     }
 
@@ -58,7 +65,8 @@ final class MenuSwitch: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         guard let item = enclosingMenuItem else { return }
-        let title = NSAttributedString(string: item.title, attributes: [.font: NSFont.menuFont(ofSize: 0), .foregroundColor: NSColor.labelColor])
+        let color: NSColor = isEnabled ? .labelColor : .disabledControlTextColor
+        let title = NSAttributedString(string: item.title, attributes: [.font: NSFont.menuFont(ofSize: 0), .foregroundColor: color])
         title.draw(at: NSPoint(x: MenuDisclosure.titleX, y: (bounds.height - title.size().height) / 2))
     }
 }

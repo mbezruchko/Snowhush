@@ -1,9 +1,10 @@
+"weather" = "Погода";
+"mix" = "Змішати";
 "intensity" = "Інтенсивність";
 "variable" = "Змінна";
 "opacity" = "Непрозорість";
 "wind" = "Вітер";
 "calm" = "Штиль";
-"random" = "Випадковий";
 "reset" = "Скинути";
 "off" = "Вимк.";
 "mode" = "Режим";
@@ -12,6 +13,10 @@
 "autumn" = "Осіннє листя";
 "rain" = "Дощ";
 "blossom" = "Цвіт сакури";
+"tile.snow" = "Сніг";
+"tile.autumn" = "Листя";
+"tile.rain" = "Дощ";
+"tile.blossom" = "Сакура";
 "halloween" = "Гелловін";
 "settings" = "Налаштування";
 "behavior" = "Поведінка";

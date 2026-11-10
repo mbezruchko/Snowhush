@@ -104,7 +104,7 @@ final class ScreenSnow {
         simulation.groundSettles = settled.contains(.ground)
         simulation.fallingOpacity = Float(Preferences.fallingOpacity)
         simulation.wind = Preferences.wind.vector
-        simulation.windWanders = Preferences.windRandom
+        simulation.windWanders = Preferences.windVaries
         let renderer: Renderer
         do {
             renderer = try Renderer(device: device, pixelFormat: .bgra8Unorm, simulation: simulation)
