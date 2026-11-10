@@ -1,7 +1,8 @@
 import AppKit
 
 /// The modes as round buttons, each over its name, as Control Center's toggles are: filled with the accent colour
-/// while on. The menu stays open.
+/// while on. The menu stays open. `compact`, the buttons are small with their names beside them, for what goes with
+/// the modes: a second, quieter row.
 final class MenuOrbs: NSView {
     struct Orb {
         let name: String
@@ -24,11 +25,13 @@ final class MenuOrbs: NSView {
     var toggled: (Int) -> Void = { _ in }
     private var hovered: Int?
 
+    private let compact: Bool
     private static let inset: CGFloat = 15
-    private static let circle: CGFloat = 40
+    private var circle: CGFloat { compact ? 26 : 40 }
 
-    init() {
-        super.init(frame: NSRect(x: 0, y: 0, width: 200, height: 70))
+    init(compact: Bool = false) {
+        self.compact = compact
+        super.init(frame: NSRect(x: 0, y: 0, width: 200, height: compact ? 38 : 70))
         autoresizingMask = .width
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
@@ -42,7 +45,8 @@ final class MenuOrbs: NSView {
     func fit() {
         let font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
         let widest = orbs.map { NSAttributedString(string: $0.name, attributes: [.font: font]).size().width }.max() ?? 0
-        setFrameSize(NSSize(width: max(200, ceil(2 * Self.inset + CGFloat(orbs.count) * max(widest + 12, 60))), height: frame.height))
+        let column = compact ? circle + 7 + widest + 14 : max(widest + 12, 60)
+        setFrameSize(NSSize(width: max(200, ceil(2 * Self.inset + CGFloat(orbs.count) * column)), height: frame.height))
     }
 
     private func isOn(_ k: Int) -> Bool { k < on.count && on[k] }
@@ -87,16 +91,18 @@ final class MenuOrbs: NSView {
         for (k, orb) in orbs.enumerated() {
             let box = frame(of: k)
             let lit = isOn(k)
-            let side = Self.circle
-            let circle = NSRect(x: box.midX - side / 2, y: 4, width: side, height: side)
+            let side = self.circle
+            let circle = compact ? NSRect(x: box.minX, y: (bounds.height - side) / 2 - 1, width: side, height: side)
+                : NSRect(x: box.midX - side / 2, y: 4, width: side, height: side)
             (lit ? NSColor.controlAccentColor : NSColor.labelColor.withAlphaComponent(hovered == k ? 0.2 : 0.12)).setFill()
             NSBezierPath(ovalIn: circle).fill()
-            let size = orb.image.size
+            let scale = compact ? min(1, 15 / max(orb.image.size.width, orb.image.size.height)) : 1
+            let size = NSSize(width: orb.image.size.width * scale, height: orb.image.size.height * scale)
             let icon = NSRect(x: circle.midX - size.width / 2, y: circle.midY - size.height / 2, width: size.width, height: size.height)
             orb.image.tinted(lit ? .white : .labelColor).draw(in: icon, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
             let name = NSAttributedString(string: orb.name, attributes: [.font: font, .foregroundColor: lit ? NSColor.labelColor : .secondaryLabelColor])
             let text = name.size()
-            name.draw(at: NSPoint(x: box.midX - text.width / 2, y: circle.maxY + 6))
+            name.draw(at: compact ? NSPoint(x: circle.maxX + 7, y: circle.midY - text.height / 2) : NSPoint(x: box.midX - text.width / 2, y: circle.maxY + 6))
         }
     }
 

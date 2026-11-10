@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var statusItem: NSStatusItem!
     private let headerRow = MenuDisclosure()
     private let modeOrbs = MenuOrbs()
+    private let extraOrbs = MenuOrbs(compact: true)
     private let intensityRow = MenuDisclosure()
     private let intensitySlider = MenuBigSlider()
     private let opacitySlider = MenuSlider(range: Preferences.opacityRange)
@@ -25,8 +26,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var windResetItem: NSMenuItem!
     private var accumulateItem: NSMenuItem!
     private var surfaceItems: [(item: NSMenuItem, surface: Surfaces)] = []
-    private var mixedItem: NSMenuItem!
-    private var halloweenItem: NSMenuItem!
     private var behaviorItems: [NSMenuItem] = []
     private var meltItem: NSMenuItem!
     private var clearItem: NSMenuItem!
@@ -157,6 +156,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         modeOrbs.fit()
         modeOrbs.toggled = { [unowned self] in choose(Mode.allCases[$0]) }
         addView(modeOrbs, to: menu)
+        // What goes with the modes, as Display's Dark Mode and Night Shift go under its slider.
+        let small = NSImage.SymbolConfiguration(pointSize: 12, weight: .medium)
+        extraOrbs.orbs = [
+            MenuOrbs.Orb(name: tr("mixed"), image: NSImage(systemSymbolName: "square.on.square", accessibilityDescription: nil)?.withSymbolConfiguration(small) ?? Blossom.icon),
+            MenuOrbs.Orb(name: tr("halloween"), image: Halloween.icon),
+        ]
+        extraOrbs.fit()
+        extraOrbs.toggled = { [unowned self] k in
+            if k == 0 { toggleMixed() } else { spookySnow() }
+            refreshMenu()
+        }
+        addView(extraOrbs, to: menu)
 
         addView(intensityRow, title: tr("intensity"), to: menu)
         intensityRow.foldable = false
@@ -217,10 +228,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         // The app itself: where the snow shows, and the rest.
         let settings = NSMenu()
         settings.autoenablesItems = false
-        settings.addItem(.sectionHeader(title: tr("mode")))
-        mixedItem = toggle(tr("mixed"), #selector(toggleMixedItem), to: settings)
-        halloweenItem = toggle(tr("halloween"), #selector(toggleHalloweenItem), to: settings)
-        settings.addItem(.separator())
         let behavior = NSMenuItem.sectionHeader(title: tr("behavior"))
         settings.addItem(behavior)
         meltItem = toggle(tr("melt.snow"), #selector(toggleMeltSnow), to: settings)
@@ -314,8 +321,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         windItem.badge = NSMenuItemBadge(string: Preferences.windVaries ? tr("variable") : Preferences.wind.summary)
         windVaryItem.state = Preferences.windVaries ? .on : .off
         windResetItem.isEnabled = Preferences.windVaries || Preferences.wind.strength > 0
-        mixedItem.state = Preferences.mixed ? .on : .off
-        halloweenItem.state = Halloween.isOn ? .on : .off
+        extraOrbs.on = [Preferences.mixed, Halloween.isOn]
         // Rain neither heaps up nor lies about to clear away.
         let heaps = modes.filter { $0 != .rain }
         clearItem.isHidden = heaps.isEmpty
@@ -378,13 +384,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         toggle(surface)
     }
 
-    @objc private func toggleMixedItem() {
-        toggleMixed()
-    }
-
-    @objc private func toggleHalloweenItem() {
-        spookySnow()
-    }
 
     /// Back to the default: calm, set by hand.
     private func resetWind() {
