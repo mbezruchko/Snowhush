@@ -30,12 +30,12 @@ final class MenuDisclosure: NSView {
     private var pillFrame: NSRect = .zero
 
     /// Where a title starts in a menu with no checkmarks, as the menu bar menu's own rows have it.
-    static let titleX: CGFloat = MenuToggle.modern ? 15 : 14
+    static let titleX: CGFloat = MenuMetrics.modern ? 15 : 14
     private static let summaryIcon: CGFloat = 15
     private static let summaryGap: CGFloat = 5
 
     init() {
-        super.init(frame: NSRect(x: 0, y: 0, width: 200, height: MenuToggle.rowHeight))
+        super.init(frame: NSRect(x: 0, y: 0, width: 200, height: MenuMetrics.rowHeight))
         autoresizingMask = .width
         setAccessibilityElement(true)
         setAccessibilityRole(.disclosureTriangle)
@@ -92,7 +92,7 @@ final class MenuDisclosure: NSView {
         let lit = item.isHighlighted
         if lit {
             NSColor.controlAccentColor.setFill()
-            let radius = MenuToggle.highlightRadius
+            let radius = MenuMetrics.highlightRadius
             NSBezierPath(roundedRect: bounds.insetBy(dx: 5, dy: 0), xRadius: radius, yRadius: radius).fill()
         }
         let color: NSColor = lit ? .selectedMenuItemTextColor : .labelColor
@@ -257,7 +257,7 @@ final class SurfacePicker: NSView {
             let tile = frame(of: k)
             if hovered == k {
                 NSColor.quaternaryLabelColor.setFill()
-                NSBezierPath(roundedRect: tile.insetBy(dx: 2, dy: 0), xRadius: MenuToggle.highlightRadius, yRadius: MenuToggle.highlightRadius).fill()
+                NSBezierPath(roundedRect: tile.insetBy(dx: 2, dy: 0), xRadius: MenuMetrics.highlightRadius, yRadius: MenuMetrics.highlightRadius).fill()
             }
             let lit = on.contains(surface)
             let usable = !disabled.contains(surface)

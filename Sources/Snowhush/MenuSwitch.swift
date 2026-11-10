@@ -20,7 +20,7 @@ final class MenuSwitch: NSView {
     private let toggle = NSSwitch()
 
     init() {
-        super.init(frame: NSRect(x: 0, y: 0, width: 200, height: MenuToggle.rowHeight + 4))
+        super.init(frame: NSRect(x: 0, y: 0, width: 200, height: MenuMetrics.rowHeight + 4))
         autoresizingMask = .width
         toggle.controlSize = .mini
         toggle.target = self

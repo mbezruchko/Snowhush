@@ -37,11 +37,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private let meltSwitch = MenuSwitch()
     private var meltItem: NSMenuItem!
     private var clearItem: NSMenuItem!
-    private var maxPerformanceItem: NSMenuItem!
-    private var behindWindowsItem: NSMenuItem!
-    private var fullScreenItem: NSMenuItem!
-    private var screenshotsItem: NSMenuItem!
-    private var loginItem: NSMenuItem!
+    private let behindWindowsSwitch = MenuSwitch()
+    private let fullScreenSwitch = MenuSwitch()
+    private let screenshotsSwitch = MenuSwitch()
+    private let maxPerformanceSwitch = MenuSwitch()
+    private let loginSwitch = MenuSwitch()
     private var observers: [NSObjectProtocol] = []
     private var screensAsleep = false
     private let screenshots = ScreenshotWatch()
@@ -239,13 +239,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         let settings = NSMenu()
         settings.autoenablesItems = false
         settings.addItem(.sectionHeader(title: tr("display")))
-        behindWindowsItem = toggle(tr("behind"), #selector(toggleBehindWindows), to: settings)
-        fullScreenItem = toggle(tr("full_screen"), #selector(toggleFullScreen), to: settings)
-        screenshotsItem = toggle(tr("screenshots"), #selector(toggleScreenshots), to: settings)
-        maxPerformanceItem = toggle(tr("performance"), #selector(toggleMaxPerformance), to: settings)
+        addSwitch(behindWindowsSwitch, tr("behind"), to: settings) { [unowned self] in toggleBehindWindows() }
+        addSwitch(fullScreenSwitch, tr("full_screen"), to: settings) { [unowned self] in toggleFullScreen() }
+        addSwitch(screenshotsSwitch, tr("screenshots"), to: settings) { [unowned self] in toggleScreenshots() }
+        addSwitch(maxPerformanceSwitch, tr("performance"), to: settings) { [unowned self] in toggleMaxPerformance() }
         settings.addItem(.separator())
         settings.addItem(.sectionHeader(title: tr("general")))
-        loginItem = toggle(tr("login"), #selector(toggleOpenAtLogin), to: settings)
+        addSwitch(loginSwitch, tr("login"), to: settings) { [unowned self] in toggleOpenAtLogin() }
         let updates = settings.addItem(withTitle: tr("updates"), action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)), keyEquivalent: "")
         updates.target = updater
         menu.addItem(withTitle: tr("settings"), action: nil, keyEquivalent: "").submenu = settings
@@ -341,12 +341,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         return item
     }
 
-    private func toggle(_ title: String, _ action: Selector, to menu: NSMenu) -> NSMenuItem {
-        let item = menu.addItem(withTitle: title, action: nil, keyEquivalent: "")
-        let toggle = MenuToggle(action: action, target: self)
-        toggle.fit(title)
-        item.view = toggle
-        return item
+    /// A row with a switch, as Melt Snow's: the menu stays open, and every row is brought up to date, so a setting
+    /// that turns another off or on shows it at once.
+    private func addSwitch(_ row: MenuSwitch, _ title: String, to menu: NSMenu, _ toggled: @escaping () -> Void) {
+        row.fit(title)
+        row.toggled = { [unowned self] _ in
+            toggled()
+            refreshMenu()
+        }
+        addView(row, title: title, to: menu)
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -389,12 +392,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         meltSwitch.isEnabled = !surfaces.isEmpty
         clearItem.isEnabled = screens.contains { $0.simulation.hasSnow || $0.simulation.spriteCount > 0 }
         refreshFolds()
-        maxPerformanceItem.state = Preferences.maxPerformance ? .on : .off
-        behindWindowsItem.state = behindWindows ? .on : .off
-        fullScreenItem.state = Preferences.showOverFullScreen ? .on : .off
-        fullScreenItem.isEnabled = !behindWindows
-        screenshotsItem.state = Preferences.showInScreenshots ? .on : .off
-        loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        maxPerformanceSwitch.isOn = Preferences.maxPerformance
+        behindWindowsSwitch.isOn = behindWindows
+        fullScreenSwitch.isOn = Preferences.showOverFullScreen
+        fullScreenSwitch.isEnabled = !behindWindows
+        screenshotsSwitch.isOn = Preferences.showInScreenshots
+        loginSwitch.isOn = SMAppService.mainApp.status == .enabled
     }
 
     func menuWillOpen(_ menu: NSMenu) {
