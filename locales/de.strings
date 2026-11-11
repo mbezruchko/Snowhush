@@ -28,6 +28,8 @@
 "taskbar" = "Hinter der Taskleiste";
 "screenshots" = "In Screenshots zeigen";
 "performance" = "Maximale Leistung";
+"sound" = "Ton";
+"sound.generator" = "Generator";
 "login" = "Beim Anmelden öffnen";
 "updates" = "Nach Updates suchen …";
 "support" = "Snowhush unterstützen";

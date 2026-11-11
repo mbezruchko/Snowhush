@@ -28,6 +28,8 @@
 "taskbar" = "Derrière la barre des tâches";
 "screenshots" = "Afficher dans les captures";
 "performance" = "Performances maximales";
+"sound" = "Son";
+"sound.generator" = "Groupe électrogène";
 "login" = "Ouvrir à la connexion";
 "updates" = "Rechercher les mises à jour…";
 "support" = "Soutenir Snowhush";
