@@ -28,6 +28,8 @@
 "taskbar" = "Atrás da barra de tarefas";
 "screenshots" = "Mostrar em capturas de tela";
 "performance" = "Desempenho máximo";
+"sound" = "Som";
+"sound.generator" = "Gerador";
 "login" = "Abrir ao iniciar sessão";
 "updates" = "Procurar atualizações…";
 "support" = "Apoiar o Snowhush";
