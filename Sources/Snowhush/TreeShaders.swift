@@ -82,7 +82,15 @@ vertex BoughOut boughVertex(uint vid [[vertex_id]], uint iid [[instance_id]], co
     float2 reach = p.a.zw;
     float2 offset = p.b.xy;
     float2 center = p.a.xy + reach * s + offset * s * s;
-    float2 tangent = normalize(reach + 2.0 * offset * s);
+    float2 slope = reach + 2.0 * offset * s;
+    if (p.c.w < 0.5) {
+        // A side bough sags a little along its length and turns its tip up.
+        float span = length(reach);
+        float side = saturate(abs(reach.x) / max(span, 0.01));
+        center.y += span * side * (0.1 * s * s * s - 0.07 * s * (1.0 - s));
+        slope.y += span * side * (0.3 * s * s - 0.07 + 0.14 * s);
+    }
+    float2 tangent = normalize(slope);
     float2 normal = float2(-tangent.y, tangent.x);
     if (dot(normal, p.d.xy) < 0.0) normal = -normal;
     float spread = p.b.z * 0.5 + p.d.z + 3.0;
@@ -106,6 +114,17 @@ fragment float4 boughFragment(BoughOut in [[stage_in]], texture2d_array<float> n
     float3 garland = garlandLight(in.world, u, bulbs, 12.0);
     float3 daylight = mix(float3(1.0), u.light.rgb, 0.85);
 
+    if (p.c.w > 1.5) {
+        // The dark heart of the tree, a ragged cone glowing faintly with the garland deep inside.
+        float s = in.uv.x;
+        float y = 6.0 + 146.0 * s;
+        float reach = (10.0 + 62.0 * pow(saturate(1.0 - (y - 14.0) / 134.0), 1.1)) * 0.42;
+        reach *= 0.85 + 0.3 * treeNoise(y * 0.35 + floor(in.across * 0.25) * 5.0);
+        float cover = smoothstep(reach + 1.0, reach * 0.8, abs(in.across)) * smoothstep(0.0, 0.08, s) * (1.0 - smoothstep(0.86, 0.99, s));
+        if (cover <= 0.0) discard_fragment();
+        float3 color = float3(0.03, 0.075, 0.045) * daylight + garland * 0.18;
+        return float4(color * cover, cover);
+    }
     if (p.c.w > 0.5) {
         float s = in.uv.x;
         float halfWidth = width * 0.5 * (1.0 - 0.7 * s);
@@ -121,7 +140,11 @@ fragment float4 boughFragment(BoughOut in [[stage_in]], texture2d_array<float> n
     constexpr sampler smooth(filter::linear, mip_filter::linear, address::clamp_to_zero);
     float4 needle = needles.sample(smooth, in.uv, uint(p.c.z + 0.5));
     float depth = saturate(p.b.w * 0.5 + 0.5);
-    needle.rgb *= mix(0.45, 1.0, depth) * daylight;
+    // Toward the trunk the needles lie in the tree's own shade; boughs round the far side are darker, and those on
+    // the right are turned from the light.
+    float inner = mix(0.38, 1.0, smoothstep(0.0, 0.6, in.uv.x));
+    float turned = 1.0 - 0.12 * p.a.z / max(length(p.a.zw), 0.01);
+    needle.rgb *= mix(0.42, 1.0, depth) * inner * turned * daylight;
     needle.rgb += garland * needle.a * 0.14;
 
     // Snow lies along the top of the needles: lumpy, thickest midway, none at the trunk or the tip.

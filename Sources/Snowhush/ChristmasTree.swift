@@ -23,6 +23,8 @@ final class ChristmasTree {
         let seed: Float
         /// The trunk, drawn as a bough of bark.
         var trunk = false
+        /// The dark mass of needles deep inside the tree, drawn behind the boughs so nothing shows through it.
+        var core = false
         /// How far its tip is bent from rest, and how fast it moves.
         var offset = SIMD2<Float>(repeating: 0)
         var velocity = SIMD2<Float>(repeating: 0)
@@ -118,17 +120,18 @@ final class ChristmasTree {
     init() {
         var random = TreeRandom()
         var boughs: [Bough] = []
-        let tiers = 11
+        // Whorls of boughs from the foot to the top: the low ones long and hanging, the high ones short and raised.
+        let tiers = 14
         for k in 0..<tiers {
             let t = Float(k) / Float(tiers - 1)
-            let y = 16 + 132 * pow(t, 0.93)
-            let length = 12 + 62 * pow(1 - t, 1.05)
-            let count = max(4, Int((10 - 5.5 * t).rounded()))
+            let y = 14 + 134 * pow(t, 0.9)
+            let length = Self.reach(at: y)
+            let count = max(4, Int((11 - 6 * t).rounded()))
             let turn = Float(k) * 2.39996
             for j in 0..<count {
                 let azimuth = turn + Float(j) * 2 * .pi / Float(count) + random.range(-0.3, 0.3)
-                let l = length * random.range(0.86, 1.1)
-                let droop = 0.2 + 0.3 * (1 - t) + random.range(-0.07, 0.07)
+                let l = length * random.range(0.8, 1.12)
+                let droop = 0.42 * (1 - t) - 0.35 * t + random.range(-0.08, 0.08)
                 var reach = SIMD2(l * sin(azimuth) * cos(droop), -l * sin(droop))
                 let shown = simd_length(reach)
                 if shown < 0.5 * l { reach *= 0.5 * l / shown }
@@ -140,9 +143,18 @@ final class ChristmasTree {
                 ))
             }
         }
-        // The leader stands straight up at the top.
+        // The leader stands straight up at the top, with a few short shoots round its foot.
+        for j in 0..<5 {
+            let azimuth = Float(j) * 1.256 + 0.4
+            let l = random.range(9, 13)
+            let reach = SIMD2(l * sin(azimuth) * cos(0.9), l * sin(0.9))
+            boughs.append(Bough(
+                azimuth: azimuth, height: 147 + random.range(0, 4), length: l, width: l * 0.6, reach: reach, up: Self.upward(reach),
+                frequency: 4.5, capacity: l * l * 0.4 * 0.11, variant: Float(random.pick(3)), seed: random.next()
+            ))
+        }
         boughs.append(Bough(
-            azimuth: 0.2, height: 146, length: 24, width: 13, reach: SIMD2(0.5, 24), up: SIMD2(-1, 0),
+            azimuth: 0.2, height: 144, length: 30, width: 12, reach: SIMD2(0.5, 30), up: SIMD2(-1, 0),
             frequency: 3.6, capacity: 0, variant: 0, seed: 0.5
         ))
         // Back to front, so the nearer ones are drawn over the farther.
@@ -152,7 +164,12 @@ final class ChristmasTree {
             frequency: 0, capacity: 0, variant: 0, seed: 0.3
         )
         trunk.trunk = true
-        boughs.insert(trunk, at: 0)
+        var core = Bough(
+            azimuth: .pi, height: 6, length: 146, width: 2 * Self.reach(at: 14), reach: SIMD2(0, 146), up: SIMD2(-1, 0),
+            frequency: 0, capacity: 0, variant: 0, seed: 0.7
+        )
+        core.core = true
+        boughs.insert(contentsOf: [trunk, core], at: 0)
         self.boughs = boughs
 
         baubles = Self.hang(on: boughs, random: &random)
@@ -166,6 +183,11 @@ final class ChristmasTree {
     }
 
     // MARK: - Shape
+
+    /// How far a bough leaving the trunk at `y` reaches.
+    static func reach(at y: Float) -> Float {
+        10 + 62 * pow(min(max(1 - (y - 14) / 134, 0), 1), 1.1)
+    }
 
     /// How far the trunk is bent sideways at `y` above its foot.
     func bend(at y: Float) -> Float {
@@ -234,7 +256,7 @@ final class ChristmasTree {
             let t = (Float(k) + 0.5) / Float(count)
             let y = 22 + t * 116
             let azimuth = t * 3.5 * 2 * .pi + 0.6
-            let radius = (12 + 62 * pow(1 - (y - 16) / 132, 1.05)) * 0.7
+            let radius = Self.reach(at: y) * 0.7
             let target = SIMD2(radius * sin(azimuth), y)
             let front = cos(azimuth) > 0
             var best: (index: Int, along: Float, distance: Float)?
@@ -270,7 +292,7 @@ final class ChristmasTree {
         }
         swayTrunk(dt: dt, wind: wind)
         var energy = abs(swayVelocity)
-        for i in boughs.indices where !boughs[i].trunk {
+        for i in boughs.indices where !boughs[i].trunk && !boughs[i].core {
             energy = max(energy, simd_length(boughs[i].velocity))
             moveBough(i, dt: dt, wind: wind, cursor: brushing, cursorVelocity: cursorVelocity, shed: shed)
             if thaws { boughs[i].snow *= exp(-dt / 400) }

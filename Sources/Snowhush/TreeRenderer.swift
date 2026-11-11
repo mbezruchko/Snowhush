@@ -79,13 +79,13 @@ final class TreeRenderer {
             if near { front.append(piece) } else { back.append(piece) }
         }
         var boughs: [TreePiece] = []
-        for (i, bough) in tree.boughs.enumerated() {
-            if bough.trunk {
-                let top = bough.reach.y / ChristmasTree.height
+        for bough in tree.boughs {
+            if bough.trunk || bough.core {
+                let top = (bough.height + bough.reach.y) / ChristmasTree.height
                 boughs.append(TreePiece(
                     a: SIMD4(tree.base + SIMD2(0, bough.height), bough.reach),
                     b: SIMD4(tree.sway * top * top, 0, bough.width, -1),
-                    c: SIMD4(0, bough.seed, 0, 1),
+                    c: SIMD4(0, bough.seed, 0, bough.trunk ? 1 : 2),
                     d: SIMD4(bough.up, 0, 0)
                 ))
                 continue
@@ -97,7 +97,6 @@ final class TreeRenderer {
                 c: SIMD4(bough.load, bough.seed, bough.variant, 0),
                 d: SIMD4(bough.up, 3.8 * bough.load.squareRoot() * flat, 0)
             ))
-            _ = i
         }
         var decor = front
         for bauble in tree.baubles {
@@ -105,7 +104,7 @@ final class TreeRenderer {
                 a: SIMD4(tree.ball(of: bauble), bauble.radius, 0), b: SIMD4(bauble.color, bauble.seed), c: SIMD4(bauble.pivot, 0, 0)
             ), at: 0)
         }
-        if let leader = tree.boughs.firstIndex(where: { $0.capacity == 0 && !$0.trunk }) {
+        if let leader = tree.boughs.firstIndex(where: { $0.capacity == 0 && !$0.trunk && !$0.core }) {
             let tip = tree.point(leader, 1)
             let lean = tree.point(leader, 1) - tree.point(leader, 0.8)
             let angle = atan2(lean.x, lean.y)
