@@ -18,6 +18,9 @@ struct TreePiece {
     var b: SIMD4<Float>
     var c: SIMD4<Float>
     var d = SIMD4<Float>(repeating: 0)
+    /// For a bough, how thick its snow lies in each of its cells, in points.
+    var e = SIMD4<Float>(repeating: 0)
+    var f = SIMD4<Float>(repeating: 0)
 }
 
 struct TreeBulb {
@@ -91,11 +94,15 @@ final class TreeRenderer {
                 continue
             }
             let flat = min(max((bough.up.y - 0.55) / 0.3, 0), 1)
+            let full = max(bough.capacity / Float(ChristmasTree.cellCount), 0.01)
+            let depths = (bough.cells / full).clamped(lowerBound: SIMD8(repeating: 0), upperBound: SIMD8(repeating: 2.5)).squareRoot() * (3.8 * flat)
             boughs.append(TreePiece(
                 a: SIMD4(tree.root(of: bough), bough.reach),
                 b: SIMD4(bough.offset, bough.width, bough.depth),
                 c: SIMD4(bough.load, bough.seed, bough.variant, 0),
-                d: SIMD4(bough.up, 3.8 * bough.load.squareRoot() * flat, 0)
+                d: SIMD4(bough.up, depths.max(), 0),
+                e: depths.lowHalf,
+                f: depths.highHalf
             ))
         }
         var decor = front

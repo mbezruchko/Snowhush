@@ -17,6 +17,8 @@ struct TreePiece {
     float4 b;
     float4 c;
     float4 d;
+    float4 e;
+    float4 f;
 };
 
 struct TreeBulb {
@@ -150,10 +152,14 @@ fragment float4 boughFragment(BoughOut in [[stage_in]], texture2d_array<float> n
     // Snow lies along the top of the needles: lumpy, thickest midway, none at the trunk or the tip.
     float s = in.uv.x;
     float rest = width * 0.5 * boughProfile(s) * 0.62;
-    // In clumps, not a band: some stretches bare, each clump rounded on top.
+    // As deep as the cell it lies in, eased between cells, in clumps rather than a band.
+    float cell = clamp((s - 0.08) / 0.9 * 8.0 - 0.5, 0.0, 7.0);
+    float depths[8] = { p.e.x, p.e.y, p.e.z, p.e.w, p.f.x, p.f.y, p.f.z, p.f.w };
+    int below = int(floor(cell));
+    float depthHere = mix(depths[below], depths[min(below + 1, 7)], smoothstep(0.0, 1.0, cell - float(below)));
     float clumps = smoothstep(0.28, 0.68, treeNoise(s * 6.5 + p.c.y * 37.0));
-    float lumps = (0.15 + 0.85 * clumps) * (0.8 + 0.2 * treeNoise(s * 14.0 + p.c.y * 7.0));
-    float thick = p.d.z * lumps * smoothstep(0.08, 0.26, s) * (1.0 - smoothstep(0.75, 0.95, s));
+    float lumps = (0.35 + 0.65 * clumps) * (0.8 + 0.2 * treeNoise(s * 14.0 + p.c.y * 7.0));
+    float thick = depthHere * lumps * smoothstep(0.05, 0.14, s) * (1.0 - smoothstep(0.93, 0.99, s));
     float above = in.across - rest;
     float4 snow = float4(0.0);
     if (thick > 0.12) {

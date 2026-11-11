@@ -1046,16 +1046,13 @@ final class SnowSimulation {
         let target: Float = covered ? -(ChristmasTree.height + 40) : 0
         tree.base = SIMD2(treeX, tree.base.y + (target - tree.base.y) * min(1, dt * 5))
         let shown = tree.base.y > -ChristmasTree.height
-        tree.step(dt: dt, wind: windSpeed(), cursor: shown ? cursor : nil, cursorVelocity: cursorVelocity, thaws: thaws) { area, position, velocity in
-            // Just under the bough it came off, so that bough doesn't catch it straight back.
-            let at = position + SIMD2(0, -3)
-            if area > 12 {
-                let lump = area * random.range(0.4, 0.7)
-                throwLump(lump, at: at, velocity: velocity)
-                release(area - lump, at: at, velocity: velocity, spread: SIMD2(4, 1), scatter: 0.3)
-            } else {
-                release(area, at: at, velocity: velocity, spread: SIMD2(4, 1), scatter: 0.3)
-            }
+        tree.step(dt: dt, wind: windSpeed(), cursor: shown ? cursor : nil, cursorVelocity: cursorVelocity, thaws: thaws) { area, position, velocity, spread in
+            // As off a window: some of it holds together in lumps, the rest goes as loose snow. It starts just clear of
+            // the bough it came off, so that bough doesn't catch it straight back.
+            let at = position + SIMD2(0, velocity.y > 0 ? 1 : -3)
+            let cohesion = area > 14 ? random.range(0.4, 0.7) : 0
+            release(area * (1 - cohesion), at: at, velocity: velocity, spread: spread, scatter: 0.25)
+            if cohesion > 0 { throwLump(area * cohesion, at: at, velocity: velocity) }
         }
         tree.settlePresents(surface: { [ground] x in ground.surface(ground.clampedIndex(at: x)) }, dt: dt)
         if tree.touched { lastCursorPush = clock }
@@ -1590,6 +1587,23 @@ final class SnowSimulation {
         }
     }
 
+    /// A puff of powder thrown up where a lump hits something.
+    private func puff(at position: SIMD2<Float>, size: Float, force: Float) {
+        let count = min(maxMotes - motes.count, Int(2 + size * 0.6 * force))
+        guard count > 0 else { return }
+        for _ in 0..<count {
+            let angle = random.range(0.15, .pi - 0.15)
+            let speed = random.range(25, 110) * force
+            motes.append(Mote(
+                position: position + SIMD2(random.range(-0.5, 0.5) * size, random.range(0, size * 0.4)),
+                velocity: SIMD2(cos(angle) * speed * 1.4, sin(angle) * speed * 0.6),
+                size: random.range(0.3, 0.6) * size + 1,
+                alpha: random.range(0.1, 0.22),
+                life: random.range(0.45, 0.9)
+            ))
+        }
+    }
+
     /// A lump hitting the snow: most of it packs in where it lands, a few crumbs hop off and a puff of powder rises.
     private func burst(_ lump: Grain, into layer: SnowLayer) {
         let impact = max(0, -lump.velocity.y)
@@ -1952,7 +1966,7 @@ final class SnowSimulation {
 
             if flake.settles && accumulates && flake.blown == 0 && flake.kind == .snow, let tree,
                let perch = tree.catcher(x: flake.position.x, from: previousY, to: flake.position.y, chance: 0.75) {
-                tree.add(flake.size * flake.size * deposition * flake.mass, to: perch, falling: flake.velocity)
+                tree.add(flake.size * flake.size * deposition * flake.mass, to: perch.index, along: perch.along, falling: flake.velocity)
                 recycle(i)
                 i -= 1
                 continue
@@ -2065,8 +2079,17 @@ final class SnowSimulation {
             }
             grain.position += grain.velocity * dt
             if let tree, accumulates, !grain.blown, !grain.kind.leafy, grain.velocity.y < 0,
-               let perch = tree.catcher(x: grain.position.x, from: previousY, to: grain.position.y, chance: 0.6) {
-                tree.add(grain.area, to: perch, falling: grain.velocity)
+               let perch = tree.catcher(x: grain.position.x, from: previousY, to: grain.position.y, chance: grain.lump > 0 ? 1 : 0.6) {
+                if grain.lump > 0 {
+                    // A lump crashing onto a bough: half of it stays there, the rest bursts through in powder and
+                    // knocks the bough down, which may shake its own snow off.
+                    tree.add(grain.area * 0.5, to: perch.index, along: perch.along, falling: grain.velocity * 2)
+                    release(grain.area * 0.5, at: grain.position + SIMD2(0, -2), velocity: SIMD2(grain.velocity.x * 0.4, grain.velocity.y * 0.3),
+                            spread: SIMD2(grain.size * 0.5, 1), scatter: 0.6)
+                    puff(at: grain.position, size: grain.size, force: min(max(-grain.velocity.y / 900, 0.35), 1))
+                } else {
+                    tree.add(grain.area, to: perch.index, along: perch.along, falling: grain.velocity)
+                }
                 removeGrain(i)
                 i -= 1
                 continue
@@ -3240,8 +3263,8 @@ final class SnowSimulation {
     /// or, `calm`, it melts away where it lies.
     func blowAway(direction: Float, calm: Bool) {
         gust = (clock, direction < 0 ? -1 : 1, calm)
-        tree?.clearSnow { area, position, _ in
-            if !calm { release(area, at: position + SIMD2(0, -3), velocity: SIMD2(direction < 0 ? -500 : 500, 60), spread: SIMD2(6, 2), scatter: 0.4) }
+        tree?.clearSnow { area, position, _, spread in
+            if !calm { release(area, at: position + SIMD2(0, -3), velocity: SIMD2(direction < 0 ? -500 : 500, 60), spread: spread, scatter: 0.4) }
         }
         // Snow kept for windows on other Spaces goes too, out of sight.
         dormant.removeAll()

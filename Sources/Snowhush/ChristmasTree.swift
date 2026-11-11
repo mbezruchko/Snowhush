@@ -25,12 +25,23 @@ final class ChristmasTree {
         var trunk = false
         /// The dark mass of needles deep inside the tree, drawn behind the boughs so nothing shows through it.
         var core = false
-        /// How far its tip is bent from rest, and how fast it moves.
+        /// How far its tip is bent from rest, how fast it moves and how fast that changes.
         var offset = SIMD2<Float>(repeating: 0)
         var velocity = SIMD2<Float>(repeating: 0)
-        var snow: Float = 0
+        var jolt = SIMD2<Float>(repeating: 0)
+        /// The snow lying along it, in square points, from near the trunk out to the tip.
+        var cells = SIMD8<Float>(repeating: 0)
+        /// How far the snow has slid along it toward the tip since it last moved a cell, and how fast it slides.
+        var slide: Float = 0
+        var slideVelocity: Float = 0
+        /// Shaking, as a window's snow feels it: back-and-forth swings of its tip, in gravities.
+        var agitation: Float = 0
+        var swingPeak: Float = 0
+        var previousSwingPeak: Float = 0
+        var swingDirection = SIMD2<Float>(repeating: 0)
 
         var depth: Float { cos(azimuth) }
+        var snow: Float { cells.sum() }
         var load: Float { capacity > 0 ? min(snow / capacity, 1) : 0 }
     }
 
@@ -92,6 +103,30 @@ final class ChristmasTree {
 
     /// From the foot of the trunk to the top of its leader; the star sits above.
     static let height: Float = 168
+    /// Snow along a bough lies in this many cells, between these shares of its length.
+    static let cellCount = 8
+    static let snowFrom: Float = 0.08
+    static let snowTo: Float = 0.98
+
+    /// Where the middle of each cell of snow is along a bough.
+    static func cellAlong(_ k: Int) -> Float {
+        snowFrom + (Float(k) + 0.5) / Float(cellCount) * (snowTo - snowFrom)
+    }
+
+    /// Snow comes off boughs as it comes off windows, by the same gravity, but needles hold it far more loosely than
+    /// a window's top: it lifts off when the bough drops away faster than gravity and this; it is knocked off sideways
+    /// when the bough swings across harder than `boughGrip` times what presses it down (this pressing on top of its
+    /// weight); it slides off the tip of a bough tipped down steeper than that grip lets it hold; and a bough shaken
+    /// past `boughShaking` gravities throws it off.
+    static let gravity: Float = 2500
+    static let boughAdhesion: Float = 500
+    static let boughHold: Float = 300
+    static let boughGrip: Float = 0.8
+    static let boughSlip: Float = 0.6
+    static let boughShaking: Float = 1.2
+
+    /// Snow let go: how much, where, how fast and over how wide a stretch.
+    typealias Shed = (Float, SIMD2<Float>, SIMD2<Float>, SIMD2<Float>) -> Void
     /// The space it takes, from the foot of its trunk: left, bottom, right, top.
     static let extent = SIMD4<Float>(-120, -10, 120, 250)
 
@@ -281,8 +316,7 @@ final class ChristmasTree {
 
     /// Moves the tree on by `dt` in a wind of `wind` points a second, brushed by the cursor; snow that comes off a
     /// bough is handed to `shed` as its area, where it lets go and how fast it goes.
-    func step(dt: Float, wind: Float, cursor: SIMD2<Float>?, cursorVelocity: SIMD2<Float>, thaws: Bool,
-              shed: (Float, SIMD2<Float>, SIMD2<Float>) -> Void) {
+    func step(dt: Float, wind: Float, cursor: SIMD2<Float>?, cursorVelocity: SIMD2<Float>, thaws: Bool, shed: Shed) {
         time += dt
         touched = false
         let brushing = cursor.flatMap { point -> SIMD2<Float>? in
@@ -295,7 +329,8 @@ final class ChristmasTree {
         for i in boughs.indices where !boughs[i].trunk && !boughs[i].core {
             energy = max(energy, simd_length(boughs[i].velocity))
             moveBough(i, dt: dt, wind: wind, cursor: brushing, cursorVelocity: cursorVelocity, shed: shed)
-            if thaws { boughs[i].snow *= exp(-dt / 400) }
+            holdSnow(i, dt: dt, shed: shed)
+            if thaws { boughs[i].cells *= exp(-dt / 400) }
         }
         swingBaubles(dt: dt, cursor: brushing, cursorVelocity: cursorVelocity)
         twinkle()
@@ -314,9 +349,9 @@ final class ChristmasTree {
         swayAcceleration = acceleration
     }
 
-    private func moveBough(_ i: Int, dt: Float, wind: Float, cursor: SIMD2<Float>?, cursorVelocity: SIMD2<Float>,
-                           shed: (Float, SIMD2<Float>, SIMD2<Float>) -> Void) {
+    private func moveBough(_ i: Int, dt: Float, wind: Float, cursor: SIMD2<Float>?, cursorVelocity: SIMD2<Float>, shed: Shed) {
         var bough = boughs[i]
+        let before = bough.velocity
         let omega = 2 * .pi * bough.frequency
         let share = bough.height / Self.height
         let flutter = 0.25 + 0.012 * min(abs(wind), 400)
@@ -339,6 +374,24 @@ final class ChristmasTree {
             let grip = min(1, dt * 40 * contact.depth) * min(max((contact.along - 0.05) / 0.3, 0), 1)
             bough.velocity += (target - bough.velocity) * grip
             swayVelocity += cursorVelocity.x * 0.0015 * contact.depth * share
+            // Where it pushes through the needles it knocks the snow off them, as it pushes a window's snow aside:
+            // the faster it goes, the more, thrown along its way.
+            let pace = simd_length(cursorVelocity)
+            let reach = 9 / max(bough.length, 1) + 0.5 * (Self.snowTo - Self.snowFrom) / Float(Self.cellCount)
+            let share = min(1, pace / 320) * min(1, contact.depth * 2) * min(1, dt * 30)
+            let line = simd_normalize(bough.reach + bough.offset + SIMD2(0, 0.001))
+            var normal = SIMD2(-line.y, line.x)
+            if simd_dot(normal, bough.up) < 0 { normal = -normal }
+            for k in 0..<Self.cellCount where abs(Self.cellAlong(k) - contact.along) < reach && bough.cells[k] > 0.05 {
+                let amount = bough.cells[k] * share
+                guard amount > 0.05 else { continue }
+                let along = Self.cellAlong(k)
+                let at = root(of: bough) + bough.reach * along + bough.offset * along * along
+                    + normal * (bough.width * 0.5 * Self.profile(along) * 0.62 + 1)
+                let thrown = cursorVelocity * Float.random(in: 0.35...0.7) + SIMD2(Float.random(in: -30...30), Float.random(in: 10...60))
+                shed(amount, at, thrown, SIMD2(3, 1.5))
+                bough.cells[k] -= amount
+            }
         }
 
         bough.offset += bough.velocity * dt
@@ -351,18 +404,128 @@ final class ChristmasTree {
             if outward > 0 { bough.velocity -= direction * outward }
         }
 
-        // Snow lets go of a bough that moves fast enough.
-        let speed = simd_length(bough.velocity)
-        if bough.snow > 0.3, speed > 55 {
-            let share = min(1, (speed - 55) / 220 * 5 * dt)
-            let amount = bough.snow * share
-            if amount > 0.15 {
-                bough.snow -= amount
-                boughs[i] = bough
-                let along = Float.random(in: 0.35...0.95)
-                shed(amount, perch(i, along), bough.velocity * along * along)
-                return
+        // Smoothed over a few milliseconds: the snow feels the needles' push, not a single frame's step.
+        let jolt = (bough.velocity - before) / max(dt, 1.0 / 240)
+        bough.jolt += (jolt - bough.jolt) * min(1, dt / 0.02)
+        boughs[i] = bough
+    }
+
+    /// The snow on a bough, felt in the bough's own frame, as a window's snow is in its window's. Each cell is pressed
+    /// on by gravity and by the bough's acceleration where it lies, which grows toward the tip. Where the bough drops
+    /// away faster than that and the needles' hold, the snow flies free as it was moving. A side bough seen moving
+    /// along its length is really swinging round the trunk, across itself: where that swing outdoes the snow's grip, it
+    /// knocks the snow off. Tipped down steeply, the snow slides along it and off the tip. Shaken back and forth hard
+    /// enough, it is thrown off in bits.
+    private func holdSnow(_ i: Int, dt: Float, shed: Shed) {
+        var bough = boughs[i]
+        let share = bough.height / Self.height
+        let rootAcceleration = SIMD2<Float>(swayAcceleration * share * share, 0)
+        let rootVelocity = SIMD2<Float>(swayVelocity * share * share, 0)
+
+        // Agitation is vibration: two consecutive back-and-forth swings, not a single start or stop.
+        bough.agitation *= exp(-dt / 0.3)
+        let magnitude = simd_length(bough.jolt)
+        if magnitude > 1, simd_dot(bough.jolt, bough.swingDirection) < 0 {
+            bough.agitation = max(bough.agitation, min(bough.previousSwingPeak, bough.swingPeak) / Self.gravity)
+            bough.previousSwingPeak = bough.swingPeak
+            bough.swingPeak = magnitude
+            bough.swingDirection = bough.jolt / magnitude
+        } else {
+            bough.swingPeak = max(bough.swingPeak, magnitude)
+            if magnitude > 1, bough.swingDirection == .zero { bough.swingDirection = bough.jolt / magnitude }
+        }
+        guard bough.snow > 0.05 else {
+            bough.slide = 0
+            bough.slideVelocity = 0
+            boughs[i] = bough
+            return
+        }
+
+        let line = bough.reach + 2 * bough.offset * 0.6
+        let tangent = simd_normalize(line)
+        var normal = SIMD2(-tangent.y, tangent.x)
+        if simd_dot(normal, bough.up) < 0 { normal = -normal }
+        let cellLength = (Self.snowTo - Self.snowFrom) * simd_length(bough.reach) / Float(Self.cellCount)
+        func thickness(_ k: Int) -> Float {
+            bough.cells[k] / max(cellLength, 0.5)
+        }
+        func place(_ k: Int) -> SIMD2<Float> {
+            perch(i, Self.cellAlong(k)) + normal * thickness(k) * 0.5
+        }
+        func spread(_ k: Int) -> SIMD2<Float> {
+            SIMD2(cellLength * 0.5 * abs(tangent.x) + 1, thickness(k) * 0.5 + 0.5)
+        }
+
+        // The bough's real slope: seen from the front it may point at the viewer, but its height along it is as seen.
+        let rise = min(max((bough.reach.y + bough.offset.y) / bough.length, -1), 1)
+        let level = (1 - rise * rise).squareRoot()
+
+        // Thrown free where the bough drops away faster than gravity and the needles' hold, or knocked off where it
+        // swings across too hard: sideways on the screen is across the bough, round the trunk for one seen side on.
+        for k in 0..<Self.cellCount where bough.cells[k] > 0.02 {
+            let along = Self.cellAlong(k)
+            let acceleration = rootAcceleration + bough.jolt * along * along
+            let pressing = level * (acceleration.y + Self.gravity)
+            let across = abs(acceleration.x)
+            let lifts = pressing < -Self.boughAdhesion
+            let hold = Self.boughGrip * max(0, pressing + Self.boughHold)
+            guard lifts || across > hold else { continue }
+            let velocity = rootVelocity + bough.velocity * along * along + tangent * bough.slideVelocity
+            // Knocked off, it doesn't all go at once: the harder the swing, the more of it.
+            let share: Float = lifts ? 1 : min(1, across / max(hold, 1) - 0.75)
+            let amount = bough.cells[k] * share
+            shed(amount, place(k), velocity, spread(k))
+            bough.cells[k] -= amount
+        }
+
+        // Sliding along the bough under its own weight, all of its snow together, as a window's heap slides.
+        let middle: Float = 0.6
+        let acceleration = rootAcceleration + bough.jolt * middle * middle
+        let pressure = max(0, level * (acceleration.y + Self.gravity) + Self.boughHold)
+        let drive = -Self.gravity * rise
+        var slideVelocity = bough.slideVelocity
+        if !(slideVelocity == 0 && abs(drive) <= Self.boughGrip * pressure) {
+            let direction: Float = slideVelocity != 0 ? (slideVelocity > 0 ? 1 : -1) : (drive > 0 ? 1 : -1)
+            let next = slideVelocity + (drive - direction * Self.boughSlip * pressure) * dt
+            slideVelocity = pressure > 0 && next * direction <= 0 ? 0 : next
+        }
+        bough.slide += slideVelocity * dt
+        let carried = rootVelocity + bough.velocity + tangent * slideVelocity
+        while bough.slide >= cellLength {
+            // Off the tip.
+            let last = Self.cellCount - 1
+            if bough.cells[last] > 0.02 { shed(bough.cells[last], place(last) + tangent * cellLength * 0.5, carried, spread(last)) }
+            for k in stride(from: last, to: 0, by: -1) { bough.cells[k] = bough.cells[k - 1] }
+            bough.cells[0] = 0
+            bough.slide -= cellLength
+        }
+        while bough.slide <= -cellLength {
+            // Against the trunk it packs up and stops.
+            bough.cells[0] += bough.cells[1]
+            for k in 1..<(Self.cellCount - 1) { bough.cells[k] = bough.cells[k + 1] }
+            bough.cells[Self.cellCount - 1] = 0
+            bough.slide += cellLength
+            if bough.cells[0] > bough.capacity / Float(Self.cellCount) * 1.6 { slideVelocity = 0 }
+        }
+        bough.slideVelocity = slideVelocity
+
+        // A granular bed shaken well past gravity throws bits off its top.
+        if bough.agitation > Self.boughShaking {
+            let rate = min(0.8, 0.3 * (bough.agitation - Self.boughShaking))
+            let picks = Int(Float(Self.cellCount) * rate * dt * 2 + Float.random(in: 0..<1))
+            for _ in 0..<picks {
+                let k = Int.random(in: 0..<Self.cellCount)
+                let amount = bough.cells[k] * 0.5
+                guard amount > 0.1 else { continue }
+                let along = Self.cellAlong(k)
+                let velocity = rootVelocity + bough.velocity * along * along + SIMD2(Float.random(in: -80...80), Float.random(in: 50...200))
+                shed(amount, place(k), velocity, spread(k))
+                bough.cells[k] -= amount
             }
+        }
+        if bough.snow <= 0.05 {
+            bough.slide = 0
+            bough.slideVelocity = 0
         }
         boughs[i] = bough
     }
@@ -453,54 +616,78 @@ final class ChristmasTree {
 
     /// The bough or present whose snow a flake falling from `from` to `to` at `x` lands in, if any: the highest
     /// one crossed that has room. Needles let some through.
-    func catcher(x: Float, from: Float, to: Float, chance: Float) -> Int? {
+    func catcher(x: Float, from: Float, to: Float, chance: Float) -> (index: Int, along: Float)? {
         let local = x - base.x
         guard local > Self.extent.x, local < Self.extent.z, to < base.y + Self.height, from > base.y - 10 else { return nil }
-        var best: (index: Int, y: Float)?
+        var best: (index: Int, along: Float, y: Float)?
         for i in boughs.indices where boughs[i].capacity > 0 && boughs[i].snow < boughs[i].capacity {
-            guard let y = perchHeight(i, at: x), y <= from, y >= to, y > best?.y ?? -.infinity else { continue }
-            best = (i, y)
+            guard let hit = perchHeight(i, at: x), hit.y <= from, hit.y >= to, hit.y > best?.y ?? -.infinity else { continue }
+            best = (i, hit.along, hit.y)
         }
         for k in presents.indices where presents[k].snow < presents[k].capacity && presents[k].lid < 0.05 {
             let present = presents[k]
             let middle = base.x + present.offset
             guard abs(x - middle) < present.width / 2 else { continue }
             let y = present.bottom + present.height + 5 + present.snow / present.width
-            if y <= from, y >= to, y > best?.y ?? -.infinity { best = (boughs.count + k, y) }
+            if y <= from, y >= to, y > best?.y ?? -.infinity { best = (boughs.count + k, 0, y) }
         }
         guard let best, Float.random(in: 0...1) < chance else { return nil }
-        return best.index
+        return (best.index, best.along)
     }
 
-    private func perchHeight(_ i: Int, at x: Float) -> Float? {
-        var a = perch(i, 0.12), b = perch(i, 0.97)
-        if a.x > b.x { swap(&a, &b) }
+    /// The height of a bough's snow over `x`, and how far along the bough that is.
+    private func perchHeight(_ i: Int, at x: Float) -> (y: Float, along: Float)? {
+        let from: Float = 0.12, to: Float = 0.97
+        var a = perch(i, from), b = perch(i, to)
+        var ends = (from, to)
+        if a.x > b.x {
+            swap(&a, &b)
+            ends = (to, from)
+        }
         let least = boughs[i].width * 0.6
         if b.x - a.x < least {
+            // Seen end on, the bough catches across its width, all of it about midway along.
             let middle = (a + b) * 0.5
             a = SIMD2(middle.x - least / 2, max(a.y, b.y))
             b = SIMD2(middle.x + least / 2, max(a.y, b.y))
+            ends = (0.55, 0.55)
         }
         guard x >= a.x, x <= b.x else { return nil }
-        return a.y + (b.y - a.y) * (x - a.x) / (b.x - a.x)
+        let t = (x - a.x) / (b.x - a.x)
+        return (a.y + (b.y - a.y) * t, ends.0 + (ends.1 - ends.0) * t)
     }
 
-    /// Lays `area` of snow on what `catcher` found; something heavy falling onto a bough knocks it down.
-    func add(_ area: Float, to index: Int, falling velocity: SIMD2<Float>) {
+    /// Lays `area` of snow where `catcher` found, spilling over into the cells beside it when one is full; something
+    /// heavy falling onto a bough knocks it down.
+    func add(_ area: Float, to index: Int, along: Float, falling velocity: SIMD2<Float>) {
         if index >= boughs.count {
             let k = index - boughs.count
             presents[k].snow = min(presents[k].snow + area, presents[k].capacity)
             return
         }
-        boughs[index].snow = min(boughs[index].snow + area, boughs[index].capacity)
-        let heft = min(area / max(boughs[index].capacity * 0.08, 1), 1)
-        boughs[index].velocity += velocity * heft * 0.25
+        var bough = boughs[index]
+        let cell = min(max(Int((along - Self.snowFrom) / (Self.snowTo - Self.snowFrom) * Float(Self.cellCount)), 0), Self.cellCount - 1)
+        let most = bough.capacity / Float(Self.cellCount) * 1.6
+        var left = area
+        for step in 0..<Self.cellCount where left > 0 {
+            for k in step == 0 ? [cell] : [cell - step, cell + step] where k >= 0 && k < Self.cellCount {
+                let room = max(0, most - bough.cells[k])
+                let laid = min(room, left)
+                bough.cells[k] += laid
+                left -= laid
+            }
+        }
+        let heft = min(area / max(bough.capacity * 0.08, 1), 1)
+        bough.velocity += velocity * heft * 0.25 * along * along * 2
+        boughs[index] = bough
     }
 
-    func clearSnow(shed: (Float, SIMD2<Float>, SIMD2<Float>) -> Void) {
+    func clearSnow(shed: Shed) {
         for i in boughs.indices where boughs[i].snow > 0.3 {
-            shed(boughs[i].snow, perch(i, 0.6), SIMD2(0, -20))
-            boughs[i].snow = 0
+            for k in 0..<Self.cellCount where boughs[i].cells[k] > 0.02 {
+                shed(boughs[i].cells[k], perch(i, Self.cellAlong(k)), SIMD2(0, -20), SIMD2(3, 1))
+            }
+            boughs[i].cells = SIMD8(repeating: 0)
         }
         for k in presents.indices { presents[k].snow = 0 }
     }
@@ -514,7 +701,7 @@ final class ChristmasTree {
 
     /// The cursor close above a present: its lid rattles and lifts, and Santa's hand comes out and reaches for the
     /// cursor. Caught, the cursor gets its hand shaken; then the hand waves and goes back in, and the lid drops shut.
-    private func tendPresents(dt: Float, cursor: SIMD2<Float>?, shed: (Float, SIMD2<Float>, SIMD2<Float>) -> Void) {
+    private func tendPresents(dt: Float, cursor: SIMD2<Float>?, shed: Shed) {
         let reach: Float = 80
         let shown = base.y > -20
         let chosen = cursor.flatMap { point -> Int? in
@@ -583,7 +770,7 @@ final class ChristmasTree {
                     present.hand = shoulder
                     present.handVelocity = .zero
                     if present.snow > 0.3 {
-                        shed(present.snow, shoulder + SIMD2(present.width * 0.4, 6), SIMD2(70, 40))
+                        shed(present.snow, shoulder + SIMD2(present.width * 0.4, 6), SIMD2(70, 40), SIMD2(present.width * 0.3, 2))
                         present.snow = 0
                     }
                 }
