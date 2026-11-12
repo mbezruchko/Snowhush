@@ -688,6 +688,9 @@ final class SnowSimulation {
     }
     /// Running drops or beads on the glass, drawn from a field of their own.
     var hasGlassDrops: Bool { glassDrops.contains { !$0.hanging } }
+    /// Where the running drops and beads last written add to their field, in points, left, bottom, right, top: each
+    /// reaches as far as the sprite shader draws it. Nil when none was written.
+    private(set) var glassReach: SIMD4<Float>?
     var spriteCount: Int {
         lying.count + flakes.count + grains.count + motes.count + ghosts.count * 2 + snowballs.count + splashes.count + glassDrops.count
             + ledgeList.reduce(0) { $0 + $1.spray.count + $1.film.count }
@@ -762,6 +765,7 @@ final class SnowSimulation {
 
     func writeSprites(into buffer: UnsafeMutablePointer<Sprite>, capacity: Int) -> Int {
         var count = 0
+        glassReach = nil
         let shown = markShown()
         for leaf in lying where count < capacity && leaf.layer.shown == shown {
             let layer = leaf.layer
@@ -856,7 +860,7 @@ final class SnowSimulation {
             let half = drop.bead ? beadWidth(drop.radius) : halfWidth(drop.radius, still: still)
             // Held back, a running drop's water piles up in its front; jolted, it squashes and stretches for a moment.
             let since = drop.age - drop.jolted
-            buffer[count] = Sprite(
+            let sprite = Sprite(
                 position: position + SIMD2(0, still ? 0 : half * (1 - grown)),
                 velocity: still ? .zero : SIMD2(drop.slope, -1) * drop.speed,
                 size: half * 2 * grown,
@@ -869,7 +873,14 @@ final class SnowSimulation {
                 turnSpeed: still ? 0 : drop.jiggle * exp(-since / 0.15) * cos(since * 2 * .pi * 11),
                 rain: drop.hanging ? 3 : 2
             )
+            buffer[count] = sprite
             count += 1
+            if !drop.hanging {
+                let speed = simd_length(sprite.velocity)
+                let reach = max(sprite.size, 1.5) * 1.1 + min(speed * 0.08, sprite.size * 0.9) + speed * 0.024 + 1
+                let bounds = SIMD4(lowHalf: sprite.position - reach, highHalf: sprite.position + reach)
+                glassReach = glassReach.map { SIMD4(lowHalf: simd_min($0.lowHalf, bounds.lowHalf), highHalf: simd_max($0.highHalf, bounds.highHalf)) } ?? bounds
+            }
         }
         for grain in grains where count < capacity && !grain.bulk {
             if grain.kind.leafy {
