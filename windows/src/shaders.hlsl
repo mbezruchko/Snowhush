@@ -137,11 +137,11 @@ float4 petalAt(float2 r, float seed, float flip, float alpha, float warm, float 
     color *= 0.94 + 0.08 * frac(seed * 31.7);
     color *= 0.9 + 0.1 * smoothstep(0.0, 0.12, inside);
     // Its fine veins show only where the petal is drawn big enough to hold them; small, they only blur it.
-    float detail = smoothstep(0.03, 0.012, (edge * 0.42));
+    float detail = smoothstep(0.03, 0.012, edge);
     float vein = 0.5 + 0.5 * cos(atan2(r.y, r.x + 0.9) * 26.0);
     color *= 1.0 - 0.035 * vein * smoothstep(0.1, 0.5, t) * detail;
     // A slightly darker line a pixel wide all round: the outline reads crisp however small the petal.
-    color = lerp(color, color * 0.86, 1.0 - smoothstep((edge * 0.42) * 0.6, (edge * 0.42) * 1.6, inside));
+    color = lerp(color, color * 0.86, 1.0 - smoothstep(edge * 0.6, edge * 1.6, inside));
     float rim = 1.0 - smoothstep(0.0, 0.35, inside);
     color = lerp(color, withered(seed) * (0.85 + 0.15 * smoothstep(0.0, 0.2, inside)), saturate(wither * (0.6 + rim)) * 0.9);
     if (flip < 0.0) {
@@ -180,7 +180,7 @@ float4 curledPetalAt(float2 r, float seed, float turn, float flip, float sense, 
         float y = i == 0 ? ys.x : ys.y;
         // Which side of the petal shows there, and how squarely: across it, a pixel spans that much more of it.
         float facing = clamp(c - 2.0 * curl * y * s, -1.0, 1.0);
-        float edge = 2.4 * px * (0.5 + 0.5 / max(abs(facing), 0.2));
+        float edge = px * (0.5 + 0.5 / max(abs(facing), 0.2));
         float hit = step(0.0, disc) * step(abs(y), 1.2);
         float4 piece = petalAt(float2(r.x, y), seed, facing, alpha, warm, wither, edge);
         // The side turned to the light is brighter, the other in shade, and the light moves over it as it tumbles;
@@ -368,7 +368,7 @@ float4 curledLeafAt(float2 r, float seed, float turn, float flip, float sense, f
         // The far side of the curve shows only through what the near side leaves uncovered.
         if (hit <= 0.0 || color.a >= 0.999) continue;
         float facing = clamp(c - 2.0 * curl * y * s, -1.0, 1.0);
-        float edge = 2.4 * px * (0.5 + 0.5 / max(abs(facing), 0.2));
+        float edge = px * (0.6 + 0.6 / max(abs(facing), 0.2));
         float4 piece = bladeAt(float2(r.x, y), seed, kind, facing, alpha, edge, px);
         if (piece.a <= 0.0) continue;
         float across = -2.0 * curl * y * c - s;
@@ -389,15 +389,16 @@ float4 curledLeafAt(float2 r, float seed, float turn, float flip, float sense, f
 // it tumbles, `sense`.
 float4 leafAt(float2 p, float seed, float turn, float flip, float alpha, float warm, float wither, float direction, float sense, float px,
               float petal) {
-    [branch] if (petal > 0.5) {
-        [branch] if (frac(seed * 23.3) < 0.035) {
-            return flowerAt(p * 2.0, seed, turn, flip, direction, alpha, warm, wither, px * 2.0);
-        }
-        float2 r = float2(cos(turn) * p.x + sin(turn) * p.y, -sin(turn) * p.x + cos(turn) * p.y) * 2.0;
-        return curledPetalAt(r, seed, turn, flip, sense, alpha, warm, wither, px);
+    [branch] if (petal > 0.5 && frac(seed * 23.3) < 0.035) {
+        return flowerAt(p * 2.0, seed, turn, flip, direction, alpha, warm, wither, px * 2.0);
     }
     float2 r = float2(cos(turn) * p.x + sin(turn) * p.y, -sin(turn) * p.x + cos(turn) * p.y) * 2.0;
-    return curledLeafAt(r, seed, turn, flip, sense, alpha, warm, px);
+    // A pixel in `r`, as the Mac and Linux take it from fwidth, which can't be had in the loop drawing the exposure.
+    float pixel = max(2.0 * px * (abs(cos(turn)) + abs(sin(turn))), 1e-4);
+    [branch] if (petal > 0.5) {
+        return curledPetalAt(r, seed, turn, flip, sense, alpha, warm, wither, pixel);
+    }
+    return curledLeafAt(r, seed, turn, flip, sense, alpha, warm, pixel);
 }
 
 float flicker(float seed) {
