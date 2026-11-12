@@ -687,7 +687,7 @@ impl SnowSimulation {
             && !self.haunting.moving()
             && self.air.gust.is_none()
             && self.air.overflow.is_empty()
-            && self.dormant.is_empty()
+            && self.dormant.values().all(|(ledge, _)| ledge.top <= 0.0)
             && self.parking.is_empty()
             && self.next_mode.is_none()
             && self.layers.iter().all(|layer| layer.top <= 0.0)
