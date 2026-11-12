@@ -366,7 +366,10 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
             lend(&mut screens, windows, now + clock.tolerance());
             let time = (clock.seconds(now - started) % 1000.0) as f32;
             let lending: Vec<bool> = (0..screens.len())
-                .map(|index| screens[index].behind_windows() && windows.is_some_and(|tracker| lends(&screens, index, tracker)))
+                .map(|index| {
+                    screens[index].behind_windows()
+                        && windows.is_some_and(|tracker| tracker.hides(&screens[index].monitor.rect) && lends(&screens, index, tracker))
+                })
                 .collect();
             let mut lost = false;
             let mut drawn = false;
