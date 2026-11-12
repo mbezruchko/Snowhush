@@ -695,7 +695,7 @@ vertex SpriteVaryings spriteVertex(uint vid [[vertex_id]],
                                    constant Uniforms &u [[buffer(1)]]) {
     // A running drop is drawn with the glass, from the field.
     float rain = rainOf(sprites[vid]);
-    if (rain >= 1.5 && rain < 2.5) return culled();
+    if (rain > 1.5 && rain < 2.5) return culled();
     return pack(sprite(vid, sprites, u));
 }
 
@@ -704,7 +704,7 @@ vertex SpriteVaryings fieldVertex(uint vid [[vertex_id]],
                                   const device Sprite *sprites [[buffer(0)]],
                                   constant Uniforms &u [[buffer(1)]]) {
     float rain = rainOf(sprites[vid]);
-    if (rain < 1.5 || rain > 2.5) return culled();
+    if (!(rain > 1.5 && rain < 2.5)) return culled();
     return pack(sprite(vid, sprites, u));
 }
 
