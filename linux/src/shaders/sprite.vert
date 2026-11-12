@@ -12,6 +12,10 @@ uniform vec4 lantern;
 uniform vec4 pumpkins[3];
 // How far everything is jolted, in points.
 uniform vec2 shake;
+// One in the pass that adds running drops and beads up into their field, which draws nothing else.
+uniform float field;
+// One while running drops and beads are drawn as glass, from their field, and not as sprites.
+uniform float glass;
 
 layout(location = 0) in vec2 position;
 layout(location = 1) in vec2 velocity;
@@ -100,6 +104,12 @@ vec2 hangingReach(float along) {
 }
 
 void main() {
+    // Left out before any fragment of them is drawn, all four corners off the surface.
+    bool running = rain.x > 1.5 && rain.x < 2.5;
+    if (field > 0.5 ? !running : running && glass > 0.5) {
+        gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+        return;
+    }
     vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
     vCoord = vec2(corner.x, 1.0 - corner.y);
     vWarm = candlelight(position);
@@ -148,6 +158,16 @@ void main() {
         }
         vec2 center = (middle + shake) / viewSize * 2.0 - 1.0;
         gl_Position = vec4(center + (corner - 0.5) * extent * 2.0 / (viewSize * scale), 0.0, 1.0);
+        if (!glass) {
+            // A streak in the air is a thin line: its quad lies along it, as wide as its sheath reaches, in the
+            // coordinates of the square it would otherwise fill.
+            float run = length(streak);
+            vec2 along = run > 0.0 ? streak / run : vec2(0.0, 1.0);
+            vec2 halfSize = vec2(run * 0.5, 0.0) + pixels * 0.575 + 1.0;
+            vec2 offset = mat2(along, vec2(-along.y, along.x)) * ((corner - 0.5) * 2.0 * halfSize);
+            gl_Position = vec4(center + offset * 2.0 / (viewSize * scale), 0.0, 1.0);
+            vCoord = vec2(0.5 + offset.x / extent, 0.5 - offset.y / extent);
+        }
         vStreak = streak / extent;
         vRadius = pixels / extent * 0.5;
         vAlpha = alpha * min(pixels / 1.5, 1.0);

@@ -2,7 +2,7 @@
 //! piles, read from a height texture, the ghosts' signs, then every flake, grain, puff and ghost as an instanced quad,
 //! and rain's drops on the glass, added up into a field first and drawn from it as glass.
 
-use std::collections::HashMap;
+use std::cell::Cell;
 use std::ffi::c_void;
 use std::mem::size_of;
 
@@ -30,6 +30,7 @@ const GLASS_FRAGMENT: &str = include_str!("shaders/glass.frag");
 /// A drop on the glass, as both the sprites and the field draw it, put into each where it is included.
 const DROP: &str = include_str!("shaders/drop.glsl");
 const LEAVES: &str = include_str!("shaders/leaves.glsl");
+const LITTER: &str = include_str!("shaders/litter.glsl");
 /// A quad over the whole surface, drawn with a blend that leaves what is there at the given opacity.
 const FADE_VERTEX: &str = "#version 300 es
 void main() {
@@ -106,8 +107,6 @@ pub struct Gpu {
     /// Whether the graphics driver can draw into a half-float texture, as the field needs; without, drops on the
     /// glass are drawn as sprites.
     fields_drawable: bool,
-    /// A field for each size of surface drawn, while it has drops on its glass.
-    fields: HashMap<(i32, i32), (glow::Texture, glow::Framebuffer)>,
     sprite_array: glow::VertexArray,
     sprite_buffer: glow::Buffer,
     /// Holds no attributes: the corners of the piles, the signs and the pumpkins come from the vertex index alone.
@@ -130,6 +129,8 @@ pub struct Surface {
     surface: egl::Surface,
     pub width: i32,
     pub height: i32,
+    /// The field its drops on the glass add up into, and the size it was made for, while it has any.
+    field: Cell<Option<(glow::Texture, glow::Framebuffer, (i32, i32))>>,
 }
 
 impl Gpu {
@@ -164,7 +165,9 @@ impl Gpu {
         };
         unsafe {
             let adapter = gl.get_parameter_string(glow::RENDERER);
-            let included = |source: &str| source.replace("#include \"drop.glsl\"", DROP).replace("#include \"leaves.glsl\"", LEAVES);
+            let included = |source: &str| {
+                source.replace("#include \"drop.glsl\"", DROP).replace("#include \"leaves.glsl\"", LEAVES).replace("#include \"litter.glsl\"", LITTER)
+            };
             let sprite = program(
                 &gl,
                 SPRITE_VERTEX,
@@ -186,8 +189,12 @@ impl Gpu {
                     "glass",
                 ],
             )?;
-            let field =
-                program(&gl, SPRITE_VERTEX, &included(FIELD_FRAGMENT), &["viewSize", "scale", "time", "lantern", "pumpkins", "shake", "panel"])?;
+            let field = program(
+                &gl,
+                SPRITE_VERTEX,
+                &included(FIELD_FRAGMENT),
+                &["viewSize", "scale", "time", "lantern", "pumpkins", "shake", "panel", "field"],
+            )?;
             let glass = program(&gl, GLASS_VERTEX, GLASS_FRAGMENT, &["field", "light", "scale"])?;
             let extensions = gl.supported_extensions();
             let fields_drawable = extensions.contains("GL_EXT_color_buffer_float") || extensions.contains("GL_EXT_color_buffer_half_float");
@@ -291,7 +298,6 @@ impl Gpu {
                 field,
                 glass,
                 fields_drawable,
-                fields: HashMap::new(),
                 sprite_array,
                 sprite_buffer,
                 empty_array,
@@ -313,7 +319,7 @@ impl Gpu {
         self.egl.make_current(self.display, Some(surface), Some(surface), Some(self.context)).map_err(|error| error.to_string())?;
         // Frames are paced by the snow loop; a swap must never wait on a display that is off.
         let _ = self.egl.swap_interval(self.display, 0);
-        Ok(Surface { window, surface, width, height })
+        Ok(Surface { window, surface, width, height, field: Cell::new(None) })
     }
 
     pub fn resize(&self, surface: &mut Surface, width: i32, height: i32) {
@@ -324,6 +330,12 @@ impl Gpu {
 
     pub fn release(&self, surface: Surface) {
         let _ = self.egl.make_current(self.display, None, None, Some(self.context));
+        if let Some((texture, framebuffer, _)) = surface.field.take() {
+            unsafe {
+                self.gl.delete_framebuffer(framebuffer);
+                self.gl.delete_texture(texture);
+            }
+        }
         let _ = self.egl.destroy_surface(self.display, surface.surface);
     }
 
@@ -487,11 +499,14 @@ impl Gpu {
             }
             let size = (surface.width.max(1), surface.height.max(1));
             let glass = sprites > 0 && self.fields_drawable && simulation.has_glass_drops();
-            if !glass && let Some((texture, framebuffer)) = self.fields.remove(&size) {
+            if let Some((texture, framebuffer, made)) = surface.field.get()
+                && (!glass || made != size)
+            {
+                surface.field.set(None);
                 gl.delete_framebuffer(framebuffer);
                 gl.delete_texture(texture);
             }
-            if glass && !self.fields.contains_key(&size) {
+            if glass && surface.field.get().is_none() {
                 let texture = gl.create_texture()?;
                 gl.bind_texture(glow::TEXTURE_2D, Some(texture));
                 for (parameter, value) in [
@@ -517,17 +532,22 @@ impl Gpu {
                 gl.bind_framebuffer(glow::FRAMEBUFFER, Some(framebuffer));
                 gl.framebuffer_texture_2d(glow::FRAMEBUFFER, glow::COLOR_ATTACHMENT0, glow::TEXTURE_2D, Some(texture), 0);
                 gl.bind_framebuffer(glow::FRAMEBUFFER, None);
-                self.fields.insert(size, (texture, framebuffer));
+                surface.field.set(Some((texture, framebuffer, size)));
             }
             if sprites > 0 {
                 gl.bind_vertex_array(Some(self.sprite_array));
                 gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.sprite_buffer));
                 gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes(&self.sprites[..sprites]), glow::STREAM_DRAW);
                 // Drops on the glass first add up into their field.
-                let field = if glass { self.fields.get(&size).copied() } else { None };
-                if let Some((_, framebuffer)) = field {
+                let field = if glass { surface.field.get() } else { None };
+                let drops = if field.is_some() { drop_bounds(&self.sprites[..sprites], shake, view, size) } else { [0.0; 4] };
+                if let Some((_, framebuffer, _)) = field {
                     let program = &self.field;
                     gl.bind_framebuffer(glow::FRAMEBUFFER, Some(framebuffer));
+                    // The glass shows at most 2 pixels below the drops and reads the field at most 2 pixels around
+                    // where it is drawn: drawn within 4 pixels of them, it reads only what is cleared within 8.
+                    gl.enable(glow::SCISSOR_TEST);
+                    scissor(gl, drops, 8.0, size);
                     gl.clear(glow::COLOR_BUFFER_BIT);
                     gl.blend_func(glow::ONE, glow::ONE);
                     gl.use_program(Some(program.program));
@@ -538,7 +558,9 @@ impl Gpu {
                     gl.uniform_4_f32_slice(program.location("pumpkins"), candles);
                     gl.uniform_2_f32_slice(program.location("shake"), &shake);
                     gl.uniform_4_f32_slice(program.location("panel"), &panel);
+                    gl.uniform_1_f32(program.location("field"), 1.0);
                     gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, 4, sprites as i32);
+                    gl.disable(glow::SCISSOR_TEST);
                     gl.bind_framebuffer(glow::FRAMEBUFFER, None);
                     gl.blend_func_separate(glow::ONE, glow::ONE_MINUS_SRC_ALPHA, glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
                 }
@@ -559,7 +581,7 @@ impl Gpu {
                 gl.uniform_1_f32(sprite.location("blossom"), blossom);
                 gl.uniform_1_f32(sprite.location("wilt"), wilt);
                 gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, 4, sprites as i32);
-                if let Some((texture, _)) = field {
+                if let Some((texture, _, _)) = field {
                     let program = &self.glass;
                     gl.bind_vertex_array(Some(self.empty_array));
                     gl.use_program(Some(program.program));
@@ -568,7 +590,10 @@ impl Gpu {
                     gl.uniform_1_i32(program.location("field"), 0);
                     gl.uniform_4_f32_slice(program.location("light"), &light);
                     gl.uniform_1_f32(program.location("scale"), 1.0);
+                    gl.enable(glow::SCISSOR_TEST);
+                    scissor(gl, drops, 4.0, size);
                     gl.draw_arrays(glow::TRIANGLES, 0, 3);
+                    gl.disable(glow::SCISSOR_TEST);
                 }
             }
             // Fading under a full-screen app or back: the snow as drawn, all of it at once, so where flakes cross a
@@ -651,6 +676,30 @@ impl Gpu {
 fn wick(pumpkin: &PumpkinSprite) -> V2 {
     let [across, up] = PUMPKIN_CANDLE;
     pumpkin.anchor + V2::new((across - 0.5) * pumpkin.width, up * pumpkin.width * PUMPKIN_ASPECT)
+}
+
+/// Where the running drops and beads add to their field, in the surface's pixels, left, bottom, right, top: each
+/// reaches as far as the sprite shader draws it.
+fn drop_bounds(sprites: &[Sprite], shake: [f32; 2], view: [f32; 2], size: (i32, i32)) -> [f32; 4] {
+    let mut bounds = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
+    for sprite in sprites.iter().filter(|sprite| sprite.rain[0] > 1.5 && sprite.rain[0] < 2.5) {
+        let speed = sprite.velocity.length();
+        let reach = sprite.size.max(1.5) * 1.1 + (speed * 0.08).min(sprite.size * 0.9) + speed * 0.024 + 1.0;
+        let (x, y) = (sprite.position.x + shake[0], sprite.position.y + shake[1]);
+        bounds = [bounds[0].min(x - reach), bounds[1].min(y - reach), bounds[2].max(x + reach), bounds[3].max(y + reach)];
+    }
+    let (across, up) = (size.0 as f32 / view[0], size.1 as f32 / view[1]);
+    [bounds[0] * across, bounds[1] * up, bounds[2] * across, bounds[3] * up]
+}
+
+/// Draws only within `bounds` and `margin` pixels around them; nothing at all when they are empty.
+unsafe fn scissor(gl: &glow::Context, bounds: [f32; 4], margin: f32, size: (i32, i32)) {
+    let (width, height) = (size.0 as f32, size.1 as f32);
+    let left = (bounds[0] - margin).floor().clamp(0.0, width) as i32;
+    let bottom = (bounds[1] - margin).floor().clamp(0.0, height) as i32;
+    let right = (bounds[2] + margin).ceil().clamp(0.0, width) as i32;
+    let top = (bounds[3] + margin).ceil().clamp(0.0, height) as i32;
+    unsafe { gl.scissor(left, bottom, (right - left).max(0), (top - bottom).max(0)) };
 }
 
 /// Plain numbers as the bytes OpenGL takes.
