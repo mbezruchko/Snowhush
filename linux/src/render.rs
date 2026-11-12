@@ -540,9 +540,14 @@ impl Gpu {
                 gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes(&self.sprites[..sprites]), glow::STREAM_DRAW);
                 // Drops on the glass first add up into their field.
                 let field = if glass { surface.field.get() } else { None };
+                let drops = if field.is_some() { drop_bounds(&self.sprites[..sprites], shake, view, size) } else { [0.0; 4] };
                 if let Some((_, framebuffer, _)) = field {
                     let program = &self.field;
                     gl.bind_framebuffer(glow::FRAMEBUFFER, Some(framebuffer));
+                    // The glass shows at most 2 pixels below the drops and reads the field at most 2 pixels around
+                    // where it is drawn: drawn within 4 pixels of them, it reads only what is cleared within 8.
+                    gl.enable(glow::SCISSOR_TEST);
+                    scissor(gl, drops, 8.0, size);
                     gl.clear(glow::COLOR_BUFFER_BIT);
                     gl.blend_func(glow::ONE, glow::ONE);
                     gl.use_program(Some(program.program));
@@ -555,6 +560,7 @@ impl Gpu {
                     gl.uniform_4_f32_slice(program.location("panel"), &panel);
                     gl.uniform_1_f32(program.location("field"), 1.0);
                     gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, 4, sprites as i32);
+                    gl.disable(glow::SCISSOR_TEST);
                     gl.bind_framebuffer(glow::FRAMEBUFFER, None);
                     gl.blend_func_separate(glow::ONE, glow::ONE_MINUS_SRC_ALPHA, glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
                 }
@@ -584,7 +590,10 @@ impl Gpu {
                     gl.uniform_1_i32(program.location("field"), 0);
                     gl.uniform_4_f32_slice(program.location("light"), &light);
                     gl.uniform_1_f32(program.location("scale"), 1.0);
+                    gl.enable(glow::SCISSOR_TEST);
+                    scissor(gl, drops, 4.0, size);
                     gl.draw_arrays(glow::TRIANGLES, 0, 3);
+                    gl.disable(glow::SCISSOR_TEST);
                 }
             }
             // Fading under a full-screen app or back: the snow as drawn, all of it at once, so where flakes cross a
@@ -667,6 +676,30 @@ impl Gpu {
 fn wick(pumpkin: &PumpkinSprite) -> V2 {
     let [across, up] = PUMPKIN_CANDLE;
     pumpkin.anchor + V2::new((across - 0.5) * pumpkin.width, up * pumpkin.width * PUMPKIN_ASPECT)
+}
+
+/// Where the running drops and beads add to their field, in the surface's pixels, left, bottom, right, top: each
+/// reaches as far as the sprite shader draws it.
+fn drop_bounds(sprites: &[Sprite], shake: [f32; 2], view: [f32; 2], size: (i32, i32)) -> [f32; 4] {
+    let mut bounds = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
+    for sprite in sprites.iter().filter(|sprite| sprite.rain[0] > 1.5 && sprite.rain[0] < 2.5) {
+        let speed = sprite.velocity.length();
+        let reach = sprite.size.max(1.5) * 1.1 + (speed * 0.08).min(sprite.size * 0.9) + speed * 0.024 + 1.0;
+        let (x, y) = (sprite.position.x + shake[0], sprite.position.y + shake[1]);
+        bounds = [bounds[0].min(x - reach), bounds[1].min(y - reach), bounds[2].max(x + reach), bounds[3].max(y + reach)];
+    }
+    let (across, up) = (size.0 as f32 / view[0], size.1 as f32 / view[1]);
+    [bounds[0] * across, bounds[1] * up, bounds[2] * across, bounds[3] * up]
+}
+
+/// Draws only within `bounds` and `margin` pixels around them; nothing at all when they are empty.
+unsafe fn scissor(gl: &glow::Context, bounds: [f32; 4], margin: f32, size: (i32, i32)) {
+    let (width, height) = (size.0 as f32, size.1 as f32);
+    let left = (bounds[0] - margin).floor().clamp(0.0, width) as i32;
+    let bottom = (bounds[1] - margin).floor().clamp(0.0, height) as i32;
+    let right = (bounds[2] + margin).ceil().clamp(0.0, width) as i32;
+    let top = (bounds[3] + margin).ceil().clamp(0.0, height) as i32;
+    unsafe { gl.scissor(left, bottom, (right - left).max(0), (top - bottom).max(0)) };
 }
 
 /// Plain numbers as the bytes OpenGL takes.
