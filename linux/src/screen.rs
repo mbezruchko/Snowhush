@@ -553,6 +553,13 @@ impl Screen {
         self.next_due = self.next_due.min(now);
     }
 
+    /// Wakes the display only if it rests, so one already drawing keeps its pace.
+    pub fn stir(&mut self, now: Instant) {
+        if self.last_step.is_none() && !self.stalled {
+            self.wake(now);
+        }
+    }
+
     pub fn resume(&mut self) {
         self.last_step = None;
         self.next_due = Instant::now();

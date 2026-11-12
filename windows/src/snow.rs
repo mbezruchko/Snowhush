@@ -673,7 +673,7 @@ fn pass_snow(screens: &mut [Screen], tracker: &Tracker, now: i64) {
             };
             let mapping = mapping(&screens[index], &screens[home]);
             screens[home].simulation.catch(&caught, mapping);
-            screens[home].wake(now);
+            screens[home].stir(now);
         }
         let strays = screens[index].simulation.take_strays();
         if strays.is_empty() {
@@ -698,7 +698,7 @@ fn pass_snow(screens: &mut [Screen], tracker: &Tracker, now: i64) {
         for (next, strays) in passed {
             let mapping = mapping(&screens[index], &screens[next]);
             screens[next].simulation.adopt_strays(strays, mapping);
-            screens[next].wake(now);
+            screens[next].stir(now);
         }
     }
 }

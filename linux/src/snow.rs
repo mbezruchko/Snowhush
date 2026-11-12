@@ -644,7 +644,7 @@ impl App {
                 let Some(home) = self.screens.iter_mut().find(|other| other.name == *owner) else { continue };
                 let shift = V2::new((here.x - home.area().x) as f32, 0.0);
                 home.simulation.catch(&caught, Mapping::shift(shift));
-                home.wake(now);
+                home.stir(now);
             }
             let mut passed: Vec<(usize, Vec<Stray>)> = Vec::new();
             for stray in self.screens[index].simulation.take_strays() {
@@ -665,7 +665,7 @@ impl App {
                 let there = self.screens[next].area();
                 let shift = V2::new((here.x - there.x) as f32, (there.bottom() - here.bottom()) as f32);
                 self.screens[next].simulation.adopt_strays(strays, Mapping::shift(shift));
-                self.screens[next].wake(now);
+                self.screens[next].stir(now);
             }
         }
     }
