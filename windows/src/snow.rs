@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::Receiver;
 
-use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, WPARAM};
+use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, RECT, WPARAM};
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
 use windows::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
 use windows::Win32::System::Threading::{
@@ -360,11 +360,14 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
             let windows = settings.snow_on_windows.then_some(&tracker);
             lend(&mut screens, windows, now + clock.tolerance());
             let time = (clock.seconds(now - started) % 1000.0) as f32;
+            let lending: Vec<bool> = (0..screens.len()).map(|index| windows.is_some_and(|tracker| lends(&screens, index, tracker))).collect();
             let mut lost = false;
             let mut drawn = false;
             let mut released = false;
             let mut reshaped = false;
-            for screen in screens.iter_mut().filter(|screen| recover_at.is_none() && screen.next_due <= now + clock.tolerance()) {
+            for (index, screen) in
+                screens.iter_mut().enumerate().filter(|(_, screen)| recover_at.is_none() && screen.next_due <= now + clock.tolerance())
+            {
                 let in_front = tracker.covering(&screen.monitor.bounds);
                 // Shown over a full-screen app, the snow reaches down to the bottom of the display while the app has put
                 // the taskbar away, so the drift lies along the bottom instead of over a taskbar no longer there; a
@@ -400,8 +403,9 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                     continue;
                 }
                 // Behind windows, the snow waits while one hides all of it, looking again soon enough to carry on
-                // before a window being restored uncovers much.
-                if screen.behind_windows() && tracker.hides(&screen.monitor.rect) {
+                // before a window being restored uncovers much. A display lending a window's snow to another keeps
+                // it following the window.
+                if screen.behind_windows() && !lending[index] && tracker.hides(&screen.monitor.rect) {
                     screen.resume();
                     screen.next_due = now + clock.frequency / 10;
                     continue;
@@ -608,18 +612,14 @@ fn lend(screens: &mut [Screen], tracker: Option<&Tracker>, due: i64) {
 /// lying across two displays keeps its drift in one piece instead of ending at the edge.
 fn borrowed(screens: &[Screen], index: usize, tracker: &Tracker) -> Vec<Borrowed> {
     let screen = &screens[index];
-    let here = &screen.monitor.rect;
     let (width, height) = screen.size();
-    // The drift stands above the window's top edge, never as high as this.
-    let reach = (300.0 * screen.pixels_per_point()) as i32;
     let mut borrowed = Vec::new();
     for (&id, owner) in &tracker.owners {
         if *owner == screen.monitor.name {
             continue;
         }
         let Some(r) = tracker.rect(id) else { continue };
-        let near = r.left < here.right && r.right > here.left && r.top - reach < here.bottom && r.top + 20 > here.top;
-        let Some(home) = screens.iter().find(|other| other.monitor.name == *owner).filter(|_| near) else { continue };
+        let Some(home) = screens.iter().find(|other| other.monitor.name == *owner).filter(|_| reaches(&r, screen)) else { continue };
         let Some(lent) = home.simulation.lend(id) else { continue };
         let lent = lent.mapped(mapping(home, screen));
         let [left, bottom, right, top] = lent.bounds();
@@ -628,6 +628,24 @@ fn borrowed(screens: &[Screen], index: usize, tracker: &Tracker) -> Vec<Borrowed
         }
     }
     borrowed
+}
+
+/// Whether the drift on a window with these bounds may show on `screen`.
+fn reaches(r: &RECT, screen: &Screen) -> bool {
+    let here = &screen.monitor.rect;
+    // The drift stands above the window's top edge, never as high as this.
+    let reach = (300.0 * screen.pixels_per_point()) as i32;
+    r.left < here.right && r.right > here.left && r.top - reach < here.bottom && r.top + 20 > here.top
+}
+
+/// Whether display `index` keeps the snow of a window reaching over another display, which draws it from there.
+fn lends(screens: &[Screen], index: usize, tracker: &Tracker) -> bool {
+    let name = &screens[index].monitor.name;
+    tracker
+        .owners
+        .iter()
+        .filter(|(_, owner)| *owner == name)
+        .any(|(&id, _)| tracker.rect(id).is_some_and(|r| screens.iter().enumerate().any(|(other, screen)| other != index && reaches(&r, screen))))
 }
 
 /// Passes on the snow that went from one display to another this frame: snow that fell on a window's drift lent by
