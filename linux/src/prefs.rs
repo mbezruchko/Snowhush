@@ -177,12 +177,21 @@ fn config_dir() -> Option<PathBuf> {
 /// Writes a file whole or not at all: a crash halfway leaves the old one, never an empty one. A symlinked file is
 /// replaced where it points.
 fn write_whole(path: &Path, contents: &[u8]) -> std::io::Result<()> {
-    let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let fresh = path.with_extension("tmp");
-    let mut file = std::fs::File::create(&fresh)?;
-    file.write_all(contents)?;
-    file.sync_all()?;
-    std::fs::rename(&fresh, &path)
+    // A link to a file not made yet is followed too, so the link itself stays.
+    let path = std::fs::canonicalize(path)
+        .or_else(|_| std::fs::read_link(path).map(|target| path.parent().unwrap_or(Path::new("")).join(target)))
+        .unwrap_or_else(|_| path.to_path_buf());
+    let name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+    let fresh = path.with_file_name(format!(".{name}.snowhush-tmp"));
+    let written = std::fs::File::create(&fresh).and_then(|mut file| {
+        file.write_all(contents)?;
+        file.sync_all()?;
+        std::fs::rename(&fresh, &path)
+    });
+    if written.is_err() {
+        let _ = std::fs::remove_file(&fresh);
+    }
+    written
 }
 
 fn autostart_entry() -> Option<PathBuf> {
