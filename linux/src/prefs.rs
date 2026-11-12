@@ -1,6 +1,7 @@
 //! Settings in `~/.config/snowhush/settings`, Open at Login as an autostart entry, and KDE's animation speed.
 
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use snowhush_core::halloween::Choice;
@@ -106,7 +107,7 @@ impl Settings {
             self.opacity
         );
         let _ = std::fs::create_dir_all(&folder);
-        let _ = std::fs::write(folder.join("settings"), text);
+        let _ = write_whole(&folder.join("settings"), text.as_bytes());
     }
 
     /// The kinds falling: the two mixed, or the one picked.
@@ -226,6 +227,17 @@ pub fn config_home() -> Option<PathBuf> {
 
 fn config_dir() -> Option<PathBuf> {
     config_home().map(|folder| folder.join("snowhush"))
+}
+
+/// Writes a file whole or not at all: a crash halfway leaves the old one, never an empty one. A symlinked file is
+/// replaced where it points.
+fn write_whole(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let fresh = path.with_extension("tmp");
+    let mut file = std::fs::File::create(&fresh)?;
+    file.write_all(contents)?;
+    file.sync_all()?;
+    std::fs::rename(&fresh, &path)
 }
 
 fn autostart_entry() -> Option<PathBuf> {
