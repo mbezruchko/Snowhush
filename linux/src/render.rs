@@ -2,7 +2,7 @@
 //! piles, read from a height texture, the ghosts' signs, then every flake, grain, puff and ghost as an instanced quad,
 //! and rain's drops on the glass, added up into a field first and drawn from it as glass.
 
-use std::collections::HashMap;
+use std::cell::Cell;
 use std::ffi::c_void;
 use std::mem::size_of;
 
@@ -106,8 +106,6 @@ pub struct Gpu {
     /// Whether the graphics driver can draw into a half-float texture, as the field needs; without, drops on the
     /// glass are drawn as sprites.
     fields_drawable: bool,
-    /// A field for each size of surface drawn, while it has drops on its glass.
-    fields: HashMap<(i32, i32), (glow::Texture, glow::Framebuffer)>,
     sprite_array: glow::VertexArray,
     sprite_buffer: glow::Buffer,
     /// Holds no attributes: the corners of the piles, the signs and the pumpkins come from the vertex index alone.
@@ -130,6 +128,8 @@ pub struct Surface {
     surface: egl::Surface,
     pub width: i32,
     pub height: i32,
+    /// The field its drops on the glass add up into, and the size it was made for, while it has any.
+    field: Cell<Option<(glow::Texture, glow::Framebuffer, (i32, i32))>>,
 }
 
 impl Gpu {
@@ -291,7 +291,6 @@ impl Gpu {
                 field,
                 glass,
                 fields_drawable,
-                fields: HashMap::new(),
                 sprite_array,
                 sprite_buffer,
                 empty_array,
@@ -313,7 +312,7 @@ impl Gpu {
         self.egl.make_current(self.display, Some(surface), Some(surface), Some(self.context)).map_err(|error| error.to_string())?;
         // Frames are paced by the snow loop; a swap must never wait on a display that is off.
         let _ = self.egl.swap_interval(self.display, 0);
-        Ok(Surface { window, surface, width, height })
+        Ok(Surface { window, surface, width, height, field: Cell::new(None) })
     }
 
     pub fn resize(&self, surface: &mut Surface, width: i32, height: i32) {
@@ -324,6 +323,12 @@ impl Gpu {
 
     pub fn release(&self, surface: Surface) {
         let _ = self.egl.make_current(self.display, None, None, Some(self.context));
+        if let Some((texture, framebuffer, _)) = surface.field.take() {
+            unsafe {
+                self.gl.delete_framebuffer(framebuffer);
+                self.gl.delete_texture(texture);
+            }
+        }
         let _ = self.egl.destroy_surface(self.display, surface.surface);
     }
 
@@ -487,11 +492,14 @@ impl Gpu {
             }
             let size = (surface.width.max(1), surface.height.max(1));
             let glass = sprites > 0 && self.fields_drawable && simulation.has_glass_drops();
-            if !glass && let Some((texture, framebuffer)) = self.fields.remove(&size) {
+            if let Some((texture, framebuffer, made)) = surface.field.get()
+                && (!glass || made != size)
+            {
+                surface.field.set(None);
                 gl.delete_framebuffer(framebuffer);
                 gl.delete_texture(texture);
             }
-            if glass && !self.fields.contains_key(&size) {
+            if glass && surface.field.get().is_none() {
                 let texture = gl.create_texture()?;
                 gl.bind_texture(glow::TEXTURE_2D, Some(texture));
                 for (parameter, value) in [
@@ -517,15 +525,15 @@ impl Gpu {
                 gl.bind_framebuffer(glow::FRAMEBUFFER, Some(framebuffer));
                 gl.framebuffer_texture_2d(glow::FRAMEBUFFER, glow::COLOR_ATTACHMENT0, glow::TEXTURE_2D, Some(texture), 0);
                 gl.bind_framebuffer(glow::FRAMEBUFFER, None);
-                self.fields.insert(size, (texture, framebuffer));
+                surface.field.set(Some((texture, framebuffer, size)));
             }
             if sprites > 0 {
                 gl.bind_vertex_array(Some(self.sprite_array));
                 gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.sprite_buffer));
                 gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes(&self.sprites[..sprites]), glow::STREAM_DRAW);
                 // Drops on the glass first add up into their field.
-                let field = if glass { self.fields.get(&size).copied() } else { None };
-                if let Some((_, framebuffer)) = field {
+                let field = if glass { surface.field.get() } else { None };
+                if let Some((_, framebuffer, _)) = field {
                     let program = &self.field;
                     gl.bind_framebuffer(glow::FRAMEBUFFER, Some(framebuffer));
                     gl.clear(glow::COLOR_BUFFER_BIT);
@@ -559,7 +567,7 @@ impl Gpu {
                 gl.uniform_1_f32(sprite.location("blossom"), blossom);
                 gl.uniform_1_f32(sprite.location("wilt"), wilt);
                 gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, 4, sprites as i32);
-                if let Some((texture, _)) = field {
+                if let Some((texture, _, _)) = field {
                     let program = &self.glass;
                     gl.bind_vertex_array(Some(self.empty_array));
                     gl.use_program(Some(program.program));
