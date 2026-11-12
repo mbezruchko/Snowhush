@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::mem::{offset_of, size_of};
 use std::sync::OnceLock;
 
-use windows::Win32::Foundation::{HMODULE, HWND};
+use windows::Win32::Foundation::{HMODULE, HWND, RECT};
 use windows::Win32::Graphics::Direct3D::Fxc::{D3DCOMPILE_OPTIMIZATION_LEVEL3, D3DCompile};
 use windows::Win32::Graphics::Direct3D::{
     D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL_10_0, D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_11_0, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
@@ -157,6 +157,8 @@ pub struct Gpu {
     bordered: ID3D11SamplerState,
     blend: ID3D11BlendState,
     raster: ID3D11RasterizerState,
+    /// The same, drawing only within the scissor rect: the glass, around the drops.
+    scissored: ID3D11RasterizerState,
     uniforms: ID3D11Buffer,
     placement: ID3D11Buffer,
     pumpkin: ID3D11Buffer,
@@ -254,6 +256,8 @@ impl Gpu {
                 D3D11_RASTERIZER_DESC { FillMode: D3D11_FILL_SOLID, CullMode: D3D11_CULL_NONE, DepthClipEnable: true.into(), ..Default::default() };
             let mut raster = None;
             device.CreateRasterizerState(&raster_desc, Some(&mut raster))?;
+            let mut scissored = None;
+            device.CreateRasterizerState(&D3D11_RASTERIZER_DESC { ScissorEnable: true.into(), ..raster_desc }, Some(&mut scissored))?;
 
             let sampler_desc = D3D11_SAMPLER_DESC {
                 Filter: D3D11_FILTER_MIN_MAG_MIP_LINEAR,
@@ -304,6 +308,7 @@ impl Gpu {
                 bordered: bordered.ok_or_else(Error::empty)?,
                 blend: blend.ok_or_else(Error::empty)?,
                 raster: raster.ok_or_else(Error::empty)?,
+                scissored: scissored.ok_or_else(Error::empty)?,
                 uniforms,
                 placement,
                 pumpkin,
@@ -475,7 +480,8 @@ impl Surface {
     pub fn draw(&mut self, gpu: &Gpu, simulation: &SnowSimulation, ambient: Ambient, time: f32) -> Result<()> {
         self.reserve(gpu, simulation.sprite_count(), simulation.column_count())?;
         let glass = if simulation.has_glass_drops() {
-            Some(self.field(gpu)?)
+            let field = self.field(gpu)?;
+            simulation.glass_bounds().map(|drops| (field, drops))
         } else {
             self.field = None;
             None
@@ -595,7 +601,7 @@ impl Surface {
                 context.IASetInputLayout(&gpu.sprite_layout);
                 context.IASetVertexBuffers(0, 1, Some(&Some(sprite_buffer.clone())), Some(&stride), Some(&offset));
                 // Drops on the glass first add up into their field.
-                if let Some((field_target, _)) = &glass {
+                if let Some(((field_target, _), _)) = &glass {
                     context.OMSetRenderTargets(Some(&[Some(field_target.clone())]), None);
                     context.ClearRenderTargetView(field_target, &[0.0; 4]);
                     context.OMSetBlendState(&gpu.adding, None, u32::MAX);
@@ -608,19 +614,34 @@ impl Surface {
                 context.VSSetShader(&gpu.sprite_vertex, None);
                 context.PSSetShader(&gpu.sprite_fragment, None);
                 context.DrawInstanced(4, sprites as u32, 0, 0);
-                if let Some((_, field)) = &glass {
+                if let Some(((_, field), drops)) = &glass {
                     context.IASetInputLayout(None);
                     context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
                     context.VSSetShader(&gpu.glass_vertex, None);
                     context.PSSetShader(&gpu.glass_fragment, None);
                     context.PSSetShaderResources(4, Some(&[Some(field.clone())]));
+                    // The glass shows at most 2 pixels below the drops: drawn within 4 pixels of them, it is all drawn.
+                    context.RSSetState(&gpu.scissored);
+                    context.RSSetScissorRects(Some(&[self.around(*drops, shake, uniforms.view_size, 4.0)]));
                     context.Draw(3, 0);
+                    context.RSSetState(&gpu.raster);
                     // Unbound, it can be drawn into again next frame.
                     context.PSSetShaderResources(4, Some(&[None]));
                 }
             }
             self.swap_chain.Present(1, DXGI_PRESENT(0)).ok()
         }
+    }
+
+    /// The swap chain's pixels within `margin` of `bounds`, left, bottom, right, top in the simulation's points.
+    fn around(&self, bounds: [f32; 4], shake: V2, view: [f32; 2], margin: f32) -> RECT {
+        let (width, height) = (self.width as f32, self.height as f32);
+        let (across, up) = (width / view[0], height / view[1]);
+        let left = ((bounds[0] + shake.x) * across - margin).floor().clamp(0.0, width);
+        let right = ((bounds[2] + shake.x) * across + margin).ceil().clamp(0.0, width);
+        let top = (height - (bounds[3] + shake.y) * up - margin).floor().clamp(0.0, height);
+        let bottom = (height - (bounds[1] + shake.y) * up + margin).ceil().clamp(0.0, height);
+        RECT { left: left as i32, top: top as i32, right: right as i32, bottom: bottom as i32 }
     }
 
     /// The field drops on the glass add up into, made the first time it is needed.

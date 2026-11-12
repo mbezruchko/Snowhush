@@ -522,8 +522,24 @@ impl SnowSimulation {
             });
             film.chain(spray)
         });
+        splashes.chain(wet).chain(self.drop_sprites())
+    }
+
+    /// Where the running drops and beads add up into the field the glass is drawn from, left, bottom, right, top, in
+    /// points before the shake: each reaches as far as the sprite shader draws it. None while none shows.
+    pub fn glass_bounds(&self) -> Option<[f32; 4]> {
+        self.drop_sprites().filter(|sprite| sprite.rain[0] == 2.0).fold(None, |bounds: Option<[f32; 4]>, sprite| {
+            let speed = sprite.velocity.length();
+            let reach = sprite.size.max(1.5) * 1.1 + (speed * 0.08).min(sprite.size * 0.9) + speed * 0.024 + 1.0;
+            let (x, y) = (sprite.position.x, sprite.position.y);
+            let [left, bottom, right, top] = bounds.unwrap_or([f32::MAX, f32::MAX, f32::MIN, f32::MIN]);
+            Some([left.min(x - reach), bottom.min(y - reach), right.max(x + reach), top.max(y + reach)])
+        })
+    }
+
+    fn drop_sprites(&self) -> impl Iterator<Item = Sprite> + '_ {
         let shown: HashMap<WindowId, usize> = self.ids.iter().enumerate().skip(1).map(|(li, &id)| (id, li)).collect();
-        let drops = self.rain.drops.iter().filter_map(move |drop| {
+        self.rain.drops.iter().filter_map(move |drop| {
             let layer = &self.layers[*shown.get(&drop.layer)?];
             let position = layer.origin + drop.offset;
             // A window in front of the one it runs down hides it.
@@ -550,8 +566,7 @@ impl SnowSimulation {
                 drop: [drop.seed, drop.offset.y * 0.06, bulge, jiggle],
                 ..Sprite::default()
             })
-        });
-        splashes.chain(wet).chain(drops)
+        })
     }
 }
 
