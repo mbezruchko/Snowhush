@@ -17,5 +17,6 @@ let package = Package(
             swiftSettings: [.unsafeFlags(["-enforce-exclusivity=unchecked"], .when(configuration: .release))],
             linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]
         ),
+        .testTarget(name: "SnowhushTests", dependencies: ["Snowhush"], path: "Tests/SnowhushTests"),
     ]
 )

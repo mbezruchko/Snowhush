@@ -50,6 +50,18 @@ From October 30 until dawn on November 1 the snow turns spooky: jack-o'-lanterns
 
 Everything else lives in the menu bar: an Intensity slider for how much falls, Opacity for how see-through it is, a row showing its value that folds out a slider (on Linux and in the plain Windows menu, both are submenus of steps), Accumulate, which folds out a row of icons for what the snow settles on (the ground, the Dock, windows and desktop widgets on the Mac; the ground and windows on Windows; the ground, a floating panel and windows on Linux, as a submenu), Mode (Snow, Autumn Leaves, Rain, Cherry Blossom, and Halloween on top of snow) and Clear Snow, with the rest under Settings: Melt Snow, Deep Interaction (on Windows and the Mac, the snow also settles on a selection dragged across the desktop), Behind Windows, Show over Full Screen, Show in Screenshots, Max Performance (draws every frame at the display's full rate) and Open at Login. On Windows and the Mac, Settings stays open while you switch its options. On Windows, Behind Taskbar lets the snow settle at the bottom of the screen under a see-through taskbar, such as one made clear with TranslucentTB.
 
+## Weather sync (macOS)
+
+Choose Mode › Weather Effects, then open Weather Settings to choose what you want to see (or press ⌘, while Snowhush is active). Each effect has three settings: Off, Weather, and Always. Weather follows local conditions; Always works independently of them, even when location access or the network is unavailable. Snow, rain, clouds, fog, sunlight, lightning, and moonlight with stars can all be controlled separately.
+
+Presets include All Follow Weather, Only Snow When It Snows, Fog Only, and All Effects Off. Only Snow When It Snows shows snow during a snowfall and nothing during rain, clear skies, fog, or thunderstorms. Fog Only turns on fog immediately with every other effect off. You can also combine rules, such as permanent fog with snow only when it snows. Choices are saved between launches.
+
+When at least one effect follows the weather, allow location access when macOS asks, or choose a city in Weather Settings. When every effect is Off or Always, no location fixes or weather requests are made. Turning Weather Effects off or selecting a manual particle mode brings back your original manual settings.
+
+Rain and snow follow the current conditions, including mixed precipitation; clouds drift overhead, fog rolls across the lower screen, sunlight glows on clear days, and thunderstorms produce short branching strikes with local cloud light. The first strike appears shortly after enabling lightning, with varied pauses between later strikes. Clear nights have a small shaded moon with a close halo and scattered stars. Forcing the moon on during the day leaves the other effects' lighting alone. The Intensity slider controls the strength, and Off stops the effects. Reduce Motion keeps the atmospheric layers still and disables lightning.
+
+Weather comes from [Open-Meteo](https://open-meteo.com/), independently of Apple's Weather app, and refreshes every 15 minutes while the Mac is awake. Location is requested at city accuracy; only coordinates rounded to two decimal places are sent to the weather service, and automatic locations are not saved. If location access is unavailable, choose a city instead. A network failure keeps a recent reading; readings older than an hour stop driving the effects until a refresh succeeds.
+
 ## Building
 
 ```sh
