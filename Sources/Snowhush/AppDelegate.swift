@@ -453,8 +453,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         observe(distributed, Notification.Name("com.apple.screenIsLocked")) { $0.screenLocked = true }
         observe(distributed, Notification.Name("com.apple.screenIsUnlocked")) { $0.screenLocked = false }
         observe(.default, NSWindow.didChangeOcclusionStateNotification) { _ in }
-        observe(.default, NSApplication.didChangeScreenParametersNotification) { $0.syncScreens() }
-        observe(workspace, NSWorkspace.activeSpaceDidChangeNotification) { $0.screens.forEach { $0.spaceChanged() } }
+        observe(.default, NSApplication.didChangeScreenParametersNotification) {
+            Spaces.invalidate()
+            $0.syncScreens()
+        }
+        observe(workspace, NSWorkspace.activeSpaceDidChangeNotification) {
+            Spaces.invalidate()
+            $0.screens.forEach { $0.spaceChanged() }
+        }
         observe(workspace, NSWorkspace.didActivateApplicationNotification) { $0.screens.forEach { $0.watchWindows() } }
     }
 

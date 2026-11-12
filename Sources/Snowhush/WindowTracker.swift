@@ -435,7 +435,7 @@ final class WindowTracker {
 
     /// How much of this display a full-screen app's Space covers, read from the window list alone, without a poll.
     func readFullScreenShare(now: CFTimeInterval) -> CGFloat {
-        fullScreenShare(in: Self.windowList(now: now))
+        fullScreenApps(in: Self.windowList(now: now)).share
     }
 
     /// Whether Mission Control or App Exposé shows on this display.
@@ -455,16 +455,24 @@ final class WindowTracker {
         return shield || bar
     }
 
-    private func fullScreenShare(in list: [ListedWindow]) -> CGFloat {
+    /// How much of this display full-screen apps' Spaces cover, and whether such an app's window reaches down past the
+    /// Dock: the Dock sinks away as soon as the app's Space starts sliding in and stays away there, though the window
+    /// server still reports it out.
+    private func fullScreenApps(in list: [ListedWindow]) -> (share: CGFloat, hidesDock: Bool) {
         let candidates = list.compactMap { entry -> (id: CGWindowID, bounds: CGRect)? in
             guard entry.layer == 0, let id = entry.id, let bounds = entry.bounds, fillsScreen(bounds) else { return nil }
             return (id, bounds)
         }
-        guard !candidates.isEmpty, let fullScreen = Spaces.fullScreen(), !fullScreen.isEmpty else { return 0 }
-        return candidates.reduce(0) { share, candidate in
-            guard let spaces = Spaces.of(candidate.id), !spaces.isDisjoint(with: fullScreen) else { return share }
-            return max(share, candidate.bounds.intersection(screen).width / screen.width)
+        guard !candidates.isEmpty, let fullScreen = Spaces.fullScreen(), !fullScreen.isEmpty else { return (0, false) }
+        let band = CGRect(x: screen.minX, y: screen.maxY - Dock.height, width: screen.width, height: Dock.height)
+        var share: CGFloat = 0
+        var hidesDock = false
+        for candidate in candidates {
+            guard let spaces = Spaces.of(candidate.id), !spaces.isDisjoint(with: fullScreen) else { continue }
+            share = max(share, candidate.bounds.intersection(screen).width / screen.width)
+            if candidate.bounds.intersects(band) { hidesDock = true }
         }
+        return (share, hidesDock)
     }
 
     /// How much of this display desktops cover while a full-screen app's Space is current, from 0 to 1, read from the
@@ -493,18 +501,6 @@ final class WindowTracker {
         guard !apps.isEmpty || !desktops.isEmpty else { return nil }
         let left = apps.isEmpty ? 0 : 1 - min(1, apps.values.reduce(0, +))
         return max(left, min(1, desktops.values.reduce(0, +)))
-    }
-
-    /// Whether an app in full screen shows on this display, its window reaching down past the Dock: the Dock sinks away
-    /// as soon as the app's Space starts sliding in and stays away there, though the window server still reports it out.
-    private func fullScreenAppHidesDock(in list: [ListedWindow]) -> Bool {
-        let band = CGRect(x: screen.minX, y: screen.maxY - Dock.height, width: screen.width, height: Dock.height)
-        let candidates = list.compactMap { entry -> CGWindowID? in
-            guard entry.layer == 0, let bounds = entry.bounds, bounds.intersects(band), fillsScreen(bounds) else { return nil }
-            return entry.id
-        }
-        guard !candidates.isEmpty, let fullScreen = Spaces.fullScreen(), !fullScreen.isEmpty else { return false }
-        return candidates.contains { Spaces.of($0).map { !$0.isDisjoint(with: fullScreen) } ?? false }
     }
 
     private static var shared: (time: CFTimeInterval, list: [ListedWindow])?
@@ -551,8 +547,7 @@ final class WindowTracker {
         exposing = false
         sinkingDock = nil
         handed = [:]
-        fullScreenInView = fullScreenAppHidesDock(in: list)
-        fullScreenShare = fullScreenShare(in: list)
+        (fullScreenShare, fullScreenInView) = fullScreenApps(in: list)
         defer {
             alphas = fresh
             panelsShownAt = panels
@@ -1093,20 +1088,44 @@ enum Spaces {
     private static let spacesForWindows = SkyLight.function("SLSCopySpacesForWindows", as: SpacesForWindows.self)
     private static let displaySpaces = SkyLight.function("SLSCopyManagedDisplaySpaces", as: DisplaySpaces.self)
 
+    private static var snapshot: (time: CFTimeInterval, displays: [[String: Any]]?)?
+    private static var uuids: [CGDirectDisplayID: String] = [:]
+
+    /// Forgets what was read, for a new Space or a change of displays.
+    static func invalidate() {
+        snapshot = nil
+        uuids = [:]
+    }
+
+    /// Each display's Spaces, read once for every caller within the same frame.
+    private static func managedDisplays() -> [[String: Any]]? {
+        let now = CACurrentMediaTime()
+        if let snapshot, now - snapshot.time < 0.004 { return snapshot.displays }
+        let displays = SkyLight.connection.flatMap { displaySpaces?($0)?.takeRetainedValue() as? [[String: Any]] }
+        snapshot = (now, displays)
+        return displays
+    }
+
+    /// One display's entry. Without separate Spaces for each display there is one entry, "Main", for them all.
+    private static func entry(on display: CGDirectDisplayID) -> [String: Any]? {
+        guard let displays = managedDisplays() else { return nil }
+        if uuids[display] == nil {
+            uuids[display] = CGDisplayCreateUUIDFromDisplayID(display).map { CFUUIDCreateString(nil, $0.takeRetainedValue()) as String }
+        }
+        let uuid = uuids[display]
+        return displays.first { $0["Display Identifier"] as? String == uuid } ?? (displays.count == 1 ? displays.first : nil)
+    }
+
     /// The Space showing on each display.
     static func current() -> Set<UInt64>? {
-        guard let connection = SkyLight.connection,
-              let displays = displaySpaces?(connection)?.takeRetainedValue() as? [[String: Any]]
-        else { return nil }
+        guard let displays = managedDisplays() else { return nil }
         let spaces = displays.compactMap { ($0["Current Space"] as? [String: Any]).flatMap(id) }
         return spaces.isEmpty ? nil : Set(spaces)
     }
 
     /// The Space showing on each display, by the display's UUID.
     static func currentByDisplay() -> [String: UInt64]? {
-        guard let connection = SkyLight.connection,
-              let displays = displaySpaces?(connection)?.takeRetainedValue() as? [[String: Any]]
-        else { return nil }
+        guard let displays = managedDisplays() else { return nil }
         var spaces: [String: UInt64] = [:]
         for display in displays {
             if let uuid = display["Display Identifier"] as? String, let current = (display["Current Space"] as? [String: Any]).flatMap(id) {
@@ -1118,9 +1137,7 @@ enum Spaces {
 
     /// The Spaces of apps in full screen, on every display.
     static func fullScreen() -> Set<UInt64>? {
-        guard let connection = SkyLight.connection,
-              let displays = displaySpaces?(connection)?.takeRetainedValue() as? [[String: Any]]
-        else { return nil }
+        guard let displays = managedDisplays() else { return nil }
         // Type 4 is a full-screen app's Space; a desktop is type 0.
         let spaces = displays.flatMap { $0["Spaces"] as? [[String: Any]] ?? [] }
         return Set(spaces.filter { ($0["type"] as? NSNumber)?.intValue == 4 }.compactMap(id))
@@ -1128,24 +1145,12 @@ enum Spaces {
 
     /// The Space showing on one display.
     static func current(on display: CGDirectDisplayID) -> UInt64? {
-        guard let connection = SkyLight.connection,
-              let displays = displaySpaces?(connection)?.takeRetainedValue() as? [[String: Any]]
-        else { return nil }
-        let uuid = CGDisplayCreateUUIDFromDisplayID(display).map { CFUUIDCreateString(nil, $0.takeRetainedValue()) as String }
-        guard let entry = displays.first(where: { $0["Display Identifier"] as? String == uuid }) ?? (displays.count == 1 ? displays.first : nil)
-        else { return nil }
-        return (entry["Current Space"] as? [String: Any]).flatMap(id)
+        (entry(on: display)?["Current Space"] as? [String: Any]).flatMap(id)
     }
 
     /// The Spaces of apps in full screen on a display, and whether one of them is showing.
     static func fullScreen(on display: CGDirectDisplayID) -> (spaces: Set<UInt64>, showing: Bool)? {
-        guard let connection = SkyLight.connection,
-              let displays = displaySpaces?(connection)?.takeRetainedValue() as? [[String: Any]]
-        else { return nil }
-        let uuid = CGDisplayCreateUUIDFromDisplayID(display).map { CFUUIDCreateString(nil, $0.takeRetainedValue()) as String }
-        // Without separate Spaces for each display there is one entry, "Main", for them all.
-        guard let entry = displays.first(where: { $0["Display Identifier"] as? String == uuid }) ?? (displays.count == 1 ? displays.first : nil)
-        else { return nil }
+        guard let entry = entry(on: display) else { return nil }
         let spaces = (entry["Spaces"] as? [[String: Any]] ?? []).filter { ($0["type"] as? NSNumber)?.intValue == 4 }.compactMap(id)
         let current = entry["Current Space"] as? [String: Any]
         return (Set(spaces), (current?["type"] as? NSNumber)?.intValue == 4)
