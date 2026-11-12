@@ -36,6 +36,10 @@ const RESTING: Duration = Duration::from_secs(1);
 /// Seconds the snow takes to fade out of a full-screen app's way, and back in once it goes.
 const FADE_OUT: f32 = 0.25;
 const FADE_IN: f32 = 0.35;
+/// Frames that fail to draw in a row before the drawing surface is made again.
+const RENEW_AFTER: u32 = 3;
+/// How often a run of failing frames is written to the log after its first.
+const FAILURE_LOG: Duration = Duration::from_secs(60);
 
 pub struct Screen {
     pub name: String,
@@ -85,6 +89,11 @@ pub struct Screen {
     lantern: V2,
     /// Whether the last frame drawn showed Halloween's pumpkins.
     pumpkins_shown: bool,
+    /// Frames that failed to draw in a row, and when that was last written to the log.
+    failures: u32,
+    failure_logged: Option<Instant>,
+    /// The drawing surface was let go, to be made again at the next frame.
+    renew: bool,
 }
 
 impl Screen {
@@ -142,6 +151,9 @@ impl Screen {
             shadow_tint: [0.0; 4],
             lantern: V2::new(-1e6, -1e6),
             pumpkins_shown: false,
+            failures: 0,
+            failure_logged: None,
+            renew: false,
         }
     }
 
@@ -159,7 +171,10 @@ impl Screen {
         match &mut self.surface {
             Some(surface) => gpu.resize(surface, width as i32, height as i32),
             None => match gpu.surface(self.layer.wl_surface(), width as i32, height as i32) {
-                Ok(surface) => self.surface = Some(surface),
+                Ok(surface) => {
+                    self.surface = Some(surface);
+                    self.renew = false;
+                }
                 Err(error) => log!("{}: no surface: {error}", self.name),
             },
         }
@@ -342,7 +357,9 @@ impl Screen {
         time: f32,
         pumpkins: bool,
     ) -> Result<bool, String> {
-        let Some(surface) = &self.surface else { return Ok(false) };
+        if self.surface.is_none() && !self.renew {
+            return Ok(false);
+        }
         let wl_surface = self.layer.wl_surface();
         wl_surface.frame(qh, FrameCallbackData(wl_surface.clone()));
         self.shown_pending = Some(now);
@@ -351,9 +368,44 @@ impl Screen {
             let r = windows::local_rect(&shelf.rect, &self.area());
             [r.min_x(), r.min_y(), r.max_x(), r.max_y() - shelf.radius]
         });
-        gpu.draw(surface, &self.simulation, Ambient { shadow_tint: self.shadow_tint, lantern, ..ambient }, panel, time, self.opacity)?;
+        if let Err(error) = self.draw(gpu, Ambient { shadow_tint: self.shadow_tint, lantern, ..ambient }, panel, time) {
+            self.failures += 1;
+            if self.failure_logged.is_none_or(|at| now - at >= FAILURE_LOG) {
+                self.failure_logged = Some(now);
+                log!("{}: frame failed, {} in a row: {error}", self.name, self.failures);
+            }
+            if self.failures.is_multiple_of(RENEW_AFTER) {
+                self.drop_surface(gpu);
+            }
+            return Err(error);
+        }
+        if self.failures > 0 {
+            log!("{}: drawing again after {} failed frames", self.name, self.failures);
+            self.failures = 0;
+            self.failure_logged = None;
+        }
         self.pumpkins_shown = pumpkins;
         Ok(true)
+    }
+
+    /// Draws on the surface, made again first if it was let go.
+    fn draw(&mut self, gpu: &mut Gpu, ambient: Ambient, panel: Option<[f32; 4]>, time: f32) -> Result<(), String> {
+        let surface = match self.surface.take() {
+            Some(surface) => surface,
+            None => gpu.surface(self.layer.wl_surface(), self.size.0 as i32, self.size.1 as i32)?,
+        };
+        self.renew = false;
+        let drawn = gpu.draw(&surface, &self.simulation, ambient, panel, time, self.opacity);
+        self.surface = Some(surface);
+        drawn
+    }
+
+    /// Lets the drawing surface go, to be made again at the next frame, as when drawing on it keeps failing.
+    pub fn drop_surface(&mut self, gpu: &Gpu) {
+        if let Some(surface) = self.surface.take() {
+            gpu.release(surface);
+            self.renew = true;
+        }
     }
 
     /// Whether a candle at this point, in overlay coordinates, lights anything on this display.
@@ -443,6 +495,11 @@ impl Screen {
 
     pub fn covered(&self) -> bool {
         self.covered
+    }
+
+    /// Frames went unshown for a while, as with the display off: the snow waits.
+    pub fn stalled(&self) -> bool {
+        self.stalled
     }
 
     /// Faded all the way out under a full-screen app: nothing to draw until it goes.

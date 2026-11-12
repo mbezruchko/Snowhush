@@ -30,7 +30,7 @@ use crate::log;
 use crate::prefs::Settings;
 use crate::render::{Ambient, Gpu};
 use crate::screen::{self, PowerBudget, Screen};
-use crate::source::{Report, Shared, Source};
+use crate::source::{Demand, Report, Shared, Source};
 use crate::tray::Tray;
 use crate::windows::{self, Area};
 
@@ -77,6 +77,9 @@ pub struct App {
     layer_shell: LayerShell,
     qh: QueueHandle<App>,
     gpu: Gpu,
+    /// When the graphics were last started again after the driver lost them.
+    gpu_renewed_at: Option<Instant>,
+    wayland: Connection,
     bus: Bus,
     shared: Arc<Shared>,
     source: Source,
@@ -122,6 +125,11 @@ pub fn run() -> Result<(), String> {
     };
     // Only now: a second copy that stops here must not wipe the running one's log.
     crate::log::start();
+    let report_panic = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        log!("panic on the {} thread: {info}", std::thread::current().name().unwrap_or("unnamed"));
+        report_panic(info);
+    }));
     log!("Snowhush {}", env!("CARGO_PKG_VERSION"));
 
     let connection = Connection::connect_to_env().map_err(|error| format!("Wayland: {error}"))?;
@@ -150,6 +158,8 @@ pub fn run() -> Result<(), String> {
         layer_shell,
         qh: qh.clone(),
         gpu,
+        gpu_renewed_at: None,
+        wayland: connection.clone(),
         bus: bus.clone(),
         source: Source::start(&bus, shared.clone(), settings.show_in_screenshots),
         shared,
@@ -178,19 +188,28 @@ pub fn run() -> Result<(), String> {
     WaylandSource::new(connection, queue).insert(event_loop.handle()).map_err(|error| error.to_string())?;
 
     use ksni::blocking::TrayMethods;
-    app.tray = Tray::new(settings, commands.clone()).spawn().inspect_err(|error| log!("tray: {error}")).ok();
+    app.tray = Tray::new(settings, commands.clone()).assume_sni_available(true).spawn().inspect_err(|error| log!("tray: {error}")).ok();
     watch_lock(&bus, commands);
 
-    while !app.quit {
+    let result = loop {
+        if app.quit {
+            break Ok(());
+        }
         let timeout = app.timeout();
-        event_loop.dispatch(timeout, &mut app).map_err(|error| error.to_string())?;
-        app.tick()?;
-    }
+        if let Err(error) = event_loop.dispatch(timeout, &mut app) {
+            break Err(error.to_string());
+        }
+        if let Err(error) = app.tick() {
+            break Err(error);
+        }
+    };
 
+    // Also when the Wayland connection broke: the KWin script must not outlive the app.
     app.source.stop(&app.bus);
     if let Some(tray) = app.tray.take() {
         tray.shutdown().wait();
     }
+    result?;
     for screen in app.screens.drain(..) {
         screen.release(&app.gpu);
     }
@@ -391,6 +410,7 @@ impl App {
         }
 
         if self.locked {
+            self.shared.set_demand(Demand::Off, false);
             return Ok(());
         }
         // Behind the windows the snow still settles on them: what lies on a window's top edge is above it, in plain view.
@@ -409,6 +429,7 @@ impl App {
         }
         let mut released = false;
         let mut reshaped = false;
+        let mut context_lost = false;
         for screen in self.screens.iter_mut().filter(|screen| screen.next_due <= now) {
             // Shown over a full-screen app, the snow reaches the display's edges while the app has put the panels away,
             // so the drift lies along the bottom instead of over a panel no longer there. An overview isn't an app.
@@ -432,8 +453,11 @@ impl App {
                     self.stats.frame(drew, began.elapsed(), screen.simulation.sprite_count());
                     released |= screen.simulation.take_snowfall_released();
                 }
-                Err(error) => log!("{}: frame failed: {error}", screen.name),
+                Err(error) => context_lost |= error.contains(&khronos_egl::Error::ContextLost.to_string()),
             }
+        }
+        if context_lost {
+            self.renew_gpu(now);
         }
         if released {
             self.screens.iter_mut().for_each(|screen| screen.simulation.set_snowfall_held(false));
@@ -442,8 +466,42 @@ impl App {
         if reshaped {
             self.place_screens();
         }
+        self.tell_demand();
         self.stats.report(Instant::now());
         Ok(())
+    }
+
+    /// Tells the compositor's sources what the snow needs: nothing while no display shows it, the windows now and then
+    /// while no snow shows, and the pointer while there is anything for it to part. The windows stay followed closely
+    /// with snow on windows off too, since the same answers move the ground with the panels.
+    fn tell_demand(&self) {
+        let awake = self.screens.iter().any(|screen| !screen.stalled());
+        let busy = self.screens.iter().any(|screen| !screen.stalled() && !screen.hidden() && !screen.simulation.is_empty());
+        let windows = if !awake {
+            Demand::Off
+        } else if busy {
+            Demand::Live
+        } else {
+            Demand::Calm
+        };
+        self.shared.set_demand(windows, busy);
+    }
+
+    /// Starts the graphics again after the driver lost them, as after a GPU reset or some suspends; each display's
+    /// surface is made again on the new ones at its next frame.
+    fn renew_gpu(&mut self, now: Instant) {
+        if self.gpu_renewed_at.is_some_and(|at| now - at < Duration::from_secs(10)) {
+            return;
+        }
+        self.gpu_renewed_at = Some(now);
+        self.screens.iter_mut().for_each(|screen| screen.drop_surface(&self.gpu));
+        match Gpu::new(self.wayland.backend().display_ptr().cast()) {
+            Ok(gpu) => {
+                self.gpu = gpu;
+                log!("graphics lost; started again on {}", self.gpu.adapter);
+            }
+            Err(error) => log!("graphics lost; starting again failed: {error}"),
+        }
     }
 
     /// The light of the hour, and Halloween with it: its ghosts, its night and the tray's pumpkin.
