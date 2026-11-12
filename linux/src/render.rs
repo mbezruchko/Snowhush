@@ -189,8 +189,12 @@ impl Gpu {
                     "glass",
                 ],
             )?;
-            let field =
-                program(&gl, SPRITE_VERTEX, &included(FIELD_FRAGMENT), &["viewSize", "scale", "time", "lantern", "pumpkins", "shake", "panel"])?;
+            let field = program(
+                &gl,
+                SPRITE_VERTEX,
+                &included(FIELD_FRAGMENT),
+                &["viewSize", "scale", "time", "lantern", "pumpkins", "shake", "panel", "field"],
+            )?;
             let glass = program(&gl, GLASS_VERTEX, GLASS_FRAGMENT, &["field", "light", "scale"])?;
             let extensions = gl.supported_extensions();
             let fields_drawable = extensions.contains("GL_EXT_color_buffer_float") || extensions.contains("GL_EXT_color_buffer_half_float");
@@ -549,6 +553,7 @@ impl Gpu {
                     gl.uniform_4_f32_slice(program.location("pumpkins"), candles);
                     gl.uniform_2_f32_slice(program.location("shake"), &shake);
                     gl.uniform_4_f32_slice(program.location("panel"), &panel);
+                    gl.uniform_1_f32(program.location("field"), 1.0);
                     gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, 4, sprites as i32);
                     gl.bind_framebuffer(glow::FRAMEBUFFER, None);
                     gl.blend_func_separate(glow::ONE, glow::ONE_MINUS_SRC_ALPHA, glow::ONE, glow::ONE_MINUS_SRC_ALPHA);

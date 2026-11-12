@@ -12,6 +12,10 @@ uniform vec4 lantern;
 uniform vec4 pumpkins[3];
 // How far everything is jolted, in points.
 uniform vec2 shake;
+// One in the pass that adds running drops and beads up into their field, which draws nothing else.
+uniform float field;
+// One while running drops and beads are drawn as glass, from their field, and not as sprites.
+uniform float glass;
 
 layout(location = 0) in vec2 position;
 layout(location = 1) in vec2 velocity;
@@ -100,6 +104,12 @@ vec2 hangingReach(float along) {
 }
 
 void main() {
+    // Left out before any fragment of them is drawn, all four corners off the surface.
+    bool running = rain.x > 1.5 && rain.x < 2.5;
+    if (field > 0.5 ? !running : running && glass > 0.5) {
+        gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+        return;
+    }
     vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
     vCoord = vec2(corner.x, 1.0 - corner.y);
     vWarm = candlelight(position);
