@@ -59,7 +59,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         behindWindows = Preferences.behindWindows
         snowfallHeld = !Preferences.welcomed
         syncScreens()
-        guard !screens.isEmpty else {
+        // With no display attached yet, the snow comes once one is.
+        guard !screens.isEmpty || NSScreen.screens.isEmpty else {
             NSApp.terminate(nil)
             return
         }
