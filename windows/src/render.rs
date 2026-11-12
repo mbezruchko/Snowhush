@@ -146,6 +146,7 @@ pub struct Gpu {
     pumpkin_vertex: ID3D11VertexShader,
     pumpkin_fragment: ID3D11PixelShader,
     /// Drops on the glass: their bumps added up into a field, and the glass drawn from it.
+    field_vertex: ID3D11VertexShader,
     field_fragment: ID3D11PixelShader,
     glass_vertex: ID3D11VertexShader,
     glass_fragment: ID3D11PixelShader,
@@ -200,6 +201,7 @@ impl Gpu {
             let sign_fragment = pixel_shader(&device, &compile(s!("signFragment"), s!("ps_4_0"))?)?;
             let pumpkin_vertex = vertex_shader(&device, &compile(s!("pumpkinVertex"), s!("vs_4_0"))?)?;
             let pumpkin_fragment = pixel_shader(&device, &compile(s!("pumpkinFragment"), s!("ps_4_0"))?)?;
+            let field_vertex = vertex_shader(&device, &compile(s!("fieldVertex"), s!("vs_4_0"))?)?;
             let field_fragment = pixel_shader(&device, &compile(s!("fieldFragment"), s!("ps_4_0"))?)?;
             let glass_vertex = vertex_shader(&device, &compile(s!("glassVertex"), s!("vs_4_0"))?)?;
             let glass_fragment = pixel_shader(&device, &compile(s!("glassFragment"), s!("ps_4_0"))?)?;
@@ -293,6 +295,7 @@ impl Gpu {
                 sign_fragment,
                 pumpkin_vertex,
                 pumpkin_fragment,
+                field_vertex,
                 field_fragment,
                 glass_vertex,
                 glass_fragment,
@@ -586,17 +589,18 @@ impl Surface {
                 let offset = 0;
                 context.IASetInputLayout(&gpu.sprite_layout);
                 context.IASetVertexBuffers(0, 1, Some(&Some(sprite_buffer.clone())), Some(&stride), Some(&offset));
-                context.VSSetShader(&gpu.sprite_vertex, None);
                 // Drops on the glass first add up into their field.
                 if let Some((field_target, _)) = &glass {
                     context.OMSetRenderTargets(Some(&[Some(field_target.clone())]), None);
                     context.ClearRenderTargetView(field_target, &[0.0; 4]);
                     context.OMSetBlendState(&gpu.adding, None, u32::MAX);
+                    context.VSSetShader(&gpu.field_vertex, None);
                     context.PSSetShader(&gpu.field_fragment, None);
                     context.DrawInstanced(4, sprites as u32, 0, 0);
                     context.OMSetRenderTargets(Some(&[Some(self.target_view.clone())]), None);
                     context.OMSetBlendState(&gpu.blend, None, u32::MAX);
                 }
+                context.VSSetShader(&gpu.sprite_vertex, None);
                 context.PSSetShader(&gpu.sprite_fragment, None);
                 context.DrawInstanced(4, sprites as u32, 0, 0);
                 if let Some((_, field)) = &glass {

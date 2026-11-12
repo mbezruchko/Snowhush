@@ -724,12 +724,23 @@ SpriteOut leafVertex(SpriteIn s, float2 corner) {
     return o;
 }
 
+// A sprite left out of a pass: every corner on one point, outside the screen, so no pixel of it is drawn.
+SpriteOut culled() {
+    SpriteOut o = (SpriteOut)0;
+    o.position = float4(2.0, 2.0, 0.0, 1.0);
+    return o;
+}
+
 SpriteOut spriteVertex(SpriteIn s) {
     float2 corner = float2(float(s.vid & 1), float(s.vid >> 1));
     [branch] if (s.leaf.x != 0.0) {
         return leafVertex(s, corner);
     }
     [branch] if (s.rain.x > 0.0) {
+        // A running drop or a bead is drawn with the glass, from the field.
+        [branch] if (s.rain.x > 1.5 && s.rain.x < 2.5) {
+            return culled();
+        }
         return rainVertex(s, corner);
     }
     float pixels = s.body.x * scale;
@@ -957,6 +968,14 @@ float4 spriteFragment(SpriteOut i) : SV_Target {
     color = lerp(color, candle, i.warm * 0.7);
     a = min(1.0, a * (1.0 + i.warm * 0.8));
     return float4(color * a, a);
+}
+
+// Only running drops and beads add up into the field.
+SpriteOut fieldVertex(SpriteIn s) {
+    [branch] if (s.leaf.x != 0.0 || s.rain.x < 1.5 || s.rain.x > 2.5) {
+        return culled();
+    }
+    return rainVertex(s, float2(float(s.vid & 1), float(s.vid >> 1)));
 }
 
 // A running drop or a bead as a smooth bump in the field the glass is drawn from, reaching half as far again as its
