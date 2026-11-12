@@ -77,6 +77,9 @@ pub struct App {
     layer_shell: LayerShell,
     qh: QueueHandle<App>,
     gpu: Gpu,
+    /// When the graphics were last started again after the driver lost them.
+    gpu_renewed_at: Option<Instant>,
+    wayland: Connection,
     bus: Bus,
     shared: Arc<Shared>,
     source: Source,
@@ -155,6 +158,8 @@ pub fn run() -> Result<(), String> {
         layer_shell,
         qh: qh.clone(),
         gpu,
+        gpu_renewed_at: None,
+        wayland: connection.clone(),
         bus: bus.clone(),
         source: Source::start(&bus, shared.clone(), settings.show_in_screenshots),
         shared,
@@ -424,6 +429,7 @@ impl App {
         }
         let mut released = false;
         let mut reshaped = false;
+        let mut context_lost = false;
         for screen in self.screens.iter_mut().filter(|screen| screen.next_due <= now) {
             // Shown over a full-screen app, the snow reaches the display's edges while the app has put the panels away,
             // so the drift lies along the bottom instead of over a panel no longer there. An overview isn't an app.
@@ -447,8 +453,11 @@ impl App {
                     self.stats.frame(drew, began.elapsed(), screen.simulation.sprite_count());
                     released |= screen.simulation.take_snowfall_released();
                 }
-                Err(error) => log!("{}: frame failed: {error}", screen.name),
+                Err(error) => context_lost |= error.contains(&khronos_egl::Error::ContextLost.to_string()),
             }
+        }
+        if context_lost {
+            self.renew_gpu(now);
         }
         if released {
             self.screens.iter_mut().for_each(|screen| screen.simulation.set_snowfall_held(false));
@@ -476,6 +485,23 @@ impl App {
             Demand::Calm
         };
         self.shared.set_demand(windows, busy);
+    }
+
+    /// Starts the graphics again after the driver lost them, as after a GPU reset or some suspends; each display's
+    /// surface is made again on the new ones at its next frame.
+    fn renew_gpu(&mut self, now: Instant) {
+        if self.gpu_renewed_at.is_some_and(|at| now - at < Duration::from_secs(10)) {
+            return;
+        }
+        self.gpu_renewed_at = Some(now);
+        self.screens.iter_mut().for_each(|screen| screen.drop_surface(&self.gpu));
+        match Gpu::new(self.wayland.backend().display_ptr().cast()) {
+            Ok(gpu) => {
+                self.gpu = gpu;
+                log!("graphics lost; started again on {}", self.gpu.adapter);
+            }
+            Err(error) => log!("graphics lost; starting again failed: {error}"),
+        }
     }
 
     /// The light of the hour, and Halloween with it: its ghosts, its night and the tray's pumpkin.
