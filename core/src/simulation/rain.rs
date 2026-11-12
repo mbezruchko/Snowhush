@@ -408,9 +408,9 @@ impl SnowSimulation {
                 }
                 drop.radius = 0.0;
             } else if shaking && shaken(air, &drop, layer, dt) {
-                // It flies on as the window was going.
+                // It flies on as the window was going before the jerk.
                 let below = if drop.hanging { drop.radius * GLASS_SCALE } else { 0.0 };
-                fall(air, &drop, layer, 1.0, below, Throw::Shaken(layer.track_velocity));
+                fall(air, &drop, layer, 1.0, below, Throw::Shaken(layer.track_velocity - layer.jolt * dt));
                 drop.radius = 0.0;
             } else if drop.hanging {
                 cling(air, &mut drop, i, layer, dt, drops);
@@ -985,6 +985,31 @@ fn grip(point: V2) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::geometry::Rect;
+    use crate::simulation::WindowSurface;
+    use std::collections::HashSet;
+
+    #[test]
+    fn a_shaken_off_drop_flies_as_its_window_went_before_the_jerk() {
+        const DT: f32 = 1.0 / 60.0;
+        let none = HashSet::new();
+        let mut simulation = SnowSimulation::new(1200.0, 900.0, 0.75);
+        simulation.set_mode(Mode::Rain);
+        let mut t = 0.0;
+        for _ in 0..120 {
+            t += DT;
+            let x = 300.0 + 150.0 * (std::f32::consts::TAU * 4.0 * t).sin();
+            let frame = Rect { x, y: 400.0, width: 500.0, height: 300.0 };
+            let window = WindowSurface { id: 1, frame, blockers: Vec::new(), cover: Vec::new(), corner_radius: 8.0, corner_exponent: 2.5 };
+            simulation.update_windows(&[window], DT, &none, &none, false);
+            let before = simulation.layers[1].track_velocity;
+            simulation.step(DT, V2::new(-10_000.0, -10_000.0));
+            let layer = &simulation.layers[1];
+            let thrown = layer.track_velocity - layer.jolt * DT;
+            assert!((thrown - before).length() < 0.01, "thrown at {thrown:?}, the window went at {before:?}");
+        }
+        assert!(simulation.layers[1].jolt.length() > 1000.0, "the window was never jerked");
+    }
 
     /// How a running drop took in spray when it measured all of it on its window.
     fn gather_measuring_all(drop: &mut GlassDrop, from: V2, layer: &mut SnowLayer) {

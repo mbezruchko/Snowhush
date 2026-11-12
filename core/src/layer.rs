@@ -76,6 +76,8 @@ pub struct SnowLayer {
     /// Smoothed path of the supporting edge; the snow reacts to its accelerations, not to raw jittery samples.
     pub track: V2,
     pub track_velocity: V2,
+    /// How hard the window was jerked this step: its acceleration.
+    pub jolt: V2,
     /// The snow body's displacement from its support: x slides along it, y lifts off it.
     pub offset: V2,
     pub offset_velocity: V2,
@@ -133,6 +135,7 @@ impl SnowLayer {
             outside: [0.0; 2],
             track: origin,
             track_velocity: V2::ZERO,
+            jolt: V2::ZERO,
             offset: V2::ZERO,
             offset_velocity: V2::ZERO,
             previous_base_y: origin.y,
