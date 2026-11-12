@@ -186,16 +186,25 @@ pub fn run() -> Result<(), String> {
     app.tray = Tray::new(settings, commands.clone()).assume_sni_available(true).spawn().inspect_err(|error| log!("tray: {error}")).ok();
     watch_lock(&bus, commands);
 
-    while !app.quit {
+    let result = loop {
+        if app.quit {
+            break Ok(());
+        }
         let timeout = app.timeout();
-        event_loop.dispatch(timeout, &mut app).map_err(|error| error.to_string())?;
-        app.tick()?;
-    }
+        if let Err(error) = event_loop.dispatch(timeout, &mut app) {
+            break Err(error.to_string());
+        }
+        if let Err(error) = app.tick() {
+            break Err(error);
+        }
+    };
 
+    // Also when the Wayland connection broke: the KWin script must not outlive the app.
     app.source.stop(&app.bus);
     if let Some(tray) = app.tray.take() {
         tray.shutdown().wait();
     }
+    result?;
     for screen in app.screens.drain(..) {
         screen.release(&app.gpu);
     }
