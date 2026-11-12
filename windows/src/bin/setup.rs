@@ -133,6 +133,9 @@ fn words(stage: &Stage, installed: Option<&str>) -> Words {
                 Some(old) if snowhush_core::version::newer(VERSION, old) => {
                     (text::fill("setup.newer", &[("old", old), ("version", VERSION)]), "setup.update")
                 }
+                Some(old) if snowhush_core::version::newer(old, VERSION) => {
+                    (text::fill("setup.older", &[("old", old), ("version", VERSION)]), "setup.downgrade")
+                }
                 Some(old) => (text::fill("setup.same", &[("old", old), ("version", VERSION)]), "setup.reinstall"),
             };
             ("Snowhush", body, if matches!(stage, Stage::Installing) { "setup.installing" } else { button })

@@ -57,6 +57,8 @@
 "setup.update" = "Оновити";
 "setup.same" = "Snowhush {old} вже встановлено. Повторне встановлення {version} його відновить.";
 "setup.reinstall" = "Перевстановити";
+"setup.older" = "Замінює Snowhush {old} старішою версією {version}.";
+"setup.downgrade" = "Відкотити";
 "setup.installing" = "Встановлення…";
 "setup.settle" = "Хай уляжеться.";
 "setup.done" = "Snowhush встановлено. Він є в меню «Пуск».";

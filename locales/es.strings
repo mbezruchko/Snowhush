@@ -57,6 +57,8 @@
 "setup.update" = "Actualizar";
 "setup.same" = "Snowhush {old} ya está aquí. Instalar de nuevo la {version} lo repara.";
 "setup.reinstall" = "Reinstalar";
+"setup.older" = "Sustituye Snowhush {old} por la {version}, más antigua.";
+"setup.downgrade" = "Revertir";
 "setup.installing" = "Instalando…";
 "setup.settle" = "Deja que se asiente.";
 "setup.done" = "Snowhush está instalado. Lo encontrarás en el menú Inicio.";
