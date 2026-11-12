@@ -2,14 +2,15 @@
 //! and the pointer, asked on `.socket.sock`, one request to a connection. Hyprland announces windows opening,
 //! closing, focusing and changing workspace on `.socket2.sock`, but neither a window being dragged nor the
 //! pointer moving, so both are asked for: the windows ten times a second, and at about the frame rate while one
-//! moves and for a moment after anything Hyprland announces; the pointer at the frame rate while it moves.
+//! moves and for a moment after anything Hyprland announces; the pointer at the frame rate while it moves. Both
+//! are asked for less, or not at all, while the snow doesn't need them: see `Demand`.
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::mpsc::{self, RecvTimeoutError, TryRecvError};
+use std::sync::mpsc::{self, TryRecvError};
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
@@ -171,6 +172,10 @@ pub fn start(shared: Arc<Shared>, folder: PathBuf) -> Result<(), String> {
             let mut moved_at = Instant::now();
             let mut failing: Option<Duration> = None;
             loop {
+                if !pointing.pointer_wanted() {
+                    std::thread::sleep(POINTER_RESTING);
+                    continue;
+                }
                 let point = match request::<Point>(&pointer, "j/cursorpos") {
                     Ok(point) => point,
                     Err(error) => {
@@ -207,6 +212,7 @@ pub fn start(shared: Arc<Shared>, folder: PathBuf) -> Result<(), String> {
             let mut event_at: Option<Instant> = None;
             let mut failing: Option<Duration> = None;
             loop {
+                let demand = shared.windows_demand();
                 let (mut report, places) = match ask(&requests, decoration) {
                     Ok(answer) => answer,
                     Err(error) => {
@@ -244,19 +250,14 @@ pub fn start(shared: Arc<Shared>, folder: PathBuf) -> Result<(), String> {
                 let alert = event_at.is_some_and(|at| now - at < ALERT);
                 let wait = if report.moving || alert { MOVING } else { CALM };
                 last = Some((report, places));
-                match announcements.recv_timeout(wait) {
-                    Ok(line) => {
-                        event_at = Some(Instant::now());
-                        let mut reloaded = line.starts_with("configreloaded");
-                        while let Ok(line) = announcements.try_recv() {
-                            reloaded |= line.starts_with("configreloaded");
-                        }
-                        if reloaded && let Ok(fresh) = self::decoration(&requests) {
-                            decoration = fresh;
-                        }
+                let Some(lines) = shared.wait(&announcements, demand, wait) else { return };
+                if !lines.is_empty() {
+                    event_at = Some(Instant::now());
+                    if lines.iter().any(|line| line.starts_with("configreloaded"))
+                        && let Ok(fresh) = self::decoration(&requests)
+                    {
+                        decoration = fresh;
                     }
-                    Err(RecvTimeoutError::Timeout) => {}
-                    Err(RecvTimeoutError::Disconnected) => return,
                 }
             }
         })

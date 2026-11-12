@@ -2,9 +2,10 @@
 //! each way ends in the same report. KWin runs a script that calls the app; Hyprland, Sway and niri answer
 //! over their own sockets.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use calloop::ping::Ping;
 use serde::Deserialize;
@@ -90,6 +91,22 @@ pub struct Report {
     pub slide: Option<kwin::Slide>,
 }
 
+/// How closely the snow needs the windows followed, for a compositor that has to be asked where they are.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Demand {
+    /// Nothing shows, as while locked or with the displays off: asked only when the compositor announces something.
+    Off,
+    /// No snow shows: asked when the compositor announces something, and now and then.
+    Calm,
+    /// As closely as the compositor allows.
+    Live,
+}
+
+/// How often a source asks while the snow's demand is calm.
+const IDLE: Duration = Duration::from_secs(1);
+/// How often a source waiting to ask looks whether the snow came to need more.
+const LOOK: Duration = Duration::from_millis(100);
+
 /// What the compositor last told, read by the snow loop at each frame.
 pub struct Shared {
     cursor: AtomicU64,
@@ -97,11 +114,66 @@ pub struct Shared {
     started_moving: Mutex<bool>,
     /// Wakes the snow loop at once, for the first report and when a drag starts.
     wake: Ping,
+    /// What the snow loop needs of the windows and the pointer, set at each frame.
+    windows_demand: AtomicU8,
+    pointer_wanted: AtomicBool,
 }
 
 impl Shared {
     pub fn new(wake: Ping) -> Shared {
-        Shared { cursor: AtomicU64::new(pack(-1e6, -1e6)), report: Mutex::new((0, None)), started_moving: Mutex::new(false), wake }
+        Shared {
+            cursor: AtomicU64::new(pack(-1e6, -1e6)),
+            report: Mutex::new((0, None)),
+            started_moving: Mutex::new(false),
+            wake,
+            windows_demand: AtomicU8::new(Demand::Live as u8),
+            pointer_wanted: AtomicBool::new(true),
+        }
+    }
+
+    pub fn set_demand(&self, windows: Demand, pointer: bool) {
+        self.windows_demand.store(windows as u8, Ordering::Relaxed);
+        self.pointer_wanted.store(pointer, Ordering::Relaxed);
+    }
+
+    pub fn windows_demand(&self) -> Demand {
+        match self.windows_demand.load(Ordering::Relaxed) {
+            0 => Demand::Off,
+            1 => Demand::Calm,
+            _ => Demand::Live,
+        }
+    }
+
+    /// Whether the pointer is worth asking the compositor for: something on the displays can part around it.
+    pub fn pointer_wanted(&self) -> bool {
+        self.pointer_wanted.load(Ordering::Relaxed)
+    }
+
+    /// Waits until a source that last asked under the demand `asked` should ask the compositor again: `close` after
+    /// that while the demand is live, a second while it is calm, and never while it is off, but at once when the
+    /// compositor announces something or the demand goes up. The announcements that came, or None once they stopped.
+    pub fn wait<T>(&self, announcements: &Receiver<T>, asked: Demand, close: Duration) -> Option<Vec<T>> {
+        let start = Instant::now();
+        loop {
+            let demand = self.windows_demand();
+            if demand > asked {
+                return Some(Vec::new());
+            }
+            let wait = match demand {
+                Demand::Live => close,
+                Demand::Calm => IDLE,
+                Demand::Off => Duration::MAX,
+            };
+            let left = wait.saturating_sub(start.elapsed());
+            if left.is_zero() {
+                return Some(Vec::new());
+            }
+            match announcements.recv_timeout(left.min(LOOK)) {
+                Ok(first) => return Some(std::iter::once(first).chain(announcements.try_iter()).collect()),
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => return None,
+            }
+        }
     }
 
     /// The pointer in logical pixels on the shared desktop, far away where the compositor doesn't tell.
@@ -207,5 +279,46 @@ impl Source {
         if let Source::KWin = self {
             kwin::unload_script(bus);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc;
+
+    #[test]
+    fn asks_again_as_closely_as_the_snow_needs() {
+        let (ping, _source) = calloop::ping::make_ping().expect("a ping");
+        let shared = Arc::new(Shared::new(ping));
+        let (announce, announcements) = mpsc::channel::<()>();
+        let close = Duration::from_millis(16);
+
+        let start = Instant::now();
+        assert_eq!(shared.wait(&announcements, Demand::Live, close).map(|lines| lines.len()), Some(0));
+        assert!(start.elapsed() >= close && start.elapsed() < IDLE);
+
+        shared.set_demand(Demand::Calm, false);
+        let start = Instant::now();
+        assert_eq!(shared.wait(&announcements, Demand::Calm, close).map(|lines| lines.len()), Some(0));
+        assert!(start.elapsed() >= IDLE);
+
+        shared.set_demand(Demand::Off, false);
+        announce.send(()).expect("sent");
+        announce.send(()).expect("sent");
+        assert_eq!(shared.wait(&announcements, Demand::Off, close).map(|lines| lines.len()), Some(2));
+
+        let raising = shared.clone();
+        let raised = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            raising.set_demand(Demand::Live, true);
+        });
+        let start = Instant::now();
+        assert_eq!(shared.wait(&announcements, Demand::Off, close).map(|lines| lines.len()), Some(0));
+        assert!(start.elapsed() >= Duration::from_millis(300) && start.elapsed() < Duration::from_millis(300) + IDLE);
+        raised.join().expect("joined");
+
+        drop(announce);
+        assert!(shared.wait(&announcements, Demand::Live, close).is_none());
     }
 }

@@ -30,7 +30,7 @@ use crate::log;
 use crate::prefs::Settings;
 use crate::render::{Ambient, Gpu};
 use crate::screen::{self, PowerBudget, Screen};
-use crate::source::{Report, Shared, Source};
+use crate::source::{Demand, Report, Shared, Source};
 use crate::tray::Tray;
 use crate::windows::{self, Area};
 
@@ -396,6 +396,7 @@ impl App {
         }
 
         if self.locked {
+            self.shared.set_demand(Demand::Off, false);
             return Ok(());
         }
         // Behind the windows the snow still settles on them: what lies on a window's top edge is above it, in plain view.
@@ -447,8 +448,25 @@ impl App {
         if reshaped {
             self.place_screens();
         }
+        self.tell_demand();
         self.stats.report(Instant::now());
         Ok(())
+    }
+
+    /// Tells the compositor's sources what the snow needs: nothing while no display shows it, the windows now and then
+    /// while no snow shows, and the pointer while there is anything for it to part. The windows stay followed closely
+    /// with snow on windows off too, since the same answers move the ground with the panels.
+    fn tell_demand(&self) {
+        let awake = self.screens.iter().any(|screen| !screen.stalled());
+        let busy = self.screens.iter().any(|screen| !screen.stalled() && !screen.hidden() && !screen.simulation.is_empty());
+        let windows = if !awake {
+            Demand::Off
+        } else if busy {
+            Demand::Live
+        } else {
+            Demand::Calm
+        };
+        self.shared.set_demand(windows, busy);
     }
 
     /// The light of the hour, and Halloween with it: its ghosts, its night and the tray's pumpkin.

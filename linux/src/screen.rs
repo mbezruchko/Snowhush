@@ -445,6 +445,11 @@ impl Screen {
         self.covered
     }
 
+    /// Frames went unshown for a while, as with the display off: the snow waits.
+    pub fn stalled(&self) -> bool {
+        self.stalled
+    }
+
     /// Faded all the way out under a full-screen app: nothing to draw until it goes.
     pub fn hidden(&self) -> bool {
         self.covered && self.opacity <= 0.0
