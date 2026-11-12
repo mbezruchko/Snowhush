@@ -588,8 +588,8 @@ final class SnowSimulation {
     private var windowsChanged = false
     private var lastWindowMotion: Double = -10
     private var lastCursorPush: Double = -10
-    /// Snow on windows that left the screen for another Space, kept until the window shows up again.
-    private var dormant: [CGWindowID: SnowLayer] = [:]
+    /// Snow on windows that left the screen for another Space, kept until the window shows up again, with when it left.
+    private var dormant: [CGWindowID: (ledge: SnowLayer, since: Double)] = [:]
     /// Where the left edge of each notification banner was at the last update.
     private var bannerEdges: [CGWindowID: Float] = [:]
     /// Windows that went off screen without a word yet on why; a Space switch keeps their snow, anything else drops it.
@@ -682,12 +682,15 @@ final class SnowSimulation {
     /// Nothing falls, lies, waits for its window or haunts, and nothing will until the snow is stirred.
     var isEmpty: Bool {
         intensity <= 0 && !halloween && flakes.isEmpty && grains.isEmpty && motes.isEmpty && ghosts.isEmpty
-            && fallingSigns.isEmpty && snowballs.isEmpty && gust == nil && !dormant.values.contains { $0.top > 0 || !$0.spray.isEmpty || !$0.film.isEmpty } && parking.isEmpty && lying.isEmpty && nextMode == nil
+            && fallingSigns.isEmpty && snowballs.isEmpty && gust == nil && !dormant.values.contains { $0.ledge.top > 0 || !$0.ledge.spray.isEmpty || !$0.ledge.film.isEmpty } && parking.isEmpty && lying.isEmpty && nextMode == nil
             && splashes.isEmpty && glassDrops.isEmpty && !wet
             && !layers.contains { $0.top > 0 }
     }
     /// Running drops or beads on the glass, drawn from a field of their own.
     var hasGlassDrops: Bool { glassDrops.contains { !$0.hanging } }
+    /// Where the running drops and beads last written add to their field, in points, left, bottom, right, top: each
+    /// reaches as far as the sprite shader draws it. Nil when none was written.
+    private(set) var glassReach: SIMD4<Float>?
     var spriteCount: Int {
         lying.count + flakes.count + grains.count + motes.count + ghosts.count * 2 + snowballs.count + splashes.count + glassDrops.count
             + ledgeList.reduce(0) { $0 + $1.spray.count + $1.film.count }
@@ -762,6 +765,7 @@ final class SnowSimulation {
 
     func writeSprites(into buffer: UnsafeMutablePointer<Sprite>, capacity: Int) -> Int {
         var count = 0
+        glassReach = nil
         let shown = markShown()
         for leaf in lying where count < capacity && leaf.layer.shown == shown {
             let layer = leaf.layer
@@ -856,7 +860,7 @@ final class SnowSimulation {
             let half = drop.bead ? beadWidth(drop.radius) : halfWidth(drop.radius, still: still)
             // Held back, a running drop's water piles up in its front; jolted, it squashes and stretches for a moment.
             let since = drop.age - drop.jolted
-            buffer[count] = Sprite(
+            let sprite = Sprite(
                 position: position + SIMD2(0, still ? 0 : half * (1 - grown)),
                 velocity: still ? .zero : SIMD2(drop.slope, -1) * drop.speed,
                 size: half * 2 * grown,
@@ -869,7 +873,14 @@ final class SnowSimulation {
                 turnSpeed: still ? 0 : drop.jiggle * exp(-since / 0.15) * cos(since * 2 * .pi * 11),
                 rain: drop.hanging ? 3 : 2
             )
+            buffer[count] = sprite
             count += 1
+            if !drop.hanging {
+                let speed = simd_length(sprite.velocity)
+                let reach = max(sprite.size, 1.5) * 1.1 + min(speed * 0.08, sprite.size * 0.9) + speed * 0.024 + 1
+                let bounds = SIMD4(lowHalf: sprite.position - reach, highHalf: sprite.position + reach)
+                glassReach = glassReach.map { SIMD4(lowHalf: simd_min($0.lowHalf, bounds.lowHalf), highHalf: simd_max($0.highHalf, bounds.highHalf)) } ?? bounds
+            }
         }
         for grain in grains where count < capacity && !grain.bulk {
             if grain.kind.leafy {
@@ -1057,7 +1068,7 @@ final class SnowSimulation {
                 } else {
                     move(ledge, left: left, right: right, top: top, columns: columns, interval: interval)
                 }
-            } else if let returning = dormant.removeValue(forKey: surface.id) ?? unpark(surface.id) {
+            } else if let returning = dormant.removeValue(forKey: surface.id)?.ledge ?? unpark(surface.id) {
                 ledge = returning
                 restore(returning, left: left, top: top, columns: columns)
                 ledges[surface.id] = returning
@@ -1097,15 +1108,18 @@ final class SnowSimulation {
                 parking.append((id, ledge, clock))
             }
         }
-        if dormant.count > 200, let stale = dormant.keys.first { dormant[stale] = nil }
         ledgeList = Array(ledges.values)
         layers = [ground] + ledgeList
     }
 
     /// Keeps the snow of a window gone to another Space for its return; a bare window gets a fresh ledge when it's back.
+    /// Only so many are kept, the one gone longest dropped first.
     private func keepAway(_ id: CGWindowID, _ ledge: SnowLayer) {
         guard ledge.top > 0 || !ledge.spray.isEmpty || !ledge.film.isEmpty || lying.contains(where: { $0.layer === ledge }) else { return }
-        dormant[id] = ledge
+        dormant[id] = (ledge, clock)
+        if dormant.count > 200, let oldest = dormant.lazy.filter({ $0.key != id }).min(by: { $0.value.since < $1.value.since })?.key {
+            dormant[oldest] = nil
+        }
     }
 
     private func unpark(_ id: CGWindowID) -> SnowLayer? {
@@ -3530,7 +3544,7 @@ final class SnowSimulation {
     private func tendLeaves(dt: Float) {
         guard !lying.isEmpty else { return }
         let shown = markShown()
-        lazy var kept = Set(dormant.values.map(ObjectIdentifier.init) + parking.map { ObjectIdentifier($0.ledge) })
+        lazy var kept = Set(dormant.values.map { ObjectIdentifier($0.ledge) } + parking.map { ObjectIdentifier($0.ledge) })
         let speed = simd_length(cursorVelocity)
         for k in lying.indices.reversed() {
             var leaf = lying[k]

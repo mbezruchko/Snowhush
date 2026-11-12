@@ -331,10 +331,12 @@ final class Renderer: NSObject, MTKViewDelegate {
             encoder.setFragmentBytes(&uniforms, length: uniformsLength, index: 1)
             encoder.drawPrimitives(type: .point, vertexStart: 0, vertexCount: sprites)
         }
-        if let glass {
+        // The glass shows at most 2 points below the drops.
+        if let glass, let scissor = scissor(around: simulation.glassReach, margin: 4, in: glass, uniforms: uniforms) {
             encoder.setRenderPipelineState(glassPipeline)
             encoder.setFragmentTexture(glass, index: 0)
             encoder.setFragmentBytes(&uniforms, length: uniformsLength, index: 1)
+            encoder.setScissorRect(scissor)
             encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         }
         encoder.endEncoding()
@@ -358,14 +360,33 @@ final class Renderer: NSObject, MTKViewDelegate {
         fieldPass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0)
         fieldPass.colorAttachments[0].storeAction = .store
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: fieldPass) else { return nil }
-        var uniforms = uniforms
-        encoder.setRenderPipelineState(fieldPipeline)
-        encoder.setVertexBuffer(sprites, offset: 0, index: 0)
-        encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
-        encoder.setFragmentBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
-        encoder.drawPrimitives(type: .point, vertexStart: 0, vertexCount: count)
+        if let scissor = scissor(around: simulation.glassReach, margin: 8, in: field, uniforms: uniforms) {
+            var uniforms = uniforms
+            encoder.setRenderPipelineState(fieldPipeline)
+            encoder.setVertexBuffer(sprites, offset: 0, index: 0)
+            encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+            encoder.setFragmentBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+            encoder.setScissorRect(scissor)
+            encoder.drawPrimitives(type: .point, vertexStart: 0, vertexCount: count)
+        }
         encoder.endEncoding()
         return field
+    }
+
+    /// `reach`, shaken as the frame is, and `margin` points around it, in the pixels of `target`; nil when that holds
+    /// none of them.
+    private func scissor(around reach: SIMD4<Float>?, margin: Float, in target: MTLTexture, uniforms: Uniforms) -> MTLScissorRect? {
+        guard let reach else { return nil }
+        let (width, height) = (Float(target.width), Float(target.height))
+        let pixels = SIMD2(width, height) / uniforms.viewSize
+        let low = (reach.lowHalf + uniforms.shake.lowHalf - margin) * pixels
+        let high = (reach.highHalf + uniforms.shake.lowHalf + margin) * pixels
+        let left = min(max(low.x.rounded(.down), 0), width)
+        let right = min(max(high.x.rounded(.up), 0), width)
+        let top = min(max((height - high.y).rounded(.down), 0), height)
+        let bottom = min(max((height - low.y).rounded(.up), 0), height)
+        guard right > left, bottom > top else { return nil }
+        return MTLScissorRect(x: Int(left), y: Int(top), width: Int(right - left), height: Int(bottom - top))
     }
 
     /// Draws the Dock's snow into its own strip below the Dock, and clears the strip once after the snow is gone.
