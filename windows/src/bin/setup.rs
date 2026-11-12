@@ -36,6 +36,8 @@ struct Setup {
     hits: Hits,
     stage: Stage,
     installed: Option<String>,
+    /// Whether an install attempt closed a running copy, which should come back when the card closes.
+    closed_running: bool,
     pressed: bool,
     holding: bool,
 }
@@ -50,10 +52,16 @@ fn main() {
     }
     snowhush::language::choose();
     if std::env::args().skip(1).any(|argument| argument.eq_ignore_ascii_case("--silent") || argument.eq_ignore_ascii_case("/s")) {
-        std::process::exit(if install::install(APP, VERSION).is_ok() { 0 } else { 1 });
+        let was_running = install::close_running();
+        let Ok(exe) = install::install(APP, VERSION) else { std::process::exit(1) };
+        if was_running {
+            install::launch(&exe);
+        }
+        return;
     }
     if open().is_err() {
         // Without the card, fall back to installing and opening the app, which is what the card would lead to.
+        install::close_running();
         if let Ok(exe) = install::install(APP, VERSION) {
             install::launch(&exe);
         }
@@ -95,7 +103,7 @@ fn open() -> Result<()> {
             None,
         )?;
         card::present(window, card.size, &pixels, Some(origin));
-        SETUP.set(Some(Setup { window, card, hits, stage: Stage::Ready, installed, pressed: false, holding: false }));
+        SETUP.set(Some(Setup { window, card, hits, stage: Stage::Ready, installed, closed_running: false, pressed: false, holding: false }));
         let _ = ShowWindow(window, SW_SHOW);
         let _ = SetForegroundWindow(window);
     }
@@ -129,7 +137,7 @@ fn words(stage: &Stage, installed: Option<&str>) -> Words {
             };
             ("Snowhush", body, if matches!(stage, Stage::Installing) { "setup.installing" } else { button })
         }
-        Stage::Done(_) => (tr("setup.settle"), tr("setup.done").to_string(), "setup.open"),
+        Stage::Done(..) => (tr("setup.settle"), tr("setup.done").to_string(), "setup.open"),
         Stage::Failed(error) => ("Snowhush", text::fill("setup.failed", &[("error", error)]), "setup.retry"),
     };
     Words { title: title.to_uppercase(), body, button: tr(button).to_uppercase(), closable: !matches!(stage, Stage::Installing) }
@@ -259,17 +267,20 @@ fn stage(stage: Stage) {
 /// The button: installs, or once installed opens the app and leaves.
 fn act() {
     let done = SETUP.with_borrow(|setup| match setup.as_ref().map(|setup| &setup.stage) {
-        Some(Stage::Done(exe)) => Some(Some(exe.clone())),
+        Some(Stage::Done(..)) => Some(true),
         Some(Stage::Installing) | None => None,
-        _ => Some(None),
+        _ => Some(false),
     });
     match done {
-        Some(Some(exe)) => {
-            install::launch(&exe);
-            close();
-        }
-        Some(None) => {
+        Some(true) => leave(true),
+        Some(false) => {
             stage(Stage::Installing);
+            let closed = install::close_running();
+            SETUP.with_borrow_mut(|setup| {
+                if let Some(setup) = setup.as_mut() {
+                    setup.closed_running |= closed;
+                }
+            });
             stage(match install::install(APP, VERSION) {
                 Ok(exe) => Stage::Done(exe),
                 Err(error) => Stage::Failed(error),
@@ -280,10 +291,20 @@ fn act() {
 }
 
 fn close() {
+    leave(false);
+}
+
+/// Closes the card, opening the app on the way out when asked to or when installing closed a running copy.
+fn leave(open: bool) {
     if SETUP.with_borrow(|setup| setup.as_ref().is_some_and(|setup| matches!(setup.stage, Stage::Installing))) {
         return;
     }
     if let Some(setup) = SETUP.take() {
+        if let Stage::Done(exe) = &setup.stage
+            && (open || setup.closed_running)
+        {
+            install::launch(exe);
+        }
         unsafe {
             let _ = DestroyWindow(setup.window);
         }

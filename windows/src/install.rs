@@ -34,9 +34,9 @@ pub fn installed_version() -> Option<String> {
     read_string(UNINSTALL, w!("DisplayVersion"))
 }
 
-/// Puts the app in place and registers it, replacing a running or older copy. Returns where the app went.
+/// Puts the app in place and registers it, replacing an older copy. Returns where the app went.
+/// A running copy holds on to its file, so callers close it with `close_running` first.
 pub fn install(app: &[u8], version: &str) -> Result<PathBuf, String> {
-    close_running();
     let folder = known_folder(&FOLDERID_UserProgramFiles).ok_or("the programs folder isn't available")?.join("Snowhush");
     std::fs::create_dir_all(&folder).map_err(|error| format!("couldn't create {}: {error}", folder.display()))?;
     let exe = folder.join("Snowhush.exe");
@@ -105,10 +105,10 @@ pub fn launch(exe: &Path) {
     }
 }
 
-/// Asks a running Snowhush to quit and waits a few seconds for it to go.
-fn close_running() {
+/// Asks a running Snowhush to quit and waits a few seconds for it to go. Returns whether one was running.
+pub fn close_running() -> bool {
     unsafe {
-        let Ok(window) = FindWindowW(CONTROLLER, PCWSTR::null()) else { return };
+        let Ok(window) = FindWindowW(CONTROLLER, PCWSTR::null()) else { return false };
         let mut process = 0;
         GetWindowThreadProcessId(window, Some(&mut process));
         let handle = OpenProcess(PROCESS_SYNCHRONIZE, false, process).ok();
@@ -120,6 +120,7 @@ fn close_running() {
             let _ = CloseHandle(handle);
         }
     }
+    true
 }
 
 fn shortcut(target: &Path, at: &Path) -> windows::core::Result<()> {
