@@ -682,7 +682,7 @@ final class SnowSimulation {
     /// Nothing falls, lies, waits for its window or haunts, and nothing will until the snow is stirred.
     var isEmpty: Bool {
         intensity <= 0 && !halloween && flakes.isEmpty && grains.isEmpty && motes.isEmpty && ghosts.isEmpty
-            && fallingSigns.isEmpty && snowballs.isEmpty && gust == nil && dormant.isEmpty && parking.isEmpty && lying.isEmpty && nextMode == nil
+            && fallingSigns.isEmpty && snowballs.isEmpty && gust == nil && !dormant.values.contains { $0.top > 0 || !$0.spray.isEmpty || !$0.film.isEmpty } && parking.isEmpty && lying.isEmpty && nextMode == nil
             && splashes.isEmpty && glassDrops.isEmpty && !wet
             && !layers.contains { $0.top > 0 }
     }
@@ -1017,7 +1017,7 @@ final class SnowSimulation {
 
     func spaceChanged() {
         spaceChangedAt = clock
-        for entry in parking { dormant[entry.id] = entry.ledge }
+        for entry in parking { keepAway(entry.id, entry.ledge) }
         parking.removeAll()
     }
 
@@ -1085,14 +1085,14 @@ final class SnowSimulation {
         for id in ledges.keys where !seen.contains(id) {
             guard let ledge = ledges.removeValue(forKey: id) else { continue }
             if elsewhere.contains(id) {
-                dormant[id] = ledge
+                keepAway(id, ledge)
             } else if !parked.contains(id) {
                 // The Dock slides down out of sight, about its height in a fifth of a second: its snow drops along with
                 // it instead of hanging behind while gravity picks it up.
                 let sink = ledge.isDock ? SIMD2<Float>(0, -450) : .zero
                 shed(ledge, share: 1, velocity: ledge.trackVelocity + ledge.offsetVelocity + sink)
             } else if clock - spaceChangedAt < 0.6 {
-                dormant[id] = ledge
+                keepAway(id, ledge)
             } else {
                 parking.append((id, ledge, clock))
             }
@@ -1100,6 +1100,12 @@ final class SnowSimulation {
         if dormant.count > 200, let stale = dormant.keys.first { dormant[stale] = nil }
         ledgeList = Array(ledges.values)
         layers = [ground] + ledgeList
+    }
+
+    /// Keeps the snow of a window gone to another Space for its return; a bare window gets a fresh ledge when it's back.
+    private func keepAway(_ id: CGWindowID, _ ledge: SnowLayer) {
+        guard ledge.top > 0 || !ledge.spray.isEmpty || !ledge.film.isEmpty || lying.contains(where: { $0.layer === ledge }) else { return }
+        dormant[id] = ledge
     }
 
     private func unpark(_ id: CGWindowID) -> SnowLayer? {
