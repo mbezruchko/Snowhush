@@ -1711,12 +1711,13 @@ impl SnowSimulation {
         }
     }
 
-    /// How much sparser than snow what heaps up falls, over the kinds falling.
+    /// How much sparser than snow what heaps up falls, over the kinds falling. Rain alone heaps up nothing: what it
+    /// finds lying melts as under snow.
     fn heaping(&self) -> f32 {
         let modes = &self.air.modes;
         let heaps: Vec<Mode> = modes.iter().copied().filter(|&mode| mode != Mode::Rain).collect();
         if heaps.is_empty() {
-            return share_of(Mode::Rain);
+            return 1.0;
         }
         heaps.iter().map(|&mode| share_of(mode)).sum::<f32>() / modes.len() as f32
     }

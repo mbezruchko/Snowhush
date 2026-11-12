@@ -1192,6 +1192,23 @@ fn switching_to_rain_clears_the_snow_first() {
 }
 
 #[test]
+fn snow_left_lying_in_the_rain_melts_as_fast_as_under_snowfall() {
+    let melted = |mode: Mode| {
+        let mut simulation = SnowSimulation::new(800.0, 600.0, 0.75);
+        simulation.thaws = true;
+        run(&mut simulation, 40.0, AWAY);
+        simulation.set_snowfall_held(true);
+        simulation.set_mode(mode);
+        run(&mut simulation, 15.0, AWAY);
+        let before = piles(&simulation)[0].1;
+        run(&mut simulation, 30.0, AWAY);
+        1.0 - piles(&simulation).first().map_or(0.0, |ground| ground.1) / before
+    };
+    let (snow, rain) = (melted(Mode::Snow), melted(Mode::Rain));
+    assert!(rain > snow * 0.7 && rain < snow * 1.5, "{snow} of the snow melted under held snowfall, {rain} in the rain");
+}
+
+#[test]
 fn every_language_has_every_text() {
     use crate::text::{LOCALES, parse};
     let english = parse(LOCALES[0].1);
