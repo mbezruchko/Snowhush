@@ -60,21 +60,6 @@ float noise(float x) {
     return mix(hash(vec2(i, 0.0)), hash(vec2(i + 1.0, 0.0)), f * f * (3.0 - 2.0 * f));
 }
 
-/// Golden, amber, orange, rust or brown, a little lighter or darker.
-vec3 leafColor(float seed) {
-    float k = fract(seed * 7.13);
-    vec3 c = k < 0.3 ? vec3(0.97, 0.78, 0.22)
-        : k < 0.55 ? vec3(0.95, 0.56, 0.13)
-        : k < 0.75 ? vec3(0.86, 0.36, 0.11)
-        : k < 0.9 ? vec3(0.72, 0.2, 0.09)
-        : vec3(0.58, 0.38, 0.17);
-    return c * (0.86 + 0.24 * fract(seed * 31.7));
-}
-
-float saturate(float x) {
-    return clamp(x, 0.0, 1.0);
-}
-
 /// Blush, soft pink, pink or nearly white, a little lighter or darker.
 vec3 petalColor(float seed) {
     // A digitized flower's colour half way out along its petals, a little lighter or darker.
