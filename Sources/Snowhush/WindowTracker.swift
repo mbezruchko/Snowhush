@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 
 struct WindowUpdate {
     let surfaces: [WindowSurface]
@@ -275,8 +276,7 @@ final class WindowTracker {
 
         let flags = CGEventSource.flagsState(.combinedSessionState)
         if !flags.isDisjoint(with: Self.windowKeys) { windowKeysAt = now }
-        // 0x2E is the M key.
-        if flags.contains(.maskCommand), CGEventSource.keyState(.combinedSessionState, key: 0x2E),
+        if flags.contains(.maskCommand), CGEventSource.keyState(.combinedSessionState, key: MinimizeKey.shared.code),
            let app = NSWorkspace.shared.frontmostApplication?.processIdentifier {
             let windows = Self.windowList(now: now).filter { $0.pid == app && $0.layer == 0 }
             // ⌥⌘M minimizes all of the app's windows.
@@ -1237,5 +1237,51 @@ private enum Dock {
 
     static func cornerRadius(height: CGFloat) -> CGFloat {
         height * 0.42
+    }
+}
+
+/// The key that types M with ⌘ in the current keyboard layout, which ⌘M goes by: on AZERTY the US keyboard's M types a
+/// comma, and ⌘, opens Settings. Layouts whose ⌘ shortcuts follow QWERTY, like Russian, give the US keyboard's M.
+private final class MinimizeKey: NSObject {
+    static let shared = MinimizeKey()
+    private var cached: CGKeyCode?
+
+    override private init() {
+        super.init()
+        // An app in the background gets distributed notifications only when it asks for them at once.
+        DistributedNotificationCenter.default().addObserver(
+            self, selector: #selector(layoutChanged),
+            name: NSNotification.Name(kTISNotifySelectedKeyboardInputSourceChanged as String), object: nil,
+            suspensionBehavior: .deliverImmediately
+        )
+    }
+
+    @objc private func layoutChanged() {
+        cached = nil
+    }
+
+    var code: CGKeyCode {
+        if let cached { return cached }
+        let code = Self.key(in: TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue())
+            ?? Self.key(in: TISCopyCurrentASCIICapableKeyboardLayoutInputSource()?.takeRetainedValue())
+            ?? 0x2E
+        cached = code
+        return code
+    }
+
+    private static func key(in source: TISInputSource?) -> CGKeyCode? {
+        guard let source, let data = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData),
+              let bytes = CFDataGetBytePtr(Unmanaged<CFData>.fromOpaque(data).takeUnretainedValue())
+        else { return nil }
+        return bytes.withMemoryRebound(to: UCKeyboardLayout.self, capacity: 1) { layout in
+            (0..<128).first { (code: UInt16) in
+                var deadKeys: UInt32 = 0
+                var length = 0
+                var chars = [UniChar](repeating: 0, count: 4)
+                return UCKeyTranslate(layout, code, UInt16(kUCKeyActionDown), UInt32((cmdKey >> 8) & 0xFF), UInt32(LMGetKbdType()),
+                                      OptionBits(kUCKeyTranslateNoDeadKeysMask), &deadKeys, chars.count, &length, &chars) == noErr
+                    && length == 1 && chars[0] == UniChar(UInt8(ascii: "m"))
+            }.map { CGKeyCode($0) }
+        }
     }
 }
