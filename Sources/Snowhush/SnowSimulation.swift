@@ -682,7 +682,7 @@ final class SnowSimulation {
     /// Nothing falls, lies, waits for its window or haunts, and nothing will until the snow is stirred.
     var isEmpty: Bool {
         intensity <= 0 && !halloween && flakes.isEmpty && grains.isEmpty && motes.isEmpty && ghosts.isEmpty
-            && fallingSigns.isEmpty && snowballs.isEmpty && gust == nil && !dormant.values.contains { $0.ledge.top > 0 || !$0.ledge.spray.isEmpty || !$0.ledge.film.isEmpty } && parking.isEmpty && lying.isEmpty && nextMode == nil
+            && fallingSigns.isEmpty && snowballs.isEmpty && gust == nil && !dormant.values.contains { $0.ledge.top > 0 } && parking.isEmpty && lying.isEmpty && nextMode == nil
             && splashes.isEmpty && glassDrops.isEmpty && !wet
             && !layers.contains { $0.top > 0 }
     }
@@ -1113,9 +1113,12 @@ final class SnowSimulation {
     }
 
     /// Keeps the snow of a window gone to another Space for its return; a bare window gets a fresh ledge when it's back.
-    /// Only so many are kept, the one gone longest dropped first.
+    /// Only so many are kept, the one gone longest dropped first. The water on its glass would dry out of sight long
+    /// before.
     private func keepAway(_ id: CGWindowID, _ ledge: SnowLayer) {
-        guard ledge.top > 0 || !ledge.spray.isEmpty || !ledge.film.isEmpty || lying.contains(where: { $0.layer === ledge }) else { return }
+        ledge.spray.removeAll()
+        ledge.film.removeAll()
+        guard ledge.top > 0 || lying.contains(where: { $0.layer === ledge }) else { return }
         dormant[id] = (ledge, clock)
         if dormant.count > 200, let oldest = dormant.lazy.filter({ $0.key != id }).min(by: { $0.value.since < $1.value.since })?.key {
             dormant[oldest] = nil

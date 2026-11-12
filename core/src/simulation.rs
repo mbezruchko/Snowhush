@@ -1159,9 +1159,11 @@ impl SnowSimulation {
     }
 
     /// Keeps the snow of a window gone off screen until it shows up again: only a window with something on it, and
-    /// only so many, the one gone longest dropped first.
-    fn keep_dormant(&mut self, id: WindowId, ledge: SnowLayer) {
-        if ledge.top <= 0.0 && ledge.spray.is_empty() && ledge.film.is_empty() && !self.lying.iter().any(|leaf| leaf.layer == id) {
+    /// only so many, the one gone longest dropped first. The water on its glass would dry out of sight long before.
+    fn keep_dormant(&mut self, id: WindowId, mut ledge: SnowLayer) {
+        ledge.spray.clear();
+        ledge.film.clear();
+        if ledge.top <= 0.0 && !self.lying.iter().any(|leaf| leaf.layer == id) {
             return;
         }
         self.dormant.insert(id, (ledge, self.air.clock));
