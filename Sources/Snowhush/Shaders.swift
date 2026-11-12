@@ -156,17 +156,6 @@ static float noise(float x) {
     return mix(hash(float2(i, 0.0)), hash(float2(i + 1.0, 0.0)), f * f * (3.0 - 2.0 * f));
 }
 
-/// Golden, amber, orange, rust or brown, a little lighter or darker.
-static float3 leafColor(float seed) {
-    float k = fract(seed * 7.13);
-    float3 c = k < 0.3 ? float3(0.97, 0.78, 0.22)
-        : k < 0.55 ? float3(0.95, 0.56, 0.13)
-        : k < 0.75 ? float3(0.86, 0.36, 0.11)
-        : k < 0.9 ? float3(0.72, 0.2, 0.09)
-        : float3(0.58, 0.38, 0.17);
-    return c * (0.86 + 0.24 * fract(seed * 31.7));
-}
-
 /// Blush, soft pink, pink or nearly white, a little lighter or darker.
 static float3 petalColor(float seed) {
     // A digitized flower's colour half way out along its petals, a little lighter or darker.
