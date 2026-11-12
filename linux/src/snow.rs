@@ -21,6 +21,7 @@ use zbus::blocking::Connection as Bus;
 
 use snowhush_core::geometry::V2;
 use snowhush_core::halloween::{Choice, Today};
+use snowhush_core::modes::Picked;
 use snowhush_core::simulation::{Borrowed, Mapping, Mode, SnowSimulation, Stray, WindowId};
 
 use crate::chores;
@@ -57,9 +58,7 @@ pub enum Command {
     /// Other kinds fall, once what lies is cleared away as `ClearSnow` clears it; a kind only joining what falls
     /// starts at once.
     Mode {
-        mode: Mode,
-        mixed: bool,
-        mix: [Mode; 2],
+        picked: Picked,
         calm: bool,
     },
     Power(PowerBudget),
@@ -328,11 +327,9 @@ impl App {
                 let direction = self.screens.first().map_or(-1.0, |screen| screen.simulation.breeze_direction());
                 self.screens.iter_mut().for_each(|screen| screen.simulation.blow_away(direction, calm));
             }
-            Command::Mode { mode, mixed, mix, calm } => {
-                self.settings.mode = mode;
-                self.settings.mixed = mixed;
-                self.settings.mix = mix;
-                let modes = self.settings.modes();
+            Command::Mode { picked, calm } => {
+                self.settings.picked = picked;
+                let modes = self.settings.picked.modes();
                 let direction = self.screens.first().map_or(-1.0, |screen| screen.simulation.breeze_direction());
                 let now = Instant::now();
                 self.screens.iter_mut().for_each(|screen| {
@@ -513,7 +510,7 @@ impl App {
                 tray.update(|tray| tray.today = today);
             }
         }
-        let halloween = self.settings.modes() == [Mode::Snow] && self.settings.halloween.wanted(today);
+        let halloween = self.settings.picked.modes() == [Mode::Snow] && self.settings.halloween.wanted(today);
         if halloween != self.halloween {
             self.halloween = halloween;
             log!("halloween: {halloween}");
@@ -699,7 +696,7 @@ fn new_simulation(bounds: &Area, settings: &Settings, budget: PowerBudget) -> Sn
     simulation.accumulates = settings.accumulates();
     simulation.ground_settles = settings.ground;
     simulation.falling_opacity = settings.opacity as f32 / 100.0;
-    simulation.set_modes(&settings.modes());
+    simulation.set_modes(&settings.picked.modes());
     simulation.set_density(density(budget));
     simulation
 }

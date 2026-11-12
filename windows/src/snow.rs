@@ -16,6 +16,7 @@ use windows::core::{HSTRING, PCWSTR, Result, w};
 
 use snowhush_core::geometry::V2;
 use snowhush_core::halloween::Choice;
+use snowhush_core::modes::Picked;
 use snowhush_core::simulation::{Borrowed, Mapping, Mode, ScatterPiece, SnowSimulation, Stray};
 
 use crate::desktop::{self, DesktopLayer};
@@ -65,9 +66,7 @@ pub enum Command {
     /// Other kinds fall, once a gust has blown what is there away; when calm, for less motion, it melts where it
     /// lies instead. A kind only joining what falls starts at once.
     SwitchMode {
-        mode: Mode,
-        mixed: bool,
-        mix: [Mode; 2],
+        picked: Picked,
         calm: bool,
     },
     Quit,
@@ -228,12 +227,10 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                     chores_at = 0;
                     light_at = 0;
                 }
-                Command::SwitchMode { mode, mixed, mix, calm } => {
-                    settings.mode = mode;
-                    settings.mixed = mixed;
-                    settings.mix = mix;
+                Command::SwitchMode { picked, calm } => {
+                    settings.picked = picked;
                     light_at = 0;
-                    let modes = settings.modes();
+                    let modes = settings.picked.modes();
                     let direction = screens.first().map_or(-1.0, |screen| screen.simulation.breeze_direction());
                     let now = Clock::now();
                     screens.iter_mut().for_each(|screen| {
@@ -487,7 +484,7 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
 /// window. Snow and leaves lie on its top edge. What falls is what the screens show, the switch to another kind
 /// coming only once the gust has cleared the screen.
 fn over_taskbar(settings: &Settings, screens: &[Screen]) -> bool {
-    settings.behind_taskbar || screens.first().map_or(settings.modes().contains(&Mode::Rain), |screen| screen.simulation.raining())
+    settings.behind_taskbar || screens.first().map_or(settings.picked.modes().contains(&Mode::Rain), |screen| screen.simulation.raining())
 }
 
 fn sync_screens(
@@ -686,7 +683,7 @@ fn new_simulation(monitor: &Monitor, settings: &Settings) -> SnowSimulation {
     simulation.falling_opacity = settings.opacity as f32 / 100.0;
     simulation.set_snowfall_held(!settings.welcomed);
     simulation.set_halloween(halloween::shows(settings));
-    simulation.set_modes(&settings.modes());
+    simulation.set_modes(&settings.picked.modes());
     simulation
 }
 
