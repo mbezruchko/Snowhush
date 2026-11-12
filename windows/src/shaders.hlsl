@@ -528,10 +528,17 @@ SpriteOut rainVertex(SpriteIn s, float2 corner) {
         middle = s.position + float2(0.0, (reach.x + reach.y) * 0.5) / scale;
         streak = float2(0.0, 0.0);
     }
+    float2 offset = (corner - 0.5) * extent;
+    // A raindrop in the air is a thin line: its quad lies along it rather than squaring it.
+    [branch] if (s.rain.x < 1.5 && length(streak) > 0.0) {
+        float2 axis = normalize(streak);
+        float wide = pixels * 1.2 + 2.0;
+        offset = (corner.x - 0.5) * (length(streak) + wide) * axis + (corner.y - 0.5) * wide * float2(-axis.y, axis.x);
+    }
     SpriteOut o = (SpriteOut)0;
     float2 center = (middle + shake.xy) / viewSize * 2.0 - 1.0;
-    o.position = float4(center + (corner - 0.5) * extent * 2.0 / (viewSize * scale), 0.0, 1.0);
-    o.coord = float2(corner.x, 1.0 - corner.y);
+    o.position = float4(center + offset * 2.0 / (viewSize * scale), 0.0, 1.0);
+    o.coord = float2(0.5 + offset.x / extent, 0.5 - offset.y / extent);
     o.streak = streak / extent;
     o.radius = pixels / extent * 0.5;
     o.alpha = s.body.y * min(pixels / 1.5, 1.0);
@@ -667,7 +674,9 @@ float4 rainAt(SpriteOut i, float2 p) {
     [branch] if (i.rain.x < 1.5) {
         // Water in the air shows what is brightest around it: a bright thread against a dark backdrop, a darker one
         // against a light one. Not knowing which is behind it, a raindrop is drawn as both, a bright core in a grey
-        // sheath, faint and brightest at its head.
+        // sheath, faint and brightest at its head. Its sheath reaches a little past the square the Mac draws it in,
+        // which cuts it off there.
+        if (max(abs(p.x), abs(p.y)) > 0.5) return float4(0.0, 0.0, 0.0, 0.0);
         float t = span > 0.0 ? clamp(dot(p, half_) / span, -1.0, 1.0) : 0.0;
         float r = length(p - half_ * t) / max(i.radius, 0.001);
         float head = span > 0.0 ? 0.25 + 0.75 * pow(t * 0.5 + 0.5, 2.0) : 1.0;
