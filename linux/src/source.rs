@@ -4,6 +4,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use calloop::ping::Ping;
 use serde::Deserialize;
@@ -137,6 +138,12 @@ impl Shared {
     pub fn take_started_moving(&self) -> bool {
         self.started_moving.lock().map(|mut started| std::mem::take(&mut *started)).unwrap_or(false)
     }
+}
+
+/// How long to wait before asking a compositor again after a request failed: half a second, then twice as long
+/// each time, up to five seconds.
+pub fn backoff(last: Option<Duration>) -> Duration {
+    last.map_or(Duration::from_millis(500), |wait| (wait * 2).min(Duration::from_secs(5)))
 }
 
 fn pack(x: f32, y: f32) -> u64 {

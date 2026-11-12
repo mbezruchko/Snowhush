@@ -7,14 +7,14 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
-use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::mpsc::{self, RecvTimeoutError, TryRecvError};
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
 use crate::log;
-use crate::source::{Display, Report, Shared, Window};
+use crate::source::{self, Display, Report, Shared, Window};
 
 const GET_WORKSPACES: u32 = 1;
 const SUBSCRIBE: u32 = 2;
@@ -111,14 +111,34 @@ pub fn start(shared: Arc<Shared>) -> Result<(), String> {
             let mut last: Option<(Report, HashMap<String, Rect>)> = None;
             let mut moved_at: Option<Instant> = None;
             let mut event_at: Option<Instant> = None;
+            let mut failing: Option<Duration> = None;
             loop {
                 let (mut report, floating) = match ask(&mut requests) {
                     Ok(answer) => answer,
                     Err(error) => {
-                        log!("sway: {error}");
-                        return;
+                        if failing.is_none() {
+                            log!("sway: {error}; the windows are asked for again");
+                        }
+                        let wait = source::backoff(failing);
+                        failing = Some(wait);
+                        std::thread::sleep(wait);
+                        loop {
+                            match changes.try_recv() {
+                                Ok(()) => {}
+                                Err(TryRecvError::Empty) => break,
+                                Err(TryRecvError::Disconnected) => return,
+                            }
+                        }
+                        // A request that failed halfway leaves the connection out of step with its answers.
+                        if let Ok(stream) = UnixStream::connect(&path) {
+                            requests = stream;
+                        }
+                        continue;
                     }
                 };
+                if failing.take().is_some() {
+                    log!("sway: the windows are answered again");
+                }
                 let now = Instant::now();
                 if let Some((_, before)) = &last
                     && floating.iter().any(|(id, rect)| before.get(id).is_some_and(|was| was != rect))

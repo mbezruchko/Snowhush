@@ -9,14 +9,14 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::mpsc::{self, RecvTimeoutError, TryRecvError};
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
 use crate::log;
-use crate::source::{Display, Report, Shared, Window};
+use crate::source::{self, Display, Report, Shared, Window};
 
 /// How often the windows are asked for while nothing moves, to notice one starting to.
 const CALM: Duration = Duration::from_millis(100);
@@ -169,8 +169,26 @@ pub fn start(shared: Arc<Shared>, folder: PathBuf) -> Result<(), String> {
         .spawn(move || {
             let mut last: Option<Point> = None;
             let mut moved_at = Instant::now();
+            let mut failing: Option<Duration> = None;
             loop {
-                let Ok(point) = request::<Point>(&pointer, "j/cursorpos") else { return };
+                let point = match request::<Point>(&pointer, "j/cursorpos") {
+                    Ok(point) => point,
+                    Err(error) => {
+                        // Not left where it was last seen, for the snow to keep parting around.
+                        if failing.is_none() {
+                            log!("hyprland: {error}; the pointer is asked for again");
+                            pointing.set_cursor(-1e6, -1e6);
+                        }
+                        let wait = source::backoff(failing);
+                        failing = Some(wait);
+                        last = None;
+                        std::thread::sleep(wait);
+                        continue;
+                    }
+                };
+                if failing.take().is_some() {
+                    log!("hyprland: the pointer is answered again");
+                }
                 pointing.set_cursor(point.x as f32, point.y as f32);
                 if last.as_ref() != Some(&point) {
                     moved_at = Instant::now();
@@ -187,14 +205,32 @@ pub fn start(shared: Arc<Shared>, folder: PathBuf) -> Result<(), String> {
             let mut last: Option<(Report, HashMap<String, [f64; 4]>)> = None;
             let mut moved_at: Option<Instant> = None;
             let mut event_at: Option<Instant> = None;
+            let mut failing: Option<Duration> = None;
             loop {
                 let (mut report, places) = match ask(&requests, decoration) {
                     Ok(answer) => answer,
                     Err(error) => {
-                        log!("hyprland: {error}");
-                        return;
+                        if failing.is_none() {
+                            log!("hyprland: {error}; the windows are asked for again");
+                        }
+                        let wait = source::backoff(failing);
+                        failing = Some(wait);
+                        std::thread::sleep(wait);
+                        loop {
+                            match announcements.try_recv() {
+                                Ok(_) => {}
+                                Err(TryRecvError::Empty) => break,
+                                Err(TryRecvError::Disconnected) => return,
+                            }
+                        }
+                        continue;
                     }
                 };
+                if failing.take().is_some() {
+                    log!("hyprland: the windows are answered again");
+                    // A config reloaded meanwhile went unseen.
+                    decoration = self::decoration(&requests).unwrap_or(decoration);
+                }
                 let now = Instant::now();
                 if let Some((_, before)) = &last
                     && places.iter().any(|(id, place)| before.get(id).is_some_and(|was| was != place))
