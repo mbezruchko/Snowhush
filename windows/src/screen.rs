@@ -387,6 +387,7 @@ impl Screen {
             self.windows_seen = tracker.generation;
             self.taskbar = taskbar;
             self.simulation.covers = tracker.covers(&self.monitor.rect, self.size);
+            self.simulation.forget_closed(|id| tracker.exists(id));
             let mut surfaces = tracker.surfaces(&self.monitor.name, &self.monitor.rect, self.size);
             surfaces.extend(self.taskbar.clone());
             if !(self.synced && surfaces == self.surfaces) {

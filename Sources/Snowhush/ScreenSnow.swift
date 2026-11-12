@@ -63,6 +63,7 @@ final class ScreenSnow {
     /// Looks for the desktop sliding back in while a full-screen app hides the snow.
     private var lookout: Timer?
     private var asleep = false
+    private var closedCheckedAt: CFTimeInterval = 0
     /// Asks for the snow to be woken or put to rest again.
     var activityChanged: () -> Void = {}
     /// Faded all the way out for a full-screen app: the snow keeps falling until then.
@@ -140,6 +141,7 @@ final class ScreenSnow {
             window.notificationLevel = tracked ? tracker.notificationLevel : nil
             watchForFullScreen(now: now, tracked: tracked)
             guard tracked else { return nil }
+            forgetClosed(now: now)
             for (id, display) in update?.handed ?? [:] { displays.hand(id, from: self, to: display) }
             simulation.windowFrames = tracker.covers.map { SIMD4(Float($0.minX), Float($0.minY), Float($0.maxX), Float($0.maxY)) }
             return update
@@ -211,6 +213,15 @@ final class ScreenSnow {
         Renderer.fitDrawable(of: view)
         view.isPaused = false
         renderer.resetClock()
+    }
+
+    /// Now and then the snow kept for windows away lets go of those that closed there.
+    private func forgetClosed(now: CFTimeInterval) {
+        guard now - closedCheckedAt >= 5 else { return }
+        closedCheckedAt = now
+        let away = simulation.awayIDs
+        guard !away.isEmpty else { return }
+        simulation.forgetClosed(keeping: WindowTracker.open(among: away))
     }
 
     func dropWindowSnow() {

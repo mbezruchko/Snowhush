@@ -349,6 +349,16 @@ final class WindowTracker {
         return ListedWindow.all(in: CGWindowListCreateDescriptionFromArray(array)).first?.bounds
     }
 
+    /// Which of these windows are still open, on any Space; all of them when the window list can't be read.
+    static func open(among ids: [CGWindowID]) -> Set<CGWindowID> {
+        // CGWindowListCreateDescriptionFromArray takes window numbers stored as raw pointer values.
+        var pointers: [UnsafeRawPointer?] = ids.filter { $0 != 0 }.map { UnsafeRawPointer(bitPattern: UInt($0)) }
+        guard let array = CFArrayCreate(nil, &pointers, pointers.count, nil), let list = CGWindowListCreateDescriptionFromArray(array) else {
+            return Set(ids)
+        }
+        return Set(ListedWindow.all(in: list).compactMap(\.id))
+    }
+
     /// Sorts windows that left the list: closed ones and ones hidden on the current Space are in neither set.
     private func offscreen(among ids: Set<CGWindowID>) -> (parked: Set<CGWindowID>, elsewhere: Set<CGWindowID>) {
         guard !ids.isEmpty else { return ([], []) }

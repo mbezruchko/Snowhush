@@ -435,6 +435,11 @@ impl Tracker {
         })
     }
 
+    /// Whether a window still exists, wherever it is.
+    pub fn exists(&self, id: isize) -> bool {
+        unsafe { IsWindow(Some(HWND(id as *mut c_void))).as_bool() }
+    }
+
     /// Whether a window that left the list moved to another virtual desktop, rather than closing or hiding.
     pub fn elsewhere(&self, id: isize) -> bool {
         let window = HWND(id as *mut c_void);

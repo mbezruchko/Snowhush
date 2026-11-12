@@ -1174,6 +1174,11 @@ impl SnowSimulation {
         }
     }
 
+    /// Lets go of the snow kept for windows away that closed meanwhile: only those `open` still knows wait on.
+    pub fn forget_closed(&mut self, open: impl Fn(WindowId) -> bool) {
+        self.dormant.retain(|&id, _| open(id));
+    }
+
     fn unpark(&mut self, id: WindowId) -> Option<SnowLayer> {
         let index = self.parking.iter().position(|entry| entry.0 == id)?;
         Some(self.parking.remove(index).1)

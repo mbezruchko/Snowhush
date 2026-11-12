@@ -447,6 +447,9 @@ impl Screen {
             return;
         }
         self.windows_seen = generation;
+        if !report.screens.is_empty() {
+            self.simulation.forget_closed(|id| windows::exists(report, id));
+        }
         let area = self.area();
         let listed = if snow_on_windows { report } else { &Report::default() };
         let mut surfaces = windows::surfaces(listed, &area, self.shelf.as_ref().filter(|_| self.panel), &self.name);

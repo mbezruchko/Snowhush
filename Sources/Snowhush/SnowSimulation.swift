@@ -1125,6 +1125,14 @@ final class SnowSimulation {
         }
     }
 
+    /// The windows away whose snow waits for them.
+    var awayIDs: [CGWindowID] { Array(dormant.keys) }
+
+    /// Lets go of the snow kept for windows away that closed meanwhile: only those in `open` wait on.
+    func forgetClosed(keeping open: Set<CGWindowID>) {
+        dormant = dormant.filter { open.contains($0.key) }
+    }
+
     private func unpark(_ id: CGWindowID) -> SnowLayer? {
         guard let index = parking.firstIndex(where: { $0.id == id }) else { return nil }
         return parking.remove(at: index).ledge

@@ -175,6 +175,26 @@ fn a_screen_rests_while_a_bare_window_is_away() {
 }
 
 #[test]
+fn snow_waiting_for_a_window_that_closed_away_is_let_go() {
+    let none = HashSet::new();
+    let windows = [surface(7, 300.0, 600.0, 500.0), surface(8, 900.0, 600.0, 300.0)];
+    let mut simulation = SnowSimulation::new(1280.0, 800.0, 1.0);
+    simulation.update_windows(&windows, 0.2, &none, &none, false);
+    run(&mut simulation, 20.0, AWAY);
+    simulation.set_intensity(0.0);
+    run(&mut simulation, 30.0, AWAY);
+    simulation.update_windows(&[], 0.2, &none, &HashSet::from([7, 8]), false);
+    simulation.forget_closed(|id| id == 8);
+    simulation.update_windows(&windows, 0.2, &none, &none, false);
+    run(&mut simulation, 0.5, AWAY);
+    let snow_on = |window: &WindowSurface| {
+        piles(&simulation).iter().filter(|(origin, _)| origin.y > 300.0 && (origin.x - window.frame.x).abs() < 1.0).map(|pile| pile.1).sum::<f32>()
+    };
+    assert_eq!(snow_on(&windows[0]), 0.0, "the closed window's snow came back");
+    assert!(snow_on(&windows[1]) > 0.0, "the open window lost its snow");
+}
+
+#[test]
 fn snow_waiting_for_windows_away_drops_the_longest_gone_first() {
     let none = HashSet::new();
     let windows: Vec<WindowSurface> = (0..201).map(|i| surface(i + 1, 10.0 + i as f32 * 40.0, 400.0, 36.0)).collect();
