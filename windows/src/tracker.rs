@@ -122,8 +122,6 @@ pub struct Tracker {
     own_process: u32,
     windows: Vec<Window>,
     listed_at: i64,
-    /// The shell's own sense that a full-screen app or presentation is in front.
-    busy: bool,
     pub generation: u64,
     /// The displays by name, with their work areas and bounds in physical pixels.
     displays: Vec<(String, RECT, RECT)>,
@@ -162,7 +160,6 @@ impl Tracker {
             own_process: std::process::id(),
             windows: Vec::new(),
             listed_at: 0,
-            busy: false,
             generation: 0,
             displays: Vec::new(),
             owners: HashMap::new(),
@@ -188,7 +185,11 @@ impl Tracker {
             let began = Clock::now();
             self.windows = self.list();
             self.owners = self.windows.iter().filter_map(|window| Some((window.id, self.owner(&window.rect)?.to_string()))).collect();
-            self.busy = SHELL_BUSY.load(Ordering::Relaxed);
+            let maximized_filling = self
+                .windows
+                .iter()
+                .any(|window| window.zoomed && !window.cover_only && self.displays.iter().any(|(_, _, bounds)| contains(&window.rect, bounds)));
+            watch_shell_for(maximized_filling);
             self.cost += Clock::now() - began;
             self.listings += 1;
             self.listed_at = now;
@@ -392,13 +393,13 @@ impl Tracker {
     /// taskbar hides itself.
     pub fn covering(&self, bounds: &RECT) -> Option<&str> {
         let foreground = unsafe { GetForegroundWindow() }.0 as isize;
+        let busy = SHELL_BUSY.load(Ordering::Relaxed);
         for window in &self.windows {
             let r = &window.rect;
             if window.cover_only || r.right <= bounds.left || r.left >= bounds.right || r.bottom <= bounds.top || r.top >= bounds.bottom {
                 continue;
             }
-            let fills = r.left <= bounds.left && r.top <= bounds.top && r.right >= bounds.right && r.bottom >= bounds.bottom;
-            if fills && (!window.zoomed || (self.busy && window.id == foreground)) {
+            if contains(r, bounds) && (!window.zoomed || (busy && window.id == foreground)) {
                 return Some(&window.class);
             }
             if !window.topmost {
@@ -675,6 +676,8 @@ fn is_top_level(window: HWND, event: u32) -> bool {
 }
 
 static SHELL_WATCHED: AtomicBool = AtomicBool::new(true);
+/// Whether a maximized window fills a display, the only case the shell's answer is used for.
+static SHELL_NEEDED: AtomicBool = AtomicBool::new(false);
 static SHELL_WATCHER: OnceLock<std::thread::Thread> = OnceLock::new();
 
 /// Asking the shell can stall for a fifth of a second while it is busy, sliding a hidden taskbar in or out for one,
@@ -686,7 +689,8 @@ fn watch_shell() {
             let _ = SHELL_WATCHER.set(std::thread::current());
             let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
             loop {
-                if !SHELL_WATCHED.load(Ordering::Relaxed) {
+                if !SHELL_WATCHED.load(Ordering::Relaxed) || !SHELL_NEEDED.load(Ordering::Relaxed) {
+                    SHELL_BUSY.store(false, Ordering::Relaxed);
                     std::thread::park();
                     continue;
                 }
@@ -703,6 +707,15 @@ fn watch_shell() {
 pub fn watch_shell_state(on: bool) {
     SHELL_WATCHED.store(on, Ordering::Relaxed);
     if on && let Some(watcher) = SHELL_WATCHER.get() {
+        watcher.unpark();
+    }
+}
+
+fn watch_shell_for(needed: bool) {
+    if !SHELL_NEEDED.swap(needed, Ordering::Relaxed)
+        && needed
+        && let Some(watcher) = SHELL_WATCHER.get()
+    {
         watcher.unpark();
     }
 }
@@ -816,6 +829,10 @@ fn frame_in(r: &RECT, area: &RECT, size: (u32, u32)) -> Rect {
         width: (r.right - r.left) as f32 * sx,
         height: (r.bottom - r.top) as f32 * sy,
     }
+}
+
+fn contains(r: &RECT, area: &RECT) -> bool {
+    r.left <= area.left && r.top <= area.top && r.right >= area.right && r.bottom >= area.bottom
 }
 
 fn overlaps(r: &RECT, area: &RECT) -> bool {
