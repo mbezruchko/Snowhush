@@ -65,6 +65,8 @@
 "setup.update" = "Update";
 "setup.same" = "Snowhush {old} is already here. Installing {version} again repairs it.";
 "setup.reinstall" = "Reinstall";
+"setup.older" = "Replaces Snowhush {old} with the older {version}.";
+"setup.downgrade" = "Downgrade";
 "setup.installing" = "Installing…";
 "setup.settle" = "Let it settle.";
 "setup.done" = "Snowhush is installed. You'll find it in the Start menu.";

@@ -57,6 +57,8 @@
 "setup.update" = "更新";
 "setup.same" = "Snowhush {old} 已安装。重新安装 {version} 可修复它。";
 "setup.reinstall" = "重新安装";
+"setup.older" = "将 Snowhush {old} 替换为较旧的 {version}。";
+"setup.downgrade" = "降级";
 "setup.installing" = "正在安装…";
 "setup.settle" = "让雪静静落下。";
 "setup.done" = "Snowhush 已安装。你可以在“开始”菜单中找到它。";
