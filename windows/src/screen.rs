@@ -48,7 +48,8 @@ thread_local! {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PowerBudget {
     Full,
-    /// On battery: no frame rates above 60, which are hard to tell apart in snow anyway.
+    /// On battery: frame rates of about 60 at most, at a whole fraction of the display's rate; faster ones are hard
+    /// to tell apart in snow anyway.
     Battery,
     /// Energy saver: a little less snow, drawn a little less often.
     Saver,
