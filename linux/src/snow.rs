@@ -464,7 +464,7 @@ impl App {
         if released {
             self.screens.iter_mut().for_each(|screen| screen.simulation.set_snowfall_held(false));
         }
-        self.pass_snow();
+        self.pass_snow(now);
         if reshaped {
             self.place_screens();
         }
@@ -635,8 +635,8 @@ impl App {
 
     /// Passes on the snow that went from one display to another this frame: snow that fell on a window's drift
     /// lent by another display goes to that one, and snow thrown past an edge two displays share goes on falling
-    /// on the other side.
-    fn pass_snow(&mut self) {
+    /// on the other side. A display resting wakes for what it gets.
+    fn pass_snow(&mut self, now: Instant) {
         for index in 0..self.screens.len() {
             let here = self.screens[index].area();
             for caught in self.screens[index].simulation.take_caught() {
@@ -644,6 +644,7 @@ impl App {
                 let Some(home) = self.screens.iter_mut().find(|other| other.name == *owner) else { continue };
                 let shift = V2::new((here.x - home.area().x) as f32, 0.0);
                 home.simulation.catch(&caught, Mapping::shift(shift));
+                home.wake(now);
             }
             let mut passed: Vec<(usize, Vec<Stray>)> = Vec::new();
             for stray in self.screens[index].simulation.take_strays() {
@@ -664,6 +665,7 @@ impl App {
                 let there = self.screens[next].area();
                 let shift = V2::new((here.x - there.x) as f32, (there.bottom() - here.bottom()) as f32);
                 self.screens[next].simulation.adopt_strays(strays, Mapping::shift(shift));
+                self.screens[next].wake(now);
             }
         }
     }

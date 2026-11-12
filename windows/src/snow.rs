@@ -430,7 +430,7 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                     }
                 }
             }
-            pass_snow(&mut screens, &tracker);
+            pass_snow(&mut screens, &tracker, now);
             // The first display the welcome window's snow reaches starts the snowfall on all of them.
             if released {
                 settings.welcomed = true;
@@ -664,7 +664,8 @@ fn lends(screens: &[Screen], index: usize, tracker: &Tracker) -> bool {
 
 /// Passes on the snow that went from one display to another this frame: snow that fell on a window's drift lent by
 /// another display goes to that one, and snow thrown past an edge two displays share goes on falling on the other side.
-fn pass_snow(screens: &mut [Screen], tracker: &Tracker) {
+/// A display resting wakes for what it gets.
+fn pass_snow(screens: &mut [Screen], tracker: &Tracker, now: i64) {
     for index in 0..screens.len() {
         for caught in screens[index].simulation.take_caught() {
             let Some(home) = tracker.owners.get(&caught.id).and_then(|owner| screens.iter().position(|screen| screen.monitor.name == *owner)) else {
@@ -672,6 +673,7 @@ fn pass_snow(screens: &mut [Screen], tracker: &Tracker) {
             };
             let mapping = mapping(&screens[index], &screens[home]);
             screens[home].simulation.catch(&caught, mapping);
+            screens[home].wake(now);
         }
         let strays = screens[index].simulation.take_strays();
         if strays.is_empty() {
@@ -696,6 +698,7 @@ fn pass_snow(screens: &mut [Screen], tracker: &Tracker) {
         for (next, strays) in passed {
             let mapping = mapping(&screens[index], &screens[next]);
             screens[next].simulation.adopt_strays(strays, mapping);
+            screens[next].wake(now);
         }
     }
 }
