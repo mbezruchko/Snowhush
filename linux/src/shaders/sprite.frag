@@ -572,6 +572,8 @@ vec4 rainAt(vec2 p) {
     vec2 halfStreak = vStreak * 0.5;
     float span = dot(halfStreak, halfStreak);
     if (vRain.x < 1.5) {
+        // Its quad lies along the streak and may reach past the square it is drawn in.
+        if (max(abs(p.x), abs(p.y)) > 0.5) return vec4(0.0);
         // Water in the air shows what is brightest around it: a bright thread against a dark backdrop, a darker one
         // against a light one. Not knowing which is behind it, a raindrop is drawn as both, a bright core in a grey
         // sheath, faint and brightest at its head.
