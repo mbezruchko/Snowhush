@@ -1199,6 +1199,44 @@ fn rain_runs_down_a_window_and_hangs_under_its_bottom_edge() {
 }
 
 #[test]
+fn the_glass_is_drawn_around_every_drop_on_it() {
+    let none = HashSet::new();
+    let mut simulation = SnowSimulation::new(1200.0, 900.0, 0.75);
+    simulation.set_mode(Mode::Rain);
+    simulation.update_windows(&[surface(1, 200.0, 700.0, 800.0)], 0.2, &none, &none, false);
+    let mut seen = false;
+    for _ in 0..(20.0 / DT) as usize {
+        simulation.step(DT, AWAY);
+        let drops = rain_sprites(&simulation, 2.0);
+        let Some([left, bottom, right, top]) = simulation.glass_bounds() else {
+            assert!(drops.is_empty(), "{} drops on the glass, none of it drawn", drops.len());
+            continue;
+        };
+        seen = true;
+        // The quad rainVertex draws each one on, in points, at 1x and 2x.
+        for scale in [1.0, 2.0] {
+            let mut reached = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
+            for drop in &drops {
+                let speed = drop.velocity.length();
+                let length = (speed * 0.08).min(drop.size * 0.9) + speed * 0.024;
+                let travel = if speed > 0.0 { -drop.velocity / speed * length } else { V2::ZERO };
+                let half = ((drop.size * scale).max(1.5) * 2.2 + length * scale + 2.0).max(2.0) / scale * 0.5;
+                let middle = drop.position + travel * 0.5;
+                reached = [
+                    reached[0].min(middle.x - half),
+                    reached[1].min(middle.y - half),
+                    reached[2].max(middle.x + half),
+                    reached[3].max(middle.y + half),
+                ];
+            }
+            let outside = [left - reached[0], bottom - reached[1], reached[2] - right, reached[3] - top];
+            assert!(outside.iter().all(|&past| past < 0.01), "a drop drawn {outside:?} past the glass at {scale}x");
+        }
+    }
+    assert!(seen, "no drop on the glass");
+}
+
+#[test]
 fn rain_spatters_the_glass_and_leaves_wet_uneven_trails() {
     let none = HashSet::new();
     let mut simulation = SnowSimulation::new(1200.0, 900.0, 0.75);

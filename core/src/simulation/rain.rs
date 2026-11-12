@@ -408,9 +408,9 @@ impl SnowSimulation {
                 }
                 drop.radius = 0.0;
             } else if shaking && shaken(air, &drop, layer, dt) {
-                // It flies on as the window was going.
+                // It flies on as the window was going before the jerk.
                 let below = if drop.hanging { drop.radius * GLASS_SCALE } else { 0.0 };
-                fall(air, &drop, layer, 1.0, below, Throw::Shaken(layer.track_velocity));
+                fall(air, &drop, layer, 1.0, below, Throw::Shaken(layer.track_velocity - layer.jolt * dt));
                 drop.radius = 0.0;
             } else if drop.hanging {
                 cling(air, &mut drop, i, layer, dt, drops);
@@ -522,8 +522,24 @@ impl SnowSimulation {
             });
             film.chain(spray)
         });
+        splashes.chain(wet).chain(self.drop_sprites())
+    }
+
+    /// Where the running drops and beads add up into the field the glass is drawn from, left, bottom, right, top, in
+    /// points before the shake: each reaches as far as the sprite shader draws it. None while none shows.
+    pub fn glass_bounds(&self) -> Option<[f32; 4]> {
+        self.drop_sprites().filter(|sprite| sprite.rain[0] == 2.0).fold(None, |bounds: Option<[f32; 4]>, sprite| {
+            let speed = sprite.velocity.length();
+            let reach = sprite.size.max(1.5) * 1.1 + (speed * 0.08).min(sprite.size * 0.9) + speed * 0.024 + 1.0;
+            let (x, y) = (sprite.position.x, sprite.position.y);
+            let [left, bottom, right, top] = bounds.unwrap_or([f32::MAX, f32::MAX, f32::MIN, f32::MIN]);
+            Some([left.min(x - reach), bottom.min(y - reach), right.max(x + reach), top.max(y + reach)])
+        })
+    }
+
+    fn drop_sprites(&self) -> impl Iterator<Item = Sprite> + '_ {
         let shown: HashMap<WindowId, usize> = self.ids.iter().enumerate().skip(1).map(|(li, &id)| (id, li)).collect();
-        let drops = self.rain.drops.iter().filter_map(move |drop| {
+        self.rain.drops.iter().filter_map(move |drop| {
             let layer = &self.layers[*shown.get(&drop.layer)?];
             let position = layer.origin + drop.offset;
             // A window in front of the one it runs down hides it.
@@ -550,8 +566,7 @@ impl SnowSimulation {
                 drop: [drop.seed, drop.offset.y * 0.06, bulge, jiggle],
                 ..Sprite::default()
             })
-        });
-        splashes.chain(wet).chain(drops)
+        })
     }
 }
 
@@ -970,6 +985,31 @@ fn grip(point: V2) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::geometry::Rect;
+    use crate::simulation::WindowSurface;
+    use std::collections::HashSet;
+
+    #[test]
+    fn a_shaken_off_drop_flies_as_its_window_went_before_the_jerk() {
+        const DT: f32 = 1.0 / 60.0;
+        let none = HashSet::new();
+        let mut simulation = SnowSimulation::new(1200.0, 900.0, 0.75);
+        simulation.set_mode(Mode::Rain);
+        let mut t = 0.0;
+        for _ in 0..120 {
+            t += DT;
+            let x = 300.0 + 150.0 * (std::f32::consts::TAU * 4.0 * t).sin();
+            let frame = Rect { x, y: 400.0, width: 500.0, height: 300.0 };
+            let window = WindowSurface { id: 1, frame, blockers: Vec::new(), cover: Vec::new(), corner_radius: 8.0, corner_exponent: 2.5 };
+            simulation.update_windows(&[window], DT, &none, &none, false);
+            let before = simulation.layers[1].track_velocity;
+            simulation.step(DT, V2::new(-10_000.0, -10_000.0));
+            let layer = &simulation.layers[1];
+            let thrown = layer.track_velocity - layer.jolt * DT;
+            assert!((thrown - before).length() < 0.01, "thrown at {thrown:?}, the window went at {before:?}");
+        }
+        assert!(simulation.layers[1].jolt.length() > 1000.0, "the window was never jerked");
+    }
 
     /// How a running drop took in spray when it measured all of it on its window.
     fn gather_measuring_all(drop: &mut GlassDrop, from: V2, layer: &mut SnowLayer) {

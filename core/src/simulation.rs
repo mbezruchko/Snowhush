@@ -2150,6 +2150,7 @@ impl Air {
         let previous_velocity = ledge.track_velocity;
         smooth_damp(&mut ledge.track, &mut ledge.track_velocity, ledge.origin, TRACK_TIME, dt);
         let mut acceleration = (ledge.track_velocity - previous_velocity) / dt;
+        ledge.jolt = acceleration;
         acceleration.y *= self.jolt_scale;
         // Agitation is vibration: two consecutive back-and-forth swings, not a single start or stop.
         ledge.agitation *= (-dt / 0.3).exp();
