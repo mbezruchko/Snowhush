@@ -191,11 +191,15 @@ final class ScreenSnow {
         simulation.density = budget == .saver ? 0.75 : 1
     }
 
-    /// `asleep` with the screens off, locked or switched away from: nothing is seen, so the frames are given back.
+    /// `asleep` with the screens off, locked or switched away from. Inactive, nothing is seen, so the frames are given
+    /// back.
     func setActive(_ active: Bool, asleep: Bool) {
-        self.asleep = asleep
+        if asleep != self.asleep {
+            self.asleep = asleep
+            restartLookout()
+        }
         self.active = active
-        if asleep { renderer.releaseFrames(of: view) }
+        if !active { renderer.releaseFrames(of: view) }
         guard view.isPaused == active else { return }
         if active { Renderer.fitDrawable(of: view) }
         view.isPaused = !active
@@ -284,8 +288,7 @@ final class ScreenSnow {
         if covered != was {
             fullScreenSpaces = nil
             leaving = false
-            lookout?.invalidate()
-            lookout = covered ? startLookout() : nil
+            restartLookout()
         }
         if covered && !was { following = false }
         if was && !covered {
@@ -325,6 +328,11 @@ final class ScreenSnow {
         guard !occluded, abs(window.alphaValue - slideAlpha) > 0.002 else { return }
         window.alphaValue = slideAlpha
         dock.window.alphaValue = slideAlpha
+    }
+
+    private func restartLookout() {
+        lookout?.invalidate()
+        lookout = covered && !asleep ? startLookout() : nil
     }
 
     /// Nothing is drawn under a full-screen app, so a few times a second the window list is read for the desktop
