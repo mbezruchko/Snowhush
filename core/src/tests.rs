@@ -884,6 +884,19 @@ fn leaves_lie_where_they_land() {
 }
 
 #[test]
+fn leaves_lying_still_ask_for_no_redraw() {
+    let mut simulation = SnowSimulation::new(800.0, 600.0, 0.75);
+    simulation.set_mode(Mode::Autumn);
+    run(&mut simulation, 60.0, AWAY);
+    simulation.set_intensity(0.0);
+    // Once the heaps have slumped into shape, a whole second passes with nothing to redraw.
+    let rested = (0..180).any(|_| (0..60).filter(|_| simulation.step(DT, AWAY)).count() == 0);
+    assert!(rested, "leaves lying still redrawn every frame");
+    assert!(leaf_sprites(&simulation) > 0, "no leaves lying");
+    assert!(!simulation.is_empty(), "leaves still lie");
+}
+
+#[test]
 fn cherry_blossom_petals_fall_and_lie_as_leaves_do() {
     let mut simulation = SnowSimulation::new(800.0, 600.0, 0.75);
     simulation.set_mode(Mode::Blossom);

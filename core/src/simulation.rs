@@ -703,6 +703,11 @@ impl SnowSimulation {
             + self.layers.iter().map(|layer| layer.spray.len() + layer.film.len()).sum::<usize>()
     }
 
+    /// Anything drawn that moves: a leaf lying still is redrawn only as it settles, sinks or fades.
+    fn moving(&self) -> bool {
+        self.sprite_count() > self.lying.len()
+    }
+
     /// Floats the renderer needs per frame: each layer's surface, bed and what it is made of.
     pub fn column_count(&self) -> usize {
         self.layers.iter().map(|layer| SnowLayer::ROWS * layer.count()).sum::<usize>() + self.borrowed.iter().map(Borrowed::span).sum::<usize>()
@@ -773,7 +778,7 @@ impl SnowSimulation {
     /// Returns whether anything visible changed.
     pub fn step(&mut self, dt: f32, cursor: V2) -> bool {
         self.air.clock += dt as f64;
-        let was_moving = self.sprite_count() > 0;
+        let was_moving = self.moving();
         self.air.heights_changed = false;
 
         self.release_scattered();
@@ -836,7 +841,7 @@ impl SnowSimulation {
             Pace::Calm
         };
         let changed = was_moving
-            || self.sprite_count() > 0
+            || self.moving()
             || self.haunting.moving()
             || self.air.heights_changed
             || self.air.windows_changed
