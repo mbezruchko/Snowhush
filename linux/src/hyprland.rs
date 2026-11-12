@@ -71,11 +71,38 @@ struct Client {
     floating: bool,
     class: String,
     pinned: bool,
-    /// 1 maximized, 2 full screen.
-    fullscreen: i64,
+    fullscreen: Fullscreen,
+    /// Before Hyprland 0.42, which a full-screen window is: 0 full screen, 1 maximized.
+    #[serde(rename = "fullscreenMode", default)]
+    fullscreen_mode: i64,
     /// 0 for the window focused last: the closest Hyprland tells to which is in front.
     #[serde(rename = "focusHistoryID")]
     focus_history: i64,
+}
+
+/// 1 maximized, 2 full screen; before Hyprland 0.42, only whether it is either.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum Fullscreen {
+    Mode(i64),
+    Either(bool),
+}
+
+impl Client {
+    /// 1 maximized, 2 full screen.
+    fn fullscreen(&self) -> i64 {
+        match self.fullscreen {
+            Fullscreen::Mode(mode) => mode,
+            Fullscreen::Either(false) => 0,
+            Fullscreen::Either(true) => {
+                if self.fullscreen_mode == 1 {
+                    1
+                } else {
+                    2
+                }
+            }
+        }
+    }
 }
 
 #[derive(Deserialize, PartialEq)]
@@ -251,7 +278,7 @@ fn ask(socket: &Path, decoration: Decoration) -> Result<(Report, HashMap<String,
     let layer = |client: &Client| {
         if specials.contains(&client.workspace.name.as_str()) {
             0
-        } else if client.fullscreen >= 2 {
+        } else if client.fullscreen() >= 2 {
             1
         } else if client.pinned {
             2
@@ -269,7 +296,7 @@ fn ask(socket: &Path, decoration: Decoration) -> Result<(Report, HashMap<String,
 /// A window as the snow sees it: its border around it, and its corners rounded as the config has them, the
 /// border's outer edge a border wider. A full-screen window has neither.
 fn reported(client: &Client, decoration: Decoration) -> Window {
-    let full = client.fullscreen >= 2;
+    let full = client.fullscreen() >= 2;
     let border = if full { 0.0 } else { decoration.border };
     let radius = if full || decoration.rounding <= 0.0 { 0.0 } else { decoration.rounding + border };
     Window {
@@ -283,7 +310,7 @@ fn reported(client: &Client, decoration: Decoration) -> Window {
         full,
         above: client.pinned,
         decorated: border > 0.0,
-        maximized: client.fullscreen == 1,
+        maximized: client.fullscreen() == 1,
         radius: Some(radius as f32),
     }
 }
@@ -296,4 +323,32 @@ fn request<T: DeserializeOwned>(socket: &Path, command: &str) -> Result<T, Strin
     let mut reply = Vec::new();
     stream.read_to_end(&mut reply).map_err(|error| error.to_string())?;
     serde_json::from_slice(&reply).map_err(|error| format!("{command}: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn client(fullscreen: &str) -> Client {
+        let json = format!(
+            r#"{{"address": "0x1", "mapped": true, "hidden": false, "at": [0, 0], "size": [10, 10], "workspace": {{"id": 1, "name": "1"}},
+            "floating": false, "class": "kitty", "pinned": false, {fullscreen}, "focusHistoryID": 0}}"#
+        );
+        serde_json::from_str(&json).expect("a client")
+    }
+
+    #[test]
+    fn reads_full_screen_as_hyprland_0_42_and_later_tell_it() {
+        assert_eq!(client(r#""fullscreen": 0, "fullscreenClient": 0"#).fullscreen(), 0);
+        assert_eq!(client(r#""fullscreen": 1, "fullscreenClient": 1"#).fullscreen(), 1);
+        assert_eq!(client(r#""fullscreen": 2, "fullscreenClient": 2"#).fullscreen(), 2);
+    }
+
+    #[test]
+    fn reads_full_screen_as_hyprland_0_41_tells_it() {
+        assert_eq!(client(r#""fullscreen": false, "fullscreenMode": 0"#).fullscreen(), 0);
+        assert_eq!(client(r#""fullscreen": false, "fullscreenMode": 1"#).fullscreen(), 0);
+        assert_eq!(client(r#""fullscreen": true, "fullscreenMode": 0"#).fullscreen(), 2);
+        assert_eq!(client(r#""fullscreen": true, "fullscreenMode": 1"#).fullscreen(), 1);
+    }
 }
