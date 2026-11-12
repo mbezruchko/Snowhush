@@ -171,12 +171,14 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                     settings.behind_windows = on;
                     layer = on.then(find_layer).flatten();
                     screens = sync_screens(&gpu, &settings, &full_screen, screens, &mut stranded, layer, true);
+                    light_at = 0;
                 }
                 Command::OverFullScreen(on) => {
                     settings.over_full_screen = on;
                     if !on && !full_screen.is_empty() {
                         full_screen.clear();
                         screens = sync_screens(&gpu, &settings, &full_screen, screens, &mut stranded, layer, false);
+                        light_at = 0;
                     }
                 }
                 Command::DeepInteraction(on) => {
@@ -192,11 +194,13 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                 Command::BehindTaskbar(on) => {
                     settings.behind_taskbar = on;
                     screens = sync_screens(&gpu, &settings, &full_screen, screens, &mut stranded, layer, true);
+                    light_at = 0;
                 }
                 Command::ShellRestarted => {
                     if settings.behind_windows {
                         layer = find_layer();
                         screens = sync_screens(&gpu, &settings, &full_screen, screens, &mut stranded, layer, true);
+                        light_at = 0;
                     }
                 }
                 Command::ShowInScreenshots(on) => {
@@ -318,6 +322,7 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                 if found.is_some() || screens.iter().any(|screen| !screen.alive()) {
                     layer = found;
                     screens = sync_screens(&gpu, &settings, &full_screen, screens, &mut stranded, layer, true);
+                    light_at = 0;
                 }
             }
             if now >= light_at {
@@ -433,6 +438,7 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                 recover_at = Some(now + pause);
             } else if reshaped {
                 screens = sync_screens(&gpu, &settings, &full_screen, screens, &mut stranded, layer, false);
+                light_at = 0;
             }
             if drawn && !lost {
                 pause = 0;
@@ -451,6 +457,7 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                     log!("adapter: {}", fresh.adapter);
                     gpu = fresh;
                     screens = sync_screens(&gpu, &settings, &full_screen, screens, &mut stranded, layer, true);
+                    light_at = 0;
                     recover_at = None;
                     backoff = clock.frequency;
                     pause = (pause * 2).clamp(clock.frequency, clock.frequency * 30);
