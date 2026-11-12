@@ -2232,7 +2232,7 @@ final class SnowSimulation {
     /// The sign the ghost holds up, its stick in the raised paw, rising out of the snow beside it as it is pulled up.
     private func sign(of ghost: Ghost) -> SignSprite? {
         guard let caption = ghost.sign, ghost.signUp > 0 else { return nil }
-        let (ground, center) = placement(of: ghost)
+        let (ground, _) = placement(of: ghost)
         // The paw's tip when raised to hold it, in the ghost's own coordinates.
         let paw = paw(of: ghost, at: 0.35)
         return SignSprite(
