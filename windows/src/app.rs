@@ -1,6 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 use std::mem::size_of;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::thread::{self, JoinHandle};
@@ -77,6 +78,9 @@ const NIN_BALLOONUSERCLICK: u32 = WM_USER + 5;
 const DAY: u32 = 24 * 60 * 60 * 1000;
 
 static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
+type Checked = std::result::Result<Option<Release>, String>;
+/// Finished update checks and whether someone asked for them, waiting for `WM_UPDATE` to pick them up.
+static UPDATES: Mutex<Vec<(Checked, bool)>> = Mutex::new(Vec::new());
 
 /// A glyph drawn like the Mac's menu bar ones, at the sizes the tray draws it at.
 macro_rules! glyph {
@@ -283,8 +287,10 @@ unsafe extern "system" fn procedure(window: HWND, message: u32, wparam: WPARAM, 
             unsafe { DefWindowProcW(window, message, wparam, lparam) }
         }
         WM_UPDATE => {
-            let result = unsafe { Box::from_raw(lparam.0 as *mut std::result::Result<Option<Release>, String>) };
-            updated(window, *result, wparam.0 != 0);
+            let finished = UPDATES.lock().map(|mut updates| std::mem::take(&mut *updates)).unwrap_or_default();
+            for (result, asked) in finished {
+                updated(window, result, asked);
+            }
             LRESULT(0)
         }
         WM_TIMER if wparam.0 == TIMER_WELCOME => {
@@ -643,9 +649,12 @@ fn switch_modes(app: &App) {
 fn check_for_updates(window: HWND, asked: bool) {
     let target = window.0 as isize;
     thread::spawn(move || {
-        let result = Box::new(update::check());
+        let result = update::check();
+        if let Ok(mut updates) = UPDATES.lock() {
+            updates.push((result, asked));
+        }
         unsafe {
-            let _ = PostMessageW(Some(HWND(target as _)), WM_UPDATE, WPARAM(asked as usize), LPARAM(Box::into_raw(result) as isize));
+            let _ = PostMessageW(Some(HWND(target as _)), WM_UPDATE, WPARAM(0), LPARAM(0));
         }
     });
 }

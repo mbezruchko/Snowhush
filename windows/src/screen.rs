@@ -4,6 +4,7 @@ use std::ffi::c_void;
 use std::mem::size_of;
 use std::sync::Once;
 use std::sync::atomic::{AtomicIsize, Ordering};
+use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{COLORREF, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{DWM_TIMING_INFO, DwmGetCompositionTimingInfo};
@@ -48,7 +49,8 @@ thread_local! {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PowerBudget {
     Full,
-    /// On battery: no frame rates above 60, which are hard to tell apart in snow anyway.
+    /// On battery: frame rates of about 60 at most, at a whole fraction of the display's rate; faster ones are hard
+    /// to tell apart in snow anyway.
     Battery,
     /// Energy saver: a little less snow, drawn a little less often.
     Saver,
@@ -229,6 +231,9 @@ pub struct Screen {
     /// The taskbar's ledge while it rains, as last seen: one that hides itself slides in and out with no window
     /// changing, so it is looked at every frame.
     taskbar: Option<WindowSurface>,
+    /// This display's taskbar as last found, and when it was last looked for: finding it goes through every
+    /// top-level window, too slow to do every frame.
+    taskbar_window: Cell<(Option<HWND>, Option<Instant>)>,
     /// Whether the simulation has had this overlay's windows at least once: one made anew for a change of settings
     /// carries on a simulation with the old overlay's, which might be gone, as the taskbar's are behind it.
     synced: bool,
@@ -273,6 +278,7 @@ impl Screen {
             idle_frames: 0,
             surfaces: Vec::new(),
             taskbar: None,
+            taskbar_window: Cell::new((None, None)),
             synced: false,
             windows_seen: 0,
             windows_changed_at: 0,
@@ -414,7 +420,7 @@ impl Screen {
             return None;
         }
         let mut rect = RECT::default();
-        unsafe { GetWindowRect(taskbar(bounds)?, &mut rect) }.ok()?;
+        unsafe { GetWindowRect(self.taskbar_window()?, &mut rect) }.ok()?;
         // Only one along the bottom, and only while it shows: a hidden one leaves a sliver on the screen.
         let showing = rect.bottom.min(bounds.bottom) - rect.top.max(bounds.top);
         if rect.bottom < bounds.bottom || rect.right - rect.left < (bounds.right - bounds.left) / 2 || showing < 16 {
@@ -526,7 +532,7 @@ impl Screen {
     pub fn raise(&self) {
         // A taskbar out of the topmost band, as under a full-screen app, would take the snow down with it.
         let topmost = |window: &HWND| unsafe { GetWindowLongPtrW(*window, GWL_EXSTYLE) } as u32 & WS_EX_TOPMOST.0 != 0;
-        let taskbar = if self.behind_taskbar { taskbar(&self.monitor.bounds).filter(topmost) } else { None };
+        let taskbar = if self.behind_taskbar { self.taskbar_window().filter(topmost) } else { None };
         let above = match (self.layer, taskbar) {
             (Some(layer), _) => layer.icons.unwrap_or(HWND_TOP),
             (None, Some(taskbar)) => taskbar,
@@ -550,7 +556,21 @@ impl Screen {
         self.layer.is_none()
             && !self.behind_taskbar
             && self.monitor.rect == self.monitor.bounds
-            && taskbar_above(self.overlay.0, &self.monitor.bounds)
+            && taskbar_above(self.overlay.0, self.taskbar_window())
+    }
+
+    /// This display's taskbar, looked for again once the one found is gone or elsewhere, and at most once a second
+    /// while there is none.
+    fn taskbar_window(&self) -> Option<HWND> {
+        let bounds = &self.monitor.bounds;
+        match self.taskbar_window.get() {
+            (Some(window), _) if unsafe { IsWindow(Some(window)) }.as_bool() && on_display(window, bounds) => return Some(window),
+            (None, Some(looked)) if looked.elapsed() < Duration::from_secs(1) => return None,
+            _ => {}
+        }
+        let window = taskbar(bounds);
+        self.taskbar_window.set((window, Some(Instant::now())));
+        window
     }
 
     /// An overlay inside Explorer's wallpaper layer goes away with it when Explorer restarts.
@@ -601,7 +621,7 @@ fn physical_size(monitor: &Monitor) -> (i32, i32) {
 pub fn watch_taskbar(wake: isize) {
     static WAKE: AtomicIsize = AtomicIsize::new(0);
     unsafe extern "system" fn on_restack(_: HWINEVENTHOOK, _: u32, _: HWND, _: i32, _: i32, _: u32, _: u32) {
-        if overlays_over_hiding_taskbars().any(|(overlay, bounds)| taskbar_above(overlay, &bounds)) {
+        if overlays_over_hiding_taskbars().any(|(overlay, bounds)| taskbar_above(overlay, taskbar(&bounds))) {
             let _ = unsafe { SetEvent(HANDLE(WAKE.load(Ordering::Relaxed) as _)) };
         }
     }
@@ -706,9 +726,9 @@ fn behind_needs_raise(overlay: HWND, icons: Option<HWND>) -> bool {
     }
 }
 
-/// Whether the taskbar on the display with these bounds stands above the overlay.
-fn taskbar_above(overlay: HWND, bounds: &RECT) -> bool {
-    let Some(taskbar) = taskbar(bounds) else {
+/// Whether the display's taskbar stands above the overlay.
+fn taskbar_above(overlay: HWND, taskbar: Option<HWND>) -> bool {
+    let Some(taskbar) = taskbar else {
         return false;
     };
     let mut window = overlay;
@@ -733,11 +753,14 @@ fn taskbar(bounds: &RECT) -> Option<HWND> {
         let secondary = std::iter::successors(FindWindowExW(None, None, w!("Shell_SecondaryTrayWnd"), None).ok(), |&previous| {
             FindWindowExW(None, Some(previous), w!("Shell_SecondaryTrayWnd"), None).ok()
         });
-        primary.into_iter().chain(secondary).find(|&window| {
-            let mut info = MONITORINFO { cbSize: size_of::<MONITORINFO>() as u32, ..Default::default() };
-            GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST), &mut info).as_bool() && info.rcMonitor == *bounds
-        })
+        primary.into_iter().chain(secondary).find(|&window| on_display(window, bounds))
     }
+}
+
+/// Whether the window is on the display with these bounds.
+fn on_display(window: HWND, bounds: &RECT) -> bool {
+    let mut info = MONITORINFO { cbSize: size_of::<MONITORINFO>() as u32, ..Default::default() };
+    unsafe { GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST), &mut info) }.as_bool() && info.rcMonitor == *bounds
 }
 
 fn create_overlay(rect: &RECT, shown_in_screenshots: bool) -> Result<HWND> {
