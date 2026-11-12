@@ -191,6 +191,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     /// ones, once the screen shows them no more, so a second clear frame follows the first.
     func releaseFrames(of view: MTKView) {
         guard view.drawableSize != Self.released else { return }
+        field = nil
         Self.resize(view, to: Self.released)
         clear(view)
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.handBack) { [weak self, weak view] in
