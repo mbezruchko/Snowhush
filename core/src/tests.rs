@@ -164,6 +164,42 @@ fn a_screen_rests_only_once_its_snow_is_gone_and_none_is_coming() {
 }
 
 #[test]
+fn a_screen_rests_while_a_bare_window_is_away() {
+    let mut simulation = SnowSimulation::new(1280.0, 800.0, 0.0);
+    let none = HashSet::new();
+    simulation.update_windows(&[surface(7, 300.0, 600.0, 500.0)], 0.2, &none, &none, false);
+    run(&mut simulation, 1.0, AWAY);
+    simulation.update_windows(&[], 0.2, &none, &HashSet::from([7]), false);
+    run(&mut simulation, 1.0, AWAY);
+    assert!(simulation.is_empty(), "a window with nothing on it kept the screen awake while away");
+}
+
+#[test]
+fn snow_waiting_for_windows_away_drops_the_longest_gone_first() {
+    let none = HashSet::new();
+    let windows: Vec<WindowSurface> = (0..201).map(|i| surface(i + 1, 10.0 + i as f32 * 40.0, 400.0, 36.0)).collect();
+    let mut simulation = SnowSimulation::new(8100.0, 500.0, 1.0);
+    simulation.update_windows(&windows, 0.2, &none, &none, false);
+    run(&mut simulation, 20.0, AWAY);
+    simulation.set_intensity(0.0);
+    run(&mut simulation, 5.0, AWAY);
+    let snow_on = |simulation: &SnowSimulation, window: &WindowSurface| {
+        piles(simulation).iter().filter(|(origin, _)| origin.y > 300.0 && (origin.x - window.frame.x).abs() < 1.0).map(|pile| pile.1).sum::<f32>()
+    };
+    assert!(windows.iter().all(|window| snow_on(&simulation, window) > 0.0), "a window without snow");
+    for gone in 1..=windows.len() {
+        let away = HashSet::from([windows[gone - 1].id]);
+        simulation.update_windows(&windows[gone..], 0.2, &none, &away, false);
+        simulation.step(DT, AWAY);
+    }
+    simulation.update_windows(&[windows[0].clone(), windows[1].clone(), windows[200].clone()], 0.2, &none, &none, false);
+    run(&mut simulation, 0.5, AWAY);
+    assert_eq!(snow_on(&simulation, &windows[0]), 0.0, "the window gone longest kept its snow");
+    assert!(snow_on(&simulation, &windows[1]) > 0.0, "the next window lost its snow");
+    assert!(snow_on(&simulation, &windows[200]) > 0.0, "the window gone last lost its snow");
+}
+
+#[test]
 fn a_calm_gust_melts_the_drifts_where_they_lie() {
     let mut simulation = SnowSimulation::new(1280.0, 800.0, 0.75);
     run(&mut simulation, 90.0, AWAY);
@@ -884,6 +920,19 @@ fn leaves_lie_where_they_land() {
 }
 
 #[test]
+fn leaves_lying_still_ask_for_no_redraw() {
+    let mut simulation = SnowSimulation::new(800.0, 600.0, 0.75);
+    simulation.set_mode(Mode::Autumn);
+    run(&mut simulation, 60.0, AWAY);
+    simulation.set_intensity(0.0);
+    // Once the heaps have slumped into shape, a whole second passes with nothing to redraw.
+    let rested = (0..180).any(|_| (0..60).filter(|_| simulation.step(DT, AWAY)).count() == 0);
+    assert!(rested, "leaves lying still redrawn every frame");
+    assert!(leaf_sprites(&simulation) > 0, "no leaves lying");
+    assert!(!simulation.is_empty(), "leaves still lie");
+}
+
+#[test]
 fn cherry_blossom_petals_fall_and_lie_as_leaves_do() {
     let mut simulation = SnowSimulation::new(800.0, 600.0, 0.75);
     simulation.set_mode(Mode::Blossom);
@@ -1189,6 +1238,23 @@ fn switching_to_rain_clears_the_snow_first() {
     let streaks = rain_sprites(&simulation, 1.0).len();
     assert!(streaks > 0, "no rain falling");
     assert_eq!(streaks, simulation.sprite_count(), "snow left over");
+}
+
+#[test]
+fn snow_left_lying_in_the_rain_melts_as_fast_as_under_snowfall() {
+    let melted = |mode: Mode| {
+        let mut simulation = SnowSimulation::new(800.0, 600.0, 0.75);
+        simulation.thaws = true;
+        run(&mut simulation, 40.0, AWAY);
+        simulation.set_snowfall_held(true);
+        simulation.set_mode(mode);
+        run(&mut simulation, 15.0, AWAY);
+        let before = piles(&simulation)[0].1;
+        run(&mut simulation, 30.0, AWAY);
+        1.0 - piles(&simulation).first().map_or(0.0, |ground| ground.1) / before
+    };
+    let (snow, rain) = (melted(Mode::Snow), melted(Mode::Rain));
+    assert!(rain > snow * 0.7 && rain < snow * 1.5, "{snow} of the snow melted under held snowfall, {rain} in the rain");
 }
 
 #[test]
