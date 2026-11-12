@@ -3,7 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use windows::Win32::Foundation::{ERROR_SUCCESS, WIN32_ERROR};
 use windows::Win32::System::Registry::{
-    HKEY_CURRENT_USER, REG_DWORD, REG_SZ, RRF_RT_REG_DWORD, RRF_RT_REG_SZ, RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW,
+    HKEY_CURRENT_USER, REG_DWORD, REG_SZ, RRF_RT_REG_BINARY, RRF_RT_REG_DWORD, RRF_RT_REG_SZ, RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{SPI_GETCLIENTAREAANIMATION, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW};
 use windows::core::{BOOL, PCWSTR, w};
@@ -15,6 +15,7 @@ const KEY: PCWSTR = w!("Software\\Snowhush");
 const MODES: [Mode; 4] = [Mode::Snow, Mode::Autumn, Mode::Rain, Mode::Blossom];
 const RUN: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
 const RUN_VALUE: PCWSTR = w!("Snowhush");
+const STARTUP_APPROVED: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run");
 
 #[derive(Clone, Copy)]
 pub struct Settings {
@@ -168,7 +169,25 @@ pub fn opens_at_login() -> bool {
         return false;
     }
     let length = buffer.iter().position(|&c| c == 0).unwrap_or(0);
-    command().is_some_and(|command| command[..command.len() - 1] == buffer[..length])
+    command().is_some_and(|command| command[..command.len() - 1] == buffer[..length]) && !startup_disabled()
+}
+
+/// Whether the system's startup list has Snowhush switched off: its record's first byte is odd then.
+fn startup_disabled() -> bool {
+    let mut record = [0u8; 64];
+    let mut size = record.len() as u32;
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            STARTUP_APPROVED,
+            RUN_VALUE,
+            RRF_RT_REG_BINARY,
+            None,
+            Some(record.as_mut_ptr().cast::<c_void>()),
+            Some(&mut size),
+        )
+    };
+    status == ERROR_SUCCESS && size > 0 && record[0] & 1 == 1
 }
 
 pub fn set_opens_at_login(on: bool) -> WIN32_ERROR {
@@ -177,6 +196,7 @@ pub fn set_opens_at_login(on: bool) -> WIN32_ERROR {
             return RegDeleteKeyValueW(HKEY_CURRENT_USER, RUN, RUN_VALUE);
         }
         let Some(command) = command() else { return WIN32_ERROR(1) };
+        let _ = RegDeleteKeyValueW(HKEY_CURRENT_USER, STARTUP_APPROVED, RUN_VALUE);
         RegSetKeyValueW(HKEY_CURRENT_USER, RUN, RUN_VALUE, REG_SZ.0, Some(command.as_ptr().cast()), (command.len() * 2) as u32)
     }
 }

@@ -22,6 +22,7 @@ use windows::core::{GUID, HSTRING, Interface, PCWSTR, w};
 
 const UNINSTALL: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Snowhush");
 const RUN: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
+const STARTUP_APPROVED: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run");
 const SETTINGS: PCWSTR = w!("Software\\Snowhush");
 const NAME: PCWSTR = w!("Snowhush");
 /// The app's hidden window, which a running Snowhush always has.
@@ -87,6 +88,7 @@ pub fn uninstall() {
         let _ = RegDeleteTreeW(HKEY_CURRENT_USER, UNINSTALL);
         let _ = RegDeleteTreeW(HKEY_CURRENT_USER, SETTINGS);
         let _ = RegDeleteKeyValueW(HKEY_CURRENT_USER, RUN, NAME);
+        let _ = RegDeleteKeyValueW(HKEY_CURRENT_USER, STARTUP_APPROVED, NAME);
     }
     if let Some(folder) = folder.filter(|folder| folder.ends_with("Snowhush")) {
         let _ = std::process::Command::new("cmd.exe")
