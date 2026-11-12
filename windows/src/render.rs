@@ -1,6 +1,7 @@
 use std::cell::{OnceCell, RefCell};
 use std::collections::HashMap;
 use std::mem::{offset_of, size_of};
+use std::sync::OnceLock;
 
 use windows::Win32::Foundation::{HMODULE, HWND};
 use windows::Win32::Graphics::Direct3D::Fxc::{D3DCOMPILE_OPTIMIZATION_LEVEL3, D3DCompile};
@@ -146,6 +147,7 @@ pub struct Gpu {
     pumpkin_vertex: ID3D11VertexShader,
     pumpkin_fragment: ID3D11PixelShader,
     /// Drops on the glass: their bumps added up into a field, and the glass drawn from it.
+    field_vertex: ID3D11VertexShader,
     field_fragment: ID3D11PixelShader,
     glass_vertex: ID3D11VertexShader,
     glass_fragment: ID3D11PixelShader,
@@ -190,19 +192,19 @@ impl Gpu {
             let factory: IDXGIFactory2 = adapter.GetParent()?;
             let composition: IDCompositionDevice = DCompositionCreateDevice(&dxgi)?;
 
-            let sprite_code = compile(s!("spriteVertex"), s!("vs_4_0"))?;
-            let pile_code = compile(s!("pileVertex"), s!("vs_4_0"))?;
-            let sprite_vertex = vertex_shader(&device, &sprite_code)?;
-            let pile_vertex = vertex_shader(&device, &pile_code)?;
-            let sprite_fragment = pixel_shader(&device, &compile(s!("spriteFragment"), s!("ps_4_0"))?)?;
-            let pile_fragment = pixel_shader(&device, &compile(s!("pileFragment"), s!("ps_4_0"))?)?;
-            let sign_vertex = vertex_shader(&device, &compile(s!("signVertex"), s!("vs_4_0"))?)?;
-            let sign_fragment = pixel_shader(&device, &compile(s!("signFragment"), s!("ps_4_0"))?)?;
-            let pumpkin_vertex = vertex_shader(&device, &compile(s!("pumpkinVertex"), s!("vs_4_0"))?)?;
-            let pumpkin_fragment = pixel_shader(&device, &compile(s!("pumpkinFragment"), s!("ps_4_0"))?)?;
-            let field_fragment = pixel_shader(&device, &compile(s!("fieldFragment"), s!("ps_4_0"))?)?;
-            let glass_vertex = vertex_shader(&device, &compile(s!("glassVertex"), s!("vs_4_0"))?)?;
-            let glass_fragment = pixel_shader(&device, &compile(s!("glassFragment"), s!("ps_4_0"))?)?;
+            let code = Code::get()?;
+            let sprite_vertex = vertex_shader(&device, &code.sprite_vertex)?;
+            let pile_vertex = vertex_shader(&device, &code.pile_vertex)?;
+            let sprite_fragment = pixel_shader(&device, &code.sprite_fragment)?;
+            let pile_fragment = pixel_shader(&device, &code.pile_fragment)?;
+            let sign_vertex = vertex_shader(&device, &code.sign_vertex)?;
+            let sign_fragment = pixel_shader(&device, &code.sign_fragment)?;
+            let pumpkin_vertex = vertex_shader(&device, &code.pumpkin_vertex)?;
+            let pumpkin_fragment = pixel_shader(&device, &code.pumpkin_fragment)?;
+            let field_vertex = vertex_shader(&device, &code.field_vertex)?;
+            let field_fragment = pixel_shader(&device, &code.field_fragment)?;
+            let glass_vertex = vertex_shader(&device, &code.glass_vertex)?;
+            let glass_fragment = pixel_shader(&device, &code.glass_fragment)?;
 
             let element = |name: PCSTR, format: DXGI_FORMAT, offset: u32| D3D11_INPUT_ELEMENT_DESC {
                 SemanticName: name,
@@ -229,7 +231,7 @@ impl Gpu {
                 element(s!("PETAL"), DXGI_FORMAT_R32_FLOAT, 132),
             ];
             let mut sprite_layout = None;
-            device.CreateInputLayout(&elements, blob_bytes(&sprite_code), Some(&mut sprite_layout))?;
+            device.CreateInputLayout(&elements, &code.sprite_vertex, Some(&mut sprite_layout))?;
 
             let target = D3D11_RENDER_TARGET_BLEND_DESC {
                 BlendEnable: true.into(),
@@ -293,6 +295,7 @@ impl Gpu {
                 sign_fragment,
                 pumpkin_vertex,
                 pumpkin_fragment,
+                field_vertex,
                 field_fragment,
                 glass_vertex,
                 glass_fragment,
@@ -309,6 +312,11 @@ impl Gpu {
                 adapter: String::from_utf16_lossy(&description.Description[..name_length]),
             })
         }
+    }
+
+    /// Why the graphics card was lost, as to a driver update or a reset; fine while it is still there.
+    pub fn removed(&self) -> Result<()> {
+        unsafe { self.device.GetDeviceRemovedReason() }
     }
 
     fn write<T: Copy>(&self, buffer: &ID3D11Buffer, value: &T) -> Result<()> {
@@ -586,17 +594,18 @@ impl Surface {
                 let offset = 0;
                 context.IASetInputLayout(&gpu.sprite_layout);
                 context.IASetVertexBuffers(0, 1, Some(&Some(sprite_buffer.clone())), Some(&stride), Some(&offset));
-                context.VSSetShader(&gpu.sprite_vertex, None);
                 // Drops on the glass first add up into their field.
                 if let Some((field_target, _)) = &glass {
                     context.OMSetRenderTargets(Some(&[Some(field_target.clone())]), None);
                     context.ClearRenderTargetView(field_target, &[0.0; 4]);
                     context.OMSetBlendState(&gpu.adding, None, u32::MAX);
+                    context.VSSetShader(&gpu.field_vertex, None);
                     context.PSSetShader(&gpu.field_fragment, None);
                     context.DrawInstanced(4, sprites as u32, 0, 0);
                     context.OMSetRenderTargets(Some(&[Some(self.target_view.clone())]), None);
                     context.OMSetBlendState(&gpu.blend, None, u32::MAX);
                 }
+                context.VSSetShader(&gpu.sprite_vertex, None);
                 context.PSSetShader(&gpu.sprite_fragment, None);
                 context.DrawInstanced(4, sprites as u32, 0, 0);
                 if let Some((_, field)) = &glass {
@@ -671,7 +680,47 @@ impl Surface {
     }
 }
 
-fn compile(entry: PCSTR, target: PCSTR) -> Result<ID3DBlob> {
+/// The shaders' bytecode, compiled once: it doesn't depend on the device, so a new one after the old was lost reuses it.
+struct Code {
+    sprite_vertex: Vec<u8>,
+    sprite_fragment: Vec<u8>,
+    pile_vertex: Vec<u8>,
+    pile_fragment: Vec<u8>,
+    sign_vertex: Vec<u8>,
+    sign_fragment: Vec<u8>,
+    pumpkin_vertex: Vec<u8>,
+    pumpkin_fragment: Vec<u8>,
+    field_vertex: Vec<u8>,
+    field_fragment: Vec<u8>,
+    glass_vertex: Vec<u8>,
+    glass_fragment: Vec<u8>,
+}
+
+impl Code {
+    fn get() -> Result<&'static Code> {
+        static CODE: OnceLock<Code> = OnceLock::new();
+        if let Some(code) = CODE.get() {
+            return Ok(code);
+        }
+        let code = Code {
+            sprite_vertex: compile(s!("spriteVertex"), s!("vs_4_0"))?,
+            sprite_fragment: compile(s!("spriteFragment"), s!("ps_4_0"))?,
+            pile_vertex: compile(s!("pileVertex"), s!("vs_4_0"))?,
+            pile_fragment: compile(s!("pileFragment"), s!("ps_4_0"))?,
+            sign_vertex: compile(s!("signVertex"), s!("vs_4_0"))?,
+            sign_fragment: compile(s!("signFragment"), s!("ps_4_0"))?,
+            pumpkin_vertex: compile(s!("pumpkinVertex"), s!("vs_4_0"))?,
+            pumpkin_fragment: compile(s!("pumpkinFragment"), s!("ps_4_0"))?,
+            field_vertex: compile(s!("fieldVertex"), s!("vs_4_0"))?,
+            field_fragment: compile(s!("fieldFragment"), s!("ps_4_0"))?,
+            glass_vertex: compile(s!("glassVertex"), s!("vs_4_0"))?,
+            glass_fragment: compile(s!("glassFragment"), s!("ps_4_0"))?,
+        };
+        Ok(CODE.get_or_init(|| code))
+    }
+}
+
+fn compile(entry: PCSTR, target: PCSTR) -> Result<Vec<u8>> {
     let mut code = None;
     let mut errors = None;
     let result = unsafe {
@@ -693,22 +742,22 @@ fn compile(entry: PCSTR, target: PCSTR) -> Result<ID3DBlob> {
         let message = errors.as_ref().map(|blob| String::from_utf8_lossy(blob_bytes(blob)).into_owned()).unwrap_or_default();
         return Err(Error::new(error.code(), message));
     }
-    code.ok_or_else(Error::empty)
+    code.map(|blob| blob_bytes(&blob).to_vec()).ok_or_else(Error::empty)
 }
 
 fn blob_bytes(blob: &ID3DBlob) -> &[u8] {
     unsafe { std::slice::from_raw_parts(blob.GetBufferPointer().cast::<u8>(), blob.GetBufferSize()) }
 }
 
-fn vertex_shader(device: &ID3D11Device, code: &ID3DBlob) -> Result<ID3D11VertexShader> {
+fn vertex_shader(device: &ID3D11Device, code: &[u8]) -> Result<ID3D11VertexShader> {
     let mut shader = None;
-    unsafe { device.CreateVertexShader(blob_bytes(code), None, Some(&mut shader))? };
+    unsafe { device.CreateVertexShader(code, None, Some(&mut shader))? };
     shader.ok_or_else(Error::empty)
 }
 
-fn pixel_shader(device: &ID3D11Device, code: &ID3DBlob) -> Result<ID3D11PixelShader> {
+fn pixel_shader(device: &ID3D11Device, code: &[u8]) -> Result<ID3D11PixelShader> {
     let mut shader = None;
-    unsafe { device.CreatePixelShader(blob_bytes(code), None, Some(&mut shader))? };
+    unsafe { device.CreatePixelShader(code, None, Some(&mut shader))? };
     shader.ok_or_else(Error::empty)
 }
 
