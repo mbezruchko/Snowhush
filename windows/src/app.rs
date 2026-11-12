@@ -125,7 +125,7 @@ impl Emblem {
         if halloween::shows(settings) {
             Emblem::Pumpkin
         } else {
-            match settings.mode {
+            match settings.picked.mode {
                 Mode::Snow => Emblem::Snowflake,
                 Mode::Autumn => Emblem::Leaf,
                 Mode::Rain => Emblem::Rain,
@@ -373,14 +373,18 @@ fn show_menu(window: HWND, x: i32, y: i32) {
 
 /// What the tray menu lists, with what is on or off: sliders in the drawn menu, submenus in the system's.
 fn entries(settings: &Settings, login: bool, sliders: bool) -> Vec<Entry> {
-    let picked = settings.modes();
+    let picked = settings.picked.modes();
     let falling: Vec<Mode> = Mode::ALL.iter().copied().filter(|mode| picked.contains(mode)).collect();
     // Mixed, the kinds are checkboxes and picking one leaves the menu open for the other; alone, one of a set.
     let kind = |id: u32, label: &str, mode: Mode| {
-        if settings.mixed { Entry::toggle(id, label, picked.contains(&mode), true) } else { Entry::choice(id, label, settings.mode == mode) }
+        if settings.picked.mixed {
+            Entry::toggle(id, label, picked.contains(&mode), true)
+        } else {
+            Entry::choice(id, label, settings.picked.mode == mode)
+        }
     };
     let modes = vec![
-        Entry::toggle(ID_MIXED, tr("mixed"), settings.mixed, true),
+        Entry::toggle(ID_MIXED, tr("mixed"), settings.picked.mixed, true),
         Entry::Separator,
         kind(ID_SNOW, tr("snow"), Mode::Snow),
         kind(ID_AUTUMN, tr("autumn"), Mode::Autumn),
@@ -563,7 +567,7 @@ fn choose(window: HWND, chosen: u32, login: bool) {
         ID_MIXED => {
             APP.with_borrow_mut(|app| {
                 let Some(app) = app else { return };
-                app.settings.toggle_mixed();
+                app.settings.picked.toggle_mixed();
                 switch_modes(app);
             });
             refresh_icon(window);
@@ -577,7 +581,7 @@ fn choose(window: HWND, chosen: u32, login: bool) {
             };
             APP.with_borrow_mut(|app| {
                 let Some(app) = app else { return };
-                if app.settings.pick(mode) {
+                if app.settings.picked.pick(mode) {
                     switch_modes(app);
                 }
             });
@@ -641,8 +645,7 @@ fn choose(window: HWND, chosen: u32, login: bool) {
 
 fn switch_modes(app: &App) {
     app.settings.save();
-    let settings = &app.settings;
-    send(app, Command::SwitchMode { mode: settings.mode, mixed: settings.mixed, mix: settings.mix, calm: !prefs::animations_enabled() });
+    send(app, Command::SwitchMode { picked: app.settings.picked, calm: !prefs::animations_enabled() });
 }
 
 /// Checks on another thread and reports back to the window with `WM_UPDATE`.

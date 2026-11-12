@@ -1301,3 +1301,78 @@ fn picks_a_language_from_system_tags() {
     assert_eq!(code("C"), None);
     assert_eq!(code("nl-NL"), None);
 }
+
+#[test]
+fn loads_saved_kinds() {
+    use crate::modes::Picked;
+    let unmixed = |mode, mix| Picked { mode, mixed: false, mix };
+    assert_eq!(Picked::load(None, None, None, [None, None]), unmixed(Mode::Snow, [Mode::Autumn, Mode::Snow]));
+    assert_eq!(Picked::load(None, Some(1), None, [None, None]), unmixed(Mode::Autumn, [Mode::Snow, Mode::Autumn]));
+    assert_eq!(Picked::load(Some(9), Some(1), None, [None, None]).mode, Mode::Autumn);
+    assert_eq!(Picked::load(Some(9), Some(0), None, [None, None]).mode, Mode::Snow);
+    assert_eq!(Picked::load(Some(2), Some(1), None, [None, None]).mode, Mode::Rain);
+    assert_eq!(Picked::load(Some(3), None, Some(1), [Some(2), Some(0)]), Picked { mode: Mode::Blossom, mixed: true, mix: [Mode::Rain, Mode::Snow] });
+    assert_eq!(Picked::load(Some(2), None, None, [Some(1), Some(1)]).mix, [Mode::Snow, Mode::Rain]);
+    assert_eq!(Picked::load(Some(0), None, None, [Some(1), Some(4)]).mix, [Mode::Autumn, Mode::Snow]);
+    assert_eq!(Picked::load(Some(1), None, None, [None, Some(2)]).mix, [Mode::Snow, Mode::Autumn]);
+}
+
+#[test]
+fn saved_kinds_load_back() {
+    use crate::modes::{Picked, SAVED, kind, number};
+    assert_eq!(SAVED.map(number), [0, 1, 2, 3]);
+    assert_eq!(kind(4), None);
+    assert!(Mode::ALL.iter().all(|&m| kind(number(m)) == Some(m)));
+    for mode in SAVED {
+        for a in SAVED {
+            for b in SAVED.into_iter().filter(|&b| b != a) {
+                for mixed in [false, true] {
+                    let picked = Picked { mode, mixed, mix: [a, b] };
+                    let autumn = Some((mode == Mode::Autumn) as u32);
+                    let loaded = Picked::load(Some(number(mode)), autumn, Some(mixed as u32), [Some(number(a)), Some(number(b))]);
+                    assert_eq!(loaded, picked);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn picks_kinds() {
+    use crate::modes::Picked;
+    let mut picked = Picked { mode: Mode::Snow, mixed: false, mix: [Mode::Autumn, Mode::Snow] };
+    assert!(!picked.pick(Mode::Snow));
+    assert!(picked.pick(Mode::Rain));
+    assert_eq!(picked, Picked { mode: Mode::Rain, mixed: false, mix: [Mode::Autumn, Mode::Snow] });
+    assert_eq!(picked.modes(), [Mode::Rain]);
+
+    let mut picked = Picked { mode: Mode::Autumn, mixed: true, mix: [Mode::Snow, Mode::Autumn] };
+    assert!(!picked.pick(Mode::Snow));
+    assert!(!picked.pick(Mode::Autumn));
+    assert!(picked.pick(Mode::Rain));
+    assert_eq!(picked, Picked { mode: Mode::Rain, mixed: true, mix: [Mode::Autumn, Mode::Rain] });
+    assert!(picked.pick(Mode::Blossom));
+    assert_eq!(picked.modes(), [Mode::Rain, Mode::Blossom]);
+    assert_eq!(picked.mode, Mode::Blossom);
+}
+
+#[test]
+fn toggles_mixed() {
+    use crate::modes::Picked;
+    let mut picked = Picked { mode: Mode::Rain, mixed: false, mix: [Mode::Snow, Mode::Autumn] };
+    picked.toggle_mixed();
+    assert_eq!(picked, Picked { mode: Mode::Rain, mixed: true, mix: [Mode::Autumn, Mode::Rain] });
+    assert!(picked.pick(Mode::Blossom));
+    picked.toggle_mixed();
+    assert_eq!(picked.modes(), [Mode::Blossom]);
+    picked.toggle_mixed();
+    assert_eq!(picked.mix, [Mode::Rain, Mode::Blossom]);
+
+    let mut picked = Picked { mode: Mode::Snow, mixed: false, mix: [Mode::Snow, Mode::Rain] };
+    picked.toggle_mixed();
+    assert_eq!(picked.mix, [Mode::Rain, Mode::Snow]);
+
+    let mut picked = Picked { mode: Mode::Snow, mixed: false, mix: [Mode::Snow, Mode::Snow] };
+    picked.toggle_mixed();
+    assert_eq!(picked.mix, [Mode::Autumn, Mode::Snow]);
+}
