@@ -44,6 +44,15 @@ jobs:
           name: snowhush-linux-x86_64
           path: dist
 
+  gnome-x11:
+    name: GNOME X11 overlay
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: sudo apt-get update -q && sudo apt-get install -y -q python3-gi python3-cairo gir1.2-gtk-3.0 gir1.2-wnck-3.0 desktop-file-utils
+      - run: /usr/bin/python3 -B -m unittest discover -s linux/tests
+      - run: desktop-file-validate linux/packaging/snowhush-gnome-x11.desktop
+
   mac:
     name: Mac app
     runs-on: macos-latest
