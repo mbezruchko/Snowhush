@@ -122,7 +122,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         self.pumpkinPipeline = try pipeline("pumpkinVertex", "pumpkinFragment")
         self.glassPipeline = try pipeline("glassVertex", "glassFragment")
         let field = MTLRenderPipelineDescriptor()
-        field.vertexFunction = library.makeFunction(name: "spriteVertex")
+        field.vertexFunction = library.makeFunction(name: "fieldVertex")
         field.fragmentFunction = library.makeFunction(name: "fieldFragment")
         let adding = field.colorAttachments[0]!
         adding.pixelFormat = .rg16Float

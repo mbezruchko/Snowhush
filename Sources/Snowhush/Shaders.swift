@@ -677,9 +677,34 @@ static SpriteOut sprite(uint vid, const device Sprite *sprites, constant Uniform
     return out;
 }
 
+/// Its kind as its fragments see it: a leaf is never rain.
+static float rainOf(Sprite s) {
+    return s.leaf != 0.0 ? 0.0 : s.rain;
+}
+
+/// A sprite left out of a pass: a pixel's point far off the screen, so none of its fragments runs.
+static SpriteVaryings culled() {
+    SpriteVaryings v = {};
+    v.position = float4(2.0, 2.0, 2.0, 1.0);
+    v.pointSize = 1.0;
+    return v;
+}
+
 vertex SpriteVaryings spriteVertex(uint vid [[vertex_id]],
                                    const device Sprite *sprites [[buffer(0)]],
                                    constant Uniforms &u [[buffer(1)]]) {
+    // A running drop is drawn with the glass, from the field.
+    float rain = rainOf(sprites[vid]);
+    if (rain >= 1.5 && rain < 2.5) return culled();
+    return pack(sprite(vid, sprites, u));
+}
+
+/// Only running drops add to the field.
+vertex SpriteVaryings fieldVertex(uint vid [[vertex_id]],
+                                  const device Sprite *sprites [[buffer(0)]],
+                                  constant Uniforms &u [[buffer(1)]]) {
+    float rain = rainOf(sprites[vid]);
+    if (rain < 1.5 || rain > 2.5) return culled();
     return pack(sprite(vid, sprites, u));
 }
 
