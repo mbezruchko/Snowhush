@@ -172,7 +172,7 @@ final class WindowTracker {
         // A sliding Space is followed every frame, its snow riding on the windows with no smoothing.
         // Turned to hide by itself, a Dock that stayed out slides away at once: the slow polls would let its snow hang.
         let dockTurnedToHide = dockStays && Dock.autoHides
-        guard minimizing || bannerMoving || now < slidingUntil || interval >= (closely ? 1.0 / 62 : 0.2) || dockTurnedToHide || watchedMoved() else { return nil }
+        guard minimizing || bannerMoving || now < slidingUntil || interval >= (closely ? 1.0 / 62 : 0.2) || dockTurnedToHide || (Self.slideMayStart && watchedMoved()) else { return nil }
         lastQuery = now
         let before = windowFrames
         let surfaces = query(now: now)
@@ -331,6 +331,14 @@ final class WindowTracker {
     private func watchedMoved() -> Bool {
         guard let watched, let bounds = Self.listedBounds(of: watched.id) else { return false }
         return abs(bounds.minX - screen.minX - watched.frame.minX) > 0.5 || abs(screen.maxY - bounds.maxY - watched.frame.minY) > 0.5
+    }
+
+    /// Input a Space can start sliding on without a click or a window shortcut's modifier: a trackpad touch or swipe, a
+    /// mouse's scroll or move, another modifier. Without any for a moment, the watched window isn't looked at between polls.
+    private static let slideInputs: [CGEventType] = [29, 30, 31].compactMap(CGEventType.init(rawValue:)) + [.scrollWheel, .mouseMoved, .flagsChanged]
+
+    private static var slideMayStart: Bool {
+        slideInputs.contains { CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0) < 0.5 }
     }
 
     /// Where the window list puts one window, in its own coordinates.
