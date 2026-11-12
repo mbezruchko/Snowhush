@@ -365,7 +365,9 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
             let windows = settings.snow_on_windows.then_some(&tracker);
             lend(&mut screens, windows, now + clock.tolerance());
             let time = (clock.seconds(now - started) % 1000.0) as f32;
-            let lending: Vec<bool> = (0..screens.len()).map(|index| windows.is_some_and(|tracker| lends(&screens, index, tracker))).collect();
+            let lending: Vec<bool> = (0..screens.len())
+                .map(|index| screens[index].behind_windows() && windows.is_some_and(|tracker| lends(&screens, index, tracker)))
+                .collect();
             let mut lost = false;
             let mut drawn = false;
             let mut released = false;
@@ -619,22 +621,27 @@ fn lend(screens: &mut [Screen], tracker: Option<&Tracker>, due: i64) {
 /// lying across two displays keeps its drift in one piece instead of ending at the edge.
 fn borrowed(screens: &[Screen], index: usize, tracker: &Tracker) -> Vec<Borrowed> {
     let screen = &screens[index];
-    let (width, height) = screen.size();
     let mut borrowed = Vec::new();
     for (&id, owner) in &tracker.owners {
         if *owner == screen.monitor.name {
             continue;
         }
-        let Some(r) = tracker.rect(id) else { continue };
-        let Some(home) = screens.iter().find(|other| other.monitor.name == *owner).filter(|_| reaches(&r, screen)) else { continue };
-        let Some(lent) = home.simulation.lend(id) else { continue };
-        let lent = lent.mapped(mapping(home, screen));
-        let [left, bottom, right, top] = lent.bounds();
-        if right > 0.0 && left < width as f32 && top > 0.0 && bottom < height as f32 {
-            borrowed.push(lent);
-        }
+        let Some(home) = screens.iter().find(|other| other.monitor.name == *owner) else { continue };
+        borrowed.extend(lent(home, screen, id, tracker));
     }
     borrowed
+}
+
+/// The snow `home` keeps for window `id`, in the coordinates of `screen`, when it shows there.
+fn lent(home: &Screen, screen: &Screen, id: isize, tracker: &Tracker) -> Option<Borrowed> {
+    let r = tracker.rect(id)?;
+    if !reaches(&r, screen) {
+        return None;
+    }
+    let lent = home.simulation.lend(id)?.mapped(mapping(home, screen));
+    let (width, height) = screen.size();
+    let [left, bottom, right, top] = lent.bounds();
+    (right > 0.0 && left < width as f32 && top > 0.0 && bottom < height as f32).then_some(lent)
 }
 
 /// Whether the drift on a window with these bounds may show on `screen`.
@@ -645,14 +652,14 @@ fn reaches(r: &RECT, screen: &Screen) -> bool {
     r.left < here.right && r.right > here.left && r.top - reach < here.bottom && r.top + 20 > here.top
 }
 
-/// Whether display `index` keeps the snow of a window reaching over another display, which draws it from there.
+/// Whether display `index` keeps the snow of a window that shows on another display, which draws it from there.
 fn lends(screens: &[Screen], index: usize, tracker: &Tracker) -> bool {
-    let name = &screens[index].monitor.name;
+    let home = &screens[index];
     tracker
         .owners
         .iter()
-        .filter(|(_, owner)| *owner == name)
-        .any(|(&id, _)| tracker.rect(id).is_some_and(|r| screens.iter().enumerate().any(|(other, screen)| other != index && reaches(&r, screen))))
+        .filter(|(_, owner)| **owner == home.monitor.name)
+        .any(|(&id, _)| screens.iter().enumerate().any(|(other, screen)| other != index && lent(home, screen, id, tracker).is_some()))
 }
 
 /// Passes on the snow that went from one display to another this frame: snow that fell on a window's drift lent by
