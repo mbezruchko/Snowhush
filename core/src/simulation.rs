@@ -1002,14 +1002,7 @@ impl SnowSimulation {
 
     /// A layer's smoothed surface, then its bed, as drawn: snow coming back with a window grows in again.
     fn write_layer(&self, layer: &SnowLayer, buffer: &mut [f32]) {
-        layer.write_smoothed(buffer);
-        let grown = smoothstep(0.0, REGROWTH, (self.air.clock - layer.returned_at) as f32);
-        if grown < 1.0 {
-            let (surface, bed) = buffer.split_at_mut(layer.count());
-            for (level, bed) in surface.iter_mut().zip(bed.iter()) {
-                *level = bed + (*level - bed) * grown;
-            }
-        }
+        layer.write_smoothed(buffer, smoothstep(0.0, REGROWTH, (self.air.clock - layer.returned_at) as f32));
     }
 
     /// Turns the pieces into snowflakes that drift down and fade to white; together they leave a small drift.

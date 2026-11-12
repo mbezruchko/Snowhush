@@ -537,45 +537,39 @@ impl SnowLayer {
         fastest > 0.01
     }
 
-    /// Writes the smoothed snow surface for each column, then the bed under it, the share of it that is leaves and
-    /// the share of those that are petals.
-    pub fn write_smoothed(&self, buffer: &mut [f32]) {
+    /// Writes the smoothed snow surface for each column, `grown` of the way up from the bed, then the bed under it, the
+    /// share of it that is leaves and the share of those that are petals.
+    pub fn write_smoothed(&self, buffer: &mut [f32], grown: f32) {
         let count = self.heights.len();
-        let mut empty = true;
-        // Worked out apart: on Windows the buffer is mapped GPU memory, write-combined, and slow to read back.
-        let mut makeup = vec![0.0f32; 2 * count];
-        let (shares, kinds) = makeup.split_at_mut(count);
-        for i in 0..count {
+        let smoothed = |values: &[f32], i: usize| {
             let (l, r) = (i.saturating_sub(1), (i + 1).min(count - 1));
-            let height = 0.25 * self.heights[l] + 0.5 * self.heights[i] + 0.25 * self.heights[r];
-            let leafy = 0.25 * self.leaves[l] + 0.5 * self.leaves[i] + 0.25 * self.leaves[r];
-            let petal = 0.25 * self.petals[l] + 0.5 * self.petals[i] + 0.25 * self.petals[r];
-            buffer[i] = self.bed[i] + height;
+            0.25 * values[l] + 0.5 * values[i] + 0.25 * values[r]
+        };
+        let kind = |i: usize| {
+            let leafy = smoothed(&self.leaves, i);
+            if leafy > 0.0 { (smoothed(&self.petals, i) / leafy).min(1.0) } else { 0.0 }
+        };
+        let makeup = |i: usize| {
+            let height = smoothed(&self.heights, i);
+            (height > 0.0).then(|| ((smoothed(&self.leaves, i) / height).min(1.0), kind(i)))
+        };
+        // Only ever written: on Windows the buffer is mapped GPU memory, write-combined, and slow to read back.
+        // A bare column takes the makeup of the nearest snow before it, or else after it, or the shader would blend a
+        // heap's end with snow that isn't there.
+        let mut last = (0..count).find_map(makeup);
+        for i in 0..count {
+            buffer[i] = self.bed[i] + smoothed(&self.heights, i) * grown;
             buffer[count + i] = self.bed[i];
-            shares[i] = if height > 0.0 { (leafy / height).min(1.0) } else { -1.0 };
-            kinds[i] = if leafy > 0.0 { (petal / leafy).min(1.0) } else { 0.0 };
-            if height > 0.0 {
-                empty = false;
-            }
-        }
-        // A bare column takes its neighbour's makeup, or the shader would blend a heap's end with snow that isn't there.
-        if empty {
-            shares.fill(0.0);
-        } else {
-            for i in 1..count {
-                if shares[i] < 0.0 && shares[i - 1] >= 0.0 {
-                    shares[i] = shares[i - 1];
-                    kinds[i] = kinds[i - 1];
+            let (share, kind) = match makeup(i) {
+                Some(own) => {
+                    last = Some(own);
+                    own
                 }
-            }
-            for i in (0..count.saturating_sub(1)).rev() {
-                if shares[i] < 0.0 {
-                    shares[i] = shares[i + 1];
-                    kinds[i] = kinds[i + 1];
-                }
-            }
+                None => last.unwrap_or_else(|| (0.0, kind(i))),
+            };
+            buffer[2 * count + i] = share;
+            buffer[3 * count + i] = kind;
         }
-        buffer[2 * count..4 * count].copy_from_slice(&makeup);
     }
 
     fn update_bed(&mut self) {
