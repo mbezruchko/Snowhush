@@ -3724,6 +3724,7 @@ extension SnowSimulation {
         ledgeList = Array(ledges.values)
         layers = [ground] + ledgeList
         windowsChanged = true
+        stirred()
     }
 
     /// The snow on a window kept here, to lend to a display it reaches over: `shift` takes these coordinates to that
@@ -3773,6 +3774,7 @@ extension SnowSimulation {
         let fill = ledge.index(at: x).map { ledge.fill($0) } ?? 1
         _ = ledge.deposit(snow.area * fill, at: x, wide: true)
         heightsChanged = true
+        stirred()
     }
 
     /// The snow thrown past a shared edge since the last call, in this display's coordinates.
@@ -3783,6 +3785,8 @@ extension SnowSimulation {
 
     /// Goes on with snow thrown in from a neighbouring display; `shift` takes its coordinates to these.
     func adoptStrays(_ thrown: [StraySnow], shift: SIMD2<Float>) {
+        guard !thrown.isEmpty else { return }
+        defer { stirred() }
         for stray in thrown {
             switch stray.piece {
             case .flake(var flake):
