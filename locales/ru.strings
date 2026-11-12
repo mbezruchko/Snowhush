@@ -63,3 +63,64 @@
 "setup.open" = "Открыть Snowhush";
 "setup.failed" = "Не удалось установить: {error}.";
 "setup.retry" = "Повторить";
+
+/* macOS weather sync. */
+"weather.title" = "Погода на рабочем столе";
+"weather.sync" = "По текущей погоде";
+"weather.configure" = "Настройки погоды…";
+"weather.automatic" = "Текущее местоположение";
+"weather.city" = "Выбрать город";
+"weather.search" = "Найти";
+"weather.search.placeholder" = "Город или почтовый индекс";
+"weather.results" = "Найденные города";
+"weather.use" = "Выбрать";
+"weather.refresh" = "Обновить погоду";
+"weather.provider" = "Погодные данные Open-Meteo ↗";
+"weather.privacy" = "Обновление каждые 15 минут, пока Mac не спит. Для текущего местоположения в Open-Meteo отправляются только округлённые координаты.";
+"weather.intro" = "Дождь, снег, плывущие облака, туман и солнечный свет следуют за погодой рядом с вами. Ночью свечение становится мягче.";
+"weather.here" = "Рядом с вами";
+"weather.interval" = "Обновление каждые 15 минут. Если геолокация недоступна, можно выбрать город.";
+"weather.updated" = "Погода на {time}";
+"weather.searching" = "Поиск…";
+"weather.noResults" = "Города не найдены. Попробуйте другое название.";
+"weather.pickResult" = "Выберите нужный город из списка и нажмите «Выбрать».";
+"weather.clear" = "Ясно";
+"weather.partlyCloudy" = "Переменная облачность";
+"weather.cloudy" = "Облачно";
+"weather.fog" = "Туман";
+"weather.drizzle" = "Морось";
+"weather.rain" = "Дождь";
+"weather.snow" = "Снег";
+"weather.storm" = "Гроза";
+"weather.status.off" = "Синхронизация с погодой выключена";
+"weather.status.locating" = "Определяем местоположение…";
+"weather.status.updating" = "Обновляем погоду…";
+"weather.status.ready" = "Погода обновлена";
+"weather.status.failed" = "Не удалось обновить погоду. Попробуйте ещё раз.";
+"weather.status.locationDenied" = "Нет доступа к геолокации. Разрешите его в Системных настройках или выберите город.";
+"weather.status.locationUnavailable" = "Не удалось определить местоположение. Повторите попытку или выберите город.";
+"weather.status.stale" = "Погодные данные устарели. Ожидаем обновления…";
+
+/* macOS effect rules. */
+"weather.effects" = "Погодные эффекты";
+"weather.customize.intro" = "Выберите, какие эффекты зависят от погоды, а какие включены постоянно.";
+"weather.customize.heading" = "Эффекты";
+"weather.customize.help" = "«Выключено» скрывает эффект. «По погоде» включает его при подходящих условиях. «Всегда» работает даже без данных о погоде.";
+"weather.effect.snow" = "Снег";
+"weather.effect.rain" = "Дождь";
+"weather.effect.clouds" = "Облака";
+"weather.effect.fog" = "Туман";
+"weather.effect.sunlight" = "Солнечное свечение";
+"weather.effect.lightning" = "Молнии";
+"weather.effect.night" = "Луна и звёзды";
+"weather.rule.off" = "Выключено";
+"weather.rule.weather" = "По погоде";
+"weather.rule.always" = "Всегда";
+"weather.location.heading" = "Где узнавать погоду";
+"weather.manual.description" = "Эти эффекты работают без геолокации и подключения к интернету.";
+"weather.none.description" = "Все погодные эффекты выключены. Выберите эффект выше, чтобы включить его.";
+"weather.status.manual" = "Ручные эффекты";
+
+/* macOS automatic weather intensity. */
+"weather.intensity.auto" = "Интенсивность по погоде";
+"weather.intensity.help" = "Для эффектов «По погоде» плотность дождя и снега зависит от силы осадков. Измените ползунок интенсивности в меню, чтобы перейти к ручной настройке.";

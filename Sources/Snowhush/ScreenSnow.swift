@@ -90,6 +90,13 @@ final class ScreenSnow {
         set { simulation.modes = newValue }
     }
 
+    func setWeather(_ scene: WeatherScene, strength: Float) {
+        renderer.weather.scene = scene
+        renderer.weather.strength = strength
+        simulation.weatherWind = scene.wind
+        wake()
+    }
+
     init?(screen: NSScreen, device: MTLDevice, displays: Displays, surfaces: @escaping () -> Surfaces) {
         guard let displayID = screen.displayID else { return nil }
         let simulation = SnowSimulation(

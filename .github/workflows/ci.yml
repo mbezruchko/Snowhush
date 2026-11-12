@@ -50,3 +50,4 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: swift build -c release
+      - run: swift test

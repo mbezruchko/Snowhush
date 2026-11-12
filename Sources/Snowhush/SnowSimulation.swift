@@ -357,6 +357,8 @@ private struct RandomSource {
 }
 
 final class SnowSimulation {
+    /// Horizontal wind supplied by weather sync; zero in the manual modes.
+    var weatherWind: Float = 0
     let columnWidth: Float = 2
     private(set) var width: Float
     private(set) var height: Float
@@ -3141,7 +3143,7 @@ final class SnowSimulation {
 
     private func breeze() -> Float {
         let t = clock
-        return Float(10 * sin(t * 0.07) + 6 * sin(t * 0.19 + 1.7) + 3 * sin(t * 0.43 + 4.1))
+        return weatherWind + Float(10 * sin(t * 0.07) + 6 * sin(t * 0.19 + 1.7) + 3 * sin(t * 0.43 + 4.1))
     }
 
     private func gustSpeed() -> Float {

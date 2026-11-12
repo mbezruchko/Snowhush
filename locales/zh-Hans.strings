@@ -63,3 +63,64 @@
 "setup.open" = "打开 Snowhush";
 "setup.failed" = "无法安装：{error}。";
 "setup.retry" = "重试";
+
+/* macOS weather sync. */
+"weather.title" = "桌面天气";
+"weather.sync" = "跟随当前天气";
+"weather.configure" = "天气设置…";
+"weather.automatic" = "当前位置";
+"weather.city" = "选择城市";
+"weather.search" = "搜索";
+"weather.search.placeholder" = "城市或邮政编码";
+"weather.results" = "匹配的地点";
+"weather.use" = "选择";
+"weather.refresh" = "刷新天气";
+"weather.provider" = "天气数据来自 Open-Meteo ↗";
+"weather.privacy" = "Mac 唤醒时每 15 分钟更新一次。当前位置的坐标经过取整后才会发送至 Open-Meteo。";
+"weather.intro" = "雨、雪、飘动的云、雾和阳光随当地天气变化。夜间光线会更加柔和。";
+"weather.here" = "你所在的附近";
+"weather.interval" = "每 15 分钟更新一次。如果无法使用定位，可以选择城市。";
+"weather.updated" = "{time} 的天气";
+"weather.searching" = "正在搜索…";
+"weather.noResults" = "未找到城市，请尝试其他名称。";
+"weather.pickResult" = "选择地点，然后点击“选择”。";
+"weather.clear" = "晴朗";
+"weather.partlyCloudy" = "局部多云";
+"weather.cloudy" = "多云";
+"weather.fog" = "雾";
+"weather.drizzle" = "毛毛雨";
+"weather.rain" = "雨";
+"weather.snow" = "雪";
+"weather.storm" = "雷暴";
+"weather.status.off" = "天气同步已关闭";
+"weather.status.locating" = "正在定位…";
+"weather.status.updating" = "正在更新天气…";
+"weather.status.ready" = "天气已更新";
+"weather.status.failed" = "无法更新天气，请重试。";
+"weather.status.locationDenied" = "定位权限已关闭。请在系统设置中允许定位或选择城市。";
+"weather.status.locationUnavailable" = "无法获取当前位置。请重试或选择城市。";
+"weather.status.stale" = "天气数据已过期，正在等待更新…";
+
+/* macOS effect rules. */
+"weather.effects" = "天气效果";
+"weather.customize.intro" = "选择哪些效果跟随天气，哪些效果始终显示。";
+"weather.customize.heading" = "效果";
+"weather.customize.help" = "“关闭”隐藏效果。“跟随天气”根据当地天气显示。“始终显示”无需天气数据也能使用。";
+"weather.effect.snow" = "雪";
+"weather.effect.rain" = "雨";
+"weather.effect.clouds" = "云";
+"weather.effect.fog" = "雾";
+"weather.effect.sunlight" = "阳光";
+"weather.effect.lightning" = "闪电";
+"weather.effect.night" = "月亮和星星";
+"weather.rule.off" = "关闭";
+"weather.rule.weather" = "跟随天气";
+"weather.rule.always" = "始终显示";
+"weather.location.heading" = "天气地点";
+"weather.manual.description" = "这些效果无需定位权限或互联网连接。";
+"weather.none.description" = "所有天气效果均已关闭。请在上方选择要显示的效果。";
+"weather.status.manual" = "手动效果";
+
+/* macOS automatic weather intensity. */
+"weather.intensity.auto" = "强度跟随天气";
+"weather.intensity.help" = "在“跟随天气”模式下，雨雪密度随降水强度变化。移动菜单中的强度滑块即可切换为手动调节。";

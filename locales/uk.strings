@@ -63,3 +63,64 @@
 "setup.open" = "Відкрити Snowhush";
 "setup.failed" = "Не вдалося встановити: {error}.";
 "setup.retry" = "Повторити";
+
+/* macOS weather sync. */
+"weather.title" = "Погода на робочому столі";
+"weather.sync" = "За поточною погодою";
+"weather.configure" = "Налаштування погоди…";
+"weather.automatic" = "Поточне місцеположення";
+"weather.city" = "Вибрати місто";
+"weather.search" = "Знайти";
+"weather.search.placeholder" = "Місто або поштовий індекс";
+"weather.results" = "Знайдені міста";
+"weather.use" = "Вибрати";
+"weather.refresh" = "Оновити погоду";
+"weather.provider" = "Погодні дані Open-Meteo ↗";
+"weather.privacy" = "Оновлення кожні 15 хвилин, поки Mac не спить. Для поточного місцеположення до Open-Meteo надсилаються лише округлені координати.";
+"weather.intro" = "Дощ, сніг, хмари, туман і сонячне світло змінюються за погодою поруч із вами. Уночі світіння стає м’якшим.";
+"weather.here" = "Поруч із вами";
+"weather.interval" = "Оновлення кожні 15 хвилин. Якщо геолокація недоступна, можна вибрати місто.";
+"weather.updated" = "Погода станом на {time}";
+"weather.searching" = "Пошук…";
+"weather.noResults" = "Міст не знайдено. Спробуйте іншу назву.";
+"weather.pickResult" = "Виберіть місто зі списку й натисніть «Вибрати».";
+"weather.clear" = "Ясно";
+"weather.partlyCloudy" = "Мінлива хмарність";
+"weather.cloudy" = "Хмарно";
+"weather.fog" = "Туман";
+"weather.drizzle" = "Мряка";
+"weather.rain" = "Дощ";
+"weather.snow" = "Сніг";
+"weather.storm" = "Гроза";
+"weather.status.off" = "Синхронізацію з погодою вимкнено";
+"weather.status.locating" = "Визначаємо місцеположення…";
+"weather.status.updating" = "Оновлюємо погоду…";
+"weather.status.ready" = "Погоду оновлено";
+"weather.status.failed" = "Не вдалося оновити погоду. Спробуйте ще раз.";
+"weather.status.locationDenied" = "Немає доступу до геолокації. Дозвольте його в Системних параметрах або виберіть місто.";
+"weather.status.locationUnavailable" = "Не вдалося визначити місцеположення. Спробуйте ще раз або виберіть місто.";
+"weather.status.stale" = "Погодні дані застаріли. Очікуємо оновлення…";
+
+/* macOS effect rules. */
+"weather.effects" = "Погодні ефекти";
+"weather.customize.intro" = "Виберіть, які ефекти залежать від погоди, а які ввімкнені постійно.";
+"weather.customize.heading" = "Ефекти";
+"weather.customize.help" = "«Вимкнено» приховує ефект. «За погодою» вмикає його за відповідних умов. «Завжди» працює навіть без погодних даних.";
+"weather.effect.snow" = "Сніг";
+"weather.effect.rain" = "Дощ";
+"weather.effect.clouds" = "Хмари";
+"weather.effect.fog" = "Туман";
+"weather.effect.sunlight" = "Сонячне світіння";
+"weather.effect.lightning" = "Блискавки";
+"weather.effect.night" = "Місяць і зорі";
+"weather.rule.off" = "Вимкнено";
+"weather.rule.weather" = "За погодою";
+"weather.rule.always" = "Завжди";
+"weather.location.heading" = "Звідки отримувати погоду";
+"weather.manual.description" = "Ці ефекти працюють без геолокації та підключення до інтернету.";
+"weather.none.description" = "Усі погодні ефекти вимкнені. Виберіть ефект вище, щоб увімкнути його.";
+"weather.status.manual" = "Ручні ефекти";
+
+/* macOS automatic weather intensity. */
+"weather.intensity.auto" = "Інтенсивність за погодою";
+"weather.intensity.help" = "Для ефектів «За погодою» густота дощу й снігу залежить від сили опадів. Змініть повзунок інтенсивності в меню, щоб перейти до ручного керування.";

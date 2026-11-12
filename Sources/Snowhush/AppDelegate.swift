@@ -3,6 +3,7 @@ import MetalKit
 import ServiceManagement
 import Sparkle
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUStandardUserDriverDelegate {
     private var device: MTLDevice!
     private var screens: [ScreenSnow] = []
@@ -14,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var halloween = false
     private var statusItem: NSStatusItem!
     private let intensitySlider = MenuSlider(range: 0...1)
+    private var intensityHeading: NSMenuItem!
     private let opacitySlider = MenuSlider(range: Preferences.opacityRange, captioned: false)
     private var opacityItem: NSMenuItem!
     private let opacityRow = MenuDisclosure()
@@ -27,6 +29,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var halloweenItem: NSMenuItem!
     private var mixedItem: NSMenuItem!
     private var modeItems: [(item: NSMenuItem, mode: Mode)] = []
+    private let weather = WeatherSync()
+    private var weatherWindow: WeatherWindow?
+    private var weatherItem: NSMenuItem!
+    private var weatherStatusItem: NSMenuItem!
+    private var presentedModes: [Mode] = []
+    private var wasWeatherEnabled = false
+    private var wasPrecipitating = false
     private var maxPerformanceItem: NSMenuItem!
     private var behindWindowsItem: NSMenuItem!
     private var fullScreenItem: NSMenuItem!
@@ -66,9 +75,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
 
         updater = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: self)
         statusItem = makeStatusItem()
+        makeAppMenu()
+        weather.changed = { [weak self] in self?.applyWeather() }
+        presentedModes = Preferences.modes
+        applyWeather()
+        weather.start()
         updateStatusIcon()
         refreshHalloween()
-        halloweenTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in self?.refreshHalloween() }
+        halloweenTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refreshHalloween() }
+        }
         observeSystem()
         Marquee.enabled = Preferences.deepInteraction
         screenshots.stepAside = { [weak self] aside in self?.screens.forEach { $0.stepAside(aside) } }
@@ -79,7 +95,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     }
 
     // A menu bar app has no Dock icon to badge, so update reminders are left to Sparkle's own gentle alerts.
-    var supportsGentleScheduledUpdateReminders: Bool { true }
+    nonisolated var supportsGentleScheduledUpdateReminders: Bool { true }
 
     // MARK: - Displays
 
@@ -98,7 +114,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
                 snow.simulation.snowfallHeld = snowfallHeld
                 snow.simulation.snowfallReleased = { [weak self] in self?.releaseSnowfall() }
                 snow.halloween = halloween
-                snow.modes = Preferences.modes
+                snow.modes = activeModes
+                snow.simulation.intensity = activeIntensity
+                snow.setWeather(weatherScene, strength: weatherIntensity.atmosphere)
                 snow.maxFrameRate = Preferences.maxPerformance
                 snow.activityChanged = { [weak self] in self?.updateActivity() }
                 snow.apply(power.budget)
@@ -138,6 +156,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
 
     // MARK: - Menu
 
+    /// Standard Settings shortcut while Snowhush is active, including its welcome and settings windows.
+    private func makeAppMenu() {
+        let main = NSMenu()
+        let application = NSMenu()
+        let settings = application.addItem(withTitle: tr("weather.configure"), action: #selector(showWeather), keyEquivalent: ",")
+        settings.target = self
+        application.addItem(.separator())
+        application.addItem(withTitle: tr("quit"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        let root = NSMenuItem()
+        root.submenu = application
+        main.addItem(root)
+        NSApp.mainMenu = main
+    }
+
     private func makeStatusItem() -> NSStatusItem {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
 
@@ -145,7 +177,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         menu.delegate = self
         menu.autoenablesItems = false
 
-        menu.addItem(.sectionHeader(title: tr("intensity")))
+        intensityHeading = .sectionHeader(title: tr("intensity"))
+        menu.addItem(intensityHeading)
         intensitySlider.changed = { [unowned self] in select(intensity: $0) }
         let intensityItem = NSMenuItem()
         intensityItem.view = intensitySlider
@@ -181,6 +214,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         menu.addItem(surfacesItem)
         let modes = NSMenu()
         modes.autoenablesItems = false
+        weatherItem = toggle(tr("weather.effects"), #selector(toggleWeather), to: modes)
+        (weatherItem.view as? MenuToggle)?.staysOpen = { false }
+        add(tr("weather.configure"), #selector(showWeather), to: modes)
+        weatherStatusItem = modes.addItem(withTitle: "", action: nil, keyEquivalent: "")
+        weatherStatusItem.isEnabled = false
+        modes.addItem(.separator())
         mixedItem = toggle(tr("mixed"), #selector(toggleMixed), to: modes)
         modes.addItem(.separator())
         modeItems = Mode.allCases.map { mode in
@@ -250,13 +289,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
-        intensitySlider.value = Preferences.intensity
+        let automaticIntensity = weather.enabled && Preferences.weatherAutomaticIntensity
+        intensitySlider.value = automaticIntensity ? Double(activeIntensity) : Preferences.intensity
+        intensityHeading.title = tr("intensity") + (automaticIntensity ? " · " + tr("weather.rule.weather") : "")
+        intensitySlider.toolTip = automaticIntensity ? tr("weather.intensity.help") : nil
         opacitySlider.value = Preferences.fallingOpacity
         opacityRow.summary = MenuSlider.percent(Preferences.fallingOpacity)
         opacityRow.fit(opacityItem.title, least: 0)
-        let modes = Mode.allCases.filter(Preferences.modes.contains)
-        mixedItem.state = Preferences.mixed ? .on : .off
-        for (item, mode) in modeItems { item.state = modes.contains(mode) ? .on : .off }
+        let modes = Mode.allCases.filter(activeModes.contains)
+        weatherItem.state = weather.enabled ? .on : .off
+        weatherStatusItem.isHidden = !weather.enabled
+        weatherStatusItem.title = weatherSummary
+        mixedItem.state = !weather.enabled && Preferences.mixed ? .on : .off
+        for (item, mode) in modeItems { item.state = !weather.enabled && modes.contains(mode) ? .on : .off }
         // Rain neither heaps up nor lies about to clear away.
         let heaps = modes.filter { $0 != .rain }
         meltItem.isHidden = heaps.isEmpty
@@ -280,7 +325,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         deepInteractionItem.isEnabled = surfaces.contains(.windows)
         clearItem.isEnabled = screens.contains { $0.simulation.hasSnow || $0.simulation.spriteCount > 0 }
         halloweenItem.state = Halloween.isWanted ? .on : .off
-        halloweenItem.isEnabled = modes == [.snow]
+        halloweenItem.isEnabled = !weather.enabled && modes == [.snow]
         maxPerformanceItem.state = Preferences.maxPerformance ? .on : .off
         behindWindowsItem.state = behindWindows ? .on : .off
         fullScreenItem.state = Preferences.showOverFullScreen ? .on : .off
@@ -290,8 +335,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     }
 
     private func select(intensity: Double) {
+        if weather.enabled {
+            weather.setManualIntensity(intensity)
+            return
+        }
         Preferences.intensity = intensity
-        for snow in screens { snow.simulation.intensity = Float(intensity) }
+        for snow in screens {
+            snow.simulation.intensity = activeIntensity
+            snow.setWeather(weatherScene, strength: weatherIntensity.atmosphere)
+        }
         updateStatusIcon()
     }
 
@@ -365,6 +417,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     /// Mixed, a third mode picked takes the place of the one picked before the other.
     @objc private func chooseMode(_ sender: NSMenuItem) {
         guard let mode = modeItems.first(where: { $0.item === sender })?.mode else { return }
+        if weather.enabled { weather.setEnabled(false) }
         if Preferences.mixed {
             let mix = Preferences.mix
             guard !mix.contains(mode) else { return }
@@ -378,6 +431,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
 
     /// Mixed, the mode picked last falls along with the one picked before it; unmixed, it falls alone.
     @objc private func toggleMixed() {
+        if weather.enabled { weather.setEnabled(false) }
         Preferences.mixed.toggle()
         let mode = Preferences.mode
         if Preferences.mixed, !Preferences.mix.contains(mode) {
@@ -389,6 +443,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     }
 
     private func switchModes() {
+        presentedModes = Preferences.modes
         refreshHalloween()
         updateStatusIcon()
         let direction = screens.first?.simulation.breezeDirection ?? -1
@@ -407,7 +462,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     }
 
     private func updateStatusIcon() {
-        statusItem.button?.image = Self.icon(halloween: halloween, dimmed: Preferences.intensity <= 0)
+        if weather.enabled {
+            let reading = weather.snapshot?.reading
+            let scene = weatherScene
+            let symbol = scene.modes.contains(.snow) ? "cloud.snow" : scene.modes.contains(.rain) ? "cloud.rain"
+                : scene.layers.y > 0 ? "cloud.fog" : scene.layers.w > 0 ? "cloud.bolt"
+                : scene.layers.z > 0 ? "sun.max" : scene.night > 0 ? "moon.stars"
+                : reading?.condition?.symbol(isDay: reading?.isDay == 1) ?? "cloud"
+            statusItem.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: tr("weather.title"))
+            statusItem.button?.appearsDisabled = false
+        } else {
+            statusItem.button?.image = Self.icon(halloween: halloween, dimmed: Preferences.intensity <= 0)
+        }
+        statusItem.button?.toolTip = weather.enabled ? weatherSummary : "Snowhush"
     }
 
     private static let symbol: [Mode: String] = [.snow: "snowflake", .autumn: "leaf", .rain: "cloud.rain"]
@@ -433,13 +500,68 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     }
 
     private func refreshHalloween() {
-        guard Halloween.isOn != halloween else { return }
+        let wanted = !weather.enabled && Halloween.isOn
+        guard wanted != halloween else { return }
         halloween.toggle()
         updateStatusIcon()
         for snow in screens { snow.halloween = halloween }
     }
 
     // MARK: - System
+
+    private var weatherScene: WeatherScene {
+        weather.enabled ? WeatherScene.resolve(reading: weather.snapshot?.reading, effects: Preferences.weatherEffects) : .empty
+    }
+    private var activeModes: [Mode] {
+        let modes = weatherScene.modes
+        return weather.enabled ? modes.isEmpty ? [.snow] : modes : Preferences.modes
+    }
+    private var activeIntensity: Float {
+        weather.enabled ? weatherIntensity.precipitation(for: weatherScene) : Float(Preferences.intensity)
+    }
+    private var weatherIntensity: WeatherIntensity {
+        WeatherIntensity(automatic: Preferences.weatherAutomaticIntensity, manual: Float(Preferences.intensity))
+    }
+
+    private var weatherSummary: String {
+        guard let snapshot = weather.snapshot, let condition = snapshot.reading.condition else { return tr(weather.status.key) }
+        let scene = "\(snapshot.place.name) · \(Int(snapshot.reading.temperature.rounded()))° · \(tr(condition.key))"
+        return weather.status == .ready ? scene : scene + " · " + tr(weather.status.key)
+    }
+
+    @objc private func toggleWeather() {
+        if !weather.enabled { NSApp.activate() }
+        weather.setEnabled(!weather.enabled)
+    }
+
+    @objc private func showWeather() {
+        if weatherWindow == nil { weatherWindow = WeatherWindow(sync: weather) }
+        weatherWindow?.show()
+    }
+
+    private func applyWeather() {
+        let scene = weatherScene
+        let modes = activeModes
+        let change = modes != presentedModes
+        presentedModes = modes
+        let direction = screens.first?.simulation.breezeDirection ?? -1
+        let calm = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let precipitating = scene.intensity > 0
+        for snow in screens {
+            if change { snow.simulation.switchMode(to: modes, direction: direction, calm: calm) }
+            if weather.enabled && (!wasWeatherEnabled || wasPrecipitating && !precipitating) {
+                snow.simulation.blowAway(direction: direction, calm: true)
+            }
+            snow.simulation.intensity = activeIntensity
+            snow.setWeather(scene, strength: weatherIntensity.atmosphere)
+        }
+        wasWeatherEnabled = weather.enabled
+        wasPrecipitating = precipitating
+        refreshHalloween()
+        updateStatusIcon()
+        if let menu = statusItem.menu { menuNeedsUpdate(menu) }
+        weatherWindow?.update()
+    }
 
     private func observeSystem() {
         power.changed = { [unowned self] in screens.forEach { $0.apply(power.budget) } }
@@ -465,14 +587,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         _ change: @escaping (AppDelegate) -> Void
     ) {
         observers.append(center.addObserver(forName: name, object: object, queue: .main) { [weak self] _ in
-            guard let self else { return }
-            change(self)
-            self.updateActivity()
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                change(self)
+                self.updateActivity()
+            }
         })
     }
 
     private func updateActivity() {
         let awake = !screensAsleep && !screenLocked && !sessionInactive
+        weather.setSuspended(!awake)
         for snow in screens {
             snow.occlusionChanged()
             snow.setActive(awake && !snow.givesWay && (snow.window.occlusionState.contains(.visible) || snow.fading), asleep: !awake)

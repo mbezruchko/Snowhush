@@ -30,6 +30,10 @@
 	<true/>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSLocationUsageDescription</key>
+	<string>Snowhush uses your approximate location to match desktop effects to the current weather. Rounded coordinates are sent to Open-Meteo only while weather sync is enabled.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Snowhush uses your approximate location to match desktop effects to the current weather. Rounded coordinates are sent to Open-Meteo only while weather sync is enabled.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>© 2026 Mykhailo Bezruchko</string>
 	<key>NSSupportsAutomaticGraphicsSwitching</key>

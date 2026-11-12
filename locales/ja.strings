@@ -63,3 +63,64 @@
 "setup.open" = "Snowhushを開く";
 "setup.failed" = "インストールできませんでした：{error}。";
 "setup.retry" = "再試行";
+
+/* macOS weather sync. */
+"weather.title" = "デスクトップの天気";
+"weather.sync" = "現在の天気に合わせる";
+"weather.configure" = "天気の設定…";
+"weather.automatic" = "現在地";
+"weather.city" = "都市を選ぶ";
+"weather.search" = "検索";
+"weather.search.placeholder" = "都市名または郵便番号";
+"weather.results" = "検索結果";
+"weather.use" = "選択";
+"weather.refresh" = "天気を更新";
+"weather.provider" = "天気データ：Open-Meteo ↗";
+"weather.privacy" = "Macの起動中は15分ごとに更新します。現在地の座標は丸めてからOpen-Meteoに送信します。";
+"weather.intro" = "雨、雪、流れる雲、霧、日差しが近くの天気に合わせて変化します。夜は光が柔らかくなります。";
+"weather.here" = "現在地付近";
+"weather.interval" = "15分ごとに更新します。位置情報を利用できない場合は都市を選べます。";
+"weather.updated" = "{time}の天気";
+"weather.searching" = "検索中…";
+"weather.noResults" = "都市が見つかりません。別の名前で検索してください。";
+"weather.pickResult" = "場所を選び、「選択」をクリックしてください。";
+"weather.clear" = "晴れ";
+"weather.partlyCloudy" = "晴れ時々曇り";
+"weather.cloudy" = "曇り";
+"weather.fog" = "霧";
+"weather.drizzle" = "霧雨";
+"weather.rain" = "雨";
+"weather.snow" = "雪";
+"weather.storm" = "雷雨";
+"weather.status.off" = "天気の同期はオフです";
+"weather.status.locating" = "現在地を確認中…";
+"weather.status.updating" = "天気を更新中…";
+"weather.status.ready" = "天気は最新です";
+"weather.status.failed" = "天気を更新できませんでした。もう一度お試しください。";
+"weather.status.locationDenied" = "位置情報がオフです。システム設定で許可するか都市を選んでください。";
+"weather.status.locationUnavailable" = "現在地を確認できません。再試行するか都市を選んでください。";
+"weather.status.stale" = "天気データが古くなっています。更新を待っています…";
+
+/* macOS effect rules. */
+"weather.effects" = "天気エフェクト";
+"weather.customize.intro" = "天気に合わせるエフェクトと、常に表示するエフェクトを選べます。";
+"weather.customize.heading" = "エフェクト";
+"weather.customize.help" = "「オフ」は非表示、「天気に連動」は現地の天気に合わせます。「常に表示」は天気データがなくても使えます。";
+"weather.effect.snow" = "雪";
+"weather.effect.rain" = "雨";
+"weather.effect.clouds" = "雲";
+"weather.effect.fog" = "霧";
+"weather.effect.sunlight" = "日差し";
+"weather.effect.lightning" = "稲光";
+"weather.effect.night" = "月と星";
+"weather.rule.off" = "オフ";
+"weather.rule.weather" = "天気に連動";
+"weather.rule.always" = "常に表示";
+"weather.location.heading" = "天気を取得する場所";
+"weather.manual.description" = "これらのエフェクトは位置情報やインターネット接続なしで使えます。";
+"weather.none.description" = "すべての天気エフェクトがオフです。上でエフェクトを選ぶと表示できます。";
+"weather.status.manual" = "手動エフェクト";
+
+/* macOS automatic weather intensity. */
+"weather.intensity.auto" = "強さを天気に合わせる";
+"weather.intensity.help" = "「天気に連動」では雨や雪の密度が降水量に合わせて変わります。メニューの強さスライダーを動かすと手動調整に切り替わります。";

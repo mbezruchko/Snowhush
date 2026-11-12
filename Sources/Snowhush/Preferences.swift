@@ -13,6 +13,34 @@ struct Surfaces: OptionSet {
 
 enum Preferences {
     private static let defaults = UserDefaults.standard
+    static var weatherEnabled: Bool {
+        get { defaults.bool(forKey: "weatherEnabled") }
+        set { defaults.set(newValue, forKey: "weatherEnabled") }
+    }
+    static var weatherAutomatic: Bool {
+        get { defaults.object(forKey: "weatherAutomatic") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "weatherAutomatic") }
+    }
+    static var weatherAutomaticIntensity: Bool {
+        get { defaults.object(forKey: "weatherAutomaticIntensity") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "weatherAutomaticIntensity") }
+    }
+    static var weatherEffects: WeatherEffects {
+        get {
+            guard let data = defaults.data(forKey: "weatherEffects"),
+                  let effects = try? JSONDecoder().decode(WeatherEffects.self, from: data) else { return .allWeather }
+            return effects
+        }
+        set { defaults.set(try? JSONEncoder().encode(newValue), forKey: "weatherEffects") }
+    }
+    static var weatherPlace: WeatherPlace? {
+        get {
+            guard let data = defaults.data(forKey: "weatherPlace"),
+                  let place = try? JSONDecoder().decode(WeatherPlace.self, from: data), place.isValid else { return nil }
+            return place
+        }
+        set { defaults.set(newValue.flatMap { try? JSONEncoder().encode($0) }, forKey: "weatherPlace") }
+    }
     static let opacityRange = 0.1...1.0
     private static let intensityKey = "intensity"
     /// Before the slider, the intensity was one of Off, Light, Steady, Heavy and Variable.

@@ -71,3 +71,64 @@
 "setup.open" = "Open Snowhush";
 "setup.failed" = "Couldn't install: {error}.";
 "setup.retry" = "Try Again";
+
+/* macOS weather sync. */
+"weather.title" = "Weather on your desktop";
+"weather.sync" = "Match Current Weather";
+"weather.configure" = "Weather Settings…";
+"weather.automatic" = "Current location";
+"weather.city" = "Choose a city";
+"weather.search" = "Search";
+"weather.search.placeholder" = "City or postal code";
+"weather.results" = "Matching locations";
+"weather.use" = "Use City";
+"weather.refresh" = "Refresh Weather";
+"weather.provider" = "Weather data by Open-Meteo ↗";
+"weather.privacy" = "Updates every 15 minutes while your Mac is awake. For your current location, only rounded coordinates are sent to Open-Meteo.";
+"weather.intro" = "Rain and snow, drifting clouds, mist and sunlight follow the weather where you are, with a softer glow at night.";
+"weather.here" = "Near you";
+"weather.interval" = "Refreshes every 15 minutes. You can also choose a city if location access is unavailable.";
+"weather.updated" = "Weather at {time}";
+"weather.searching" = "Searching…";
+"weather.noResults" = "No cities found. Try another name.";
+"weather.pickResult" = "Select a location, then choose Use City.";
+"weather.clear" = "Clear";
+"weather.partlyCloudy" = "Partly cloudy";
+"weather.cloudy" = "Cloudy";
+"weather.fog" = "Fog";
+"weather.drizzle" = "Drizzle";
+"weather.rain" = "Rain";
+"weather.snow" = "Snow";
+"weather.storm" = "Thunderstorm";
+"weather.status.off" = "Weather sync is off";
+"weather.status.locating" = "Finding your location…";
+"weather.status.updating" = "Updating weather…";
+"weather.status.ready" = "Weather is up to date";
+"weather.status.failed" = "Couldn’t update weather. Try again.";
+"weather.status.locationDenied" = "Location access is off. Allow it in System Settings or choose a city.";
+"weather.status.locationUnavailable" = "Your location is unavailable. Try again or choose a city.";
+"weather.status.stale" = "Weather is out of date. Waiting for an update…";
+
+/* macOS effect rules. */
+"weather.effects" = "Weather Effects";
+"weather.customize.intro" = "Choose which effects follow the weather and which stay on whenever you like.";
+"weather.customize.heading" = "Effects";
+"weather.customize.help" = "Off hides an effect. Weather follows local conditions. Always turns it on even without weather data.";
+"weather.effect.snow" = "Snow";
+"weather.effect.rain" = "Rain";
+"weather.effect.clouds" = "Clouds";
+"weather.effect.fog" = "Fog";
+"weather.effect.sunlight" = "Sunlight";
+"weather.effect.lightning" = "Lightning";
+"weather.effect.night" = "Moon and stars";
+"weather.rule.off" = "Off";
+"weather.rule.weather" = "Weather";
+"weather.rule.always" = "Always";
+"weather.location.heading" = "Weather location";
+"weather.manual.description" = "These effects work without location access or an internet connection.";
+"weather.none.description" = "All weather effects are off. Choose an effect above to turn it on.";
+"weather.status.manual" = "Manual effects";
+
+/* macOS automatic weather intensity. */
+"weather.intensity.auto" = "Match Weather Intensity";
+"weather.intensity.help" = "In Weather mode, rain and snow density follows precipitation. Moving the Intensity slider in the menu switches to manual control.";

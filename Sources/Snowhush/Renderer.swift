@@ -57,6 +57,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     var budget = PowerBudget.full
     /// Every frame at the display's highest rate, whatever the snow is doing and whatever the power.
     var maxFrameRate = false
+    var weather = WeatherAtmosphere()
     /// Called when there is nothing to draw and nothing on its way, for the view to stop until the snow is stirred.
     var rest: () -> Void = {}
     private static let lanternReach: Float = 130
@@ -76,6 +77,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     /// Drops on the glass: their bumps added up into a field, and the glass drawn from it.
     private let fieldPipeline: MTLRenderPipelineState
     private let glassPipeline: MTLRenderPipelineState
+    private let weatherPipeline: MTLRenderPipelineState
     private var field: MTLTexture?
     /// The pumpkin's shell and its face, drawn the first time it is needed.
     private var pumpkinPictures: (shell: MTLTexture, face: MTLTexture)?
@@ -96,7 +98,7 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     init(device: MTLDevice, pixelFormat: MTLPixelFormat, simulation: SnowSimulation) throws {
         guard let queue = device.makeCommandQueue() else { throw RendererError.unavailable }
-        let library = try device.makeLibrary(source: shaderSource, options: nil)
+        let library = try device.makeLibrary(source: shaderSource + "\n" + weatherShaderSource, options: nil)
 
         func pipeline(_ vertex: String, _ fragment: String) throws -> MTLRenderPipelineState {
             let descriptor = MTLRenderPipelineDescriptor()
@@ -121,6 +123,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         self.signPipeline = try pipeline("signVertex", "signFragment")
         self.pumpkinPipeline = try pipeline("pumpkinVertex", "pumpkinFragment")
         self.glassPipeline = try pipeline("glassVertex", "glassFragment")
+        self.weatherPipeline = try pipeline("weatherVertex", "weatherFragment")
         let field = MTLRenderPipelineDescriptor()
         field.vertexFunction = library.makeFunction(name: "spriteVertex")
         field.fragmentFunction = library.makeFunction(name: "fieldFragment")
@@ -211,9 +214,10 @@ final class Renderer: NSObject, MTKViewDelegate {
         simulation.setBorrowed(borrowedSnow())
         let cursor = cursorLocation()
         let changed = simulation.step(dt: dt, cursor: cursor)
+        weather.step(dt: dt, calm: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
         stepped()
         // The frame shown last stays up, as it would anyway with nothing to draw, without ticking over in vain.
-        if !changed && simulation.isEmpty {
+        if !changed && simulation.isEmpty && !weather.isVisible {
             rest()
             return
         }
@@ -232,7 +236,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         if view.preferredFramesPerSecond != pace { view.preferredFramesPerSecond = pace }
         idleFrames = changed || lanternMoved ? 0 : idleFrames + 1
         // A still pile only needs a slow refresh for its glints.
-        guard changed || lanternMoved || ((simulation.hasSnow || !simulation.pumpkins.isEmpty) && idleFrames % 2 == 0) else { return }
+        guard changed || lanternMoved || weather.isVisible || ((simulation.hasSnow || !simulation.pumpkins.isEmpty) && idleFrames % 2 == 0) else { return }
 
         semaphore.wait()
         guard let pass = view.currentRenderPassDescriptor,
@@ -293,6 +297,15 @@ final class Renderer: NSObject, MTKViewDelegate {
         let glass = sprites > 0 && simulation.hasGlassDrops ? encodeField(sprites: spriteBuffer, count: sprites, into: commandBuffer, matching: pass, uniforms: uniforms) : nil
         if !simulation.hasGlassDrops { field = nil }
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return }
+        if weather.isVisible {
+            let calm = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            var atmosphere = WeatherUniforms(layers: weather.layers, environment: weather.environment,
+                viewport: SIMD4(simulation.width, simulation.height, calm ? 0 : time, simulation.fallingOpacity),
+                lightning: weather.lightning.flash)
+            encoder.setRenderPipelineState(weatherPipeline)
+            encoder.setFragmentBytes(&atmosphere, length: MemoryLayout<WeatherUniforms>.stride, index: 0)
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        }
         drawPumpkins(pumpkins, with: encoder, uniforms: uniforms)
         drawPiles(piles.filter { !$0.isDock }, with: encoder, uniforms: uniforms, heights: heightBuffer)
         drawSigns(simulation.signs, with: encoder, uniforms: uniforms)
