@@ -778,7 +778,7 @@ impl SnowSimulation {
     /// Returns whether anything visible changed.
     pub fn step(&mut self, dt: f32, cursor: V2) -> bool {
         self.air.clock += dt as f64;
-        let was_moving = self.moving();
+        let was_moving = self.moving() || self.haunting.moving();
         self.air.heights_changed = false;
 
         self.release_scattered();
