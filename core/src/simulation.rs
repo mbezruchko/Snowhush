@@ -1170,13 +1170,23 @@ impl SnowSimulation {
         if self.dormant.len() > 200
             && let Some(oldest) = self.dormant.iter().filter(|entry| *entry.0 != id).min_by(|a, b| a.1.1.total_cmp(&b.1.1)).map(|(&id, _)| id)
         {
-            self.dormant.remove(&oldest);
+            self.forget_dormant(oldest);
         }
     }
 
     /// Lets go of the snow kept for windows away that closed meanwhile: only those `open` still knows wait on.
     pub fn forget_closed(&mut self, open: impl Fn(WindowId) -> bool) {
-        self.dormant.retain(|&id, _| open(id));
+        let closed: Vec<WindowId> = self.dormant.keys().copied().filter(|&id| !open(id)).collect();
+        for id in closed {
+            self.forget_dormant(id);
+        }
+    }
+
+    /// The leaves kept with a window's snow fall from where the window was last seen.
+    fn forget_dormant(&mut self, id: WindowId) {
+        if let Some((ledge, _)) = self.dormant.remove(&id) {
+            self.drop_leaves(id, V2::new(ledge.heap_x(), ledge.base().y));
+        }
     }
 
     fn unpark(&mut self, id: WindowId) -> Option<SnowLayer> {

@@ -195,6 +195,36 @@ fn snow_waiting_for_a_window_that_closed_away_is_let_go() {
 }
 
 #[test]
+fn leaves_waiting_for_a_window_that_closed_away_fall_from_where_it_was() {
+    let none = HashSet::new();
+    let mut simulation = SnowSimulation::new(1280.0, 800.0, 0.75);
+    simulation.set_mode(Mode::Autumn);
+    simulation.thaws = false;
+    simulation.update_windows(&[surface(7, 300.0, 600.0, 500.0)], 0.2, &none, &none, false);
+    run(&mut simulation, 90.0, AWAY);
+    simulation.set_intensity(0.0);
+    run(&mut simulation, 20.0, AWAY);
+    simulation.update_windows(&[], 0.2, &none, &HashSet::from([7]), false);
+    run(&mut simulation, 0.5, AWAY);
+    let leaves = |simulation: &SnowSimulation| -> Vec<V2> {
+        let mut sprites = vec![Sprite::default(); simulation.sprite_count()];
+        let count = simulation.write_sprites(&mut sprites);
+        sprites[..count].iter().filter(|sprite| sprite.leaf[0] > 0.0 && sprite.position.y > 400.0).map(|sprite| sprite.position).collect()
+    };
+    assert!(leaves(&simulation).is_empty(), "leaves showed on a window away");
+
+    simulation.forget_closed(|_| false);
+    simulation.step(DT, AWAY);
+    let falling = leaves(&simulation);
+    assert!(falling.len() > 5, "the closed window's leaves vanished: {}", falling.len());
+    assert!(falling.iter().all(|p| p.x > 280.0 && p.x < 820.0 && p.y > 580.0), "the leaves fell from elsewhere: {falling:?}");
+    let height = |leaves: &[V2]| leaves.iter().map(|p| p.y).sum::<f32>() / leaves.len().max(1) as f32;
+    run(&mut simulation, 1.0, AWAY);
+    let (from, to) = (height(&falling), height(&leaves(&simulation)));
+    assert!(to < from - 20.0, "the leaves hung in the air: {from} -> {to}");
+}
+
+#[test]
 fn snow_waiting_for_windows_away_drops_the_longest_gone_first() {
     let none = HashSet::new();
     let windows: Vec<WindowSurface> = (0..201).map(|i| surface(i + 1, 10.0 + i as f32 * 40.0, 400.0, 36.0)).collect();
