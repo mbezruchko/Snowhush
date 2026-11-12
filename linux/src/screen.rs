@@ -497,6 +497,11 @@ impl Screen {
         self.covered
     }
 
+    /// Frames kept failing though the drawing surface was made again: the graphics themselves may be lost.
+    pub fn failing(&self) -> bool {
+        self.failures >= 2 * RENEW_AFTER
+    }
+
     /// Frames went unshown for a while, as with the display off: the snow waits.
     pub fn stalled(&self) -> bool {
         self.stalled

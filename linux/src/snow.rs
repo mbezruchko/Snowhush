@@ -425,7 +425,7 @@ impl App {
         }
         let mut released = false;
         let mut reshaped = false;
-        let mut context_lost = false;
+        let mut gpu_lost = false;
         for screen in self.screens.iter_mut().filter(|screen| screen.next_due <= now) {
             // Shown over a full-screen app, the snow reaches the display's edges while the app has put the panels away,
             // so the drift lies along the bottom instead of over a panel no longer there. An overview isn't an app.
@@ -449,10 +449,10 @@ impl App {
                     self.stats.frame(drew, began.elapsed(), screen.simulation.sprite_count());
                     released |= screen.simulation.take_snowfall_released();
                 }
-                Err(error) => context_lost |= error.contains(&khronos_egl::Error::ContextLost.to_string()),
+                Err(error) => gpu_lost |= screen.failing() || error.contains(&khronos_egl::Error::ContextLost.to_string()),
             }
         }
-        if context_lost {
+        if gpu_lost {
             self.renew_gpu(now);
         }
         if released {
