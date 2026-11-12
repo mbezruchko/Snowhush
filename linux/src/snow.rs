@@ -122,6 +122,11 @@ pub fn run() -> Result<(), String> {
     };
     // Only now: a second copy that stops here must not wipe the running one's log.
     crate::log::start();
+    let report_panic = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        log!("panic on the {} thread: {info}", std::thread::current().name().unwrap_or("unnamed"));
+        report_panic(info);
+    }));
     log!("Snowhush {}", env!("CARGO_PKG_VERSION"));
 
     let connection = Connection::connect_to_env().map_err(|error| format!("Wayland: {error}"))?;
