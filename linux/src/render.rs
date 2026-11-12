@@ -130,8 +130,11 @@ pub struct Surface {
     pub width: i32,
     pub height: i32,
     /// The field its drops on the glass add up into, and the size it was made for, while it has any.
-    field: Cell<Option<(glow::Texture, glow::Framebuffer, (i32, i32))>>,
+    field: Cell<Option<Field>>,
 }
+
+/// A field's texture, its framebuffer and the size they were made for.
+type Field = (glow::Texture, glow::Framebuffer, (i32, i32));
 
 impl Gpu {
     /// `display` is the Wayland connection's `wl_display`.
