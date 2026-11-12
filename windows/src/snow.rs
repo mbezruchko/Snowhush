@@ -100,7 +100,9 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
     // been seen that way or not.
     let mut full_screen: HashSet<String> = HashSet::new();
     let mut full_screen_seen: HashMap<String, (bool, i64)> = HashMap::new();
-    let mut screens = sync_screens(&gpu, &settings, &full_screen, Vec::new(), layer, false);
+    // The snow of displays whose overlay the device was lost in the middle of making, kept for the next device.
+    let mut stranded: HashMap<String, SnowSimulation> = HashMap::new();
+    let mut screens = sync_screens(&gpu, &settings, &full_screen, Vec::new(), &mut stranded, layer, false);
     let timer = unsafe {
         CreateWaitableTimerExW(None, PCWSTR::null(), CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS.0)
             .or_else(|_| CreateWaitableTimerW(None, false, PCWSTR::null()))?
@@ -108,6 +110,12 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
     let wake = HANDLE(links.wake as _);
     let mut clock = Clock::new();
     let started = Clock::now();
+    // While the graphics card is lost: when to try making a new device, and how long to wait after that if it fails.
+    let mut recover_at: Option<i64> = None;
+    let mut backoff = clock.frequency;
+    // How long a failed frame waits before the overlays are made again: nothing at first, longer each time the frames
+    // after a recovery fail too, so a failure that a new device doesn't cure isn't retried on every frame.
+    let mut pause = 0;
     let mut active = true;
     let mut budget = PowerBudget::Full;
     let mut spooky = halloween::shows(&settings);
@@ -163,13 +171,13 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                 Command::BehindWindows(on) => {
                     settings.behind_windows = on;
                     layer = on.then(find_layer).flatten();
-                    screens = sync_screens(&gpu, &settings, &full_screen, screens, layer, true);
+                    screens = sync_screens(&gpu, &settings, &full_screen, screens, &mut stranded, layer, true);
                 }
                 Command::OverFullScreen(on) => {
                     settings.over_full_screen = on;
                     if !on && !full_screen.is_empty() {
                         full_screen.clear();
-                        screens = sync_screens(&gpu, &settings, &full_screen, screens, layer, false);
+                        screens = sync_screens(&gpu, &settings, &full_screen, screens, &mut stranded, layer, false);
                     }
                 }
                 Command::DeepInteraction(on) => {
@@ -184,12 +192,12 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                 }
                 Command::BehindTaskbar(on) => {
                     settings.behind_taskbar = on;
-                    screens = sync_screens(&gpu, &settings, &full_screen, screens, layer, true);
+                    screens = sync_screens(&gpu, &settings, &full_screen, screens, &mut stranded, layer, true);
                 }
                 Command::ShellRestarted => {
                     if settings.behind_windows {
                         layer = find_layer();
-                        screens = sync_screens(&gpu, &settings, &full_screen, screens, layer, true);
+                        screens = sync_screens(&gpu, &settings, &full_screen, screens, &mut stranded, layer, true);
                     }
                 }
                 Command::ShowInScreenshots(on) => {
@@ -264,7 +272,7 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
             if settings.behind_windows {
                 layer = find_layer();
             }
-            screens = sync_screens(&gpu, &settings, &full_screen, screens, layer, false);
+            screens = sync_screens(&gpu, &settings, &full_screen, screens, &mut stranded, layer, false);
             clock.refresh();
             light_at = 0;
         }
@@ -275,6 +283,12 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
         if now >= chores_at {
             chores_at = now + clock.frequency;
             clock.refresh();
+            if recover_at.is_none()
+                && let Err(reason) = gpu.removed()
+            {
+                log!("graphics device lost: {reason}");
+                recover_at = Some(now);
+            }
             // In case a display change went unannounced.
             let current = monitors(over_taskbar(&settings, &screens), &full_screen);
             if current.len() != screens.len() || screens.iter().any(|screen| !current.contains(&screen.monitor)) {
@@ -306,7 +320,7 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                 let found = find_layer();
                 if found.is_some() || screens.iter().any(|screen| !screen.alive()) {
                     layer = found;
-                    screens = sync_screens(&gpu, &settings, &full_screen, screens, layer, true);
+                    screens = sync_screens(&gpu, &settings, &full_screen, screens, &mut stranded, layer, true);
                 }
             }
             if now >= light_at {
@@ -350,9 +364,10 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
             lend(&mut screens, windows, now + clock.tolerance());
             let time = (clock.seconds(now - started) % 1000.0) as f32;
             let mut lost = false;
+            let mut drawn = false;
             let mut released = false;
             let mut reshaped = false;
-            for screen in screens.iter_mut().filter(|screen| screen.next_due <= now + clock.tolerance()) {
+            for screen in screens.iter_mut().filter(|screen| recover_at.is_none() && screen.next_due <= now + clock.tolerance()) {
                 let in_front = tracker.covering(&screen.monitor.bounds);
                 // Shown over a full-screen app, the snow reaches down to the bottom of the display while the app has put
                 // the taskbar away, so the drift lies along the bottom instead of over a taskbar no longer there; a
@@ -390,6 +405,7 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                 let began = Clock::now();
                 match screen.frame(&gpu, &clock, now, budget, sky, time, windows) {
                     Ok(drew) => {
+                        drawn = true;
                         stats.frame(drew, Clock::now() - began, screen.simulation.sprite_count());
                         released |= screen.simulation.take_snowfall_released();
                     }
@@ -406,17 +422,43 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                 screens.iter_mut().for_each(|screen| screen.simulation.set_snowfall_held(false));
             }
             if lost {
-                screens.clear();
-                gpu = Gpu::new()?;
-                screens = sync_screens(&gpu, &settings, &full_screen, Vec::new(), layer, false);
+                recover_at = Some(now + pause);
             } else if reshaped {
-                screens = sync_screens(&gpu, &settings, &full_screen, screens, layer, false);
+                screens = sync_screens(&gpu, &settings, &full_screen, screens, &mut stranded, layer, false);
+            }
+            if drawn && !lost {
+                pause = 0;
             }
             now = Clock::now();
             stats.report(&clock, now, &mut tracker);
         }
 
-        let due = screens.iter().map(|screen| screen.next_due).min().filter(|_| active);
+        // A new device keeps every display's snow: only the overlays are made again. Right after a driver update or a
+        // reset one often can't be made for a while, so it is tried again later rather than given up on.
+        if let Some(at) = recover_at
+            && now >= at
+        {
+            match Gpu::new() {
+                Ok(fresh) => {
+                    log!("adapter: {}", fresh.adapter);
+                    gpu = fresh;
+                    screens = sync_screens(&gpu, &settings, &full_screen, screens, &mut stranded, layer, true);
+                    recover_at = None;
+                    backoff = clock.frequency;
+                    pause = (pause * 2).clamp(clock.frequency, clock.frequency * 30);
+                }
+                Err(error) => {
+                    log!("graphics device unavailable: {error}");
+                    recover_at = Some(now + backoff);
+                    backoff = (backoff * 2).min(clock.frequency * 30);
+                }
+            }
+        }
+
+        let due = match recover_at {
+            Some(at) => Some(at.min(chores_at)),
+            None => screens.iter().map(|screen| screen.next_due).min().filter(|_| active),
+        };
         unsafe {
             if let Some(due) = due {
                 let wait = -(((due - now).max(0) as i128 * 10_000_000) / clock.frequency as i128) as i64;
@@ -446,9 +488,15 @@ fn sync_screens(
     settings: &Settings,
     full_screen: &HashSet<String>,
     mut current: Vec<Screen>,
+    stranded: &mut HashMap<String, SnowSimulation>,
     layer: Option<DesktopLayer>,
     rebuild: bool,
 ) -> Vec<Screen> {
+    // Overlays can't be made on a lost device: the displays keep their snow till a new one is.
+    if gpu.removed().is_err() {
+        return current;
+    }
+    let mut spare = std::mem::take(stranded);
     let mut result = Vec::new();
     let displays = monitors(over_taskbar(settings, &current), full_screen);
     for monitor in displays.iter().cloned() {
@@ -475,9 +523,17 @@ fn sync_screens(
                 }
                 simulation
             }
-            None => new_simulation(&monitor, settings),
+            None => match spare.remove(&monitor.name) {
+                Some(mut simulation) => {
+                    let (width, height) = dip_size(&monitor);
+                    simulation.resize(width as f32, height as f32);
+                    simulation
+                }
+                None => new_simulation(&monitor, settings),
+            },
         };
         log!("display {}: {:?}, {} dpi, {} Hz", monitor.name, monitor.rect, monitor.dpi, monitor.refresh);
+        let name = monitor.name.clone();
         let screen = Screen::new(gpu, monitor.clone(), simulation, settings, layer).or_else(|(error, simulation)| {
             // Snow that can't go behind windows stays on top of them rather than vanishing.
             if layer.is_none() {
@@ -488,7 +544,12 @@ fn sync_screens(
         });
         match screen {
             Ok(screen) => result.push(screen),
-            Err((error, _)) => log!("overlay failed: {error}"),
+            Err((error, simulation)) => {
+                log!("overlay failed: {error}");
+                if gpu.removed().is_err() {
+                    stranded.insert(name, simulation);
+                }
+            }
         }
     }
     for screen in &mut result {

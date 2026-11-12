@@ -314,6 +314,11 @@ impl Gpu {
         }
     }
 
+    /// Why the graphics card was lost, as to a driver update or a reset; fine while it is still there.
+    pub fn removed(&self) -> Result<()> {
+        unsafe { self.device.GetDeviceRemovedReason() }
+    }
+
     fn write<T: Copy>(&self, buffer: &ID3D11Buffer, value: &T) -> Result<()> {
         unsafe {
             let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
