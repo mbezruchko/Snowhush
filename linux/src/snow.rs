@@ -181,25 +181,31 @@ pub fn run() -> Result<(), String> {
         backdrops_wanted: chores::start(bus.clone(), commands.clone()),
         stats: Stats::new(now),
     };
-    // The displays are known after a round trip; the snow starts on them right away.
-    queue.roundtrip(&mut app).map_err(|error| error.to_string())?;
-    app.sync_screens();
-    WaylandSource::new(connection, queue).insert(event_loop.handle()).map_err(|error| error.to_string())?;
-
-    use ksni::blocking::TrayMethods;
-    app.tray = Tray::new(settings, commands.clone()).assume_sni_available(true).spawn().inspect_err(|error| log!("tray: {error}")).ok();
-    watch_lock(&bus, commands);
-
-    let result = loop {
-        if app.quit {
-            break Ok(());
+    let result = 'run: {
+        // The displays are known after a round trip; the snow starts on them right away.
+        if let Err(error) = queue.roundtrip(&mut app) {
+            break 'run Err(error.to_string());
         }
-        let timeout = app.timeout();
-        if let Err(error) = event_loop.dispatch(timeout, &mut app) {
-            break Err(error.to_string());
+        app.sync_screens();
+        if let Err(error) = WaylandSource::new(connection, queue).insert(event_loop.handle()) {
+            break 'run Err(error.to_string());
         }
-        if let Err(error) = app.tick() {
-            break Err(error);
+
+        use ksni::blocking::TrayMethods;
+        app.tray = Tray::new(settings, commands.clone()).assume_sni_available(true).spawn().inspect_err(|error| log!("tray: {error}")).ok();
+        watch_lock(&bus, commands);
+
+        loop {
+            if app.quit {
+                break Ok(());
+            }
+            let timeout = app.timeout();
+            if let Err(error) = event_loop.dispatch(timeout, &mut app) {
+                break Err(error.to_string());
+            }
+            if let Err(error) = app.tick() {
+                break Err(error);
+            }
         }
     };
 
