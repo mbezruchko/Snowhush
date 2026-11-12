@@ -96,6 +96,35 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     init(device: MTLDevice, pixelFormat: MTLPixelFormat, simulation: SnowSimulation) throws {
         guard let queue = device.makeCommandQueue() else { throw RendererError.unavailable }
+        let pipelines = try Self.pipelines(for: device, pixelFormat: pixelFormat)
+        self.device = device
+        self.queue = queue
+        self.simulation = simulation
+        self.semaphore = DispatchSemaphore(value: framesInFlight)
+        self.spritePipeline = pipelines.sprite
+        self.pilePipeline = pipelines.pile
+        self.signPipeline = pipelines.sign
+        self.pumpkinPipeline = pipelines.pumpkin
+        self.glassPipeline = pipelines.glass
+        self.fieldPipeline = pipelines.field
+        super.init()
+    }
+
+    private struct Pipelines {
+        let sprite, pile, sign, pumpkin, glass, field: MTLRenderPipelineState
+    }
+
+    private struct PipelineKey: Hashable {
+        let device: UInt64
+        let pixelFormat: UInt
+    }
+
+    /// Built once for each GPU and shared by every display's renderer: compiling the shaders takes about half a second.
+    private static var built: [PipelineKey: Pipelines] = [:]
+
+    private static func pipelines(for device: MTLDevice, pixelFormat: MTLPixelFormat) throws -> Pipelines {
+        let key = PipelineKey(device: device.registryID, pixelFormat: pixelFormat.rawValue)
+        if let pipelines = built[key] { return pipelines }
         let library = try device.makeLibrary(source: shaderSource, options: nil)
 
         func pipeline(_ vertex: String, _ fragment: String) throws -> MTLRenderPipelineState {
@@ -112,15 +141,6 @@ final class Renderer: NSObject, MTKViewDelegate {
             return try device.makeRenderPipelineState(descriptor: descriptor)
         }
 
-        self.device = device
-        self.queue = queue
-        self.simulation = simulation
-        self.semaphore = DispatchSemaphore(value: framesInFlight)
-        self.spritePipeline = try pipeline("spriteVertex", "spriteFragment")
-        self.pilePipeline = try pipeline("pileVertex", "pileFragment")
-        self.signPipeline = try pipeline("signVertex", "signFragment")
-        self.pumpkinPipeline = try pipeline("pumpkinVertex", "pumpkinFragment")
-        self.glassPipeline = try pipeline("glassVertex", "glassFragment")
         let field = MTLRenderPipelineDescriptor()
         field.vertexFunction = library.makeFunction(name: "fieldVertex")
         field.fragmentFunction = library.makeFunction(name: "fieldFragment")
@@ -131,8 +151,16 @@ final class Renderer: NSObject, MTKViewDelegate {
         adding.destinationRGBBlendFactor = .one
         adding.sourceAlphaBlendFactor = .one
         adding.destinationAlphaBlendFactor = .one
-        self.fieldPipeline = try device.makeRenderPipelineState(descriptor: field)
-        super.init()
+        let pipelines = try Pipelines(
+            sprite: pipeline("spriteVertex", "spriteFragment"),
+            pile: pipeline("pileVertex", "pileFragment"),
+            sign: pipeline("signVertex", "signFragment"),
+            pumpkin: pipeline("pumpkinVertex", "pumpkinFragment"),
+            glass: pipeline("glassVertex", "glassFragment"),
+            field: device.makeRenderPipelineState(descriptor: field)
+        )
+        built[key] = pipelines
+        return pipelines
     }
 
     func resetClock() {
