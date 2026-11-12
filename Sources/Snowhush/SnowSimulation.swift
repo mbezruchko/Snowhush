@@ -588,8 +588,8 @@ final class SnowSimulation {
     private var windowsChanged = false
     private var lastWindowMotion: Double = -10
     private var lastCursorPush: Double = -10
-    /// Snow on windows that left the screen for another Space, kept until the window shows up again.
-    private var dormant: [CGWindowID: SnowLayer] = [:]
+    /// Snow on windows that left the screen for another Space, kept until the window shows up again, with when it left.
+    private var dormant: [CGWindowID: (ledge: SnowLayer, since: Double)] = [:]
     /// Where the left edge of each notification banner was at the last update.
     private var bannerEdges: [CGWindowID: Float] = [:]
     /// Windows that went off screen without a word yet on why; a Space switch keeps their snow, anything else drops it.
@@ -682,7 +682,7 @@ final class SnowSimulation {
     /// Nothing falls, lies, waits for its window or haunts, and nothing will until the snow is stirred.
     var isEmpty: Bool {
         intensity <= 0 && !halloween && flakes.isEmpty && grains.isEmpty && motes.isEmpty && ghosts.isEmpty
-            && fallingSigns.isEmpty && snowballs.isEmpty && gust == nil && !dormant.values.contains { $0.top > 0 || !$0.spray.isEmpty || !$0.film.isEmpty } && parking.isEmpty && lying.isEmpty && nextMode == nil
+            && fallingSigns.isEmpty && snowballs.isEmpty && gust == nil && !dormant.values.contains { $0.ledge.top > 0 || !$0.ledge.spray.isEmpty || !$0.ledge.film.isEmpty } && parking.isEmpty && lying.isEmpty && nextMode == nil
             && splashes.isEmpty && glassDrops.isEmpty && !wet
             && !layers.contains { $0.top > 0 }
     }
@@ -1068,7 +1068,7 @@ final class SnowSimulation {
                 } else {
                     move(ledge, left: left, right: right, top: top, columns: columns, interval: interval)
                 }
-            } else if let returning = dormant.removeValue(forKey: surface.id) ?? unpark(surface.id) {
+            } else if let returning = dormant.removeValue(forKey: surface.id)?.ledge ?? unpark(surface.id) {
                 ledge = returning
                 restore(returning, left: left, top: top, columns: columns)
                 ledges[surface.id] = returning
@@ -1108,15 +1108,18 @@ final class SnowSimulation {
                 parking.append((id, ledge, clock))
             }
         }
-        if dormant.count > 200, let stale = dormant.keys.first { dormant[stale] = nil }
         ledgeList = Array(ledges.values)
         layers = [ground] + ledgeList
     }
 
     /// Keeps the snow of a window gone to another Space for its return; a bare window gets a fresh ledge when it's back.
+    /// Only so many are kept, the one gone longest dropped first.
     private func keepAway(_ id: CGWindowID, _ ledge: SnowLayer) {
         guard ledge.top > 0 || !ledge.spray.isEmpty || !ledge.film.isEmpty || lying.contains(where: { $0.layer === ledge }) else { return }
-        dormant[id] = ledge
+        dormant[id] = (ledge, clock)
+        if dormant.count > 200, let oldest = dormant.lazy.filter({ $0.key != id }).min(by: { $0.value.since < $1.value.since })?.key {
+            dormant[oldest] = nil
+        }
     }
 
     private func unpark(_ id: CGWindowID) -> SnowLayer? {
@@ -3541,7 +3544,7 @@ final class SnowSimulation {
     private func tendLeaves(dt: Float) {
         guard !lying.isEmpty else { return }
         let shown = markShown()
-        lazy var kept = Set(dormant.values.map(ObjectIdentifier.init) + parking.map { ObjectIdentifier($0.ledge) })
+        lazy var kept = Set(dormant.values.map { ObjectIdentifier($0.ledge) } + parking.map { ObjectIdentifier($0.ledge) })
         let speed = simd_length(cursorVelocity)
         for k in lying.indices.reversed() {
             var leaf = lying[k]
