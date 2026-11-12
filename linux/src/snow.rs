@@ -209,11 +209,10 @@ pub fn run() -> Result<(), String> {
     if let Some(tray) = app.tray.take() {
         tray.shutdown().wait();
     }
-    result?;
     for screen in app.screens.drain(..) {
         screen.release(&app.gpu);
     }
-    Ok(())
+    result
 }
 
 /// Pauses the snow while the screen is locked.

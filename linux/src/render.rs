@@ -159,6 +159,7 @@ impl Gpu {
         let context = egl
             .create_context(display, config, None, &[egl::CONTEXT_CLIENT_VERSION, 3, egl::NONE])
             .map_err(|error| format!("EGL context: {error}"))?;
+        let unfinished = Unfinished { egl: &egl, display, context };
         egl.make_current(display, None, None, Some(context)).map_err(|error| format!("EGL make current: {error}"))?;
         let gl = unsafe {
             glow::Context::from_loader_function(|name| egl.get_proc_address(name).map_or(std::ptr::null(), |function| function as *const c_void))
@@ -284,6 +285,7 @@ impl Gpu {
                 gl.tex_parameter_i32(glow::TEXTURE_2D, parameter, value as i32);
             }
 
+            std::mem::forget(unfinished);
             Ok(Gpu {
                 egl,
                 display,
@@ -669,6 +671,44 @@ impl Gpu {
             }
             Some((texture, [width, height]))
         }
+    }
+}
+
+impl Drop for Gpu {
+    /// Surfaces made on this Gpu must have been released already. The display is left initialized: a Gpu made again
+    /// after the context was lost shares it.
+    fn drop(&mut self) {
+        if self.egl.make_current(self.display, None, None, Some(self.context)).is_ok() {
+            let gl = &self.gl;
+            unsafe {
+                for program in [&self.sprite, &self.pile, &self.sign, &self.pumpkin, &self.fade, &self.field, &self.glass] {
+                    gl.delete_program(program.program);
+                }
+                gl.delete_vertex_array(self.sprite_array);
+                gl.delete_vertex_array(self.empty_array);
+                gl.delete_buffer(self.sprite_buffer);
+                gl.delete_texture(self.heights);
+                for texture in self.signs.iter().flatten().map(|(texture, _)| *texture).chain(self.pumpkin_pictures.iter().flatten().copied()) {
+                    gl.delete_texture(texture);
+                }
+            }
+        }
+        let _ = self.egl.make_current(self.display, None, None, None);
+        let _ = self.egl.destroy_context(self.display, self.context);
+    }
+}
+
+/// A context whose Gpu failed to be made; destroying it frees the GL objects made on it so far.
+struct Unfinished<'a> {
+    egl: &'a egl::DynamicInstance<egl::EGL1_4>,
+    display: egl::Display,
+    context: egl::Context,
+}
+
+impl Drop for Unfinished<'_> {
+    fn drop(&mut self) {
+        let _ = self.egl.make_current(self.display, None, None, None);
+        let _ = self.egl.destroy_context(self.display, self.context);
     }
 }
 
