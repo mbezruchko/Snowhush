@@ -171,6 +171,8 @@ pub fn set_opens_at_login(on: bool) -> std::io::Result<()> {
         Some(appimage) => PathBuf::from(appimage),
         None => std::env::current_exe()?,
     };
+    let exe = exe.to_str().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "executable path is not UTF-8"))?;
+    let exe = desktop_exec(exe)?;
     if let Some(folder) = path.parent() {
         std::fs::create_dir_all(folder)?;
     }
@@ -178,9 +180,40 @@ pub fn set_opens_at_login(on: bool) -> std::io::Result<()> {
         path,
         format!(
             "[Desktop Entry]\nType=Application\nName=Snowhush\nComment=Snow on your desktop\nExec=\"{}\"\nIcon=snowhush\nX-KDE-autostart-phase=2\n",
-            exe.display()
+            exe
         ),
     )
+}
+
+/// Desktop entries parse Exec twice: first as a string value, then as a quoted command argument.
+fn desktop_exec(path: &str) -> std::io::Result<String> {
+    if path.contains(['\n', '\r']) {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "newline in executable path"));
+    }
+    let mut escaped = String::new();
+    for character in path.chars() {
+        match character {
+            '\\' => escaped.push_str("\\\\\\\\"),
+            '"' => escaped.push_str("\\\\\\\""),
+            '$' => escaped.push_str("\\\\$"),
+            '`' => escaped.push_str("\\\\`"),
+            '%' => escaped.push_str("%%"),
+            _ => escaped.push(character),
+        }
+    }
+    Ok(escaped)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::desktop_exec;
+
+    #[test]
+    fn login_command_quotes_desktop_entry_and_exec_metacharacters() {
+        assert_eq!(desktop_exec("/tmp/a b\"$`%/snowhush").unwrap(), "/tmp/a b\\\\\\\"\\\\$\\\\`%%/snowhush");
+        assert_eq!(desktop_exec("/tmp/a\\b").unwrap(), "/tmp/a\\\\\\\\b");
+        assert!(desktop_exec("/tmp/snow\nhush").is_err());
+    }
 }
 
 /// KDE's animation speed: zero, "Instant", means the person prefers less motion.
