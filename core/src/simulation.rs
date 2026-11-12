@@ -442,8 +442,8 @@ pub struct SnowSimulation {
     /// The ground first, then one ledge per window, with `ids` alongside.
     layers: Vec<SnowLayer>,
     ids: Vec<WindowId>,
-    /// Snow on windows that left the screen for another desktop, kept until the window shows up again.
-    dormant: HashMap<WindowId, SnowLayer>,
+    /// Snow on windows that left the screen for another desktop, kept until the window shows up again, with when it left.
+    dormant: HashMap<WindowId, (SnowLayer, f64)>,
     /// Windows that went off screen without a word yet on why; a desktop switch keeps their snow, anything else drops it.
     parking: Vec<(WindowId, SnowLayer, f64)>,
     space_changed_at: f64,
@@ -733,7 +733,7 @@ impl SnowSimulation {
         self.air.grains.iter_mut().for_each(|grain| grain.position += up);
         self.air.motes.iter_mut().for_each(|mote| mote.position += up);
         self.layers.iter_mut().skip(1).for_each(|ledge| ledge.raise(by));
-        self.dormant.values_mut().for_each(|ledge| ledge.raise(by));
+        self.dormant.values_mut().for_each(|(ledge, _)| ledge.raise(by));
         self.parking.iter_mut().for_each(|(_, ledge, _)| ledge.raise(by));
         let ground = &mut self.layers[0];
         let count = ground.count();
@@ -763,7 +763,7 @@ impl SnowSimulation {
         self.air.grains.retain(|grain| grain.position.y >= 0.0);
         self.air.motes.retain(|mote| mote.position.y >= 0.0);
         self.layers.iter_mut().skip(1).for_each(|ledge| ledge.raise(-by));
-        self.dormant.values_mut().for_each(|ledge| ledge.raise(-by));
+        self.dormant.values_mut().for_each(|(ledge, _)| ledge.raise(-by));
         self.parking.iter_mut().for_each(|(_, ledge, _)| ledge.raise(-by));
         self.air.heights_changed = true;
         self.resize(width, height);
@@ -1047,8 +1047,8 @@ impl SnowSimulation {
 
     pub fn space_changed(&mut self) {
         self.space_changed_at = self.air.clock;
-        for (id, ledge, _) in self.parking.drain(..) {
-            self.dormant.insert(id, ledge);
+        for (id, ledge, _) in std::mem::take(&mut self.parking) {
+            self.keep_dormant(id, ledge);
         }
     }
 
@@ -1093,7 +1093,7 @@ impl SnowSimulation {
                 }
                 li
             } else {
-                let ledge = match self.dormant.remove(&surface.id).or_else(|| self.unpark(surface.id)) {
+                let ledge = match self.dormant.remove(&surface.id).map(|(ledge, _)| ledge).or_else(|| self.unpark(surface.id)) {
                     Some(mut returning) => {
                         restore(&mut returning, left, top, columns);
                         returning.returned_at = self.air.clock;
@@ -1145,21 +1145,30 @@ impl SnowSimulation {
                 self.layers.push(ledge);
                 self.ids.push(id);
             } else if elsewhere.contains(&id) {
-                self.dormant.insert(id, ledge);
+                self.keep_dormant(id, ledge);
             } else if !parked.contains(&id) {
                 let velocity = ledge.track_velocity + ledge.offset_velocity;
                 self.drop_leaves(id, V2::new(ledge.heap_x(), ledge.base().y));
                 self.air.shed(&mut ledge, 1.0, velocity, false);
             } else if self.air.clock - self.space_changed_at < 0.6 {
-                self.dormant.insert(id, ledge);
+                self.keep_dormant(id, ledge);
             } else {
                 self.parking.push((id, ledge, self.air.clock));
             }
         }
+    }
+
+    /// Keeps the snow of a window gone off screen until it shows up again: only a window with something on it, and
+    /// only so many, the one gone longest dropped first.
+    fn keep_dormant(&mut self, id: WindowId, ledge: SnowLayer) {
+        if ledge.top <= 0.0 && ledge.spray.is_empty() && ledge.film.is_empty() && !self.lying.iter().any(|leaf| leaf.layer == id) {
+            return;
+        }
+        self.dormant.insert(id, (ledge, self.air.clock));
         if self.dormant.len() > 200
-            && let Some(&stale) = self.dormant.keys().next()
+            && let Some(oldest) = self.dormant.iter().filter(|entry| *entry.0 != id).min_by(|a, b| a.1.1.total_cmp(&b.1.1)).map(|(&id, _)| id)
         {
-            self.dormant.remove(&stale);
+            self.dormant.remove(&oldest);
         }
     }
 
