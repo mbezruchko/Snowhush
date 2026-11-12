@@ -38,6 +38,8 @@ const FADE_OUT: f32 = 0.25;
 const FADE_IN: f32 = 0.35;
 /// Frames that fail to draw in a row before the drawing surface is made again.
 const RENEW_AFTER: u32 = 3;
+/// How long a display waits after a frame failed to draw before trying again.
+const RETRY: Duration = Duration::from_millis(250);
 /// How often a run of failing frames is written to the log after its first.
 const FAILURE_LOG: Duration = Duration::from_secs(60);
 
@@ -377,6 +379,10 @@ impl Screen {
             if self.failures.is_multiple_of(RENEW_AFTER) {
                 self.drop_surface(gpu);
             }
+            // Nothing was committed, so the compositor will not say it showed the frame: that is no sign of the
+            // display being off.
+            self.shown_pending = None;
+            self.next_due = self.next_due.max(now + RETRY);
             return Err(error);
         }
         if self.failures > 0 {
