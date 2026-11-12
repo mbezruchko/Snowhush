@@ -168,7 +168,7 @@ final class WindowTracker {
         // Panels like Spotlight vanish on a keystroke; once one has stayed a while it's more likely a long-lived floating window.
         let panelOpen = panelsShownAt.values.contains { now - $0 < 20 }
         // Even while windows move, 60 looks a second are plenty: the snow follows a smoothed path of the window anyway.
-        let closely = eager || now - lastChange < 0.6 || dockShownAt != nil || dockHides || pointerAtBottomEdge || panelOpen || exposing || windowsMayChange(now: now)
+        let closely = eager || now - lastChange < 0.6 || dockShownAt != nil || dockHides || dockMayCome || panelOpen || exposing || windowsMayChange(now: now)
         // A sliding Space is followed every frame, its snow riding on the windows with no smoothing.
         // Turned to hide by itself, a Dock that stayed out slides away at once: the slow polls would let its snow hang.
         let dockTurnedToHide = dockStays && Dock.autoHides
@@ -378,9 +378,10 @@ final class WindowTracker {
         bounds.intersects(screen) && bounds.width * bounds.height >= screen.width * (screen.height - menuBarHeight) * 0.9
     }
 
-    /// Where the pointer reveals an auto-hidden Dock.
-    private var pointerAtBottomEdge: Bool {
-        pointer.y >= screen.maxY - 3 && pointer.x >= screen.minX && pointer.x < screen.maxX
+    /// The pointer on the bottom edge, where it reveals an auto-hidden Dock or calls the Dock over from another display.
+    /// A Dock that stays out here does neither.
+    private var dockMayCome: Bool {
+        pointer.y >= screen.maxY - 3 && pointer.x >= screen.minX && pointer.x < screen.maxX && (!dockWasOut || Dock.autoHides)
     }
 
     /// The pointer in the window list's coordinates.
