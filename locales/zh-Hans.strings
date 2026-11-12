@@ -106,12 +106,6 @@
 "weather.customize.intro" = "选择哪些效果跟随天气，哪些效果始终显示。";
 "weather.customize.heading" = "效果";
 "weather.customize.help" = "“关闭”隐藏效果。“跟随天气”根据当地天气显示。“始终显示”无需天气数据也能使用。";
-"weather.preset" = "效果预设";
-"weather.preset.custom" = "自定义";
-"weather.preset.weather" = "全部跟随天气";
-"weather.preset.snow" = "仅在下雪时显示雪";
-"weather.preset.fog" = "仅显示雾";
-"weather.preset.none" = "关闭所有效果";
 "weather.effect.snow" = "雪";
 "weather.effect.rain" = "雨";
 "weather.effect.clouds" = "云";
@@ -126,3 +120,7 @@
 "weather.manual.description" = "这些效果无需定位权限或互联网连接。";
 "weather.none.description" = "所有天气效果均已关闭。请在上方选择要显示的效果。";
 "weather.status.manual" = "手动效果";
+
+/* macOS automatic weather intensity. */
+"weather.intensity.auto" = "强度跟随天气";
+"weather.intensity.help" = "在“跟随天气”模式下，雨雪密度随降水强度变化。移动菜单中的强度滑块即可切换为手动调节。";

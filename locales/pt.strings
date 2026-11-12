@@ -106,12 +106,6 @@
 "weather.customize.intro" = "Escolha quais efeitos acompanham o tempo e quais ficam sempre ativos.";
 "weather.customize.heading" = "Efeitos";
 "weather.customize.help" = "Desativado oculta um efeito. Tempo acompanha as condições locais. Sempre funciona mesmo sem dados do tempo.";
-"weather.preset" = "Conjunto de efeitos";
-"weather.preset.custom" = "Personalizado";
-"weather.preset.weather" = "Tudo conforme o tempo";
-"weather.preset.snow" = "Neve apenas quando nevar";
-"weather.preset.fog" = "Apenas nevoeiro";
-"weather.preset.none" = "Todos os efeitos desativados";
 "weather.effect.snow" = "Neve";
 "weather.effect.rain" = "Chuva";
 "weather.effect.clouds" = "Nuvens";
@@ -126,3 +120,7 @@
 "weather.manual.description" = "Estes efeitos funcionam sem acesso à localização nem conexão à internet.";
 "weather.none.description" = "Todos os efeitos do tempo estão desativados. Escolha um efeito acima para ativá-lo.";
 "weather.status.manual" = "Efeitos manuais";
+
+/* macOS automatic weather intensity. */
+"weather.intensity.auto" = "Intensidade conforme o tempo";
+"weather.intensity.help" = "No modo Tempo, a densidade da chuva e da neve acompanha as precipitações. Mover o controle de intensidade no menu ativa o ajuste manual.";

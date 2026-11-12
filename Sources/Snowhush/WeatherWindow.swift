@@ -4,7 +4,7 @@ import AppKit
 final class WeatherWindow: NSWindowController, NSSearchFieldDelegate {
     private let sync: WeatherSync
     private let enabled = NSButton(checkboxWithTitle: tr("weather.effects"), target: nil, action: nil)
-    private let preset = NSPopUpButton()
+    private let automaticIntensity = NSButton(checkboxWithTitle: tr("weather.intensity.auto"), target: nil, action: nil)
     private var effectPickers: [WeatherEffect: NSPopUpButton] = [:]
     private let locationSection = NSStackView()
     private let manualNote = NSTextField(wrappingLabelWithString: "")
@@ -57,10 +57,11 @@ final class WeatherWindow: NSWindowController, NSSearchFieldDelegate {
         enabled.action = #selector(toggleEnabled)
         let effectsHeading = NSTextField(labelWithString: tr("weather.customize.heading"))
         effectsHeading.font = .systemFont(ofSize: 14, weight: .semibold)
-        preset.addItems(withTitles: ["weather.preset.custom", "weather.preset.weather", "weather.preset.snow", "weather.preset.fog", "weather.preset.none"].map(tr))
-        preset.setAccessibilityLabel(tr("weather.preset"))
-        preset.target = self
-        preset.action = #selector(choosePreset)
+        automaticIntensity.target = self
+        automaticIntensity.action = #selector(toggleAutomaticIntensity)
+        let intensityHelp = NSTextField(wrappingLabelWithString: tr("weather.intensity.help"))
+        intensityHelp.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        intensityHelp.textColor = .secondaryLabelColor
         let rows: [[NSView]] = WeatherEffect.allCases.enumerated().map { index, effect in
             let label = NSTextField(labelWithString: tr(effect.key))
             let picker = NSPopUpButton()
@@ -128,7 +129,7 @@ final class WeatherWindow: NSWindowController, NSSearchFieldDelegate {
         for view in [locationHeading, automatic, city, query, selection, searchStatus, status, privacy, provider] {
             locationSection.addArrangedSubview(view)
         }
-        let stack = NSStackView(views: [heading, intro, enabled, effectsHeading, preset, effectsGrid, help, manualNote, locationSection])
+        let stack = NSStackView(views: [heading, intro, enabled, effectsHeading, effectsGrid, help, automaticIntensity, intensityHelp, manualNote, locationSection])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 12
@@ -155,7 +156,7 @@ final class WeatherWindow: NSWindowController, NSSearchFieldDelegate {
             stack.bottomAnchor.constraint(equalTo: document.bottomAnchor, constant: -24),
             search.widthAnchor.constraint(greaterThanOrEqualToConstant: 260),
         ]
-        for view in [intro, preset, effectsGrid, help, manualNote, locationSection, query, selection, searchStatus, status, privacy] {
+        for view in [intro, effectsGrid, help, intensityHelp, manualNote, locationSection, query, selection, searchStatus, status, privacy] {
             constraints.append(view.widthAnchor.constraint(equalTo: stack.widthAnchor))
         }
         for view in [summary, detail] { constraints.append(view.widthAnchor.constraint(equalTo: stack.widthAnchor)) }
@@ -168,8 +169,7 @@ final class WeatherWindow: NSWindowController, NSSearchFieldDelegate {
     func update() {
         enabled.state = sync.enabled ? .on : .off
         let effects = Preferences.weatherEffects
-        let presets: [WeatherEffects] = [.allWeather, .snowOnly, .fogOnly, .none]
-        preset.selectItem(at: presets.firstIndex(of: effects).map { $0 + 1 } ?? 0)
+        automaticIntensity.state = Preferences.weatherAutomaticIntensity ? .on : .off
         for (effect, picker) in effectPickers {
             picker.selectItem(at: WeatherEffectRule.allCases.firstIndex(of: effects[effect]) ?? 1)
         }
@@ -208,10 +208,8 @@ final class WeatherWindow: NSWindowController, NSSearchFieldDelegate {
         update()
     }
 
-    @objc private func choosePreset() {
-        let presets: [WeatherEffects] = [.allWeather, .snowOnly, .fogOnly, .none]
-        guard presets.indices.contains(preset.indexOfSelectedItem - 1) else { return }
-        sync.setEffects(presets[preset.indexOfSelectedItem - 1])
+    @objc private func toggleAutomaticIntensity() {
+        sync.setAutomaticIntensity(automaticIntensity.state == .on)
         update()
     }
 

@@ -30,16 +30,20 @@ struct WeatherEffects: Codable, Equatable {
     }
     static let allWeather = WeatherEffects()
     static let none = WeatherEffects(defaultRule: .off)
-    static var snowOnly: WeatherEffects {
-        var effects = none
-        effects[.snow] = .weather
-        return effects
+}
+
+struct WeatherIntensity {
+    var automatic: Bool
+    var manual: Float
+
+    func precipitation(for scene: WeatherScene) -> Float {
+        guard !scene.modes.isEmpty else { return 0 }
+        return min(max(automatic ? scene.intensity : manual, 0), 1)
     }
-    static var fogOnly: WeatherEffects {
-        var effects = none
-        effects[.fog] = .always
-        return effects
-    }
+
+    /// Atmospheric layers already encode cloud cover and sunlight from the reading.
+    /// Automatic weather must not inherit an unrelated saved manual intensity, including a saved Off value.
+    var atmosphere: Float { automatic ? 1 : min(max(manual * 2, 0), 1) }
 }
 
 /// Resolves the user's rules before anything reaches the simulation or renderer. Forced effects need no reading.

@@ -106,12 +106,6 @@
 "weather.customize.intro" = "Выберите, какие эффекты зависят от погоды, а какие включены постоянно.";
 "weather.customize.heading" = "Эффекты";
 "weather.customize.help" = "«Выключено» скрывает эффект. «По погоде» включает его при подходящих условиях. «Всегда» работает даже без данных о погоде.";
-"weather.preset" = "Набор эффектов";
-"weather.preset.custom" = "Своя настройка";
-"weather.preset.weather" = "Всё по погоде";
-"weather.preset.snow" = "Только снег по погоде";
-"weather.preset.fog" = "Только туман";
-"weather.preset.none" = "Всё выключено";
 "weather.effect.snow" = "Снег";
 "weather.effect.rain" = "Дождь";
 "weather.effect.clouds" = "Облака";
@@ -126,3 +120,7 @@
 "weather.manual.description" = "Эти эффекты работают без геолокации и подключения к интернету.";
 "weather.none.description" = "Все погодные эффекты выключены. Выберите эффект выше, чтобы включить его.";
 "weather.status.manual" = "Ручные эффекты";
+
+/* macOS automatic weather intensity. */
+"weather.intensity.auto" = "Интенсивность по погоде";
+"weather.intensity.help" = "Для эффектов «По погоде» плотность дождя и снега зависит от силы осадков. Измените ползунок интенсивности в меню, чтобы перейти к ручной настройке.";

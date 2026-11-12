@@ -61,9 +61,10 @@ struct WeatherReading: Decodable, Equatable, Sendable {
     let cloudCover: Double
     let windSpeed: Double
     let windDirection: Double
+    var interval: Double = 900
 
     enum CodingKeys: String, CodingKey {
-        case time, precipitation, rain, snowfall
+        case time, precipitation, rain, snowfall, interval
         case temperature = "temperature_2m", code = "weather_code", isDay = "is_day"
         case cloudCover = "cloud_cover", windSpeed = "wind_speed_10m", windDirection = "wind_direction_10m"
     }
@@ -71,8 +72,8 @@ struct WeatherReading: Decodable, Equatable, Sendable {
     var condition: WeatherCondition? { WeatherCondition(code: code) }
     var date: Date { Date(timeIntervalSince1970: time) }
     var isValid: Bool {
-        condition != nil && [time, temperature, precipitation, rain, snowfall, cloudCover, windSpeed, windDirection].allSatisfy(\.isFinite)
-            && (0...1).contains(isDay) && (0...100).contains(cloudCover) && precipitation >= 0 && rain >= 0 && snowfall >= 0 && windSpeed >= 0
+        condition != nil && [time, temperature, precipitation, rain, snowfall, cloudCover, windSpeed, windDirection, interval].allSatisfy(\.isFinite)
+            && interval > 0 && (0...1).contains(isDay) && (0...100).contains(cloudCover) && precipitation >= 0 && rain >= 0 && snowfall >= 0 && windSpeed >= 0
     }
 
     var modes: [Mode] {
@@ -84,6 +85,22 @@ struct WeatherReading: Decodable, Equatable, Sendable {
     }
 
     var intensity: Float {
+        guard codedIntensity > 0 else { return 0 }
+        // Current precipitation is an interval sum, not an hourly rate. Snow is in cm; Open-Meteo uses
+        // 7 cm of snowfall per 10 mm of water equivalent. The total also includes convective showers.
+        let water = max(precipitation, rain + snowfall * (10.0 / 7.0))
+        guard water > 0, interval.isFinite, interval > 0 else { return codedIntensity }
+        let rate = water * (3600 / interval)
+        let stops: [(rate: Double, intensity: Float)] = [(0, 0.12), (0.1, 0.2), (0.5, 0.35), (2, 0.55), (5, 0.8), (10, 1)]
+        for (lower, upper) in zip(stops, stops.dropFirst()) where rate <= upper.rate {
+            let along = Float((rate - lower.rate) / (upper.rate - lower.rate))
+            return lower.intensity + (upper.intensity - lower.intensity) * along
+        }
+        return 1
+    }
+
+    /// A weather code still provides a sensible level when tiny measured amounts have rounded to zero.
+    private var codedIntensity: Float {
         switch code {
         case 51, 56, 77: return 0.2
         case 53, 61, 66, 71, 80, 85: return 0.35
@@ -95,6 +112,23 @@ struct WeatherReading: Decodable, Equatable, Sendable {
 
     /// Meteorological direction is where the wind comes from; its horizontal component points the other way.
     var wind: Float { Float(-sin(windDirection * .pi / 180) * min(windSpeed, 100) * 1.5) }
+}
+
+extension WeatherReading {
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(time: try values.decode(Double.self, forKey: .time),
+                  temperature: try values.decode(Double.self, forKey: .temperature),
+                  code: try values.decode(Int.self, forKey: .code),
+                  isDay: try values.decode(Int.self, forKey: .isDay),
+                  precipitation: try values.decode(Double.self, forKey: .precipitation),
+                  rain: try values.decode(Double.self, forKey: .rain),
+                  snowfall: try values.decode(Double.self, forKey: .snowfall),
+                  cloudCover: try values.decode(Double.self, forKey: .cloudCover),
+                  windSpeed: try values.decode(Double.self, forKey: .windSpeed),
+                  windDirection: try values.decode(Double.self, forKey: .windDirection),
+                  interval: try values.decodeIfPresent(Double.self, forKey: .interval) ?? 900)
+    }
 }
 
 struct WeatherSnapshot: Equatable, Sendable {
@@ -130,7 +164,7 @@ struct WeatherAPI: WeatherProviding {
         let data = try await data(from: "https://api.open-meteo.com/v1/forecast", query: [
             "latitude": String(place.latitude), "longitude": String(place.longitude),
             "current": "temperature_2m,weather_code,is_day,precipitation,rain,snowfall,cloud_cover,wind_speed_10m,wind_direction_10m",
-            "timeformat": "unixtime", "wind_speed_unit": "kmh", "forecast_days": "1",
+            "timeformat": "unixtime", "wind_speed_unit": "kmh", "precipitation_unit": "mm", "forecast_days": "1",
         ])
         let reading = try JSONDecoder().decode(Response.self, from: data).current
         let snapshot = WeatherSnapshot(place: place, reading: reading)

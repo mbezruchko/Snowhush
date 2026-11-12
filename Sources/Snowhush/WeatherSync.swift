@@ -62,6 +62,17 @@ final class WeatherSync: NSObject, @preconcurrency CLLocationManagerDelegate {
         else { changed() }
     }
 
+    func setAutomaticIntensity(_ automatic: Bool) {
+        Preferences.weatherAutomaticIntensity = automatic
+        changed()
+    }
+
+    func setManualIntensity(_ intensity: Double) {
+        Preferences.intensity = min(max(intensity, 0), 1)
+        Preferences.weatherAutomaticIntensity = false
+        changed()
+    }
+
     func useAutomaticLocation() {
         Preferences.weatherAutomatic = true
         Preferences.weatherEnabled = true

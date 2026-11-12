@@ -54,7 +54,9 @@ Everything else lives in the menu bar: an Intensity slider for how much falls, O
 
 Choose Mode › Weather Effects, then open Weather Settings to choose what you want to see (or press ⌘, while Snowhush is active). Each effect has three settings: Off, Weather, and Always. Weather follows local conditions; Always works independently of them, even when location access or the network is unavailable. Snow, rain, clouds, fog, sunlight, lightning, and moonlight with stars can all be controlled separately.
 
-Presets include All Follow Weather, Only Snow When It Snows, Fog Only, and All Effects Off. Only Snow When It Snows shows snow during a snowfall and nothing during rain, clear skies, fog, or thunderstorms. Fog Only turns on fog immediately with every other effect off. You can also combine rules, such as permanent fog with snow only when it snows. Choices are saved between launches.
+Choose each effect individually. For snow only when it snows, set Snow to Weather and every other effect to Off. To show just fog regardless of the weather, set Fog to Always and everything else to Off. You can also combine rules, such as permanent fog with snow only when it snows. Choices are saved between launches.
+
+Match Weather Intensity is on by default. In Weather mode, rain and snow density follow the reported precipitation rate, accounting for the duration of the weather reading; if rounded amounts are zero, the condition's light, moderate or heavy category is used. The saved manual intensity does not scale automatic weather. Moving the Intensity slider switches back to manual intensity without changing your effect rules. Turn Match Weather Intensity back on in Weather Settings to resume automatic control.
 
 When at least one effect follows the weather, allow location access when macOS asks, or choose a city in Weather Settings. When every effect is Off or Always, no location fixes or weather requests are made. Turning Weather Effects off or selecting a manual particle mode brings back your original manual settings.
 

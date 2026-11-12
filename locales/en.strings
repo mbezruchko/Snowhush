@@ -114,12 +114,6 @@
 "weather.customize.intro" = "Choose which effects follow the weather and which stay on whenever you like.";
 "weather.customize.heading" = "Effects";
 "weather.customize.help" = "Off hides an effect. Weather follows local conditions. Always turns it on even without weather data.";
-"weather.preset" = "Effect preset";
-"weather.preset.custom" = "Custom";
-"weather.preset.weather" = "All Follow Weather";
-"weather.preset.snow" = "Only Snow When It Snows";
-"weather.preset.fog" = "Fog Only";
-"weather.preset.none" = "All Effects Off";
 "weather.effect.snow" = "Snow";
 "weather.effect.rain" = "Rain";
 "weather.effect.clouds" = "Clouds";
@@ -134,3 +128,7 @@
 "weather.manual.description" = "These effects work without location access or an internet connection.";
 "weather.none.description" = "All weather effects are off. Choose an effect above to turn it on.";
 "weather.status.manual" = "Manual effects";
+
+/* macOS automatic weather intensity. */
+"weather.intensity.auto" = "Match Weather Intensity";
+"weather.intensity.help" = "In Weather mode, rain and snow density follows precipitation. Moving the Intensity slider in the menu switches to manual control.";

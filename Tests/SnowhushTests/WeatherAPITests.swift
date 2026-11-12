@@ -11,9 +11,9 @@ final class WeatherAPITests: XCTestCase {
         return WeatherAPI(session: URLSession(configuration: configuration))
     }
 
-    private func body(code: Int = 63, time: Double = Date().timeIntervalSince1970) -> String {
+    private func body(code: Int = 63, time: Double = Date().timeIntervalSince1970, interval: Double = 900) -> String {
         """
-        {"current":{"time":\(time),"temperature_2m":4.5,"weather_code":\(code),"is_day":1,
+        {"current":{"time":\(time),"interval":\(interval),"temperature_2m":4.5,"weather_code":\(code),"is_day":1,
         "precipitation":0.3,"rain":0.3,"snowfall":0,"cloud_cover":95,"wind_speed_10m":8,"wind_direction_10m":240}}
         """
     }
@@ -25,16 +25,18 @@ final class WeatherAPITests: XCTestCase {
         let snapshot = try await service.current(at: place)
         XCTAssertEqual(snapshot.reading.condition, .rain)
         XCTAssertEqual(snapshot.place, place)
+        XCTAssertEqual(snapshot.reading.interval, 900)
         let url = try XCTUnwrap(WeatherFixtureProtocol.requestURL)
         let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
         XCTAssertEqual(query.first { $0.name == "timeformat" }?.value, "unixtime")
         XCTAssertEqual(query.first { $0.name == "wind_speed_unit" }?.value, "kmh")
+        XCTAssertEqual(query.first { $0.name == "precipitation_unit" }?.value, "mm")
         XCTAssertEqual(query.first { $0.name == "latitude" }?.value, "55.75")
         XCTAssertTrue(query.first { $0.name == "current" }?.value?.contains("is_day") == true)
     }
 
     func testRejectsHTTPFailureAndStaleOrUnknownWeather() async {
-        for (json, status) in [(body(), 503), (body(time: Date().timeIntervalSince1970 - 7200), 200), (body(code: 999), 200), ("{}", 200)] {
+        for (json, status) in [(body(), 503), (body(time: Date().timeIntervalSince1970 - 7200), 200), (body(code: 999), 200), (body(interval: 0), 200), ("{}", 200)] {
             let service = api(body: json, status: status)
             do {
                 _ = try await service.current(at: WeatherPlace(name: "Test", latitude: 55, longitude: 37))

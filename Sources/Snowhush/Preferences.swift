@@ -21,6 +21,10 @@ enum Preferences {
         get { defaults.object(forKey: "weatherAutomatic") as? Bool ?? true }
         set { defaults.set(newValue, forKey: "weatherAutomatic") }
     }
+    static var weatherAutomaticIntensity: Bool {
+        get { defaults.object(forKey: "weatherAutomaticIntensity") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "weatherAutomaticIntensity") }
+    }
     static var weatherEffects: WeatherEffects {
         get {
             guard let data = defaults.data(forKey: "weatherEffects"),

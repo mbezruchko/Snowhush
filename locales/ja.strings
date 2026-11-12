@@ -106,12 +106,6 @@
 "weather.customize.intro" = "天気に合わせるエフェクトと、常に表示するエフェクトを選べます。";
 "weather.customize.heading" = "エフェクト";
 "weather.customize.help" = "「オフ」は非表示、「天気に連動」は現地の天気に合わせます。「常に表示」は天気データがなくても使えます。";
-"weather.preset" = "エフェクトのプリセット";
-"weather.preset.custom" = "カスタム";
-"weather.preset.weather" = "すべて天気に連動";
-"weather.preset.snow" = "雪の日だけ雪を表示";
-"weather.preset.fog" = "霧だけ";
-"weather.preset.none" = "すべてオフ";
 "weather.effect.snow" = "雪";
 "weather.effect.rain" = "雨";
 "weather.effect.clouds" = "雲";
@@ -126,3 +120,7 @@
 "weather.manual.description" = "これらのエフェクトは位置情報やインターネット接続なしで使えます。";
 "weather.none.description" = "すべての天気エフェクトがオフです。上でエフェクトを選ぶと表示できます。";
 "weather.status.manual" = "手動エフェクト";
+
+/* macOS automatic weather intensity. */
+"weather.intensity.auto" = "強さを天気に合わせる";
+"weather.intensity.help" = "「天気に連動」では雨や雪の密度が降水量に合わせて変わります。メニューの強さスライダーを動かすと手動調整に切り替わります。";

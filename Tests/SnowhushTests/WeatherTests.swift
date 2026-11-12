@@ -52,6 +52,7 @@ final class WeatherTests: XCTestCase {
         XCTAssertEqual(value.condition, .snow)
         XCTAssertEqual(value.temperature, -2.5)
         XCTAssertEqual(value.isDay, 0)
+        XCTAssertEqual(value.interval, 900, "Older readings without an interval retain the fifteen-minute default")
         XCTAssertTrue(value.isValid)
         XCTAssertThrowsError(try JSONDecoder().decode(WeatherReading.self, from: Data("{\"weather_code\":null}".utf8)))
     }
@@ -114,6 +115,27 @@ final class WeatherTests: XCTestCase {
             XCTAssertGreaterThan(alphas.max() ?? 0, 0, "Weather \(code) must be visible")
             XCTAssertLessThan(alphas.max() ?? 255, 230, "The desktop must remain visible even under the lunar disc")
         }
+    }
+
+    @MainActor
+    func testManualIntensityDisablesAutomationWithoutChangingEffectRules() async {
+        let saved = savePreferences()
+        let provider = PendingWeather()
+        let sync = WeatherSync(provider: provider)
+        defer { sync.setEnabled(false); restorePreferences(saved) }
+        UserDefaults.standard.removeObject(forKey: "weatherAutomaticIntensity")
+        XCTAssertTrue(Preferences.weatherAutomaticIntensity)
+        sync.setEffects(.fogOnly)
+        sync.setManualIntensity(0.7)
+        XCTAssertFalse(Preferences.weatherAutomaticIntensity)
+        XCTAssertEqual(Preferences.intensity, 0.7, accuracy: 0.0001)
+        XCTAssertEqual(Preferences.weatherEffects, .fogOnly)
+        sync.setAutomaticIntensity(true)
+        XCTAssertTrue(Preferences.weatherAutomaticIntensity)
+        XCTAssertEqual(Preferences.intensity, 0.7, accuracy: 0.0001, "The saved manual level is kept when automation resumes")
+        XCTAssertEqual(Preferences.weatherEffects, .fogOnly)
+        let requests = await provider.requests
+        XCTAssertEqual(requests, 0, "Intensity changes alone do not start location or weather requests")
     }
 
     @MainActor
@@ -201,7 +223,7 @@ final class WeatherTests: XCTestCase {
         XCTAssertEqual(sync.snapshot?.reading.condition, .clear)
     }
 
-    private let preferenceKeys = ["weatherEnabled", "weatherAutomatic", "weatherPlace", "weatherEffects"]
+    private let preferenceKeys = ["weatherEnabled", "weatherAutomatic", "weatherPlace", "weatherEffects", "weatherAutomaticIntensity", "intensity"]
     private func savePreferences() -> [String: Any] {
         let saved = preferenceKeys.reduce(into: [String: Any]()) { if let value = UserDefaults.standard.object(forKey: $1) { $0[$1] = value } }
         Preferences.weatherEffects = .allWeather

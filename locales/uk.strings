@@ -106,12 +106,6 @@
 "weather.customize.intro" = "Виберіть, які ефекти залежать від погоди, а які ввімкнені постійно.";
 "weather.customize.heading" = "Ефекти";
 "weather.customize.help" = "«Вимкнено» приховує ефект. «За погодою» вмикає його за відповідних умов. «Завжди» працює навіть без погодних даних.";
-"weather.preset" = "Набір ефектів";
-"weather.preset.custom" = "Власні налаштування";
-"weather.preset.weather" = "Усе за погодою";
-"weather.preset.snow" = "Лише сніг за погодою";
-"weather.preset.fog" = "Лише туман";
-"weather.preset.none" = "Усе вимкнено";
 "weather.effect.snow" = "Сніг";
 "weather.effect.rain" = "Дощ";
 "weather.effect.clouds" = "Хмари";
@@ -126,3 +120,7 @@
 "weather.manual.description" = "Ці ефекти працюють без геолокації та підключення до інтернету.";
 "weather.none.description" = "Усі погодні ефекти вимкнені. Виберіть ефект вище, щоб увімкнути його.";
 "weather.status.manual" = "Ручні ефекти";
+
+/* macOS automatic weather intensity. */
+"weather.intensity.auto" = "Інтенсивність за погодою";
+"weather.intensity.help" = "Для ефектів «За погодою» густота дощу й снігу залежить від сили опадів. Змініть повзунок інтенсивності в меню, щоб перейти до ручного керування.";

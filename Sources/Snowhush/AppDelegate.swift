@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var halloween = false
     private var statusItem: NSStatusItem!
     private let intensitySlider = MenuSlider(range: 0...1)
+    private var intensityHeading: NSMenuItem!
     private let opacitySlider = MenuSlider(range: Preferences.opacityRange, captioned: false)
     private var opacityItem: NSMenuItem!
     private let opacityRow = MenuDisclosure()
@@ -115,7 +116,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
                 snow.halloween = halloween
                 snow.modes = activeModes
                 snow.simulation.intensity = activeIntensity
-                snow.setWeather(weatherScene, strength: Float(Preferences.intensity * 2))
+                snow.setWeather(weatherScene, strength: weatherIntensity.atmosphere)
                 snow.maxFrameRate = Preferences.maxPerformance
                 snow.activityChanged = { [weak self] in self?.updateActivity() }
                 snow.apply(power.budget)
@@ -176,7 +177,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         menu.delegate = self
         menu.autoenablesItems = false
 
-        menu.addItem(.sectionHeader(title: tr("intensity")))
+        intensityHeading = .sectionHeader(title: tr("intensity"))
+        menu.addItem(intensityHeading)
         intensitySlider.changed = { [unowned self] in select(intensity: $0) }
         let intensityItem = NSMenuItem()
         intensityItem.view = intensitySlider
@@ -287,7 +289,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
-        intensitySlider.value = Preferences.intensity
+        let automaticIntensity = weather.enabled && Preferences.weatherAutomaticIntensity
+        intensitySlider.value = automaticIntensity ? Double(activeIntensity) : Preferences.intensity
+        intensityHeading.title = tr("intensity") + (automaticIntensity ? " · " + tr("weather.rule.weather") : "")
+        intensitySlider.toolTip = automaticIntensity ? tr("weather.intensity.help") : nil
         opacitySlider.value = Preferences.fallingOpacity
         opacityRow.summary = MenuSlider.percent(Preferences.fallingOpacity)
         opacityRow.fit(opacityItem.title, least: 0)
@@ -330,10 +335,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     }
 
     private func select(intensity: Double) {
+        if weather.enabled {
+            weather.setManualIntensity(intensity)
+            return
+        }
         Preferences.intensity = intensity
         for snow in screens {
             snow.simulation.intensity = activeIntensity
-            snow.setWeather(weatherScene, strength: Float(intensity * 2))
+            snow.setWeather(weatherScene, strength: weatherIntensity.atmosphere)
         }
         updateStatusIcon()
     }
@@ -508,7 +517,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         return weather.enabled ? modes.isEmpty ? [.snow] : modes : Preferences.modes
     }
     private var activeIntensity: Float {
-        weather.enabled ? min(1, weatherScene.intensity * Float(Preferences.intensity * 2)) : Float(Preferences.intensity)
+        weather.enabled ? weatherIntensity.precipitation(for: weatherScene) : Float(Preferences.intensity)
+    }
+    private var weatherIntensity: WeatherIntensity {
+        WeatherIntensity(automatic: Preferences.weatherAutomaticIntensity, manual: Float(Preferences.intensity))
     }
 
     private var weatherSummary: String {
@@ -541,7 +553,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
                 snow.simulation.blowAway(direction: direction, calm: true)
             }
             snow.simulation.intensity = activeIntensity
-            snow.setWeather(scene, strength: Float(Preferences.intensity * 2))
+            snow.setWeather(scene, strength: weatherIntensity.atmosphere)
         }
         wasWeatherEnabled = weather.enabled
         wasPrecipitating = precipitating

@@ -106,12 +106,6 @@
 "weather.customize.intro" = "Choisissez les effets qui suivent la météo et ceux qui restent toujours actifs.";
 "weather.customize.heading" = "Effets";
 "weather.customize.help" = "Désactivé masque un effet. Météo suit les conditions locales. Toujours fonctionne même sans données météo.";
-"weather.preset" = "Préréglage des effets";
-"weather.preset.custom" = "Personnalisé";
-"weather.preset.weather" = "Tout selon la météo";
-"weather.preset.snow" = "Neige seulement quand il neige";
-"weather.preset.fog" = "Brouillard seul";
-"weather.preset.none" = "Tous les effets désactivés";
 "weather.effect.snow" = "Neige";
 "weather.effect.rain" = "Pluie";
 "weather.effect.clouds" = "Nuages";
@@ -126,3 +120,7 @@
 "weather.manual.description" = "Ces effets fonctionnent sans accès à la position ni connexion Internet.";
 "weather.none.description" = "Tous les effets météo sont désactivés. Choisissez un effet ci-dessus pour l’activer.";
 "weather.status.manual" = "Effets manuels";
+
+/* macOS automatic weather intensity. */
+"weather.intensity.auto" = "Intensité selon la météo";
+"weather.intensity.help" = "En mode Météo, la densité de pluie et de neige suit les précipitations. Déplacer le curseur Intensité dans le menu passe au réglage manuel.";
