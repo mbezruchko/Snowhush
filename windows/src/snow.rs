@@ -387,6 +387,13 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                     screen.next_due = now + clock.frequency / 4;
                     continue;
                 }
+                // Behind windows, the snow waits while one hides all of it, looking again soon enough to carry on
+                // before a window being restored uncovers much.
+                if screen.behind_windows() && tracker.hides(&screen.monitor.rect) {
+                    screen.resume();
+                    screen.next_due = now + clock.frequency / 10;
+                    continue;
+                }
                 let began = Clock::now();
                 match screen.frame(&gpu, &clock, now, budget, sky, time, windows) {
                     Ok(drew) => {

@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, POINT, RECT};
 use windows::Win32::Graphics::Dwm::{
-    DWM_WINDOW_CORNER_PREFERENCE, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND, DWMWCP_ROUNDSMALL,
-    DwmGetWindowAttribute,
+    DWM_WINDOW_CORNER_PREFERENCE, DWMSBT_TRANSIENTWINDOW, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DWMWA_SYSTEMBACKDROP_TYPE,
+    DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND, DWMWCP_ROUNDSMALL, DwmGetWindowAttribute,
 };
 use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow};
 use windows::Win32::System::Com::{CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx};
@@ -79,6 +79,8 @@ struct Window {
     cover_only: bool,
     topmost: bool,
     zoomed: bool,
+    /// Neither layered nor drawn by composition, either of which can leave parts of it see-through.
+    opaque: bool,
     toast: bool,
     sweeps: bool,
     hold: bool,
@@ -409,6 +411,20 @@ impl Tracker {
         None
     }
 
+    /// Whether an opaque window covers all of this area, so that nothing behind the windows shows in it.
+    /// Acrylic shows what is behind it, blurred; Mica only shows the desktop picture.
+    pub fn hides(&self, area: &RECT) -> bool {
+        self.windows.iter().any(|window| {
+            let mut backdrop = 0i32;
+            window.opaque
+                && !window.cover_only
+                && contains(&window.rect, area)
+                && !(unsafe { DwmGetWindowAttribute(HWND(window.id as *mut c_void), DWMWA_SYSTEMBACKDROP_TYPE, (&raw mut backdrop).cast(), 4) }
+                    .is_ok()
+                    && backdrop == DWMSBT_TRANSIENTWINDOW.0)
+        })
+    }
+
     /// Whether a listed window covers most of this display's work area, in physical pixels, as when maximized or full screen.
     pub fn fills(&self, id: isize, area: &RECT) -> bool {
         self.windows.iter().any(|window| {
@@ -515,6 +531,7 @@ impl Tracker {
                 radius,
                 topmost: extended & WS_EX_TOPMOST.0 != 0,
                 zoomed,
+                opaque: extended & (WS_EX_LAYERED.0 | WS_EX_NOREDIRECTIONBITMAP.0) == 0,
                 toast,
                 sweeps: false,
                 hold: false,
