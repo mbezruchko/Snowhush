@@ -183,7 +183,7 @@ pub fn run() -> Result<(), String> {
     WaylandSource::new(connection, queue).insert(event_loop.handle()).map_err(|error| error.to_string())?;
 
     use ksni::blocking::TrayMethods;
-    app.tray = Tray::new(settings, commands.clone()).spawn().inspect_err(|error| log!("tray: {error}")).ok();
+    app.tray = Tray::new(settings, commands.clone()).assume_sni_available(true).spawn().inspect_err(|error| log!("tray: {error}")).ok();
     watch_lock(&bus, commands);
 
     while !app.quit {

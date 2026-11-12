@@ -111,6 +111,16 @@ impl ksni::Tray for Tray {
         self.glyphs[glyph][usize::from(self.light)].clone()
     }
 
+    fn watcher_online(&self) {
+        log!("tray: the panel's tray is back");
+    }
+
+    /// Waits for a panel's tray to come, as when Snowhush starts before the panel.
+    fn watcher_offline(&self, reason: ksni::OfflineReason) -> bool {
+        log!("tray: no panel's tray yet ({reason:?})");
+        true
+    }
+
     fn tool_tip(&self) -> ksni::ToolTip {
         ksni::ToolTip { title: "Snowhush".into(), ..Default::default() }
     }
