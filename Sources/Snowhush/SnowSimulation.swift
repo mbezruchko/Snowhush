@@ -1301,7 +1301,9 @@ final class SnowSimulation {
         let leafy = ledge.blend.leaves > 0.5
         let (stick, hold, rub) = leafy ? (leafAdhesion, leafGrip, leafSlip) : (adhesion, grip, slip)
         let fall = -gravity - acceleration.y
-        if lift > 0 || fall > stick {
+        // The Dock comes out easing to a stop, braking harder than gravity all the way: its snow would be thrown off and
+        // hang above it.
+        if !ledge.isDock && (lift > 0 || fall > stick) {
             liftVelocity += fall * dt
             lift += liftVelocity * dt
             if lift <= 0 {
