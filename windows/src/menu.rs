@@ -1214,7 +1214,14 @@ impl Menu {
                             for &icon in icons.iter().rev() {
                                 let x = right - SUMMARY_ICON / 2.0;
                                 let y = top + ROW / 2.0;
-                                target.SetTransform(&Matrix3x2 { M11: scale, M12: 0.0, M21: 0.0, M22: scale, M31: x * (1.0 - scale), M32: y * (1.0 - scale) });
+                                target.SetTransform(&Matrix3x2 {
+                                    M11: scale,
+                                    M12: 0.0,
+                                    M21: 0.0,
+                                    M22: scale,
+                                    M31: x * (1.0 - scale),
+                                    M32: y * (1.0 - scale),
+                                });
                                 self.icon(target, icon, x, y - ICON / 2.0, &soft)?;
                                 right -= SUMMARY_ICON + SUMMARY_GAP;
                             }
