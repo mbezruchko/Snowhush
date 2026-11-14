@@ -10,6 +10,7 @@ mod prefs;
 mod render;
 mod screen;
 mod snow;
+mod store;
 mod tracker;
 mod update;
 mod welcome;

@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy · Snowhush</title>
+<meta name="description" content="Snowhush collects no personal data. What the app and this site do and don't send anywhere.">
+<meta name="theme-color" content="#17130f">
+<link rel="icon" type="image/png" href="/assets/icon-64.png">
+<link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Alegreya+Sans:ital,wght@0,400;0,500;0,700;1,400&family=Big+Shoulders+Display:wght@300&display=swap" rel="stylesheet">
+<style>
+:root {
+  --night: oklch(0.155 0.012 60);
+  --ink: oklch(0.93 0.02 80);
+  --muted: oklch(0.8 0.02 75);
+  --faint: oklch(0.72 0.02 75);
+  --rule: oklch(0.93 0.02 80 / 0.12);
+  --gutter: clamp(20px, 6vw, 88px);
+  color-scheme: dark;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--night);
+  color: var(--ink);
+  font-family: 'Alegreya Sans', 'Avenir Next', 'Segoe UI', sans-serif;
+  font-size: 19px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+main {
+  max-width: 680px;
+  margin: 0 auto;
+  padding: clamp(56px, 10vw, 120px) var(--gutter) 96px;
+}
+
+.home {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 56px;
+  color: var(--muted);
+  font-size: 15px;
+  font-weight: 500;
+  text-decoration: none;
+}
+.home img { width: 28px; height: 28px; }
+.home:hover { color: var(--ink); }
+
+h1 {
+  margin: 0 0 12px;
+  font-family: 'Big Shoulders Display', 'Arial Narrow', sans-serif;
+  font-weight: 300;
+  font-size: clamp(56px, 11vw, 96px);
+  line-height: 0.9;
+  text-transform: uppercase;
+}
+
+.updated { margin: 0 0 48px; color: var(--faint); font-size: 15px; }
+
+.lead { margin: 0 0 40px; font-size: 22px; }
+
+h2 {
+  margin: 48px 0 12px;
+  padding-top: 32px;
+  border-top: 1px solid var(--rule);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+p, li { color: var(--ink); }
+ul { padding-left: 1.1em; }
+li + li { margin-top: 8px; }
+
+a { color: inherit; text-underline-offset: 3px; text-decoration-color: oklch(0.93 0.02 80 / 0.4); }
+a:hover { text-decoration-color: currentColor; }
+a:focus-visible { outline: 2px solid var(--ink); outline-offset: 4px; }
+</style>
+</head>
+<body>
+<main>
+  <a class="home" href="/"><img src="/assets/icon-64.png" alt="">Snowhush</a>
+
+  <h1>Privacy</h1>
+  <p class="updated">Updated 14 November 2026</p>
+
+  <p class="lead">Snowhush collects no personal data. It has no accounts, no analytics and no ads, and nothing you do with it leaves your computer.</p>
+
+  <h2>The app</h2>
+  <ul>
+    <li>Snowhush watches where windows, the Dock or taskbar and the cursor are, so the snow can settle on them and part around the cursor. This happens on your computer only and is never recorded or sent anywhere.</li>
+    <li>Your settings are kept on your computer, in the system's usual place for app settings. On Windows and Linux the app also keeps a small log on your computer to help with bug reports; it holds no personal data and is sent nowhere unless you attach it to a report yourself.</li>
+    <li>To offer updates, the macOS and Windows versions ask GitHub, where Snowhush is published, whether a newer release exists: macOS through Sparkle, Windows once a day. These requests carry nothing about you beyond what any web request does, such as your IP address, which GitHub handles under <a href="https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement">its privacy statement</a>. The Microsoft Store and Linux versions don't check; the Store and your package manager update them.</li>
+    <li>“Support Snowhush” only opens GitHub Sponsors in your browser.</li>
+  </ul>
+
+  <h2>This site</h2>
+  <ul>
+    <li>snowhush.app sets no cookies and runs no tracking of its own. It is served by Cloudflare Pages, which may keep standard server logs and anonymous visit counts.</li>
+    <li>Its fonts come from Google Fonts, so your browser asks Google for them.</li>
+    <li>Downloads come from GitHub.</li>
+  </ul>
+
+  <h2>Children</h2>
+  <p>Snowhush collects no data from anyone, children included.</p>
+
+  <h2>Changes and questions</h2>
+  <p>If this ever changes, this page will say so first, with a new date above. Questions are welcome as an <a href="https://github.com/mbezruchko/Snowhush/issues">issue on GitHub</a>.</p>
+</main>
+</body>
+</html>

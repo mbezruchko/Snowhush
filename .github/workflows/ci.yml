@@ -29,6 +29,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: cargo build --locked --release --bin Snowhush --manifest-path windows/Cargo.toml
+      # The Microsoft Store's package, ready to upload to Partner Center.
+      - run: windows/store/pack.ps1
+        shell: pwsh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: snowhush-msix
+          path: dist/Snowhush.msix
 
   linux:
     name: Linux app

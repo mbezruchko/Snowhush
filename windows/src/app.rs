@@ -27,6 +27,7 @@ use crate::log;
 use crate::menu::{self, Entry, Icon, Tile};
 use crate::prefs::{self, Settings};
 use crate::snow::{self, Command, Links};
+use crate::store;
 use crate::update::{self, Release};
 use crate::welcome::{self, Handlers};
 use snowhush_core::simulation::Mode;
@@ -223,7 +224,10 @@ pub fn run() -> Result<()> {
         if !settings.welcomed {
             SetTimer(Some(window), TIMER_WELCOME, 1200, None);
         }
-        SetTimer(Some(window), TIMER_UPDATES, 30_000, None);
+        // The Store keeps its own copy up to date.
+        if !store::packaged() {
+            SetTimer(Some(window), TIMER_UPDATES, 30_000, None);
+        }
         SetTimer(Some(window), TIMER_HALLOWEEN, 60_000, None);
         APP.set(Some(App { settings, commands, wake, snow, icon, emblem, light, locked: false, display_off: false, away: false, update: None }));
 
@@ -419,8 +423,10 @@ fn entries(settings: &Settings, login: bool, sliders: bool) -> Vec<Entry> {
         Entry::Separator,
         Entry::header(tr("general")),
         Entry::toggle(ID_LOGIN, tr("login"), login, true),
-        Entry::item(ID_UPDATES, tr("updates"), false, true),
     ]);
+    if !store::packaged() {
+        options.push(Entry::item(ID_UPDATES, tr("updates"), false, true));
+    }
     let mut entries = if sliders {
         vec![
             Entry::header(tr("intensity")),

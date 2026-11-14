@@ -107,6 +107,9 @@ impl Settings {
 }
 
 pub fn opens_at_login() -> bool {
+    if crate::store::packaged() {
+        return crate::store::opens_at_login();
+    }
     let mut buffer = [0u16; 1024];
     let mut size = (buffer.len() * 2) as u32;
     let status =
@@ -137,6 +140,9 @@ fn startup_disabled() -> bool {
 }
 
 pub fn set_opens_at_login(on: bool) -> WIN32_ERROR {
+    if crate::store::packaged() {
+        return crate::store::set_opens_at_login(on);
+    }
     unsafe {
         if !on {
             return RegDeleteKeyValueW(HKEY_CURRENT_USER, RUN, RUN_VALUE);
