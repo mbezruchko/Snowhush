@@ -17,6 +17,8 @@ One-time setup on the release machine:
 
 `windows/` is the Windows app in Rust, cross-compiled from the Mac. Its snow comes from `core/`, the simulation without any platform, which `cd core && cargo test` tests natively. `windows/build.sh` builds the app and its installer, which carries the app, into `dist/Snowhush-Setup.exe`. The installer works per user, without administrator rights, and `Snowhush.exe --uninstall` removes it again. The installer is unsigned, so SmartScreen may warn before running it.
 
+The site's Windows button leads to the Microsoft Store (product 9P00NQMGBKGP), which signs the package. CI's Windows job packs `Snowhush.msix` (`windows/store/pack.ps1`) and keeps it as the `snowhush-msix` artifact: after a release, take it from the release commit's run and upload it as a new submission in Partner Center. Run from the Store's package, the app leaves updates to the Store.
+
 ## Linux
 
 `linux/` is the Linux app in Rust, on the same `core/`, for KDE Plasma 6, Hyprland, Sway and niri on Wayland. Macs can't build it, so GitHub does: `linux/packaging/package.sh` turns the binary built on Ubuntu 22.04 into `Snowhush-x86_64.AppImage`, `snowhush-x86_64.deb`, `snowhush-x86_64.rpm` and `snowhush-linux-x86_64.tar.gz`, the last for the AUR. A release without them, such as one made before, gets them from the workflow's "Run workflow" button with its tag.
