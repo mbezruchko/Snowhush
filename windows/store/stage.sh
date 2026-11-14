@@ -1,6 +1,6 @@
 #!/bin/zsh
 # Lays out the Microsoft Store package's contents in the folder given (default dist/store): the app, its manifest with
-# this version, and the logos. pack.ps1 turns the folder into Snowhush.msix on Windows; for a test, the folder can be
+# this version, and the logos, as pack.ps1 packs them into Snowhush.msix on Windows. For a test, the folder can be
 # registered as it is (Developer Mode): Add-AppxPackage -Register .\AppxManifest.xml
 set -euo pipefail
 
