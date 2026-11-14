@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 
 struct WindowUpdate {
     let surfaces: [WindowSurface]
@@ -168,11 +169,11 @@ final class WindowTracker {
         // Panels like Spotlight vanish on a keystroke; once one has stayed a while it's more likely a long-lived floating window.
         let panelOpen = panelsShownAt.values.contains { now - $0 < 20 }
         // Even while windows move, 60 looks a second are plenty: the snow follows a smoothed path of the window anyway.
-        let closely = eager || now - lastChange < 0.6 || dockShownAt != nil || dockHides || pointerAtBottomEdge || panelOpen || exposing || windowsMayChange(now: now)
+        let closely = eager || now - lastChange < 0.6 || dockShownAt != nil || dockHides || dockMayCome || panelOpen || exposing || windowsMayChange(now: now)
         // A sliding Space is followed every frame, its snow riding on the windows with no smoothing.
         // Turned to hide by itself, a Dock that stayed out slides away at once: the slow polls would let its snow hang.
         let dockTurnedToHide = dockStays && Dock.autoHides
-        guard minimizing || bannerMoving || now < slidingUntil || interval >= (closely ? 1.0 / 62 : 0.2) || dockTurnedToHide || watchedMoved() else { return nil }
+        guard minimizing || bannerMoving || now < slidingUntil || interval >= (closely ? 1.0 / 62 : 0.2) || dockTurnedToHide || (Self.slideMayStart && watchedMoved()) else { return nil }
         lastQuery = now
         let before = windowFrames
         let surfaces = query(now: now)
@@ -275,8 +276,7 @@ final class WindowTracker {
 
         let flags = CGEventSource.flagsState(.combinedSessionState)
         if !flags.isDisjoint(with: Self.windowKeys) { windowKeysAt = now }
-        // 0x2E is the M key.
-        if flags.contains(.maskCommand), CGEventSource.keyState(.combinedSessionState, key: 0x2E),
+        if flags.contains(.maskCommand), CGEventSource.keyState(.combinedSessionState, key: MinimizeKey.shared.code),
            let app = NSWorkspace.shared.frontmostApplication?.processIdentifier {
             let windows = Self.windowList(now: now).filter { $0.pid == app && $0.layer == 0 }
             // ⌥⌘M minimizes all of the app's windows.
@@ -333,12 +333,30 @@ final class WindowTracker {
         return abs(bounds.minX - screen.minX - watched.frame.minX) > 0.5 || abs(screen.maxY - bounds.maxY - watched.frame.minY) > 0.5
     }
 
+    /// Input a Space can start sliding on without a click or a window shortcut's modifier: a trackpad touch or swipe, a
+    /// mouse's scroll or move, another modifier. Without any for a moment, the watched window isn't looked at between polls.
+    private static let slideInputs: [CGEventType] = [29, 30, 31].compactMap(CGEventType.init(rawValue:)) + [.scrollWheel, .mouseMoved, .flagsChanged]
+
+    private static var slideMayStart: Bool {
+        slideInputs.contains { CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0) < 0.5 }
+    }
+
     /// Where the window list puts one window, in its own coordinates.
     private static func listedBounds(of window: CGWindowID) -> CGRect? {
         // CGWindowListCreateDescriptionFromArray takes window numbers stored as raw pointer values.
         var pointer = UnsafeRawPointer(bitPattern: UInt(window))
         guard let array = CFArrayCreate(nil, &pointer, 1, nil) else { return nil }
         return ListedWindow.all(in: CGWindowListCreateDescriptionFromArray(array)).first?.bounds
+    }
+
+    /// Which of these windows are still open, on any Space; all of them when the window list can't be read.
+    static func open(among ids: [CGWindowID]) -> Set<CGWindowID> {
+        // CGWindowListCreateDescriptionFromArray takes window numbers stored as raw pointer values.
+        var pointers: [UnsafeRawPointer?] = ids.filter { $0 != 0 }.map { UnsafeRawPointer(bitPattern: UInt($0)) }
+        guard let array = CFArrayCreate(nil, &pointers, pointers.count, nil), let list = CGWindowListCreateDescriptionFromArray(array) else {
+            return Set(ids)
+        }
+        return Set(ListedWindow.all(in: list).compactMap(\.id))
     }
 
     /// Sorts windows that left the list: closed ones and ones hidden on the current Space are in neither set.
@@ -378,9 +396,10 @@ final class WindowTracker {
         bounds.intersects(screen) && bounds.width * bounds.height >= screen.width * (screen.height - menuBarHeight) * 0.9
     }
 
-    /// Where the pointer reveals an auto-hidden Dock.
-    private var pointerAtBottomEdge: Bool {
-        pointer.y >= screen.maxY - 3 && pointer.x >= screen.minX && pointer.x < screen.maxX
+    /// The pointer on the bottom edge, where it reveals an auto-hidden Dock or calls the Dock over from another display.
+    /// A Dock that stays out here does neither.
+    private var dockMayCome: Bool {
+        pointer.y >= screen.maxY - 3 && pointer.x >= screen.minX && pointer.x < screen.maxX && (!dockWasOut || Dock.autoHides)
     }
 
     /// The pointer in the window list's coordinates.
@@ -426,7 +445,7 @@ final class WindowTracker {
 
     /// How much of this display a full-screen app's Space covers, read from the window list alone, without a poll.
     func readFullScreenShare(now: CFTimeInterval) -> CGFloat {
-        fullScreenShare(in: Self.windowList(now: now))
+        fullScreenApps(in: Self.windowList(now: now)).share
     }
 
     /// Whether Mission Control or App Exposé shows on this display.
@@ -446,16 +465,24 @@ final class WindowTracker {
         return shield || bar
     }
 
-    private func fullScreenShare(in list: [ListedWindow]) -> CGFloat {
+    /// How much of this display full-screen apps' Spaces cover, and whether such an app's window reaches down past the
+    /// Dock: the Dock sinks away as soon as the app's Space starts sliding in and stays away there, though the window
+    /// server still reports it out.
+    private func fullScreenApps(in list: [ListedWindow]) -> (share: CGFloat, hidesDock: Bool) {
         let candidates = list.compactMap { entry -> (id: CGWindowID, bounds: CGRect)? in
             guard entry.layer == 0, let id = entry.id, let bounds = entry.bounds, fillsScreen(bounds) else { return nil }
             return (id, bounds)
         }
-        guard !candidates.isEmpty, let fullScreen = Spaces.fullScreen(), !fullScreen.isEmpty else { return 0 }
-        return candidates.reduce(0) { share, candidate in
-            guard let spaces = Spaces.of(candidate.id), !spaces.isDisjoint(with: fullScreen) else { return share }
-            return max(share, candidate.bounds.intersection(screen).width / screen.width)
+        guard !candidates.isEmpty, let fullScreen = Spaces.fullScreen(), !fullScreen.isEmpty else { return (0, false) }
+        let band = CGRect(x: screen.minX, y: screen.maxY - Dock.height, width: screen.width, height: Dock.height)
+        var share: CGFloat = 0
+        var hidesDock = false
+        for candidate in candidates {
+            guard let spaces = Spaces.of(candidate.id), !spaces.isDisjoint(with: fullScreen) else { continue }
+            share = max(share, candidate.bounds.intersection(screen).width / screen.width)
+            if candidate.bounds.intersects(band) { hidesDock = true }
         }
+        return (share, hidesDock)
     }
 
     /// How much of this display desktops cover while a full-screen app's Space is current, from 0 to 1, read from the
@@ -484,18 +511,6 @@ final class WindowTracker {
         guard !apps.isEmpty || !desktops.isEmpty else { return nil }
         let left = apps.isEmpty ? 0 : 1 - min(1, apps.values.reduce(0, +))
         return max(left, min(1, desktops.values.reduce(0, +)))
-    }
-
-    /// Whether an app in full screen shows on this display, its window reaching down past the Dock: the Dock sinks away
-    /// as soon as the app's Space starts sliding in and stays away there, though the window server still reports it out.
-    private func fullScreenAppHidesDock(in list: [ListedWindow]) -> Bool {
-        let band = CGRect(x: screen.minX, y: screen.maxY - Dock.height, width: screen.width, height: Dock.height)
-        let candidates = list.compactMap { entry -> CGWindowID? in
-            guard entry.layer == 0, let bounds = entry.bounds, bounds.intersects(band), fillsScreen(bounds) else { return nil }
-            return entry.id
-        }
-        guard !candidates.isEmpty, let fullScreen = Spaces.fullScreen(), !fullScreen.isEmpty else { return false }
-        return candidates.contains { Spaces.of($0).map { !$0.isDisjoint(with: fullScreen) } ?? false }
     }
 
     private static var shared: (time: CFTimeInterval, list: [ListedWindow])?
@@ -542,8 +557,7 @@ final class WindowTracker {
         exposing = false
         sinkingDock = nil
         handed = [:]
-        fullScreenInView = fullScreenAppHidesDock(in: list)
-        fullScreenShare = fullScreenShare(in: list)
+        (fullScreenShare, fullScreenInView) = fullScreenApps(in: list)
         defer {
             alphas = fresh
             panelsShownAt = panels
@@ -1084,20 +1098,44 @@ enum Spaces {
     private static let spacesForWindows = SkyLight.function("SLSCopySpacesForWindows", as: SpacesForWindows.self)
     private static let displaySpaces = SkyLight.function("SLSCopyManagedDisplaySpaces", as: DisplaySpaces.self)
 
+    private static var snapshot: (time: CFTimeInterval, displays: [[String: Any]]?)?
+    private static var uuids: [CGDirectDisplayID: String] = [:]
+
+    /// Forgets what was read, for a new Space or a change of displays.
+    static func invalidate() {
+        snapshot = nil
+        uuids = [:]
+    }
+
+    /// Each display's Spaces, read once for every caller within the same frame.
+    private static func managedDisplays() -> [[String: Any]]? {
+        let now = CACurrentMediaTime()
+        if let snapshot, now - snapshot.time < 0.004 { return snapshot.displays }
+        let displays = SkyLight.connection.flatMap { displaySpaces?($0)?.takeRetainedValue() as? [[String: Any]] }
+        snapshot = (now, displays)
+        return displays
+    }
+
+    /// One display's entry. Without separate Spaces for each display there is one entry, "Main", for them all.
+    private static func entry(on display: CGDirectDisplayID) -> [String: Any]? {
+        guard let displays = managedDisplays() else { return nil }
+        if uuids[display] == nil {
+            uuids[display] = CGDisplayCreateUUIDFromDisplayID(display).map { CFUUIDCreateString(nil, $0.takeRetainedValue()) as String }
+        }
+        let uuid = uuids[display]
+        return displays.first { $0["Display Identifier"] as? String == uuid } ?? (displays.count == 1 ? displays.first : nil)
+    }
+
     /// The Space showing on each display.
     static func current() -> Set<UInt64>? {
-        guard let connection = SkyLight.connection,
-              let displays = displaySpaces?(connection)?.takeRetainedValue() as? [[String: Any]]
-        else { return nil }
+        guard let displays = managedDisplays() else { return nil }
         let spaces = displays.compactMap { ($0["Current Space"] as? [String: Any]).flatMap(id) }
         return spaces.isEmpty ? nil : Set(spaces)
     }
 
     /// The Space showing on each display, by the display's UUID.
     static func currentByDisplay() -> [String: UInt64]? {
-        guard let connection = SkyLight.connection,
-              let displays = displaySpaces?(connection)?.takeRetainedValue() as? [[String: Any]]
-        else { return nil }
+        guard let displays = managedDisplays() else { return nil }
         var spaces: [String: UInt64] = [:]
         for display in displays {
             if let uuid = display["Display Identifier"] as? String, let current = (display["Current Space"] as? [String: Any]).flatMap(id) {
@@ -1109,9 +1147,7 @@ enum Spaces {
 
     /// The Spaces of apps in full screen, on every display.
     static func fullScreen() -> Set<UInt64>? {
-        guard let connection = SkyLight.connection,
-              let displays = displaySpaces?(connection)?.takeRetainedValue() as? [[String: Any]]
-        else { return nil }
+        guard let displays = managedDisplays() else { return nil }
         // Type 4 is a full-screen app's Space; a desktop is type 0.
         let spaces = displays.flatMap { $0["Spaces"] as? [[String: Any]] ?? [] }
         return Set(spaces.filter { ($0["type"] as? NSNumber)?.intValue == 4 }.compactMap(id))
@@ -1119,24 +1155,12 @@ enum Spaces {
 
     /// The Space showing on one display.
     static func current(on display: CGDirectDisplayID) -> UInt64? {
-        guard let connection = SkyLight.connection,
-              let displays = displaySpaces?(connection)?.takeRetainedValue() as? [[String: Any]]
-        else { return nil }
-        let uuid = CGDisplayCreateUUIDFromDisplayID(display).map { CFUUIDCreateString(nil, $0.takeRetainedValue()) as String }
-        guard let entry = displays.first(where: { $0["Display Identifier"] as? String == uuid }) ?? (displays.count == 1 ? displays.first : nil)
-        else { return nil }
-        return (entry["Current Space"] as? [String: Any]).flatMap(id)
+        (entry(on: display)?["Current Space"] as? [String: Any]).flatMap(id)
     }
 
     /// The Spaces of apps in full screen on a display, and whether one of them is showing.
     static func fullScreen(on display: CGDirectDisplayID) -> (spaces: Set<UInt64>, showing: Bool)? {
-        guard let connection = SkyLight.connection,
-              let displays = displaySpaces?(connection)?.takeRetainedValue() as? [[String: Any]]
-        else { return nil }
-        let uuid = CGDisplayCreateUUIDFromDisplayID(display).map { CFUUIDCreateString(nil, $0.takeRetainedValue()) as String }
-        // Without separate Spaces for each display there is one entry, "Main", for them all.
-        guard let entry = displays.first(where: { $0["Display Identifier"] as? String == uuid }) ?? (displays.count == 1 ? displays.first : nil)
-        else { return nil }
+        guard let entry = entry(on: display) else { return nil }
         let spaces = (entry["Spaces"] as? [[String: Any]] ?? []).filter { ($0["type"] as? NSNumber)?.intValue == 4 }.compactMap(id)
         let current = entry["Current Space"] as? [String: Any]
         return (Set(spaces), (current?["type"] as? NSNumber)?.intValue == 4)
@@ -1223,5 +1247,51 @@ private enum Dock {
 
     static func cornerRadius(height: CGFloat) -> CGFloat {
         height * 0.42
+    }
+}
+
+/// The key that types M with ⌘ in the current keyboard layout, which ⌘M goes by: on AZERTY the US keyboard's M types a
+/// comma, and ⌘, opens Settings. Layouts whose ⌘ shortcuts follow QWERTY, like Russian, give the US keyboard's M.
+private final class MinimizeKey: NSObject {
+    static let shared = MinimizeKey()
+    private var cached: CGKeyCode?
+
+    override private init() {
+        super.init()
+        // An app in the background gets distributed notifications only when it asks for them at once.
+        DistributedNotificationCenter.default().addObserver(
+            self, selector: #selector(layoutChanged),
+            name: NSNotification.Name(kTISNotifySelectedKeyboardInputSourceChanged as String), object: nil,
+            suspensionBehavior: .deliverImmediately
+        )
+    }
+
+    @objc private func layoutChanged() {
+        cached = nil
+    }
+
+    var code: CGKeyCode {
+        if let cached { return cached }
+        let code = Self.key(in: TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue())
+            ?? Self.key(in: TISCopyCurrentASCIICapableKeyboardLayoutInputSource()?.takeRetainedValue())
+            ?? 0x2E
+        cached = code
+        return code
+    }
+
+    private static func key(in source: TISInputSource?) -> CGKeyCode? {
+        guard let source, let data = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData),
+              let bytes = CFDataGetBytePtr(Unmanaged<CFData>.fromOpaque(data).takeUnretainedValue())
+        else { return nil }
+        return bytes.withMemoryRebound(to: UCKeyboardLayout.self, capacity: 1) { layout in
+            (0..<128).first { (code: UInt16) in
+                var deadKeys: UInt32 = 0
+                var length = 0
+                var chars = [UniChar](repeating: 0, count: 4)
+                return UCKeyTranslate(layout, code, UInt16(kUCKeyActionDown), UInt32((cmdKey >> 8) & 0xFF), UInt32(LMGetKbdType()),
+                                      OptionBits(kUCKeyTranslateNoDeadKeysMask), &deadKeys, chars.count, &length, &chars) == noErr
+                    && length == 1 && chars[0] == UniChar(UInt8(ascii: "m"))
+            }.map { CGKeyCode($0) }
+        }
     }
 }

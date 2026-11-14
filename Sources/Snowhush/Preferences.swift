@@ -42,6 +42,12 @@ enum Preferences {
 
     static func registerDefaults() {
         let calm = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        if let stop = defaults.object(forKey: snowfallKey) as? Int {
+            if defaults.object(forKey: intensityKey) == nil {
+                defaults.set([0, 0.25, 0.5, 0.75, 0.5][min(max(stop, 0), 4)], forKey: intensityKey)
+            }
+            defaults.removeObject(forKey: snowfallKey)
+        }
         defaults.register(defaults: [
             intensityKey: calm ? 0.25 : 0.5,
             behindWindowsKey: false,
@@ -59,9 +65,6 @@ enum Preferences {
             mixedKey: false,
             fallingOpacityKey: 1.0,
         ])
-        if defaults.object(forKey: intensityKey) == nil, let stop = defaults.object(forKey: snowfallKey) as? Int {
-            defaults.set([0, 0.25, 0.5, 0.75, 0.5][min(max(stop, 0), 4)], forKey: intensityKey)
-        }
         if defaults.object(forKey: accumulateKey) != nil {
             if !defaults.bool(forKey: accumulateKey) {
                 for key in [groundKey, dockKey, widgetsKey, snowOnWindowsKey] { defaults.set(false, forKey: key) }

@@ -43,17 +43,6 @@ float smoothNoise(float x) {
     return lerp(hash(float2(i, 0.0)), hash(float2(i + 1.0, 0.0)), f * f * (3.0 - 2.0 * f));
 }
 
-// Golden, amber, orange, rust or brown, a little lighter or darker.
-float3 leafColor(float seed) {
-    float k = frac(seed * 7.13);
-    float3 c = k < 0.3 ? float3(0.97, 0.78, 0.22)
-        : (k < 0.55 ? float3(0.95, 0.56, 0.13)
-        : (k < 0.75 ? float3(0.86, 0.36, 0.11)
-        : (k < 0.9 ? float3(0.72, 0.2, 0.09)
-        : float3(0.58, 0.38, 0.17))));
-    return c * (0.86 + 0.24 * frac(seed * 31.7));
-}
-
 // Blush, soft pink, pink or nearly white, a little lighter or darker.
 float3 petalColor(float seed) {
     // A digitized flower's colour half way out along its petals, a little lighter or darker.
@@ -129,28 +118,6 @@ float3 litter(float2 at) {
     return litterAt(at, blossom, 1.0).rgb;
 }
 
-// A leaf's outline at one moment, `p` running across it from -0.5 to 0.5: how far inside it a point is. Gives back how
-// far inside its blade alone, and the point in the leaf's own frame, stretched across by how much of its face shows.
-float leafShape(float2 p, float seed, float turn, float flip, out float blade, out float2 r) {
-    float across = max(abs(flip), 0.35);
-    r = float2(cos(turn) * p.x + sin(turn) * p.y, -sin(turn) * p.x + cos(turn) * p.y) * 2.0;
-    r.y /= across;
-    if (frac(seed * 13.7) < 0.4) {
-        // A maple leaf: five pointed lobes around the stem.
-        float2 m = r - float2(0.08, 0.0);
-        float a = atan2(m.y, m.x);
-        float reach = (0.5 + 0.44 * pow(abs(cos(a * 2.5)), 1.3)) * (0.82 + 0.18 * cos(a));
-        blade = reach - length(m);
-    } else {
-        // An oval leaf, widest toward the stem and pointed at the tip.
-        float t = (r.x + 0.88) / 1.82;
-        float halfWidth = 2.1 * pow(saturate(t), 0.7) * pow(saturate(1.0 - t), 1.1) * (0.8 + 0.4 * frac(seed * 5.3));
-        blade = min(halfWidth - abs(r.y), min(t, 1.0 - t) * 0.6);
-    }
-    float stem = 0.05 - max(abs(r.y) * across, max(-0.98 - r.x, r.x + 0.55));
-    return max(blade, stem);
-}
-
 // A cherry blossom petal, as `leafAt` draws a leaf, its outline smoothed over `edge`: narrow at its base, broadest near
 // its rounded tip, which is notched in the middle, and pinker toward the base. It browns from its edges in as it
 // withers by `wither`.
@@ -170,11 +137,11 @@ float4 petalAt(float2 r, float seed, float flip, float alpha, float warm, float 
     color *= 0.94 + 0.08 * frac(seed * 31.7);
     color *= 0.9 + 0.1 * smoothstep(0.0, 0.12, inside);
     // Its fine veins show only where the petal is drawn big enough to hold them; small, they only blur it.
-    float detail = smoothstep(0.03, 0.012, (edge * 0.42));
+    float detail = smoothstep(0.03, 0.012, edge);
     float vein = 0.5 + 0.5 * cos(atan2(r.y, r.x + 0.9) * 26.0);
     color *= 1.0 - 0.035 * vein * smoothstep(0.1, 0.5, t) * detail;
     // A slightly darker line a pixel wide all round: the outline reads crisp however small the petal.
-    color = lerp(color, color * 0.86, 1.0 - smoothstep((edge * 0.42) * 0.6, (edge * 0.42) * 1.6, inside));
+    color = lerp(color, color * 0.86, 1.0 - smoothstep(edge * 0.6, edge * 1.6, inside));
     float rim = 1.0 - smoothstep(0.0, 0.35, inside);
     color = lerp(color, withered(seed) * (0.85 + 0.15 * smoothstep(0.0, 0.2, inside)), saturate(wither * (0.6 + rim)) * 0.9);
     if (flip < 0.0) {
@@ -213,7 +180,7 @@ float4 curledPetalAt(float2 r, float seed, float turn, float flip, float sense, 
         float y = i == 0 ? ys.x : ys.y;
         // Which side of the petal shows there, and how squarely: across it, a pixel spans that much more of it.
         float facing = clamp(c - 2.0 * curl * y * s, -1.0, 1.0);
-        float edge = 2.4 * px * (0.5 + 0.5 / max(abs(facing), 0.2));
+        float edge = px * (0.5 + 0.5 / max(abs(facing), 0.2));
         float hit = step(0.0, disc) * step(abs(y), 1.2);
         float4 piece = petalAt(float2(r.x, y), seed, facing, alpha, warm, wither, edge);
         // The side turned to the light is brighter, the other in shade, and the light moves over it as it tumbles;
@@ -312,9 +279,6 @@ float4 flowerAt(float2 p, float seed, float spin, float face, float direction, f
     return nz > 0.0 ? over(color, stalkColor) : over(stalkColor, color);
 }
 
-// A leaf at one moment, its outline smoothed over `edge`: its colour, premultiplied. A cherry blossom petal or flower,
-// `petal`, `px` of the leaf to a pixel, browns as it withers by `wither`; a flower's face points `direction` on the
-// screen, and a petal curves the way it tumbles, `sense`.
 float leafNoise(float2 x) {
     float2 i = floor(x), f = frac(x);
     float2 u = f * f * (3.0 - 2.0 * f);
@@ -404,7 +368,7 @@ float4 curledLeafAt(float2 r, float seed, float turn, float flip, float sense, f
         // The far side of the curve shows only through what the near side leaves uncovered.
         if (hit <= 0.0 || color.a >= 0.999) continue;
         float facing = clamp(c - 2.0 * curl * y * s, -1.0, 1.0);
-        float edge = 2.4 * px * (0.5 + 0.5 / max(abs(facing), 0.2));
+        float edge = px * (0.6 + 0.6 / max(abs(facing), 0.2));
         float4 piece = bladeAt(float2(r.x, y), seed, kind, facing, alpha, edge, px);
         if (piece.a <= 0.0) continue;
         float across = -2.0 * curl * y * c - s;
@@ -420,17 +384,21 @@ float4 curledLeafAt(float2 r, float seed, float turn, float flip, float sense, f
     return color;
 }
 
-float4 leafAt(float2 p, float seed, float turn, float flip, float alpha, float warm, float edge, float wither, float direction, float sense,
-              float px, float petal) {
-    [branch] if (petal > 0.5) {
-        [branch] if (frac(seed * 23.3) < 0.035) {
-            return flowerAt(p * 2.0, seed, turn, flip, direction, alpha, warm, wither, px * 2.0);
-        }
-        float2 r = float2(cos(turn) * p.x + sin(turn) * p.y, -sin(turn) * p.x + cos(turn) * p.y) * 2.0;
-        return curledPetalAt(r, seed, turn, flip, sense, alpha, warm, wither, px);
+// A leaf at one moment: its colour, premultiplied. A cherry blossom petal or flower, `petal`, `px` of the leaf to a
+// pixel, browns as it withers by `wither`; a flower's face points `direction` on the screen, and a petal curves the way
+// it tumbles, `sense`.
+float4 leafAt(float2 p, float seed, float turn, float flip, float alpha, float warm, float wither, float direction, float sense, float px,
+              float petal) {
+    [branch] if (petal > 0.5 && frac(seed * 23.3) < 0.035) {
+        return flowerAt(p * 2.0, seed, turn, flip, direction, alpha, warm, wither, px * 2.0);
     }
     float2 r = float2(cos(turn) * p.x + sin(turn) * p.y, -sin(turn) * p.x + cos(turn) * p.y) * 2.0;
-    return curledLeafAt(r, seed, turn, flip, sense, alpha, warm, px);
+    // A pixel in `r`, as the Mac and Linux take it from fwidth, which can't be had in the loop drawing the exposure.
+    float pixel = max(2.0 * px * (abs(cos(turn)) + abs(sin(turn))), 1e-4);
+    [branch] if (petal > 0.5) {
+        return curledPetalAt(r, seed, turn, flip, sense, alpha, warm, wither, pixel);
+    }
+    return curledLeafAt(r, seed, turn, flip, sense, alpha, warm, pixel);
 }
 
 float flicker(float seed) {
@@ -560,10 +528,17 @@ SpriteOut rainVertex(SpriteIn s, float2 corner) {
         middle = s.position + float2(0.0, (reach.x + reach.y) * 0.5) / scale;
         streak = float2(0.0, 0.0);
     }
+    float2 offset = (corner - 0.5) * extent;
+    // A raindrop in the air is a thin line: its quad lies along it rather than squaring it.
+    [branch] if (s.rain.x < 1.5 && length(streak) > 0.0) {
+        float2 axis = normalize(streak);
+        float wide = pixels * 1.2 + 2.0;
+        offset = (corner.x - 0.5) * (length(streak) + wide) * axis + (corner.y - 0.5) * wide * float2(-axis.y, axis.x);
+    }
     SpriteOut o = (SpriteOut)0;
     float2 center = (middle + shake.xy) / viewSize * 2.0 - 1.0;
-    o.position = float4(center + (corner - 0.5) * extent * 2.0 / (viewSize * scale), 0.0, 1.0);
-    o.coord = float2(corner.x, 1.0 - corner.y);
+    o.position = float4(center + offset * 2.0 / (viewSize * scale), 0.0, 1.0);
+    o.coord = float2(0.5 + offset.x / extent, 0.5 - offset.y / extent);
     o.streak = streak / extent;
     o.radius = pixels / extent * 0.5;
     o.alpha = s.body.y * min(pixels / 1.5, 1.0);
@@ -699,7 +674,9 @@ float4 rainAt(SpriteOut i, float2 p) {
     [branch] if (i.rain.x < 1.5) {
         // Water in the air shows what is brightest around it: a bright thread against a dark backdrop, a darker one
         // against a light one. Not knowing which is behind it, a raindrop is drawn as both, a bright core in a grey
-        // sheath, faint and brightest at its head.
+        // sheath, faint and brightest at its head. Its sheath reaches a little past the square the Mac draws it in,
+        // which cuts it off there.
+        if (max(abs(p.x), abs(p.y)) > 0.5) return float4(0.0, 0.0, 0.0, 0.0);
         float t = span > 0.0 ? clamp(dot(p, half_) / span, -1.0, 1.0) : 0.0;
         float r = length(p - half_ * t) / max(i.radius, 0.001);
         float head = span > 0.0 ? 0.25 + 0.75 * pow(t * 0.5 + 0.5, 2.0) : 1.0;
@@ -756,12 +733,23 @@ SpriteOut leafVertex(SpriteIn s, float2 corner) {
     return o;
 }
 
+// A sprite left out of a pass: every corner on one point, outside the screen, so no pixel of it is drawn.
+SpriteOut culled() {
+    SpriteOut o = (SpriteOut)0;
+    o.position = float4(2.0, 2.0, 0.0, 1.0);
+    return o;
+}
+
 SpriteOut spriteVertex(SpriteIn s) {
     float2 corner = float2(float(s.vid & 1), float(s.vid >> 1));
     [branch] if (s.leaf.x != 0.0) {
         return leafVertex(s, corner);
     }
     [branch] if (s.rain.x > 0.0) {
+        // A running drop or a bead is drawn with the glass, from the field.
+        [branch] if (s.rain.x > 1.5 && s.rain.x < 2.5) {
+            return culled();
+        }
         return rainVertex(s, corner);
     }
     float pixels = s.body.x * scale;
@@ -926,9 +914,8 @@ float4 ghostColor(SpriteOut i, float2 p, float2 q, float side, float cover, floa
     return float4(color * a, a);
 }
 
-// The leaf over the exposure, from where it was to where it is now, turning and tumbling on the way, its outline
-// smoothed over `edge`.
-float4 leafSmear(SpriteOut i, float2 p, float edge) {
+// The leaf over the exposure, from where it was to where it is now, turning and tumbling on the way.
+float4 leafSmear(SpriteOut i, float2 p) {
     int n = int(i.leaf.w);
     float4 sum = float4(0.0, 0.0, 0.0, 0.0);
     [loop]
@@ -936,8 +923,8 @@ float4 leafSmear(SpriteOut i, float2 p, float edge) {
         float along = (float(k) + 0.5) / float(n) - 0.5;
         float back = along - 0.5;
         sum += leafAt(p * i.smear.x - i.streak * along, i.leaf.x, i.leaf.y + i.smear.y * back,
-                      clamp(i.leaf.z + i.smear.z * back, -1.0, 1.0), i.alpha, i.warm, edge,
-                      i.tint.a, i.pose.y, i.smear.z > 0.0 ? -1.0 : 1.0, i.smear.w, i.petal);
+                      clamp(i.leaf.z + i.smear.z * back, -1.0, 1.0), i.alpha, i.warm, i.tint.a, i.pose.y,
+                      i.smear.z > 0.0 ? -1.0 : 1.0, i.smear.w, i.petal);
     }
     sum /= float(n);
     if (sum.a < 0.002) discard;
@@ -953,21 +940,15 @@ float4 spriteFragment(SpriteOut i) : SV_Target {
     float inside = 0.0;
     [branch] if (i.ghost.x > 0.0) {
         inside = ghostShape(p, i.spin, i.ghost, i.pose, i.mood.xy, q, side, cover);
-    } else if (i.leaf.x != 0.0) {
-        float blade;
-        float2 frame;
-        inside = leafShape(p * i.smear.x, i.leaf.x, i.leaf.y - i.smear.y * 0.5, clamp(i.leaf.z - i.smear.z * 0.5, -1.0, 1.0), blade, frame);
     }
     // Gradients are taken outside any branch, where every graphics card has them for all four pixels of a block.
-    // A sprite's pixels all take the same branch, so a ghost's or a leaf's are its own.
+    // A sprite's pixels all take the same branch, so a ghost's are its own.
     float2 slope = float2(ddx(inside), -ddy(inside));
     [branch] if (i.ghost.x > 0.0) {
         return ghostColor(i, p, q, side, cover, inside, slope);
     }
     [branch] if (i.leaf.x != 0.0) {
-        // Gradients can't be taken in a loop of varying length, so every moment's outline is smoothed as wide as the
-        // one midway through the exposure, the only moment drawn when the leaf hardly moves.
-        return leafSmear(i, p, max(abs(slope.x) + abs(slope.y), 1e-4));
+        return leafSmear(i, p);
     }
     [branch] if (i.rain.x > 0.0) {
         float4 water = rainAt(i, p);
@@ -996,6 +977,14 @@ float4 spriteFragment(SpriteOut i) : SV_Target {
     color = lerp(color, candle, i.warm * 0.7);
     a = min(1.0, a * (1.0 + i.warm * 0.8));
     return float4(color * a, a);
+}
+
+// Only running drops and beads add up into the field.
+SpriteOut fieldVertex(SpriteIn s) {
+    [branch] if (s.leaf.x != 0.0 || s.rain.x < 1.5 || s.rain.x > 2.5) {
+        return culled();
+    }
+    return rainVertex(s, float2(float(s.vid & 1), float(s.vid >> 1)));
 }
 
 // A running drop or a bead as a smooth bump in the field the glass is drawn from, reaching half as far again as its

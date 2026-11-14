@@ -588,8 +588,8 @@ final class SnowSimulation {
     private var windowsChanged = false
     private var lastWindowMotion: Double = -10
     private var lastCursorPush: Double = -10
-    /// Snow on windows that left the screen for another Space, kept until the window shows up again.
-    private var dormant: [CGWindowID: SnowLayer] = [:]
+    /// Snow on windows that left the screen for another Space, kept until the window shows up again, with when it left.
+    private var dormant: [CGWindowID: (ledge: SnowLayer, since: Double)] = [:]
     /// Where the left edge of each notification banner was at the last update.
     private var bannerEdges: [CGWindowID: Float] = [:]
     /// Windows that went off screen without a word yet on why; a Space switch keeps their snow, anything else drops it.
@@ -682,12 +682,15 @@ final class SnowSimulation {
     /// Nothing falls, lies, waits for its window or haunts, and nothing will until the snow is stirred.
     var isEmpty: Bool {
         intensity <= 0 && !halloween && flakes.isEmpty && grains.isEmpty && motes.isEmpty && ghosts.isEmpty
-            && fallingSigns.isEmpty && snowballs.isEmpty && gust == nil && dormant.isEmpty && parking.isEmpty && lying.isEmpty && nextMode == nil
+            && fallingSigns.isEmpty && snowballs.isEmpty && gust == nil && !dormant.values.contains { $0.ledge.top > 0 } && parking.isEmpty && lying.isEmpty && nextMode == nil
             && splashes.isEmpty && glassDrops.isEmpty && !wet
             && !layers.contains { $0.top > 0 }
     }
     /// Running drops or beads on the glass, drawn from a field of their own.
     var hasGlassDrops: Bool { glassDrops.contains { !$0.hanging } }
+    /// Where the running drops and beads last written add to their field, in points, left, bottom, right, top: each
+    /// reaches as far as the sprite shader draws it. Nil when none was written.
+    private(set) var glassReach: SIMD4<Float>?
     var spriteCount: Int {
         lying.count + flakes.count + grains.count + motes.count + ghosts.count * 2 + snowballs.count + splashes.count + glassDrops.count
             + ledgeList.reduce(0) { $0 + $1.spray.count + $1.film.count }
@@ -762,6 +765,7 @@ final class SnowSimulation {
 
     func writeSprites(into buffer: UnsafeMutablePointer<Sprite>, capacity: Int) -> Int {
         var count = 0
+        glassReach = nil
         let shown = markShown()
         for leaf in lying where count < capacity && leaf.layer.shown == shown {
             let layer = leaf.layer
@@ -819,7 +823,7 @@ final class SnowSimulation {
         }
         for ledge in ledgeList {
             for piece in ledge.film where count < capacity {
-                let position = ledge.base + (piece.from + piece.to) * 0.5
+                let position = ledge.origin + (piece.from + piece.to) * 0.5
                 guard !ledge.faceOccluders.contains(where: { $0.x < position.x && $0.z > position.x && $0.y < position.y && $0.w > position.y }) else { continue }
                 // It dries from its edges in, thinning as it fades.
                 let dry = piece.age / piece.life
@@ -834,7 +838,7 @@ final class SnowSimulation {
                 count += 1
             }
             for droplet in ledge.spray where count < capacity {
-                let position = ledge.base + droplet.offset
+                let position = ledge.origin + droplet.offset
                 guard !ledge.faceOccluders.contains(where: { $0.x < position.x && $0.z > position.x && $0.y < position.y && $0.w > position.y }) else { continue }
                 buffer[count] = Sprite(
                     position: position,
@@ -847,7 +851,7 @@ final class SnowSimulation {
             }
         }
         for drop in glassDrops where count < capacity {
-            let position = drop.layer.base + drop.offset
+            let position = drop.layer.origin + drop.offset
             // A window in front of the one it runs down hides it.
             guard !drop.layer.faceOccluders.contains(where: { $0.x < position.x && $0.z > position.x && $0.y < position.y && $0.w > position.y }) else { continue }
             // It swells out of nothing as it gathers on the edge, down from the edge, its top staying where it gathers.
@@ -856,7 +860,7 @@ final class SnowSimulation {
             let half = drop.bead ? beadWidth(drop.radius) : halfWidth(drop.radius, still: still)
             // Held back, a running drop's water piles up in its front; jolted, it squashes and stretches for a moment.
             let since = drop.age - drop.jolted
-            buffer[count] = Sprite(
+            let sprite = Sprite(
                 position: position + SIMD2(0, still ? 0 : half * (1 - grown)),
                 velocity: still ? .zero : SIMD2(drop.slope, -1) * drop.speed,
                 size: half * 2 * grown,
@@ -869,7 +873,14 @@ final class SnowSimulation {
                 turnSpeed: still ? 0 : drop.jiggle * exp(-since / 0.15) * cos(since * 2 * .pi * 11),
                 rain: drop.hanging ? 3 : 2
             )
+            buffer[count] = sprite
             count += 1
+            if !drop.hanging {
+                let speed = simd_length(sprite.velocity)
+                let reach = max(sprite.size, 1.5) * 1.1 + min(speed * 0.08, sprite.size * 0.9) + speed * 0.024 + 1
+                let bounds = SIMD4(lowHalf: sprite.position - reach, highHalf: sprite.position + reach)
+                glassReach = glassReach.map { SIMD4(lowHalf: simd_min($0.lowHalf, bounds.lowHalf), highHalf: simd_max($0.highHalf, bounds.highHalf)) } ?? bounds
+            }
         }
         for grain in grains where count < capacity && !grain.bulk {
             if grain.kind.leafy {
@@ -1017,7 +1028,7 @@ final class SnowSimulation {
 
     func spaceChanged() {
         spaceChangedAt = clock
-        for entry in parking { dormant[entry.id] = entry.ledge }
+        for entry in parking { keepAway(entry.id, entry.ledge) }
         parking.removeAll()
     }
 
@@ -1057,7 +1068,7 @@ final class SnowSimulation {
                 } else {
                     move(ledge, left: left, right: right, top: top, columns: columns, interval: interval)
                 }
-            } else if let returning = dormant.removeValue(forKey: surface.id) ?? unpark(surface.id) {
+            } else if let returning = dormant.removeValue(forKey: surface.id)?.ledge ?? unpark(surface.id) {
                 ledge = returning
                 restore(returning, left: left, top: top, columns: columns)
                 ledges[surface.id] = returning
@@ -1085,21 +1096,41 @@ final class SnowSimulation {
         for id in ledges.keys where !seen.contains(id) {
             guard let ledge = ledges.removeValue(forKey: id) else { continue }
             if elsewhere.contains(id) {
-                dormant[id] = ledge
+                keepAway(id, ledge)
             } else if !parked.contains(id) {
                 // The Dock slides down out of sight, about its height in a fifth of a second: its snow drops along with
                 // it instead of hanging behind while gravity picks it up.
                 let sink = ledge.isDock ? SIMD2<Float>(0, -450) : .zero
                 shed(ledge, share: 1, velocity: ledge.trackVelocity + ledge.offsetVelocity + sink)
             } else if clock - spaceChangedAt < 0.6 {
-                dormant[id] = ledge
+                keepAway(id, ledge)
             } else {
                 parking.append((id, ledge, clock))
             }
         }
-        if dormant.count > 200, let stale = dormant.keys.first { dormant[stale] = nil }
         ledgeList = Array(ledges.values)
         layers = [ground] + ledgeList
+    }
+
+    /// Keeps the snow of a window gone to another Space for its return; a bare window gets a fresh ledge when it's back.
+    /// Only so many are kept, the one gone longest dropped first. The water on its glass would dry out of sight long
+    /// before.
+    private func keepAway(_ id: CGWindowID, _ ledge: SnowLayer) {
+        ledge.spray.removeAll()
+        ledge.film.removeAll()
+        guard ledge.top > 0 || lying.contains(where: { $0.layer === ledge }) else { return }
+        dormant[id] = (ledge, clock)
+        if dormant.count > 200, let oldest = dormant.lazy.filter({ $0.key != id }).min(by: { $0.value.since < $1.value.since })?.key {
+            dormant[oldest] = nil
+        }
+    }
+
+    /// The windows away whose snow waits for them.
+    var awayIDs: [CGWindowID] { Array(dormant.keys) }
+
+    /// Lets go of the snow kept for windows away that closed meanwhile: only those in `open` wait on.
+    func forgetClosed(keeping open: Set<CGWindowID>) {
+        dormant = dormant.filter { open.contains($0.key) }
     }
 
     private func unpark(_ id: CGWindowID) -> SnowLayer? {
@@ -1270,7 +1301,9 @@ final class SnowSimulation {
         let leafy = ledge.blend.leaves > 0.5
         let (stick, hold, rub) = leafy ? (leafAdhesion, leafGrip, leafSlip) : (adhesion, grip, slip)
         let fall = -gravity - acceleration.y
-        if lift > 0 || fall > stick {
+        // The Dock comes out easing to a stop, braking harder than gravity all the way: its snow would be thrown off and
+        // hang above it.
+        if !ledge.isDock && (lift > 0 || fall > stick) {
             liftVelocity += fall * dt
             lift += liftVelocity * dt
             if lift <= 0 {
@@ -2201,7 +2234,7 @@ final class SnowSimulation {
     /// The sign the ghost holds up, its stick in the raised paw, rising out of the snow beside it as it is pulled up.
     private func sign(of ghost: Ghost) -> SignSprite? {
         guard let caption = ghost.sign, ghost.signUp > 0 else { return nil }
-        let (ground, center) = placement(of: ghost)
+        let (ground, _) = placement(of: ghost)
         // The paw's tip when raised to hold it, in the ghost's own coordinates.
         let paw = paw(of: ghost, at: 0.35)
         return SignSprite(
@@ -2661,7 +2694,7 @@ final class SnowSimulation {
         }
         radius = min(radius, largest)
         // It gathers right under the edge: its top, once it has swelled to its size, at the edge.
-        let along = x - ledge.base.x, edge = -corner(of: ledge, at: x - ledge.base.x)
+        let along = x - ledge.origin.x, edge = -corner(of: ledge, at: x - ledge.origin.x)
         glassDrops.append(GlassDrop(
             layer: ledge,
             offset: SIMD2(along, edge - halfWidth(radius, still: false)),
@@ -2805,7 +2838,7 @@ final class SnowSimulation {
         let deepest = min(sprayDeepest, ledge.face * 0.4)
         let room = ledgeList.reduce(0) { $0 + $1.spray.count } < maxSpray && Float(ledge.spray.count) < ledge.width * sprayAlong
         for _ in 0..<count {
-            let along = x - ledge.base.x + random.range(-1, 1) * (8 + 16 * depth)
+            let along = x - ledge.origin.x + random.range(-1, 1) * (8 + 16 * depth)
             let below = -log(1 - random.next() * 0.999) * sprayReach
             guard along > 2, along < ledge.width - 2, below < deepest else { continue }
             let u = random.next()
@@ -2882,16 +2915,16 @@ final class SnowSimulation {
         let reach = cursorRadius * 0.8
         for ledge in ledgeList where !ledge.spray.isEmpty || !ledge.film.isEmpty {
             let near = wiping.map { path in
-                min(path.from.y, path.to.y) - reach < ledge.base.y && max(path.from.y, path.to.y) + reach > ledge.base.y - ledge.face
-                    && min(path.from.x, path.to.x) - reach < ledge.base.x + ledge.width && max(path.from.x, path.to.x) + reach > ledge.base.x
+                min(path.from.y, path.to.y) - reach < ledge.origin.y && max(path.from.y, path.to.y) + reach > ledge.origin.y - ledge.face
+                    && min(path.from.x, path.to.x) - reach < ledge.origin.x + ledge.width && max(path.from.x, path.to.x) + reach > ledge.origin.x
             } ?? false
-            let width = ledge.width, face = ledge.face, base = ledge.base, covers = ledge.faceOccluders
+            let width = ledge.width, face = ledge.face, origin = ledge.origin, covers = ledge.faceOccluders
             func off(_ offset: SIMD2<Float>) -> Bool {
                 offset.x < 0 || offset.x > width || -offset.y > face
             }
             func wiped(_ offset: SIMD2<Float>, by margin: Float) -> Bool {
                 guard near, let wiping else { return false }
-                let position = base + offset
+                let position = origin + offset
                 let path = wiping.to - wiping.from
                 let along = min(max(simd_dot(position - wiping.from, path) / max(simd_length_squared(path), 0.0001), 0), 1)
                 return simd_distance(position, wiping.from + path * along) < reach + margin
@@ -3007,7 +3040,7 @@ final class SnowSimulation {
     private func wipes(_ point: SIMD2<Float>, _ drop: GlassDrop, dt: Float) -> Bool {
         // What it has just smeared out it passes on over.
         guard simd_length(cursorVelocity) > 40, drop.age > 0.3 || !drop.bead else { return false }
-        let position = drop.layer.base + drop.offset
+        let position = drop.layer.origin + drop.offset
         let from = point - cursorVelocity * dt
         let path = point - from
         let along = min(max(simd_dot(position - from, path) / max(simd_length_squared(path), 0.0001), 0), 1)
@@ -3023,7 +3056,7 @@ final class SnowSimulation {
         let speed = simd_length(cursorVelocity)
         let direction = cursorVelocity / speed
         let across = SIMD2(-direction.y, direction.x)
-        let length = min(max(simd_dot(point - (drop.layer.base + drop.offset), direction), 6), 45)
+        let length = min(max(simd_dot(point - (drop.layer.origin + drop.offset), direction), 6), 45)
         let count = min(9, max(2, Int(length / 5)))
         let spots = (0..<count).map { k in (Float(k) + random.range(0.2, 0.8)) / Float(count) }
         let weights = spots.map { 1.15 - $0 }
@@ -3055,7 +3088,7 @@ final class SnowSimulation {
 
     /// Whether the cursor, at `point`, brushes a hanging drop where it shows.
     private func touches(_ point: SIMD2<Float>, _ drop: GlassDrop) -> Bool {
-        let cling = drop.layer.base + drop.offset
+        let cling = drop.layer.origin + drop.offset
         let depth = (1 + 1.2 * drop.fill) * drop.radius * glassScale
         guard abs(point.x - cling.x) < spread(of: drop) + cursorRadius * 0.7,
               point.y < cling.y + cursorRadius * 0.5, point.y > cling.y - depth - cursorRadius else { return false }
@@ -3070,7 +3103,7 @@ final class SnowSimulation {
     /// The part of a hanging drop that lets go falls like any raindrop, to burst on whatever is below, and runs on down
     /// a window it lands on.
     private func fall(_ drop: GlassDrop, share: Float? = nil, below: Float? = nil, flick: SIMD2<Float> = .zero, thrown: SIMD2<Float>? = nil) {
-        let position = drop.layer.base + drop.offset - SIMD2(0, below ?? 2.6 * drop.radius * glassScale)
+        let position = drop.layer.origin + drop.offset - SIMD2(0, below ?? 2.6 * drop.radius * glassScale)
         guard raining, position.y > 2 else { return }
         var velocity = thrown ?? flick * 0.5
         let speed = simd_length(velocity)
@@ -3524,7 +3557,7 @@ final class SnowSimulation {
     private func tendLeaves(dt: Float) {
         guard !lying.isEmpty else { return }
         let shown = markShown()
-        lazy var kept = Set(dormant.values.map(ObjectIdentifier.init) + parking.map { ObjectIdentifier($0.ledge) })
+        lazy var kept = Set(dormant.values.map { ObjectIdentifier($0.ledge) } + parking.map { ObjectIdentifier($0.ledge) })
         let speed = simd_length(cursorVelocity)
         for k in lying.indices.reversed() {
             var leaf = lying[k]
@@ -3694,12 +3727,14 @@ extension SnowSimulation {
         ledge.track += shift
         ledge.previousBaseY += shift.y
         ledge.occluders = ledge.occluders.map { $0 + SIMD4(shift.x, shift.y, shift.x, shift.y) }
+        ledge.faceOccluders = ledge.faceOccluders.map { $0 + SIMD4(shift.x, shift.y, shift.x, shift.y) }
         ledges[id] = ledge
         lying += carried.leaves
         glassDrops += carried.drops
         ledgeList = Array(ledges.values)
         layers = [ground] + ledgeList
         windowsChanged = true
+        stirred()
     }
 
     /// The snow on a window kept here, to lend to a display it reaches over: `shift` takes these coordinates to that
@@ -3749,6 +3784,7 @@ extension SnowSimulation {
         let fill = ledge.index(at: x).map { ledge.fill($0) } ?? 1
         _ = ledge.deposit(snow.area * fill, at: x, wide: true)
         heightsChanged = true
+        stirred()
     }
 
     /// The snow thrown past a shared edge since the last call, in this display's coordinates.
@@ -3759,6 +3795,8 @@ extension SnowSimulation {
 
     /// Goes on with snow thrown in from a neighbouring display; `shift` takes its coordinates to these.
     func adoptStrays(_ thrown: [StraySnow], shift: SIMD2<Float>) {
+        guard !thrown.isEmpty else { return }
+        defer { stirred() }
         for stray in thrown {
             switch stray.piece {
             case .flake(var flake):

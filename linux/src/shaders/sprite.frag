@@ -49,17 +49,6 @@ float hash(vec2 p) {
 
 #include "leaves.glsl"
 
-/// Golden, amber, orange, rust or brown, a little lighter or darker.
-vec3 leafColor(float seed) {
-    float k = fract(seed * 7.13);
-    vec3 c = k < 0.3 ? vec3(0.97, 0.78, 0.22)
-        : k < 0.55 ? vec3(0.95, 0.56, 0.13)
-        : k < 0.75 ? vec3(0.86, 0.36, 0.11)
-        : k < 0.9 ? vec3(0.72, 0.2, 0.09)
-        : vec3(0.58, 0.38, 0.17);
-    return c * (0.86 + 0.24 * fract(seed * 31.7));
-}
-
 float saturate(float x) {
     return clamp(x, 0.0, 1.0);
 }
@@ -75,35 +64,11 @@ vec3 withered(float seed) {
     return vec3(0.78, 0.6, 0.49) * (0.86 + 0.18 * fract(seed * 17.3));
 }
 
+#include "litter.glsl"
+
 /// Fallen leaves lying every which way: the topmost at each point shows, the gaps between them in shadow.
 vec3 litter(vec2 point) {
-    float spacing = blossom > 0.5 ? 4.6 : 6.5;
-    vec2 cell = floor(point / spacing);
-    float top = -1.0;
-    float rim = 0.0;
-    vec3 color = blossom > 0.5 ? vec3(0.86, 0.68, 0.74) : vec3(0.34, 0.19, 0.08);
-    for (int j = -1; j <= 1; j++) {
-        for (int i = -1; i <= 1; i++) {
-            for (int k = 0; k < 3; k++) {
-                vec2 c = cell + vec2(i, j) + float(k) * 0.37;
-                vec2 d = point - (cell + vec2(i, j) + vec2(hash(c + 7.1), hash(c + 3.3))) * spacing;
-                float angle = hash(c + 11.7) * 6.2832;
-                vec2 q = vec2(cos(angle) * d.x + sin(angle) * d.y, -sin(angle) * d.x + cos(angle) * d.y);
-                float size = blossom > 0.5 ? 3.2 + 1.6 * hash(c + 2.9) : 3.8 + 2.4 * hash(c + 2.9);
-                float t = q.x / size;
-                float inside = (1.0 - t * t) * size * (blossom > 0.5 ? 0.62 : 0.45) - abs(q.y);
-                float z = hash(c + 5.9);
-                if (inside > 0.0 && z > top) {
-                    top = z;
-                    rim = inside;
-                    color = blossom > 0.5 ? petalColor(hash(c + 0.5)) : leafColor(hash(c + 0.5));
-                    // Petals that have lain a while are withering.
-                    if (blossom > 0.5 && hash(c + 9.1) < 0.35 * wilt) color = mix(color, withered(hash(c + 0.5)), 0.3 + 0.6 * hash(c + 4.4));
-                }
-            }
-        }
-    }
-    return color * ((blossom > 0.5 ? 0.86 : 0.7) + (blossom > 0.5 ? 0.14 : 0.3) * smoothstep(0.0, 0.7, rim));
+    return litterAt(point, blossom, 1.0).rgb;
 }
 
 /// A cherry blossom petal, as `leafAt` draws a leaf: narrow at its base, broadest near its rounded tip, which is
@@ -607,6 +572,8 @@ vec4 rainAt(vec2 p) {
     vec2 halfStreak = vStreak * 0.5;
     float span = dot(halfStreak, halfStreak);
     if (vRain.x < 1.5) {
+        // Its quad lies along the streak and may reach past the square it is drawn in.
+        if (max(abs(p.x), abs(p.y)) > 0.5) return vec4(0.0);
         // Water in the air shows what is brightest around it: a bright thread against a dark backdrop, a darker one
         // against a light one. Not knowing which is behind it, a raindrop is drawn as both, a bright core in a grey
         // sheath, faint and brightest at its head.

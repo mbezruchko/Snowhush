@@ -1,6 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 use std::mem::size_of;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::thread::{self, JoinHandle};
@@ -77,6 +78,9 @@ const NIN_BALLOONUSERCLICK: u32 = WM_USER + 5;
 const DAY: u32 = 24 * 60 * 60 * 1000;
 
 static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
+type Checked = std::result::Result<Option<Release>, String>;
+/// Finished update checks and whether someone asked for them, waiting for `WM_UPDATE` to pick them up.
+static UPDATES: Mutex<Vec<(Checked, bool)>> = Mutex::new(Vec::new());
 
 /// A glyph drawn like the Mac's menu bar ones, at the sizes the tray draws it at.
 macro_rules! glyph {
@@ -121,7 +125,7 @@ impl Emblem {
         if halloween::shows(settings) {
             Emblem::Pumpkin
         } else {
-            match settings.mode {
+            match settings.picked.mode {
                 Mode::Snow => Emblem::Snowflake,
                 Mode::Autumn => Emblem::Leaf,
                 Mode::Rain => Emblem::Rain,
@@ -283,8 +287,10 @@ unsafe extern "system" fn procedure(window: HWND, message: u32, wparam: WPARAM, 
             unsafe { DefWindowProcW(window, message, wparam, lparam) }
         }
         WM_UPDATE => {
-            let result = unsafe { Box::from_raw(lparam.0 as *mut std::result::Result<Option<Release>, String>) };
-            updated(window, *result, wparam.0 != 0);
+            let finished = UPDATES.lock().map(|mut updates| std::mem::take(&mut *updates)).unwrap_or_default();
+            for (result, asked) in finished {
+                updated(window, result, asked);
+            }
             LRESULT(0)
         }
         WM_TIMER if wparam.0 == TIMER_WELCOME => {
@@ -367,14 +373,18 @@ fn show_menu(window: HWND, x: i32, y: i32) {
 
 /// What the tray menu lists, with what is on or off: sliders in the drawn menu, submenus in the system's.
 fn entries(settings: &Settings, login: bool, sliders: bool) -> Vec<Entry> {
-    let picked = settings.modes();
+    let picked = settings.picked.modes();
     let falling: Vec<Mode> = Mode::ALL.iter().copied().filter(|mode| picked.contains(mode)).collect();
     // Mixed, the kinds are checkboxes and picking one leaves the menu open for the other; alone, one of a set.
     let kind = |id: u32, label: &str, mode: Mode| {
-        if settings.mixed { Entry::toggle(id, label, picked.contains(&mode), true) } else { Entry::choice(id, label, settings.mode == mode) }
+        if settings.picked.mixed {
+            Entry::toggle(id, label, picked.contains(&mode), true)
+        } else {
+            Entry::choice(id, label, settings.picked.mode == mode)
+        }
     };
     let modes = vec![
-        Entry::toggle(ID_MIXED, tr("mixed"), settings.mixed, true),
+        Entry::toggle(ID_MIXED, tr("mixed"), settings.picked.mixed, true),
         Entry::Separator,
         kind(ID_SNOW, tr("snow"), Mode::Snow),
         kind(ID_AUTUMN, tr("autumn"), Mode::Autumn),
@@ -557,7 +567,7 @@ fn choose(window: HWND, chosen: u32, login: bool) {
         ID_MIXED => {
             APP.with_borrow_mut(|app| {
                 let Some(app) = app else { return };
-                app.settings.toggle_mixed();
+                app.settings.picked.toggle_mixed();
                 switch_modes(app);
             });
             refresh_icon(window);
@@ -571,7 +581,7 @@ fn choose(window: HWND, chosen: u32, login: bool) {
             };
             APP.with_borrow_mut(|app| {
                 let Some(app) = app else { return };
-                if app.settings.pick(mode) {
+                if app.settings.picked.pick(mode) {
                     switch_modes(app);
                 }
             });
@@ -635,17 +645,19 @@ fn choose(window: HWND, chosen: u32, login: bool) {
 
 fn switch_modes(app: &App) {
     app.settings.save();
-    let settings = &app.settings;
-    send(app, Command::SwitchMode { mode: settings.mode, mixed: settings.mixed, mix: settings.mix, calm: !prefs::animations_enabled() });
+    send(app, Command::SwitchMode { picked: app.settings.picked, calm: !prefs::animations_enabled() });
 }
 
 /// Checks on another thread and reports back to the window with `WM_UPDATE`.
 fn check_for_updates(window: HWND, asked: bool) {
     let target = window.0 as isize;
     thread::spawn(move || {
-        let result = Box::new(update::check());
+        let result = update::check();
+        if let Ok(mut updates) = UPDATES.lock() {
+            updates.push((result, asked));
+        }
         unsafe {
-            let _ = PostMessageW(Some(HWND(target as _)), WM_UPDATE, WPARAM(asked as usize), LPARAM(Box::into_raw(result) as isize));
+            let _ = PostMessageW(Some(HWND(target as _)), WM_UPDATE, WPARAM(0), LPARAM(0));
         }
     });
 }

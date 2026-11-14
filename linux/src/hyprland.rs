@@ -2,21 +2,22 @@
 //! and the pointer, asked on `.socket.sock`, one request to a connection. Hyprland announces windows opening,
 //! closing, focusing and changing workspace on `.socket2.sock`, but neither a window being dragged nor the
 //! pointer moving, so both are asked for: the windows ten times a second, and at about the frame rate while one
-//! moves and for a moment after anything Hyprland announces; the pointer at the frame rate while it moves.
+//! moves and for a moment after anything Hyprland announces; the pointer at the frame rate while it moves. Both
+//! are asked for less, or not at all, while the snow doesn't need them: see `Demand`.
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::mpsc::{self, TryRecvError};
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
 use crate::log;
-use crate::source::{Display, Report, Shared, Window};
+use crate::source::{self, Display, Report, Shared, Window};
 
 /// How often the windows are asked for while nothing moves, to notice one starting to.
 const CALM: Duration = Duration::from_millis(100);
@@ -71,11 +72,38 @@ struct Client {
     floating: bool,
     class: String,
     pinned: bool,
-    /// 1 maximized, 2 full screen.
-    fullscreen: i64,
+    fullscreen: Fullscreen,
+    /// Before Hyprland 0.42, which a full-screen window is: 0 full screen, 1 maximized.
+    #[serde(rename = "fullscreenMode", default)]
+    fullscreen_mode: i64,
     /// 0 for the window focused last: the closest Hyprland tells to which is in front.
     #[serde(rename = "focusHistoryID")]
     focus_history: i64,
+}
+
+/// 1 maximized, 2 full screen; before Hyprland 0.42, only whether it is either.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum Fullscreen {
+    Mode(i64),
+    Either(bool),
+}
+
+impl Client {
+    /// 1 maximized, 2 full screen.
+    fn fullscreen(&self) -> i64 {
+        match self.fullscreen {
+            Fullscreen::Mode(mode) => mode,
+            Fullscreen::Either(false) => 0,
+            Fullscreen::Either(true) => {
+                if self.fullscreen_mode == 1 {
+                    1
+                } else {
+                    2
+                }
+            }
+        }
+    }
 }
 
 #[derive(Deserialize, PartialEq)]
@@ -142,8 +170,30 @@ pub fn start(shared: Arc<Shared>, folder: PathBuf) -> Result<(), String> {
         .spawn(move || {
             let mut last: Option<Point> = None;
             let mut moved_at = Instant::now();
+            let mut failing: Option<Duration> = None;
             loop {
-                let Ok(point) = request::<Point>(&pointer, "j/cursorpos") else { return };
+                if !pointing.pointer_wanted() {
+                    std::thread::sleep(POINTER_RESTING);
+                    continue;
+                }
+                let point = match request::<Point>(&pointer, "j/cursorpos") {
+                    Ok(point) => point,
+                    Err(error) => {
+                        // Not left where it was last seen, for the snow to keep parting around.
+                        if failing.is_none() {
+                            log!("hyprland: {error}; the pointer is asked for again");
+                            pointing.set_cursor(-1e6, -1e6);
+                        }
+                        let wait = source::backoff(failing);
+                        failing = Some(wait);
+                        last = None;
+                        std::thread::sleep(wait);
+                        continue;
+                    }
+                };
+                if failing.take().is_some() {
+                    log!("hyprland: the pointer is answered again");
+                }
                 pointing.set_cursor(point.x as f32, point.y as f32);
                 if last.as_ref() != Some(&point) {
                     moved_at = Instant::now();
@@ -160,14 +210,33 @@ pub fn start(shared: Arc<Shared>, folder: PathBuf) -> Result<(), String> {
             let mut last: Option<(Report, HashMap<String, [f64; 4]>)> = None;
             let mut moved_at: Option<Instant> = None;
             let mut event_at: Option<Instant> = None;
+            let mut failing: Option<Duration> = None;
             loop {
+                let demand = shared.windows_demand();
                 let (mut report, places) = match ask(&requests, decoration) {
                     Ok(answer) => answer,
                     Err(error) => {
-                        log!("hyprland: {error}");
-                        return;
+                        if failing.is_none() {
+                            log!("hyprland: {error}; the windows are asked for again");
+                        }
+                        let wait = source::backoff(failing);
+                        failing = Some(wait);
+                        std::thread::sleep(wait);
+                        loop {
+                            match announcements.try_recv() {
+                                Ok(_) => {}
+                                Err(TryRecvError::Empty) => break,
+                                Err(TryRecvError::Disconnected) => return,
+                            }
+                        }
+                        continue;
                     }
                 };
+                if failing.take().is_some() {
+                    log!("hyprland: the windows are answered again");
+                    // A config reloaded meanwhile went unseen.
+                    decoration = self::decoration(&requests).unwrap_or(decoration);
+                }
                 let now = Instant::now();
                 if let Some((_, before)) = &last
                     && places.iter().any(|(id, place)| before.get(id).is_some_and(|was| was != place))
@@ -181,19 +250,14 @@ pub fn start(shared: Arc<Shared>, folder: PathBuf) -> Result<(), String> {
                 let alert = event_at.is_some_and(|at| now - at < ALERT);
                 let wait = if report.moving || alert { MOVING } else { CALM };
                 last = Some((report, places));
-                match announcements.recv_timeout(wait) {
-                    Ok(line) => {
-                        event_at = Some(Instant::now());
-                        let mut reloaded = line.starts_with("configreloaded");
-                        while let Ok(line) = announcements.try_recv() {
-                            reloaded |= line.starts_with("configreloaded");
-                        }
-                        if reloaded && let Ok(fresh) = self::decoration(&requests) {
-                            decoration = fresh;
-                        }
+                let Some(lines) = shared.wait(&announcements, demand, wait) else { return };
+                if !lines.is_empty() {
+                    event_at = Some(Instant::now());
+                    if lines.iter().any(|line| line.starts_with("configreloaded"))
+                        && let Ok(fresh) = self::decoration(&requests)
+                    {
+                        decoration = fresh;
                     }
-                    Err(RecvTimeoutError::Timeout) => {}
-                    Err(RecvTimeoutError::Disconnected) => return,
                 }
             }
         })
@@ -251,7 +315,7 @@ fn ask(socket: &Path, decoration: Decoration) -> Result<(Report, HashMap<String,
     let layer = |client: &Client| {
         if specials.contains(&client.workspace.name.as_str()) {
             0
-        } else if client.fullscreen >= 2 {
+        } else if client.fullscreen() >= 2 {
             1
         } else if client.pinned {
             2
@@ -269,7 +333,7 @@ fn ask(socket: &Path, decoration: Decoration) -> Result<(Report, HashMap<String,
 /// A window as the snow sees it: its border around it, and its corners rounded as the config has them, the
 /// border's outer edge a border wider. A full-screen window has neither.
 fn reported(client: &Client, decoration: Decoration) -> Window {
-    let full = client.fullscreen >= 2;
+    let full = client.fullscreen() >= 2;
     let border = if full { 0.0 } else { decoration.border };
     let radius = if full || decoration.rounding <= 0.0 { 0.0 } else { decoration.rounding + border };
     Window {
@@ -283,7 +347,7 @@ fn reported(client: &Client, decoration: Decoration) -> Window {
         full,
         above: client.pinned,
         decorated: border > 0.0,
-        maximized: client.fullscreen == 1,
+        maximized: client.fullscreen() == 1,
         radius: Some(radius as f32),
     }
 }
@@ -296,4 +360,32 @@ fn request<T: DeserializeOwned>(socket: &Path, command: &str) -> Result<T, Strin
     let mut reply = Vec::new();
     stream.read_to_end(&mut reply).map_err(|error| error.to_string())?;
     serde_json::from_slice(&reply).map_err(|error| format!("{command}: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn client(fullscreen: &str) -> Client {
+        let json = format!(
+            r#"{{"address": "0x1", "mapped": true, "hidden": false, "at": [0, 0], "size": [10, 10], "workspace": {{"id": 1, "name": "1"}},
+            "floating": false, "class": "kitty", "pinned": false, {fullscreen}, "focusHistoryID": 0}}"#
+        );
+        serde_json::from_str(&json).expect("a client")
+    }
+
+    #[test]
+    fn reads_full_screen_as_hyprland_0_42_and_later_tell_it() {
+        assert_eq!(client(r#""fullscreen": 0, "fullscreenClient": 0"#).fullscreen(), 0);
+        assert_eq!(client(r#""fullscreen": 1, "fullscreenClient": 1"#).fullscreen(), 1);
+        assert_eq!(client(r#""fullscreen": 2, "fullscreenClient": 2"#).fullscreen(), 2);
+    }
+
+    #[test]
+    fn reads_full_screen_as_hyprland_0_41_tells_it() {
+        assert_eq!(client(r#""fullscreen": false, "fullscreenMode": 0"#).fullscreen(), 0);
+        assert_eq!(client(r#""fullscreen": false, "fullscreenMode": 1"#).fullscreen(), 0);
+        assert_eq!(client(r#""fullscreen": true, "fullscreenMode": 0"#).fullscreen(), 2);
+        assert_eq!(client(r#""fullscreen": true, "fullscreenMode": 1"#).fullscreen(), 1);
+    }
 }
