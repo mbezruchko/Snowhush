@@ -122,6 +122,8 @@ struct WallpaperRidge: Codable, Equatable {
     var tops: [Float]
     /// How near it looks, from 0 for the horizon to 1 for right in front.
     var nearness: Float
+    /// How much of a full cap of snow each column can carry, 0 to 1: a mountain all of it, a thin branch a thin line.
+    var room: [Float] = []
 }
 
 /// The wallpaper as a display shows it, and the tops of the things in it found from a depth map: wherever a nearer
@@ -146,7 +148,7 @@ enum Wallpaper {
     }
 
     /// Raise whenever what is found changes, so pictures already done are looked at again.
-    private static let version = 25
+    private static let version = 26
 
     /// Which wallpaper a screen shows and how it lays it out, as the system tells it: nothing of the picture's file.
     struct Asked {
@@ -255,7 +257,8 @@ enum Wallpaper {
         let cell = 2
         let lightness = lightness(of: shown, cell: cell)
         let depth = snapped(depths.fine, to: lightness)
-        let ridges = find(in: shown, depth: depths.whole, columnWidth: columnWidth)
+        var ridges = find(in: shown, depth: depths.whole, columnWidth: columnWidth)
+        for k in ridges.indices { ridges[k].room = room(on: ridges[k], depth: depth, cell: Float(cell), screenHeight: Float(shown.height), columnWidth: columnWidth) }
         let relief = WallpaperRelief(width: depth.width, height: depth.height, cell: cell, lightness: Data(lightness), tops: Data(tops(of: lightness, width: depth.width)),
                                      hold: Data(hold(of: depth, cell: Float(cell), screenHeight: Float(shown.height), ridges: ridges, columnWidth: columnWidth)),
                                      near: Data(depth.values.map { UInt8(min(max($0, 0), 1) * 255) }))
@@ -457,6 +460,28 @@ enum Wallpaper {
     static let sky: Float = 0.06
     /// Clouds come out a little nearer than the sky: only what is nearer still is ground for snow to lie on.
     static let ground: Float = 0.12
+
+    /// How much of a full cap each column of a ridge can carry, by how far the thing under it reaches down before
+    /// what is behind it shows again: a cap can't stand thicker than a fraction of what it stands on.
+    static func room(on ridge: WallpaperRidge, depth: Grid, cell: Float, screenHeight: Float, columnWidth: Float) -> [Float] {
+        let deepest = 20
+        var room = ridge.tops.enumerated().map { k, top -> Float in
+            let x = Int((ridge.left + (Float(k) + 0.5) * columnWidth) / cell)
+            let row = Int((screenHeight - top) / cell) + 2
+            guard x >= 0, x < depth.width, row >= 0, row < depth.height else { return 1 }
+            let near = depth.values[row * depth.width + x]
+            var body = 0
+            while body < deepest, row + body + 1 < depth.height, depth.values[(row + body + 1) * depth.width + x] > near - 0.05 { body += 1 }
+            return min(Float(body + 2) / Float(deepest), 1)
+        }
+        // Evened out along the ridge: a cap doesn't thin for a single column's gap.
+        let raw = room
+        for k in raw.indices {
+            let low = max(k - 4, 0), high = min(k + 4, raw.count - 1)
+            room[k] = raw[low...high].reduce(0, +) / Float(high - low + 1)
+        }
+        return room
+    }
 
     /// How near each spot of the picture is, for the flakes: a cell to every four points, each the mean of the finer
     /// depth's four.

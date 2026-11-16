@@ -157,7 +157,8 @@ final class PictureRenderer {
                 let taper = end * end * (3 - 2 * end)
                 let low = max(k - 5, 0), high = min(k + 5, count - 1)
                 let smooth = tops[low...high].reduce(0, +) / Float(high - low + 1)
-                values += [tops[k], smooth, lie * uneven * taper, 0]
+                let room = k < ridge.room.count ? ridge.room[k] : 1
+                values += [tops[k], smooth, lie * uneven * taper * room, 0]
             }
         }
         columns = values.isEmpty ? nil : device.makeBuffer(bytes: values, length: values.count * MemoryLayout<Float>.stride, options: .storageModeShared)
