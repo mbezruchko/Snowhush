@@ -471,6 +471,8 @@ final class Renderer: NSObject, MTKViewDelegate {
         encoder.setFragmentTexture(cover.hold, index: 1)
         encoder.setFragmentTexture(ridgeLight(), index: 2)
         encoder.setFragmentTexture(cover.shade, index: 3)
+        var range = simulation.coverRange
+        encoder.setFragmentBytes(&range, length: MemoryLayout<SIMD4<Float>>.stride, index: 3)
         encoder.setScissorRect(scissor)
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         encoder.setScissorRect(MTLScissorRect(x: 0, y: 0, width: target.width, height: target.height))
@@ -481,17 +483,17 @@ final class Renderer: NSObject, MTKViewDelegate {
     private func coverTextures() -> (cover: MTLTexture, hold: MTLTexture, shade: MTLTexture)? {
         let size = simulation.coverSize
         guard size.width > 0, size.height > 0 else { return nil }
-        func texture(_ old: MTLTexture?) -> MTLTexture? {
+        func texture(_ old: MTLTexture?, format: MTLPixelFormat = .r8Unorm) -> MTLTexture? {
             if let old, old.width == size.width, old.height == size.height { return old }
-            let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r8Unorm, width: size.width, height: size.height, mipmapped: false)
+            let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: format, width: size.width, height: size.height, mipmapped: false)
             descriptor.usage = .shaderRead
             return device.makeTexture(descriptor: descriptor)
         }
         let region = MTLRegionMake2D(0, 0, size.width, size.height)
         if terrainVersion != simulation.terrainVersion || holdTexture?.width != size.width {
             terrainVersion = simulation.terrainVersion
-            holdTexture = texture(holdTexture)
-            simulation.coverHold?.withUnsafeBytes { holdTexture?.replace(region: region, mipmapLevel: 0, withBytes: $0.baseAddress!, bytesPerRow: size.width) }
+            holdTexture = texture(holdTexture, format: .rg8Unorm)
+            simulation.coverHoldNear?.withUnsafeBytes { holdTexture?.replace(region: region, mipmapLevel: 0, withBytes: $0.baseAddress!, bytesPerRow: 2 * size.width) }
             shadeTexture = makeShade(simulation.pictureShade)
         }
         if coverVersion != simulation.coverVersion || coverTexture?.width != size.width {

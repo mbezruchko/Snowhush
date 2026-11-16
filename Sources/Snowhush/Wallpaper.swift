@@ -118,7 +118,7 @@ enum Wallpaper {
     }
 
     /// Raise whenever what is found changes, so pictures already done are looked at again.
-    private static let version = 16
+    private static let version = 18
 
     /// What the screen shows of its wallpaper now; nil for a moving or missing one.
     static func picture(on screen: NSScreen) -> Picture? {
@@ -382,6 +382,10 @@ enum Wallpaper {
                         if l > lightest { lightest = l; best = c }
                     }
                 }
+                // Snow takes the colour of the light falling on things, not of the things: of moss or a tinted picture's
+                // green or teal it keeps a little; of a sunset's glow, enough to glow.
+                let gray = lightness(best.x, best.y, best.z)
+                best = SIMD3(repeating: gray) + (best - SIMD3(repeating: gray)) * 0.4
                 let hue = SIMD3<Float>(repeating: 0.25) + best / max(best.x, best.y, best.z, 0.05) * 0.75
                 let tint = hue * min(max(lightest * 1.15 + 0.1, 0.62), 1)
                 let i = (y * width + x) * 4

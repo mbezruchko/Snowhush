@@ -1141,7 +1141,10 @@ final class SnowSimulation {
     private(set) var coverVersion = 0
     /// The wallpaper's surfaces' own `hold`, for the renderer, and the part of the screen they take up, left, bottom,
     /// right, top in points.
-    var coverHold: Data? { terrain?.hold }
+    /// How well each cell holds snow and how near it is, side by side, for the renderer.
+    private(set) var coverHoldNear: Data?
+    /// The nearness of the farthest and nearest things in the wallpaper, and of what counts as ground.
+    var coverRange: SIMD4<Float> { SIMD4(terrain?.far ?? 0, terrain?.close ?? 1, Wallpaper.ground, 0) }
     var coverSize: (width: Int, height: Int) { (terrain?.width ?? 0, terrain?.height ?? 0) }
     private(set) var coverBounds: SIMD4<Float>?
     /// What hides the wallpaper: the windows and the Dock.
@@ -1154,6 +1157,7 @@ final class SnowSimulation {
     private let sceneDepth: Float = 0.7
     /// How far apart in nearness a flake and a surface can be for the flake to land on it rather than pass it.
     private let sceneTolerance: Float = 0.025
+    private let groundLevel = UInt8(Wallpaper.ground * 255)
 
     private(set) var terrainVersion = 0
     /// How light the wallpaper is, for the renderer.
@@ -1169,11 +1173,12 @@ final class SnowSimulation {
         cover = Array(repeating: 0, count: terrainHold.count)
         coverVersion += 1
         coverBounds = nil
+        coverHoldNear = fresh.map { _ in Data(zip(terrainHold, terrainNear).flatMap { [$0, $1] }) }
         guard let fresh else { return }
         var top = fresh.height, bottom = -1
         for y in 0..<fresh.height {
-            let row = terrainHold[(y * fresh.width)..<((y + 1) * fresh.width)]
-            if row.contains(where: { $0 > 0 }) {
+            let row = terrainNear[(y * fresh.width)..<((y + 1) * fresh.width)]
+            if row.contains(where: { $0 > groundLevel }) {
                 top = min(top, y)
                 bottom = max(bottom, y)
             }
@@ -1232,7 +1237,8 @@ final class SnowSimulation {
             let floor: Float = !accumulates || !modes.contains(.snow) ? 0 : falling > 0 ? 0.55 : 0
             let melt = thaws || !accumulates || !modes.contains(.snow) ? elapsed / (falling > 0 ? 900 : 180) : 0
             if grow > 0 || melt > 0 {
-                for k in coverAmount.indices where terrainHold[k] > 0 {
+                // Everything nearer than the sky gathers it: what holds it on top of what is for the renderer to say.
+                for k in coverAmount.indices where terrainNear[k] > groundLevel {
                     var amount = min(coverAmount[k] + grow, 1)
                     if amount > floor { amount = max(floor, amount - melt) }
                     coverAmount[k] = amount
