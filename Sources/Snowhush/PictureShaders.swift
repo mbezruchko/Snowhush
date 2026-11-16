@@ -87,14 +87,16 @@ fragment float4 pictureLieFragment(CoverOut in [[stage_in]],
     // neither's grid lines the edge up, breaks up what is left alike.
     float grain = 0.6 * noise.sample(tiled, float2x2(0.8, 0.6, -0.6, 0.8) * world * (0.16 / 32.0)).r
         + 0.4 * noise.sample(tiled, world * (0.05 / 32.0)).r;
-    // Far off, in mist or behind the trees, less of it shows, and only where the most of it lies.
+    // Far off, in mist or behind the trees, less of it shows, and only where the most of it lies. At its edge snow
+    // lies thin, and what is darker than all about it at the picture's finest, the gaps between needles, the cracks
+    // of a rock, shows through first: the edge is ragged as the thing under it is, not a line drawn round it.
+    float fine = here.r - relief.sample(smooth, uv, level(2.0)).r;
     float threshold = 0.55 - (lightness - around) * 2.2 + (grain - 0.5) * 0.45 + max(0.0, 0.28 - around) * 0.8 - top * 0.7
-        + (1.0 - smoothstep(0.0, 0.45, near)) * 0.45;
+        + (1.0 - smoothstep(0.0, 0.45, near)) * 0.45 - clamp(fine / (around + 0.1), -0.5, 0.5) * 0.7;
     float cover = smoothstep(threshold - 0.12, threshold + 0.06, snow * 1.25);
     // The same depth of snow looks thinner the farther off it lies, and lies thinner on what holds it less well. Before
     // it covers a spot it only dusts it, where the picture's grain catches the light first.
     float thick = cover * mix(0.25, 1.0, near) * mix(0.55, 1.0, holds);
-    float fine = here.r - relief.sample(smooth, uv, level(2.0)).r;
     float dust = smoothstep(0.35, 1.0, snow * 1.25 / max(threshold, 0.1)) * saturate(fine * 14.0) * holdNear.r * 0.22;
     return float4(thick, max(dust, frost) * (1.0 - cover), cover, 1.0);
 }
