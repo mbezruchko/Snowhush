@@ -17,6 +17,7 @@
 "surface.dock" = "Dock";
 "surface.widgets" = "ウィジェット";
 "surface.windows" = "ウインドウ";
+"surface.wallpaper" = "壁紙";
 "surface.panel" = "パネル";
 "all" = "すべて";
 "melt.snow" = "雪を溶かす";

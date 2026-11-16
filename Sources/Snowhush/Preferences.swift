@@ -7,8 +7,10 @@ struct Surfaces: OptionSet {
     static let dock = Surfaces(rawValue: 2)
     static let windows = Surfaces(rawValue: 4)
     static let widgets = Surfaces(rawValue: 8)
-    /// What the window list is read for.
-    static let tracked: Surfaces = [.dock, .windows, .widgets]
+    /// The tops of things in the wallpaper.
+    static let wallpaper = Surfaces(rawValue: 16)
+    /// What the window list is read for: the snow on the wallpaper hides behind every window.
+    static let tracked: Surfaces = [.dock, .windows, .widgets, .wallpaper]
 }
 
 enum Preferences {
@@ -25,6 +27,7 @@ enum Preferences {
     private static let groundKey = "settleGround"
     private static let dockKey = "settleDock"
     private static let widgetsKey = "settleWidgets"
+    private static let wallpaperKey = "settleWallpaper"
     private static let snowOnWindowsKey = "snowOnWindows"
     private static let welcomedKey = "welcomed"
     private static let installedAtKey = "installedAt"
@@ -56,6 +59,7 @@ enum Preferences {
             groundKey: true,
             dockKey: true,
             widgetsKey: true,
+            wallpaperKey: true,
             snowOnWindowsKey: true,
             showInScreenshotsKey: false,
             deepInteractionKey: false,
@@ -67,7 +71,7 @@ enum Preferences {
         ])
         if defaults.object(forKey: accumulateKey) != nil {
             if !defaults.bool(forKey: accumulateKey) {
-                for key in [groundKey, dockKey, widgetsKey, snowOnWindowsKey] { defaults.set(false, forKey: key) }
+                for key in [groundKey, dockKey, widgetsKey, wallpaperKey, snowOnWindowsKey] { defaults.set(false, forKey: key) }
             }
             defaults.removeObject(forKey: accumulateKey)
         }
@@ -92,14 +96,16 @@ enum Preferences {
     static var surfaces: Surfaces {
         get {
             var surfaces: Surfaces = []
-            for (surface, key) in [(Surfaces.ground, groundKey), (.dock, dockKey), (.widgets, widgetsKey), (.windows, snowOnWindowsKey)]
+            for (surface, key) in [(Surfaces.ground, groundKey), (.dock, dockKey), (.widgets, widgetsKey), (.windows, snowOnWindowsKey),
+                                   (.wallpaper, wallpaperKey)]
             where defaults.bool(forKey: key) {
                 surfaces.insert(surface)
             }
             return surfaces
         }
         set {
-            for (surface, key) in [(Surfaces.ground, groundKey), (.dock, dockKey), (.widgets, widgetsKey), (.windows, snowOnWindowsKey)] {
+            for (surface, key) in [(Surfaces.ground, groundKey), (.dock, dockKey), (.widgets, widgetsKey), (.windows, snowOnWindowsKey),
+                                   (.wallpaper, wallpaperKey)] {
                 defaults.set(newValue.contains(surface), forKey: key)
             }
         }

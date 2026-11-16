@@ -38,6 +38,11 @@ final class SnowLayer {
     var faceOccluders: [SIMD4<Float>] = []
     /// Lies on the Dock's shelf, and so is drawn below the Dock.
     var isDock = false
+    /// Lies on the top of something in the wallpaper, behind every window.
+    private(set) var onWallpaper = false
+    /// For a layer on the wallpaper, which never moves: over each stretch of the screen it crosses, how low and how
+    /// high its bed lies there, relative to `origin.y`. The simulation looks up landing flakes by these.
+    var bands: [(stretch: Int, low: Float, high: Float)] = []
     /// How far the window it lies on reaches down from its top edge: as far as a drop can run down it.
     var face: Float = 200
     /// Rain's spray on the window's glass: each droplet from the left end of its top edge, and how big it is.
@@ -79,8 +84,13 @@ final class SnowLayer {
     private let depth: Float
     private let phases: (Float, Float)
     private var corner: (radius: Float, exponent: Float) = (0, 2)
+    /// The bed under each column, for a layer lying along the top of something in the wallpaper instead of an edge.
+    private var contour: [Float]?
     private var supported: [Bool]
     private var supportedRange: ClosedRange<Int>?
+    /// Something changed the snow since it last came to rest. Snow on the wallpaper is never moved under it, so once
+    /// at rest it stays so until snow lands, melts or is swept, and its settling is skipped meanwhile.
+    private var stirred = true
     private var parity = false
 
     init(origin: SIMD2<Float>, columns: Int, columnWidth: Float, depth: Float, opensAtEdges: Bool, phases: (Float, Float)) {
@@ -132,6 +142,14 @@ final class SnowLayer {
         guard radius != corner.radius || exponent != corner.exponent else { return }
         corner = (radius, exponent)
         updateBed()
+    }
+
+    /// Lays the layer along the top of something in the wallpaper: its bed under each column, relative to `origin.y`.
+    func lie(along tops: [Float]) {
+        onWallpaper = true
+        contour = tops
+        updateBed()
+        updateCapacity()
     }
 
     /// What column `i` is made of.
@@ -189,6 +207,7 @@ final class SnowLayer {
         roll(&packed)
         roll(&leaves)
         roll(&petals)
+        stirred = true
     }
 
     func fill(_ i: Int) -> Float {
@@ -197,6 +216,7 @@ final class SnowLayer {
 
     /// Snow taken off a column takes its leaves along in proportion; snow added to it is snow.
     func set(_ i: Int, _ height: Float) {
+        stirred = true
         let old = heights[i]
         heights[i] = max(0, height)
         packed[i] = min(packed[i], heights[i])
@@ -209,11 +229,13 @@ final class SnowLayer {
 
     /// Takes snow alone off a column, leaving its leaves.
     func remove(snow amount: Float, from i: Int) {
+        stirred = true
         heights[i] = max(heights[i] - amount, leaves[i], 0)
         packed[i] = min(packed[i], heights[i])
     }
 
     func replace(heights fresh: [Float], leaves freshLeaves: [Float]? = nil, petals freshPetals: [Float]? = nil) {
+        stirred = true
         heights = fresh
         leaves = freshLeaves ?? Array(repeating: 0, count: fresh.count)
         petals = freshPetals ?? Array(repeating: 0, count: fresh.count)
@@ -249,6 +271,7 @@ final class SnowLayer {
     @discardableResult
     func deposit(_ area: Float, at x: Float, wide: Bool, blend: Blend = .snow) -> Float {
         guard area > 0 else { return 0 }
+        stirred = true
         let center = Int(((x - base.x) / columnWidth).rounded(.down))
         let amount = area / columnWidth
         let kernel: [(Int, Float)] = wide
@@ -273,6 +296,7 @@ final class SnowLayer {
     func heap(_ area: Float, against edge: Int, inward: Int, slope: Float, blend: Blend = .snow) {
         let amount = area / columnWidth
         guard amount > 0 else { return }
+        stirred = true
         var low = bed[edge] + heights[edge]
         var high = low + amount
         for _ in 0..<20 {
@@ -309,6 +333,7 @@ final class SnowLayer {
 
     /// Columns touching the cursor are held up by it, so their walls don't slump into the hole until it leaves.
     func hold(_ i: Int) {
+        stirred = true
         supported[i] = true
         if let range = supportedRange {
             supportedRange = min(range.lowerBound, i)...max(range.upperBound, i)
@@ -330,7 +355,7 @@ final class SnowLayer {
     /// so snow slides off rounded corners. Open layers shed what slides past their ends into `spill`.
     func relax(repose: Float, rounding: Float) -> Bool {
         let count = heights.count
-        guard count > 1, top > 0 else { return false }
+        guard count > 1, top > 0, stirred || !onWallpaper else { return false }
         let limit = repose * columnWidth
         // Snow clings to its bed: a layer may follow the bed down a rounded corner as far as it is no steeper than
         // `clingSlope`, on top of the angle of repose its own surface keeps.
@@ -371,7 +396,8 @@ final class SnowLayer {
                             l[a] *= 1 - part
                             q[a] *= 1 - part
                         }
-                        for pass in 0..<6 {
+                        // Snow on the wallpaper is far off and never jolted: it may take a few steps longer to settle.
+                        for pass in 0..<(onWallpaper ? 2 : 6) {
                             var shifted = false
                             let forward = (pass % 2 == 0) == forwardFirst
                             for k in 0..<(count - 1) {
@@ -427,6 +453,7 @@ final class SnowLayer {
         }
         spill.left += spilledLeft * columnWidth
         spill.right += spilledRight * columnWidth
+        stirred = moved
         return moved
     }
 
@@ -445,6 +472,7 @@ final class SnowLayer {
             petals[i] *= heights[i] / h
             fastest = max(fastest, loss)
         }
+        if fastest > 0 { stirred = true }
         // Sub-pixel melting is picked up by the idle glint refresh instead of forcing full-rate frames.
         return fastest > 0.01
     }
@@ -494,6 +522,11 @@ final class SnowLayer {
     }
 
     private func updateBed() {
+        if let contour, contour.count == heights.count {
+            bed = contour
+            bedDepth = -(bed.min() ?? 0)
+            return
+        }
         let radius = corner.radius
         let span = width
         bed = (0..<heights.count).map { i in
@@ -508,10 +541,18 @@ final class SnowLayer {
     }
 
     private func updateCapacity() {
-        capacity = (0..<heights.count).map { i in
+        let count = heights.count
+        capacity = (0..<count).map { i in
             let x = Float(i) * columnWidth
             let drift = 0.12 * sin(x * 0.0105 + phases.0) + 0.07 * sin(x * 0.037 + phases.1)
-            return depth * (0.95 + drift)
+            // Along a ridge, the snow lies thick in the saddles and thins out where the ridge climbs steeply.
+            var lie: Float = 1
+            if let contour, contour.count == count, count > 1 {
+                let a = max(i - 3, 0), b = min(i + 3, count - 1)
+                let slope = abs(contour[b] - contour[a]) / (Float(max(b - a, 1)) * columnWidth)
+                lie = min(max(1 - slope / 2.2, 0.3), 1)
+            }
+            return depth * (0.95 + drift) * lie
         }
     }
 }

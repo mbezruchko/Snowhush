@@ -64,6 +64,11 @@ final class ScreenSnow {
     private var lookout: Timer?
     private var asleep = false
     private var closedCheckedAt: CFTimeInterval = 0
+    /// The wallpaper whose ridges the snow lies on, and when it was last looked for.
+    private var wallpaper: Wallpaper.Picture?
+    private var wallpaperCheckedAt: CFTimeInterval = -10
+    /// One wallpaper at a time is looked at, for all the displays: each look holds a few screens' worth of pixels.
+    private static let wallpaperQueue = DispatchQueue(label: "com.mbezruchko.Snowhush.wallpaper", qos: .utility)
     /// Asks for the snow to be woken or put to rest again.
     var activityChanged: () -> Void = {}
     /// Faded all the way out for a full-screen app: the snow keeps falling until then.
@@ -135,6 +140,7 @@ final class ScreenSnow {
             // Behind the windows the snow still settles on them: what lies on a window's top edge is above it, in
             // plain view.
             let settled = surfaces()
+            watchWallpaper(now: now, wanted: settled.contains(.wallpaper))
             let tracked = !settled.isDisjoint(with: .tracked)
             tracker.collects = settled.intersection(.tracked)
             let update = tracked ? tracker.poll(now: now, eager: NSEvent.pressedMouseButtons != 0) : nil
@@ -177,6 +183,12 @@ final class ScreenSnow {
         renderer.interactiveFrameRate = Self.interactiveFrameRate(of: screen)
         measure()
         checkCovered()
+        lookForWallpaper()
+    }
+
+    /// Each Space and display may have a wallpaper of its own: looks again at the next frame.
+    private func lookForWallpaper() {
+        if wallpaperCheckedAt > 0 { wallpaperCheckedAt = 0.001 }
     }
 
     private static func interactiveFrameRate(of screen: NSScreen) -> Int {
@@ -222,6 +234,35 @@ final class ScreenSnow {
         let away = simulation.awayIDs
         guard !away.isEmpty else { return }
         simulation.forgetClosed(keeping: WindowTracker.open(among: away))
+    }
+
+    /// Looks every few seconds for another wallpaper, and finds the tops of the things in a new one off the main thread:
+    /// a second or so the first time, read from disk after that.
+    private func watchWallpaper(now: CFTimeInterval, wanted: Bool) {
+        guard wanted else {
+            guard wallpaperCheckedAt > 0 else { return }
+            wallpaper = nil
+            wallpaperCheckedAt = -10
+            simulation.setRidges(nil)
+            return
+        }
+        guard now - wallpaperCheckedAt >= 3 else { return }
+        wallpaperCheckedAt = now
+        let picture = Wallpaper.picture(on: screen)
+        guard picture != wallpaper else { return }
+        wallpaper = picture
+        guard let picture else {
+            simulation.setRidges(nil)
+            return
+        }
+        let columnWidth = simulation.columnWidth
+        Self.wallpaperQueue.async { [weak self] in
+            let scene = Wallpaper.scene(in: picture, columnWidth: columnWidth)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.wallpaper == picture else { return }
+                self.simulation.setRidges(scene)
+            }
+        }
     }
 
     func dropWindowSnow() {
@@ -416,6 +457,7 @@ final class ScreenSnow {
     func spaceChanged() {
         checkCovered()
         simulation.spaceChanged()
+        lookForWallpaper()
         light.invalidate()
         watchWindows()
         window.holdInPlace()

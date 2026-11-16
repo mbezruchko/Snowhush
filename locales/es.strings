@@ -17,6 +17,7 @@
 "surface.dock" = "Dock";
 "surface.widgets" = "Widgets";
 "surface.windows" = "Ventanas";
+"surface.wallpaper" = "Fondo";
 "surface.panel" = "Panel";
 "all" = "Todo";
 "melt.snow" = "Derretir la nieve";

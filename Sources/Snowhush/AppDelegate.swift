@@ -265,8 +265,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         meltItem.title = tr(heaps.contains(.snow) ? "melt.snow" : heaps == [.blossom] ? "melt.blossom" : "melt.autumn")
         clearItem.title = tr("clear", heaps)
         (meltItem.view as? MenuToggle)?.fit(meltItem.title)
-        // Top to bottom, as they lie on the screen. Rain splashes on the ground whatever it says.
-        let choices: [Surfaces] = [.widgets, .windows, .dock] + (heaps.isEmpty ? [] : [.ground])
+        // Top to bottom, as they lie on the screen, the wallpaper behind them all first. Rain splashes on the ground
+        // whatever it says.
+        let choices: [Surfaces] = [.wallpaper, .widgets, .windows, .dock] + (heaps.isEmpty ? [] : [.ground])
         if surfacePicker.choices != choices { surfacePicker.choices = choices }
         surfacePicker.on = surfaces
         let lit = choices.filter(surfaces.contains)

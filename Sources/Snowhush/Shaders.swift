@@ -1114,6 +1114,20 @@ vertex PileOut pileVertex(uint vid [[vertex_id]], constant Uniforms &u [[buffer(
     return out;
 }
 
+// Snow along a ridge in the wallpaper: a band hugging it from just under its bed to just over its surface, column
+// edge by column edge, so a long slanted ridge doesn't shade the whole box around it.
+vertex PileOut ridgeVertex(uint vid [[vertex_id]], constant Uniforms &u [[buffer(0)]], const device float *h [[buffer(1)]]) {
+    int n = u.columnCount;
+    int edge = int(vid >> 1);
+    int a = clamp(edge - 1, 0, n - 1), b = clamp(edge, 0, n - 1);
+    float y = (vid & 1) ? max(h[a], h[b]) + 3.0 : min(h[n + a], h[n + b]) - 3.0;
+    float2 p = float2(float(edge) * u.columnWidth, y);
+    PileOut out;
+    out.position = float4((p + u.origin + u.shake.xy) / u.viewSize * 2.0 - 1.0, 0.0, 1.0);
+    out.point = p;
+    return out;
+}
+
 static float heightAt(const device float *h, constant Uniforms &u, float x) {
     float f = x / u.columnWidth - 0.5;
     float base = floor(f);
@@ -1122,10 +1136,8 @@ static float heightAt(const device float *h, constant Uniforms &u, float x) {
     return mix(h[i], h[j], saturate(f - base));
 }
 
-fragment float4 pileFragment(PileOut in [[stage_in]],
-                             const device float *heights [[buffer(0)]],
-                             constant Uniforms &u [[buffer(1)]],
-                             constant float4 *occluders [[buffer(2)]]) {
+// `tint` is the light the snow takes on: white, or for snow on the wallpaper the picture's own light there.
+static float4 pileColor(PileOut in, const device float *heights, constant Uniforms &u, constant float4 *occluders, float3 tint) {
     float2 world = in.point + u.origin;
     for (int k = 0; k < u.occluderCount; k++) {
         float4 o = occluders[k];
@@ -1181,10 +1193,28 @@ fragment float4 pileFragment(PileOut in [[stage_in]],
     }
 
     // Night dims fallen leaves without draining their colour.
-    color *= mix(u.light.rgb, mix(float3(1.0), u.light.rgb, 0.4), leafy);
+    color *= mix(u.light.rgb * tint, mix(float3(1.0), u.light.rgb, 0.4) * mix(float3(1.0), tint, 0.5), leafy);
     color = mix(color, u.rim.rgb, u.rim.a * exp(-depth / 2.5) * (1.0 - leafy));
     color = mix(color, candle, candlelight(u, world) * (0.35 + 0.65 * exp(-depth / 14.0)) * 0.55);
     return float4(color * coverage, coverage);
+}
+
+fragment float4 pileFragment(PileOut in [[stage_in]],
+                             const device float *heights [[buffer(0)]],
+                             constant Uniforms &u [[buffer(1)]],
+                             constant float4 *occluders [[buffer(2)]]) {
+    return pileColor(in, heights, u, occluders, float3(1.0));
+}
+
+fragment float4 ridgeFragment(PileOut in [[stage_in]],
+                              const device float *heights [[buffer(0)]],
+                              constant Uniforms &u [[buffer(1)]],
+                              constant float4 *occluders [[buffer(2)]],
+                              texture2d<float> light [[texture(0)]]) {
+    constexpr sampler smooth(filter::linear, address::clamp_to_edge);
+    float2 world = in.point + u.origin;
+    float3 tint = light.sample(smooth, float2(world.x / u.viewSize.x, 1.0 - world.y / u.viewSize.y)).rgb;
+    return pileColor(in, heights, u, occluders, tint);
 }
 
 struct SignUniforms {

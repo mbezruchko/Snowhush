@@ -71,6 +71,9 @@ final class Renderer: NSObject, MTKViewDelegate {
     private let queue: MTLCommandQueue
     private let spritePipeline: MTLRenderPipelineState
     private let pilePipeline: MTLRenderPipelineState
+    private let ridgePipeline: MTLRenderPipelineState
+    private var ridgeLightTexture: MTLTexture?
+    private var ridgeLightVersion = -1
     private let signPipeline: MTLRenderPipelineState
     private let pumpkinPipeline: MTLRenderPipelineState
     /// Drops on the glass: their bumps added up into a field, and the glass drawn from it.
@@ -103,6 +106,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         self.semaphore = DispatchSemaphore(value: framesInFlight)
         self.spritePipeline = pipelines.sprite
         self.pilePipeline = pipelines.pile
+        self.ridgePipeline = pipelines.ridge
         self.signPipeline = pipelines.sign
         self.pumpkinPipeline = pipelines.pumpkin
         self.glassPipeline = pipelines.glass
@@ -111,7 +115,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     }
 
     private struct Pipelines {
-        let sprite, pile, sign, pumpkin, glass, field: MTLRenderPipelineState
+        let sprite, pile, ridge, sign, pumpkin, glass, field: MTLRenderPipelineState
     }
 
     private struct PipelineKey: Hashable {
@@ -154,6 +158,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         let pipelines = try Pipelines(
             sprite: pipeline("spriteVertex", "spriteFragment"),
             pile: pipeline("pileVertex", "pileFragment"),
+            ridge: pipeline("ridgeVertex", "ridgeFragment"),
             sign: pipeline("signVertex", "signFragment"),
             pumpkin: pipeline("pumpkinVertex", "pumpkinFragment"),
             glass: pipeline("glassVertex", "glassFragment"),
@@ -415,8 +420,8 @@ final class Renderer: NSObject, MTKViewDelegate {
         guard !piles.isEmpty else { return }
         var uniforms = uniforms
         let uniformsLength = MemoryLayout<Uniforms>.stride
-        encoder.setRenderPipelineState(pilePipeline)
         for pile in piles {
+            encoder.setRenderPipelineState(pile.contoured ? ridgePipeline : pilePipeline)
             uniforms.columnCount = Int32(pile.count)
             uniforms.pileTop = pile.top + 2
             uniforms.pileBottom = pile.bottom
@@ -428,8 +433,31 @@ final class Renderer: NSObject, MTKViewDelegate {
             encoder.setFragmentBuffer(heights, offset: pile.offset * MemoryLayout<Float>.stride, index: 0)
             encoder.setFragmentBytes(&uniforms, length: uniformsLength, index: 1)
             encoder.setFragmentBytes(&occluders, length: occluders.count * MemoryLayout<SIMD4<Float>>.stride, index: 2)
-            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+            if pile.contoured {
+                encoder.setFragmentTexture(ridgeLight(), index: 0)
+                encoder.setVertexBuffer(heights, offset: pile.offset * MemoryLayout<Float>.stride, index: 1)
+                encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 2 * (pile.count + 1))
+            } else {
+                encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+            }
         }
+    }
+
+    /// The wallpaper's light for the snow on it, as a texture made again only when the wallpaper changes; plain white
+    /// until there is one.
+    private func ridgeLight() -> MTLTexture? {
+        guard ridgeLightVersion != simulation.ridgeLightVersion || ridgeLightTexture == nil else { return ridgeLightTexture }
+        ridgeLightVersion = simulation.ridgeLightVersion
+        let light = simulation.ridgeLight ?? WallpaperLight(width: 1, height: 1, cell: 1, pixels: Data([255, 255, 255, 255]))
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: light.width, height: light.height, mipmapped: false)
+        descriptor.usage = .shaderRead
+        let texture = device.makeTexture(descriptor: descriptor)
+        light.pixels.withUnsafeBytes { bytes in
+            guard let base = bytes.baseAddress else { return }
+            texture?.replace(region: MTLRegionMake2D(0, 0, light.width, light.height), mipmapLevel: 0, withBytes: base, bytesPerRow: light.width * 4)
+        }
+        ridgeLightTexture = texture
+        return texture
     }
 
     private func drawSigns(_ signs: [SignSprite], with encoder: MTLRenderCommandEncoder, uniforms: Uniforms) {
