@@ -24,6 +24,7 @@
 "melt.blossom" = "花瓣凋谢";
 "deep" = "深度交互";
 "behind" = "在窗口后面";
+"ignore.apps" = "忽略应用";
 "full_screen" = "在全屏应用上显示";
 "taskbar" = "在任务栏后面";
 "screenshots" = "在截图中显示";
