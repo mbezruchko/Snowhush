@@ -148,7 +148,7 @@ enum Wallpaper {
     }
 
     /// Raise whenever what is found changes, so pictures already done are looked at again.
-    private static let version = 32
+    private static let version = 35
 
     /// Which wallpaper a screen shows and how it lays it out, as the system tells it: nothing of the picture's file.
     struct Asked {
@@ -610,7 +610,10 @@ enum Wallpaper {
                 // The depth map squeezes the distance: far off, the same slope changes its depth less.
                 steepness[i] = max(down, 0) / (near + 0.15)
                 falls[i] = down
-                sides[i] = smoothstep(jump.lowerBound, jump.upperBound, abs(across))
+                // A surface that lies level runs nearer straight down the screen. One whose depth runs across more than
+                // down leans over sideways as steeply: the side of a fir's crown against the wood behind, the flank
+                // of a crag. However slight the step in depth, that is no place to lie.
+                sides[i] = max(smoothstep(jump.lowerBound, jump.upperBound, abs(across)), smoothstep(1.0, 2.2, abs(across) / max(down, 1e-5)))
                 if down > 0, abs(down) < jump.lowerBound, abs(across) < jump.lowerBound, (x + y) % 5 == 0 { level.append(steepness[i]) }
             }
         }
