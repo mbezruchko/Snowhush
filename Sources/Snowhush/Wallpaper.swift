@@ -124,6 +124,9 @@ struct WallpaperRidge: Codable, Equatable {
     var nearness: Float
     /// How much of a full cap of snow each column can carry, 0 to 1: a mountain all of it, a thin branch a thin line.
     var room: [Float] = []
+    /// Whether each column is a mountain's, 1, or a branch's or a rock's, 0: under a mountain's ridge the sky over
+    /// it doesn't show again.
+    var mass: [Float] = []
 }
 
 /// The wallpaper as a display shows it, and the tops of the things in it found from a depth map: wherever a nearer
@@ -148,7 +151,7 @@ enum Wallpaper {
     }
 
     /// Raise whenever what is found changes, so pictures already done are looked at again.
-    private static let version = 49
+    private static let version = 50
 
     /// Which wallpaper a screen shows and how it lays it out, as the system tells it: nothing of the picture's file.
     struct Asked {
@@ -264,6 +267,7 @@ enum Wallpaper {
         for k in ridges.indices {
             let body = body(under: ridges[k], in: shown, depth: depth, cell: Float(cell), columnWidth: columnWidth)
             ridges[k].tops = zip(ridges[k].tops, body.lift).map { $0 + $1 }
+            ridges[k].mass = mass(under: ridges[k], in: shown, columnWidth: columnWidth)
             // No cap on what is as white as the cap: a line of the same snow along a ridge of snow is an outline.
             ridges[k].room = body.room.enumerated().map { j, room in
                 let x = Int(ridges[k].left + (Float(j) + 0.5) * columnWidth), y = shown.height - Int(ridges[k].tops[j]) + 8
@@ -641,21 +645,6 @@ enum Wallpaper {
                 thick[k] = known[known.count / 2]
             }
         }
-        // The middle of what the columns around say, then evened out: a branch stays thin where it crosses a trunk,
-        // and a ridge doesn't thin for one stray column.
-        func evened(_ values: [Float]) -> [Float] {
-            var middle = values
-            for k in values.indices {
-                let around = values[max(k - 8, 0)...min(k + 8, values.count - 1)].sorted()
-                middle[k] = around[around.count / 2]
-            }
-            var even = middle
-            for k in middle.indices {
-                let low = max(k - 3, 0), high = min(k + 3, middle.count - 1)
-                even[k] = middle[low...high].reduce(0, +) / Float(high - low + 1)
-            }
-            return even
-        }
         let room = evened(zip(slivers, thick).map { $0 ? min(max($1 / full, 0.12), 1) : 1 })
         // Only the columns where the sliver showed say where its top is.
         var known = lifts
@@ -668,6 +657,58 @@ enum Wallpaper {
         }
         let lift = zip(evened(known), room).map { $0 * (1 - smoothstep(0.25, 0.9, $1)) }
         return (room, lift)
+    }
+
+    /// The middle of what the columns around say, then evened out: a branch stays thin where it crosses a trunk, and a
+    /// ridge doesn't change for one stray column.
+    static func evened(_ values: [Float]) -> [Float] {
+        var middle = values
+        for k in values.indices {
+            let around = values[max(k - 8, 0)...min(k + 8, values.count - 1)].sorted()
+            middle[k] = around[around.count / 2]
+        }
+        var even = middle
+        for k in middle.indices {
+            let low = max(k - 3, 0), high = min(k + 3, middle.count - 1)
+            even[k] = middle[low...high].reduce(0, +) / Float(high - low + 1)
+        }
+        return even
+    }
+
+    /// Whether each column of a ridge is a mountain's, 0 to 1. A mountain goes on down: sixty points under its ridge
+    /// the sky that is over it has not shown again. Under a branch it has, however thick the depth map takes the
+    /// branch for. Where no edge shows at all, or the rock under a ridge is as dark as the night over it, it is
+    /// taken for no mountain, and nothing is done to it as one. Snow in a peak's shade is lit by the sky and as blue,
+    /// and passes for the sky showing again: so a ridge that is a mountain's along most of its length is one all
+    /// along, and one that hardly ever is, a bough crossing a trunk, isn't.
+    static func mass(under ridge: WallpaperRidge, in shown: Shown, columnWidth: Float) -> [Float] {
+        func colour(_ x: Int, _ y: Int) -> SIMD3<Float> {
+            var sum = SIMD3<Float>(repeating: 0)
+            for dx in -1...1 {
+                let i = (y * shown.width + min(max(x + dx, 0), shown.width - 1)) * 4
+                sum += SIMD3(Float(shown.pixels[i]), Float(shown.pixels[i + 1]), Float(shown.pixels[i + 2]))
+            }
+            return sum / 3
+        }
+        func apart(_ a: SIMD3<Float>, _ b: SIMD3<Float>) -> Float { ((a - b) * (a - b)).sum().squareRoot() }
+        let found = evened(ridge.tops.enumerated().map { k, top -> Float in
+            let x = Int(ridge.left + (Float(k) + 0.5) * columnWidth)
+            let y = shown.height - Int(top)
+            guard x >= 0, x < shown.width, y >= 16, y + 64 < shown.height else { return 0 }
+            var behind = SIMD3<Float>(repeating: 0), thing = SIMD3<Float>(repeating: 0)
+            for r in -13 ... -10 { behind += colour(x, y + r) }
+            for r in 3...6 { thing += colour(x, y + r) }
+            behind /= 4
+            thing /= 4
+            let edge = apart(thing, behind)
+            guard edge >= 12 else { return 0 }
+            for r in stride(from: 8, through: 60, by: 2) where apart(colour(x, y + r), behind) < edge * 0.35 { return 0 }
+            return 1
+        })
+        let share = found.reduce(0, +) / Float(max(found.count, 1))
+        if share >= 0.5 { return [Float](repeating: 1, count: found.count) }
+        if share < 0.25 { return [Float](repeating: 0, count: found.count) }
+        return found
     }
 
     /// How much grain the picture shows before it counts as a thing with a surface, as a share of how light it is

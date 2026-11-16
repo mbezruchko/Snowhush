@@ -165,7 +165,13 @@ final class PictureRenderer {
                 let near = min(max(ridge.nearness, 0), 1)
                 let slim = min(room / (0.35 + 0.65 * near), 1)
                 let carried = slim + (1 - slim) * Wallpaper.smoothstep(0.6, 0.95, room)
-                values += [tops[k], smooth, lie * uneven * taper * carried, foot]
+                // A mountain far off is small on the screen, and a cap a few points thick on it would be a drift
+                // as deep as a house: there the snow shows on its faces, and its ridge is left without a line drawn
+                // round it. A branch against the sky, however far the depth map takes it for, keeps its cap.
+                let mountain: Float = k < ridge.mass.count && ridge.mass[k] >= 0.5 ? 1 : 0
+                let far = 1 - mountain * (1 - Wallpaper.smoothstep(0.3, 0.45, near))
+                // The shader is told a mountain's column by its foot, eight points over what a foot can be.
+                values += [tops[k], smooth, lie * uneven * taper * carried * far, foot + 8 * mountain]
             }
         }
         columns = values.isEmpty ? nil : device.makeBuffer(bytes: values, length: values.count * MemoryLayout<Float>.stride, options: .storageModeShared)
