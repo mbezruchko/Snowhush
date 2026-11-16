@@ -26,7 +26,7 @@ A tiny app that lives in the menu bar on macOS and in the tray on Windows and Li
 
 - **Falls.** Every flake keeps its own pace and sways in a slow breeze.
 - **Settles.** It piles up and slumps to a natural slope along the bottom of the screen, on any window with room above it, and on the Dock.
-- **Falls into your wallpaper.** On the Mac it reads the depth of your wallpaper once and snows inside the picture: far flakes pass behind nearer mountains and trees and take the picture's light, and snow gathers on its slopes, ridges and boughs with a thickness of its own, glowing under a sunset, grey at dusk. It comes on over minutes, lies deeper over an hour unless Melt Snow holds it, and is still there next time. Windows hide it, as they hide the wallpaper, and it costs nothing while it lies still.
+- **Falls into your wallpaper.** On the Mac it reads the depth of your wallpaper once and snows inside the picture: far flakes pass behind nearer mountains and trees and take the picture's light, and snow gathers on its slopes, ridges and boughs with a thickness of its own, glowing under a sunset, grey at dusk. It comes on over minutes, lies deeper over an hour unless Melt Snow holds it, and is still there next time; change the wallpaper and it starts over on the new one. Windows hide it, as they hide the wallpaper, and it costs nothing while it lies still.
 - **Moves.** Push the cursor through a drift and it parts and sprays. Drag or shake a window and its snow slides off and lands below.
 - **Drops.** Close or minimize a window and its snow drops at once, in lumps that burst into powder where they land.
 - **Melts.** With Melt Snow on, the drift thaws slowly, so it never takes over your screen.
