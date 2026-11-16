@@ -62,6 +62,17 @@ final class WindowTracker {
     /// What collects snow: the Dock, desktop widgets and windows. The others still hide the snow behind them.
     var collects: Surfaces = .tracked
 
+    static func appOwners() -> [String] {
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        let list = ListedWindow.all(in: CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID))
+        return list.compactMap { entry in
+            guard let pid = entry.pid, pid != ownPID, let layer = entry.layer, layer >= 0,
+                  let owner = entry.owner, !owner.isEmpty, owner != "Dock", owner != "Window Server"
+            else { return nil }
+            return owner
+        }
+    }
+
     private var currentSpace: UInt64?
     private var currentSpaceRead = false
     private let ownPID = ProcessInfo.processInfo.processIdentifier
@@ -74,7 +85,7 @@ final class WindowTracker {
     /// Whether each process seen with a window above the normal layer is the one that shows Picture in Picture.
     private var pipHosts: [Int32: Bool] = [:]
     /// CursorUIViewService draws the input source badge next to the text caret.
-    private let ignoredOwners: Set<String> = ["Window Server", "CursorUIViewService"]
+    private let ignoredOwners: Set<String> = ["Window Server", "CursorUIViewService", "TheBoringNotch"]
     /// The Dock's windows (the Dock itself, the ⌘Tab switcher) hide snow behind them but don't collect any.
     private let coverOnlyOwners: Set<String> = ["Dock"]
     private var previous: [WindowSurface] = []
@@ -566,12 +577,14 @@ final class WindowTracker {
             cards = checked
         }
 
+        let ignoredByUser = Set(Preferences.ignoredApps)
         for entry in list {
             guard let pid = entry.pid, pid != ownPID,
                   let layer = entry.layer, layer >= 0 || isWidget(pid: pid, layer: layer), layer < maxLayer,
                   var bounds = entry.bounds,
                   let alpha = entry.alpha, alpha > 0.3,
-                  !ignoredOwners.contains(entry.owner ?? "")
+                  !ignoredOwners.contains(entry.owner ?? ""),
+                  !ignoredByUser.contains(entry.owner ?? "")
             else { continue }
             let id = entry.id ?? 0
             fresh[id] = alpha

@@ -24,6 +24,7 @@
 "melt.blossom" = "Marchitar los pétalos";
 "deep" = "Interacción profunda";
 "behind" = "Detrás de las ventanas";
+"ignore.apps" = "Ignorar apps";
 "full_screen" = "Mostrar sobre pantalla completa";
 "taskbar" = "Detrás de la barra de tareas";
 "screenshots" = "Mostrar en capturas";

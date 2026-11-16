@@ -38,6 +38,7 @@ enum Preferences {
     /// Before rain, the mode was only whether leaves fell.
     private static let autumnKey = "autumn"
     private static let performanceKey = "performance"
+    private static let ignoredAppsKey = "ignoredApps"
     private static let fallingOpacityKey = "fallingOpacity"
 
     static func registerDefaults() {
@@ -103,6 +104,11 @@ enum Preferences {
                 defaults.set(newValue.contains(surface), forKey: key)
             }
         }
+    }
+
+    static var ignoredApps: [String] {
+        get { defaults.stringArray(forKey: ignoredAppsKey) ?? [] }
+        set { defaults.set(newValue, forKey: ignoredAppsKey) }
     }
 
     static var meltSnow: Bool {
