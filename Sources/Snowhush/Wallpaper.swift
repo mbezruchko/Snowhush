@@ -148,7 +148,7 @@ enum Wallpaper {
     }
 
     /// Raise whenever what is found changes, so pictures already done are looked at again.
-    private static let version = 35
+    private static let version = 38
 
     /// Which wallpaper a screen shows and how it lays it out, as the system tells it: nothing of the picture's file.
     struct Asked {
@@ -264,7 +264,7 @@ enum Wallpaper {
             ridges[k].tops = zip(ridges[k].tops, body.lift).map { $0 + $1 }
         }
         let relief = WallpaperRelief(width: depth.width, height: depth.height, cell: cell, lightness: Data(lightness), tops: Data(tops(of: lightness, width: depth.width)),
-                                     hold: Data(hold(of: depth, cell: Float(cell), screenHeight: Float(shown.height), ridges: ridges, columnWidth: columnWidth)),
+                                     hold: Data(hold(of: depth, lightness: lightness, cell: Float(cell), screenHeight: Float(shown.height), ridges: ridges, columnWidth: columnWidth)),
                                      near: Data(depth.values.map { UInt8(min(max($0, 0), 1) * 255) }))
         var light = light(of: shown)
         light.haze = haze(of: shown, depth: depth)
@@ -565,6 +565,11 @@ enum Wallpaper {
         return (room, lift)
     }
 
+    /// How much grain the picture shows before it counts as a thing with a surface, as a share of how light it is
+    /// there. A bank of cloud, mist, anything out of focus and snow lying smooth already show next to none; rock,
+    /// bark, needles and the ripples of a dune show several times this.
+    static let grain: ClosedRange<Float> = 0.012...0.0225
+
     /// How near each spot of the picture is, for the flakes: a cell to every four points, each the mean of the finer
     /// depth's four.
     static func terrain(of depth: Grid) -> WallpaperTerrain {
@@ -587,7 +592,7 @@ enum Wallpaper {
     /// grows for level ground differs from picture to picture, with the lens and with how the network read it: so each
     /// picture is measured against its own flattest ground. Where the depth jumps at the top of something, the top
     /// holds snow up to its edge and the sky over it doesn't; above a ridge's own edge, nothing lies.
-    static func hold(of depth: Grid, cell: Float, screenHeight: Float, ridges: [WallpaperRidge], columnWidth: Float) -> [UInt8] {
+    static func hold(of depth: Grid, lightness: [UInt8], cell: Float, screenHeight: Float, ridges: [WallpaperRidge], columnWidth: Float) -> [UInt8] {
         let width = depth.width, height = depth.height
         let smooth = depth.blurred(radius: 1).values
         let fine = depth.values
@@ -660,6 +665,20 @@ enum Wallpaper {
         // Softened over a few points, the edges of what holds snow follow the land rather than the cells.
         hold = Grid(width: width, height: height, values: hold).blurred(radius: max(Int((3 / cell).rounded()), 1)).values
         for i in hold.indices where fine[i] <= ground { hold[i] = 0 }
+        // What shows no grain has no surface to see snow on: cloud and mist, what is out of focus, snow lying smooth
+        // already.
+        let light = lightness.map { Float($0) / 255 }
+        let lit = Grid(width: width, height: height, values: light)
+        let even = lit.blurred(radius: 2).values, about = lit.blurred(radius: 8).values
+        let rough = Grid(width: width, height: height, values: zip(light, even).map { abs($0 - $1) }).blurred(radius: 8).values
+        // Where rock ends over a bank of cloud the cloud is the nearer, and its upper edge would pass for the top of a
+        // thing: so the grain is asked for a little further down too, in what the snow would lie on.
+        let under = max(Int((16 / cell).rounded()), 1)
+        for i in hold.indices where hold[i] > 0 {
+            let below = min(i + under * width, hold.count - 1)
+            let grained = min(rough[i] / (about[i] + 0.1), rough[below] / (about[below] + 0.1))
+            hold[i] *= smoothstep(grain.lowerBound, grain.upperBound, grained)
+        }
         ridgeColumns { x, edge, room in
             for y in max(Int((edge - 28) / cell), 0)..<min(Int(edge / cell), height) { hold[y * width + x] = 0 }
             // A branch carries its snow on top, as its cap: what the depth map takes for a ledge under it is air.
