@@ -148,7 +148,7 @@ enum Wallpaper {
     }
 
     /// Raise whenever what is found changes, so pictures already done are looked at again.
-    private static let version = 40
+    private static let version = 49
 
     /// Which wallpaper a screen shows and how it lays it out, as the system tells it: nothing of the picture's file.
     struct Asked {
@@ -257,18 +257,23 @@ enum Wallpaper {
         let cell = 2
         let lightness = lightness(of: shown, cell: cell)
         let depth = snapped(depths.fine, to: lightness)
+        let far = haze(of: shown, depth: depth)
+        var light = light(of: shown, sky: far, skylight: skylight(of: shown, depth: depth))
+        light.haze = far
         var ridges = find(in: shown, depth: depths.whole, columnWidth: columnWidth)
         for k in ridges.indices {
             let body = body(under: ridges[k], in: shown, depth: depth, cell: Float(cell), columnWidth: columnWidth)
-            ridges[k].room = body.room
             ridges[k].tops = zip(ridges[k].tops, body.lift).map { $0 + $1 }
+            // No cap on what is as white as the cap: a line of the same snow along a ridge of snow is an outline.
+            ridges[k].room = body.room.enumerated().map { j, room in
+                let x = Int(ridges[k].left + (Float(j) + 0.5) * columnWidth), y = shown.height - Int(ridges[k].tops[j]) + 8
+                return room * (1 - white(atX: x, y: y, in: shown, light: light))
+            }
         }
         let relief = WallpaperRelief(width: depth.width, height: depth.height, cell: cell, lightness: Data(lightness), tops: Data(tops(of: lightness, width: depth.width)),
-                                     hold: Data(hold(of: depth, lightness: lightness, cell: Float(cell), screenHeight: Float(shown.height), ridges: ridges, columnWidth: columnWidth)),
+                                     hold: Data(hold(of: depth, lightness: lightness, shown: shown, lighting: light, cell: Float(cell), screenHeight: Float(shown.height),
+                                                     ridges: ridges, columnWidth: columnWidth)),
                                      near: Data(depth.values.map { UInt8(min(max($0, 0), 1) * 255) }))
-        let far = haze(of: shown, depth: depth)
-        var light = light(of: shown, sky: far)
-        light.haze = far
         let found = WallpaperScene(ridges: ridges, light: light, terrain: terrain(of: depth), relief: relief)
         if let file, let data = try? JSONEncoder().encode(found) {
             let folder = file.deletingLastPathComponent()
@@ -386,7 +391,7 @@ enum Wallpaper {
     /// things, not light. Where nothing about is white, in a dark wood, the snow is lit by the sky the picture has,
     /// `sky`, and takes its cast: in the dark the colour of a few pixels is anyone's guess, and beige snow in a blue
     /// picture is a wrong one.
-    static func light(of shown: Shown, sky: [Float], cell: Int = 16) -> WallpaperLight {
+    static func light(of shown: Shown, sky: [Float], skylight: Float, cell: Int = 16) -> WallpaperLight {
         let width = (shown.width + cell - 1) / cell, height = (shown.height + cell - 1) / cell
         func lightness(_ c: SIMD3<Float>) -> Float { 0.2126 * c.x + 0.7152 * c.y + 0.0722 * c.z }
         let bins = 32
@@ -432,15 +437,17 @@ enum Wallpaper {
         }
         let colours = whites.map { $0.w > 0 ? SIMD3($0.x, $0.y, $0.z) / $0.w : SIMD3(repeating: 0) }
         let means = sums.map { $0.w > 0 ? SIMD3($0.x, $0.y, $0.z) / $0.w : SIMD3(repeating: 0) }
-        // The whitest fiftieth of the whole picture: what white looks like in it. Snow is never far under that, or
-        // under what can be told from the dark at all.
+        // The whitest fiftieth of the whole picture: what white looks like in it.
         var above = 0, whitest = 255
         while whitest > 0, above + all[whitest] < shown.width * shown.height / 50 {
             above += all[whitest]
             whitest -= 1
         }
         let white = Float(whitest) / 255
-        let least = max(0.9 * white, 0.45)
+        // Snow is never far under the picture's whites, or under what can be told from the dark at all; nor is it
+        // brighter than the sky that lights it. Under a dusk sky the snow in a peak's shade is dim, however bright
+        // the peak's lit side, and snow laid there as bright as that would be a pale patch.
+        let least = max(0.9 * min(white, skylight), 0.45)
         // A colour as a cast on white, keeping `kept` of how far it is from grey.
         func cast(_ c: SIMD3<Float>, kept: Float) -> SIMD3<Float> {
             let grey = lightness(c)
@@ -465,15 +472,25 @@ enum Wallpaper {
                     }
                 }
                 // As white as the picture's whites and not strongly coloured: it shows the light itself.
-                let strong = (best.max() - best.min()) / max(best.max(), 0.02)
-                let shows = smoothstep(0.5, 0.9, lightest / max(white, 0.05)) * (1 - smoothstep(0.3, 0.6, strong))
-                let own = cast(best, kept: 0.25 + 0.55 * shows)
+                func showing(_ c: SIMD3<Float>) -> Float {
+                    let strong = (c.max() - c.min()) / max(c.max(), 0.02)
+                    return smoothstep(0.5, 0.9, lightness(c) / max(white, 0.05)) * (1 - smoothstep(0.3, 0.6, strong))
+                }
+                // Snow in the shade of a peak is white too, and lit less than the snow in the sun beside it: a cell
+                // with white of its own goes by that, not by a brighter neighbour's.
+                let own = colours[y * width + x]
+                let mine = showing(own)
+                best += (own - best) * mine
+                whole += (means[y * width + x] - whole) * mine
+                lightest = lightness(best)
+                let shows = showing(best)
+                let hue = cast(best, kept: 0.25 + 0.55 * shows)
                 let level = min(max(lightest * 1.2, least), 0.95)
                 let dim = min(max((least - lightest * 1.2) / least, 0), 1)
                 let apart = cast(best, kept: 1) - cast(whole, kept: 1)
                 let alike = lightness(whole) > 0.03 ? 1 - smoothstep(0.3, 0.7, (apart * apart).sum().squareRoot()) : 1
                 let sure = smoothstep(0.06, 0.2, lightest) * (1 - 0.5 * dim) * alike
-                let tint = (overhead + (own - overhead) * sure) * level
+                let tint = (overhead + (hue - overhead) * sure) * level
                 let i = (y * width + x) * 4
                 pixels[i] = UInt8(min(max(tint.x, 0), 1) * 255)
                 pixels[i + 1] = UInt8(min(max(tint.y, 0), 1) * 255)
@@ -481,6 +498,48 @@ enum Wallpaper {
             }
         }
         return WallpaperLight(width: width, height: height, cell: cell, pixels: Data(pixels))
+    }
+
+    /// How nearly the picture is, at a spot, already the snow that would be laid there, 0 to 1: about as light and
+    /// of its colour. Snow in the shade of a peak is, and pale rock; snow on it would show as a flat patch a shade
+    /// off, or as nothing. What is of another colour than the snow's light, rock in a sunset, is not, however
+    /// bright, and snow on it shows as paler.
+    static func white(atX x: Int, y: Int, in shown: Shown, light: WallpaperLight) -> Float {
+        var sum = SIMD3<Float>(repeating: 0)
+        for dy in 0...1 {
+            for dx in 0...1 {
+                let i = (min(max(y + dy, 0), shown.height - 1) * shown.width + min(max(x + dx, 0), shown.width - 1)) * 4
+                sum += SIMD3(Float(shown.pixels[i]), Float(shown.pixels[i + 1]), Float(shown.pixels[i + 2]))
+            }
+        }
+        let here = sum / (4 * 255)
+        let k = (min(max(y / light.cell, 0), light.height - 1) * light.width + min(max(x / light.cell, 0), light.width - 1)) * 4 + light.pixels.startIndex
+        let snow = SIMD3(Float(light.pixels[k]), Float(light.pixels[k + 1]), Float(light.pixels[k + 2])) / 255
+        let against = here / pointwiseMax(snow, SIMD3(repeating: 0.05))
+        let unlike = (against.max() - against.min()) / max(against.max(), 0.02)
+        let level = 0.2126 * against.x + 0.7152 * against.y + 0.0722 * against.z
+        return smoothstep(0.55, 0.75, level) * (1 - smoothstep(0.25, 0.5, unlike))
+    }
+
+    /// How light the picture's sky is, 0 to 1: the brighter half of its farthest tenth. The half, since through a
+    /// wood's canopy the farthest of the picture is as much dark crowns as sky.
+    static func skylight(of shown: Shown, depth: Grid) -> Float {
+        let ordered = depth.values.sorted()
+        let far = ordered[ordered.count / 10]
+        let cell = shown.width / depth.width
+        var levels: [Float] = []
+        shown.pixels.withUnsafeBufferPointer { p in
+            for y in stride(from: 0, to: depth.height, by: 2) {
+                for x in stride(from: 0, to: depth.width, by: 2) where depth.values[y * depth.width + x] <= far {
+                    let i = (y * cell * shown.width + x * cell) * 4
+                    levels.append((0.2126 * Float(p[i]) + 0.7152 * Float(p[i + 1]) + 0.0722 * Float(p[i + 2])) / 255)
+                }
+            }
+        }
+        guard !levels.isEmpty else { return 0.8 }
+        levels.sort()
+        let upper = levels[(levels.count / 2)...]
+        return upper.reduce(0, +) / Float(upper.count)
     }
 
     /// The mean colour of the farthest tenth of the picture: its sky, or failing one the mist or the far wood behind
@@ -638,7 +697,8 @@ enum Wallpaper {
     /// grows for level ground differs from picture to picture, with the lens and with how the network read it: so each
     /// picture is measured against its own flattest ground. Where the depth jumps at the top of something, the top
     /// holds snow up to its edge and the sky over it doesn't; above a ridge's own edge, nothing lies.
-    static func hold(of depth: Grid, lightness: [UInt8], cell: Float, screenHeight: Float, ridges: [WallpaperRidge], columnWidth: Float) -> [UInt8] {
+    static func hold(of depth: Grid, lightness: [UInt8], shown: Shown, lighting: WallpaperLight, cell: Float, screenHeight: Float, ridges: [WallpaperRidge],
+                     columnWidth: Float) -> [UInt8] {
         let width = depth.width, height = depth.height
         let smooth = depth.blurred(radius: 1).values
         let fine = depth.values
@@ -724,6 +784,8 @@ enum Wallpaper {
             let below = min(i + under * width, hold.count - 1)
             let grained = min(rough[i] / (about[i] + 0.1), rough[below] / (about[below] + 0.1))
             hold[i] *= smoothstep(grain.lowerBound, grain.upperBound, grained)
+            // On what is as white already little more shows, and what did would be a patch a shade off.
+            if hold[i] > 0 { hold[i] *= 1 - 0.85 * white(atX: (i % width) * Int(cell), y: (i / width) * Int(cell), in: shown, light: lighting) }
         }
         ridgeColumns { x, edge, room in
             for y in max(Int((edge - 28) / cell), 0)..<min(Int(edge / cell), height) { hold[y * width + x] = 0 }
