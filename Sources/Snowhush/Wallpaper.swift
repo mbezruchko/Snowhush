@@ -154,7 +154,7 @@ enum Wallpaper {
     private static let version = 50
 
     /// Which wallpaper a screen shows and how it lays it out, as the system tells it: nothing of the picture's file.
-    struct Asked {
+    struct Asked: Equatable {
         let url: URL
         let size: CGSize
         let scaling: NSImageScaling

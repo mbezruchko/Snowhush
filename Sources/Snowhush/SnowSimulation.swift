@@ -1185,21 +1185,27 @@ final class SnowSimulation {
     /// it can, and then most of an hour to lie as deep as it gets; melting, it never lies deeper than it covers, and
     /// goes in a few minutes once the snowfall stops.
     private func snowInPicture(for seconds: Float) {
+        pictureLevel = snowInPicture(from: pictureLevel, after: seconds)
+    }
+
+    /// The same for the snow in any picture, from its `level`: a wallpaper on a Space out of sight is snowed on too.
+    func snowInPicture(from level: Float, after seconds: Float) -> Float {
         let snowing = modes.contains(.snow) && accumulates && !holding
         let falling = snowing ? Self.flakesPerMegapoint(intensity) * density / Self.flakesPerMegapoint(0.5) : 0
         let most: Float = pictureMelting ? 1 : Self.deepest
-        var left = seconds
-        if pictureLevel < 1, falling > 0 {
-            let covering = min(left, (1 - pictureLevel) * 480 / falling)
-            pictureLevel += falling * covering / 480
+        var level = level, left = seconds
+        if level < 1, falling > 0 {
+            let covering = min(left, (1 - level) * 480 / falling)
+            level += falling * covering / 480
             left -= covering
         }
-        if pictureLevel >= 1, pictureLevel < most, falling > 0 { pictureLevel = min(pictureLevel + falling * left / 3000, most) }
-        if pictureLevel > most { pictureLevel = max(most, pictureLevel - seconds / 300) }
-        if falling <= 0, pictureMelting { pictureLevel = max(0, pictureLevel - seconds / 180) }
+        if level >= 1, level < most, falling > 0 { level = min(level + falling * left / 3000, most) }
+        if level > most { level = max(most, level - seconds / 300) }
+        if falling <= 0, pictureMelting { level = max(0, level - seconds / 180) }
+        return level
     }
 
-    /// Puts back the snow that lay in the picture when the app last ran.
+    /// Puts back the snow that lay in the picture when the app last ran, or lies in the one now showing.
     func restorePicture(level: Float) {
         pictureLevel = min(max(level, 0), Self.deepest)
     }
