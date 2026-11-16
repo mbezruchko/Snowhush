@@ -71,6 +71,8 @@ final class Renderer: NSObject, MTKViewDelegate {
     private let queue: MTLCommandQueue
     private let spritePipeline: MTLRenderPipelineState
     private let pilePipeline: MTLRenderPipelineState
+    private var airTexture: MTLTexture?
+    private var airVersion = -1
     private let signPipeline: MTLRenderPipelineState
     private let pumpkinPipeline: MTLRenderPipelineState
     /// Drops on the glass: their bumps added up into a field, and the glass drawn from it.
@@ -327,6 +329,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         drawSigns(simulation.signs, with: encoder, uniforms: uniforms)
         if sprites > 0 {
             encoder.setRenderPipelineState(spritePipeline)
+            encoder.setVertexTexture(pictureAir(), index: 0)
             encoder.setVertexBuffer(spriteBuffer, offset: 0, index: 0)
             encoder.setVertexBytes(&uniforms, length: uniformsLength, index: 1)
             encoder.setFragmentBytes(&uniforms, length: uniformsLength, index: 1)
@@ -409,6 +412,20 @@ final class Renderer: NSObject, MTKViewDelegate {
             clearDock(into: commandBuffer)
             commandBuffer.commit()
         }
+    }
+
+    /// The wallpaper's light and nearness for the flakes falling in its picture, as a texture made again only when the
+    /// wallpaper changes; one clear cell while there is none.
+    private func pictureAir() -> MTLTexture? {
+        guard airVersion != simulation.airVersion || airTexture == nil else { return airTexture }
+        airVersion = simulation.airVersion
+        let size = simulation.airSize
+        let cells = size.width > 0 ? simulation.air : [255, 255, 255, 0]
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: max(size.width, 1), height: max(size.height, 1), mipmapped: false)
+        descriptor.usage = .shaderRead
+        airTexture = device.makeTexture(descriptor: descriptor)
+        airTexture?.replace(region: MTLRegionMake2D(0, 0, descriptor.width, descriptor.height), mipmapLevel: 0, withBytes: cells, bytesPerRow: descriptor.width * 4)
+        return airTexture
     }
 
     private func drawPiles(_ piles: [PileLayer], with encoder: MTLRenderCommandEncoder, uniforms: Uniforms, heights: MTLBuffer) {

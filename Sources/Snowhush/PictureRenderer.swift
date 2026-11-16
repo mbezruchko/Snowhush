@@ -12,6 +12,8 @@ final class PictureRenderer {
         var level: Float
         var range: SIMD4<Float>
         var thickest: Float
+        var veil: Float
+        var haze: SIMD4<Float>
     }
 
     private struct CapUniforms {
@@ -45,6 +47,7 @@ final class PictureRenderer {
     private var columns: MTLBuffer?
     private var caps: [Cap] = []
     private var range = SIMD4<Float>(0, 1, Wallpaper.ground, 0)
+    private var haze = SIMD4<Float>(0.8, 0.82, 0.85, 1)
     private var columnWidth: Float = 2
 
     /// A cap's full thickness on the nearest ridge once all the snow has fallen, in points.
@@ -97,6 +100,7 @@ final class PictureRenderer {
         }
         let terrain = scene.terrain
         range = SIMD4(terrain.far, terrain.close, Wallpaper.ground, 0)
+        if scene.light.haze.count == 3 { haze = SIMD4(scene.light.haze[0], scene.light.haze[1], scene.light.haze[2], 1) }
         light = texture(.rgba8Unorm, width: scene.light.width, height: scene.light.height, bytes: scene.light.pixels, perPixel: 4)
         // The four planes of the relief side by side in one texture: lightness, tops, hold, near.
         let relief = scene.relief
@@ -162,9 +166,10 @@ final class PictureRenderer {
     private static func fraction(_ x: Float) -> Float { x - x.rounded(.down) }
 
     /// Draws the snow into `target`, the whole screen at `scale` pixels a point, and calls `done` on the main thread once
-    /// it is there. `level` is how much has fallen everywhere, `dabs` what the flakes seen landing have left.
+    /// it is there. `level` is how much has fallen everywhere, `dabs` what the flakes seen landing have left, `veil` how
+    /// much the snow now falling hides the farthest things.
     @discardableResult
-    func draw(level: Float, dabs bytes: [UInt8], dabsSize: (width: Int, height: Int), dabsVersion version: Int,
+    func draw(level: Float, veil: Float, dabs bytes: [UInt8], dabsSize: (width: Int, height: Int), dabsVersion version: Int,
               into target: MTLTexture, screen: SIMD2<Float>, then done: @escaping () -> Void) -> Bool {
         guard let relief, let light, dabsSize.width > 0, bytes.count >= dabsSize.width * dabsSize.height,
               let commandBuffer = queue.makeCommandBuffer() else { return false }
@@ -196,7 +201,7 @@ final class PictureRenderer {
             return pass
         }
         var uniforms = Uniforms(viewSize: screen, scale: Float(target.width) / max(screen.x, 1), level: level, range: range,
-                                thickest: max(Self.depth * pow(level, 0.7), 0.01))
+                                thickest: max(Self.depth * pow(level, 0.7), 0.01), veil: veil, haze: haze)
         let length = MemoryLayout<Uniforms>.stride
         // How the snow lies, at half the size: nothing it is worked out from is finer.
         guard let lying = commandBuffer.makeRenderCommandEncoder(descriptor: pass(into: lie)) else { return false }

@@ -12,7 +12,15 @@ struct PictureUniforms {
     float4 range;
     // How thick the snow lies now where it lies thickest, in points.
     float thickest;
+    // How much the falling snow veils the farthest things, and the colour they fade into.
+    float veil;
+    float4 haze;
 };
+
+// Snow falling between here and far things veils them: the farther, the more they take the colour of the distance.
+static float veiled(float near, constant PictureUniforms &u) {
+    return u.veil * pow(1.0 - near, 1.6);
+}
 
 static float hash(float2 p) {
     p = fract(p * float2(123.34, 456.21));
@@ -117,9 +125,13 @@ fragment float4 pictureShowFragment(CoverOut in [[stage_in]],
     float3 tint = light.sample(smooth, uv).rgb;
     float dusting = here.g * 0.22 * (1.0 - covered);
     float4 ground = float4(tint * 0.95 * dusting, dusting + shade * (1.0 - dusting));
+    // Nothing veils the sky, which is the distance's own colour; what is hardly nearer than the sky takes the veil on
+    // by degrees, so no edge shows where the sky ends.
+    float veil = veiled(near, u) * smoothstep(u.range.z, u.range.z + 0.14, relieved.a);
     if (covered <= 0.0) {
-        if (ground.a <= 0.002) discard_fragment();
-        return ground;
+        float4 seen = float4(u.haze.rgb * veil, veil) + ground * (1.0 - veil);
+        if (seen.a <= 0.002) discard_fragment();
+        return seen;
     }
     // Lit as the picture is there, and carrying the picture's own bumps and hollows: as light as the picture is there
     // against around it, bluer in its shadows.
@@ -138,7 +150,8 @@ fragment float4 pictureShowFragment(CoverOut in [[stage_in]],
     color += (hash(floor(in.position.xy)) - 0.5) * 0.03;
     color = hazed(color, tint, near);
     float a = covered * 0.9;
-    return float4(color * a, a) + ground * (1.0 - a);
+    float4 seen = float4(color * a, a) + ground * (1.0 - a);
+    return float4(u.haze.rgb * veil, veil) + seen * (1.0 - veil);
 }
 
 // One column of a ridge: its top from the screen's bottom, that top smoothed along the ridge, and how much of a
@@ -203,6 +216,7 @@ fragment float4 pictureCapFragment(CapOut in [[stage_in]],
     color = mix(color, float3(0.975, 0.982, 0.995), exp(-depth * 0.9) * 0.6) * tint;
     color += (hash(floor(in.position.xy)) - 0.5) * 0.02;
     color = hazed(color, tint, c.near);
+    color = mix(color, u.haze.rgb, veiled(c.near, u));
     return float4(color * coverage, coverage);
 }
 """

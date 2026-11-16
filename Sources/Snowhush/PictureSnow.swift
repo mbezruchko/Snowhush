@@ -62,8 +62,10 @@ final class PictureSnow {
         /// was read the renderer has, for as long as this is the desktop it draws.
         var read = false
         var terrain: WallpaperTerrain?
+        var light: WallpaperLight?
         var front: Surface?
         var level: Float = -1
+        var veil: Float = -1
         var dabs = -1
         var drawing = false
         var drawnAt: CFTimeInterval = 0
@@ -275,7 +277,7 @@ final class PictureSnow {
         guard wanted, active, let desktop = desktopShowing() else { return }
         if desktop !== current {
             current = desktop
-            simulation.setPicture(desktop.terrain)
+            simulation.setPicture(desktop.terrain, light: desktop.light)
             asked = false
         }
         let picture = wallpaperMayHaveChanged() ? Wallpaper.picture(on: screen) : desktop.picture
@@ -283,6 +285,7 @@ final class PictureSnow {
             desktop.picture = picture
             desktop.read = false
             desktop.terrain = nil
+            desktop.light = nil
             fade(desktop.window.snow, over: 0.3)
             clear(desktop)
             simulation.setPicture(nil)
@@ -300,10 +303,11 @@ final class PictureSnow {
                     guard let desktop, desktop.picture == picture else { return }
                     desktop.read = true
                     desktop.terrain = scene?.terrain
+                    desktop.light = scene?.light
                     if desktop === self.current {
                         self.renderer.load(scene, columnWidth: columnWidth)
                         self.loaded = scene == nil ? nil : picture
-                        self.simulation.setPicture(scene?.terrain)
+                        self.simulation.setPicture(scene?.terrain, light: scene?.light)
                         desktop.level = -1
                     }
                     self.look()
@@ -311,22 +315,22 @@ final class PictureSnow {
             }
         }
         guard desktop.terrain != nil, loaded == desktop.picture, renderer.loaded, !desktop.drawing else { return }
-        let level = simulation.pictureLevel
-        guard level > 0 || simulation.hasDabs else {
+        let level = simulation.pictureLevel, veil = simulation.pictureVeil
+        guard level > 0 || simulation.hasDabs || veil > 0 else {
             if desktop.front != nil { clear(desktop) }
             if simulation.isEmpty { rest() }
             return
         }
         let now = CACurrentMediaTime()
         // What the flakes seen landing add in a second can't be told; in a few it can.
-        let changed = abs(level - desktop.level) >= Self.step || desktop.shrunk
+        let changed = abs(level - desktop.level) >= Self.step || abs(veil - desktop.veil) >= 0.01 || desktop.shrunk
             || (desktop.dabs != simulation.dabsVersion && now - desktop.drawnAt >= 3)
         // Behind other windows it is drawn now and then all the same, so that uncovered it is never far behind.
         guard changed, desktop.window.occlusionState.contains(.visible) || now - desktop.drawnAt > 15 else { return }
-        draw(desktop, level: level, now: now)
+        draw(desktop, level: level, veil: veil, now: now)
     }
 
-    private func draw(_ desktop: Desktop, level: Float, now: CFTimeInterval) {
+    private func draw(_ desktop: Desktop, level: Float, veil: Float, now: CFTimeInterval) {
         // Each picture is drawn into a surface of its own, and the one before let go once this one shows: drawing into
         // the one on show would flicker, and keeping a second for next time would double the memory.
         let size = screen.frame.size
@@ -334,7 +338,7 @@ final class PictureSnow {
         let dabs = simulation.dabsVersion
         let first = desktop.front == nil
         desktop.drawing = true
-        let drawn = renderer.draw(level: level, dabs: simulation.dabs, dabsSize: simulation.dabsSize, dabsVersion: dabs, into: target.texture,
+        let drawn = renderer.draw(level: level, veil: veil, dabs: simulation.dabs, dabsSize: simulation.dabsSize, dabsVersion: dabs, into: target.texture,
                                   screen: SIMD2(Float(size.width), Float(size.height))) { [weak self, weak desktop] in
             guard let self, let desktop else { return }
             desktop.drawing = false
@@ -345,6 +349,7 @@ final class PictureSnow {
             desktop.front = target
             desktop.shrunk = false
             desktop.level = level
+            desktop.veil = veil
             desktop.dabs = dabs
             desktop.drawnAt = now
         }

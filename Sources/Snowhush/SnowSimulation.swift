@@ -60,6 +60,11 @@ struct Sprite {
     var rain: Float = 0
     /// One for a cherry blossom petal or flower instead of a leaf.
     var petal: Float = 0
+    /// For a flake falling in the wallpaper's picture, how near it is there: it shows only in front of what the
+    /// picture has at that spot. Below zero for anything else.
+    var scene: Float = -1
+    /// How much of the picture's light at that spot the flake takes: all of it far off, none right in front.
+    var sceneLight: Float = 0
 }
 
 /// A Halloween sign a ghost holds up, or lets fall into the snow.
@@ -794,6 +799,7 @@ final class SnowSimulation {
             )
             count += 1
         }
+        let inPicture = pictureTop > 0
         for flake in flakes where count < capacity {
             let petal = flake.kind == .blossom
             let tilt = isFlower(flake.leaf, petal: petal) ? flowerTilt(seed: flake.leaf, phase: flake.phase) : nil
@@ -816,6 +822,14 @@ final class SnowSimulation {
                 rain: flake.rain ? 1 : 0,
                 petal: petal ? 1 : 0
             )
+            // A snowflake over the wallpaper is in its picture: lit as the picture is there, and hidden behind
+            // whatever in it is nearer. Over a window or the Dock it is in front of them, and of the picture.
+            if inPicture, flake.kind == .snow, flake.blown == 0, flake.position.x >= 0, flake.position.x < width, flake.position.y >= 0, flake.position.y < height,
+               !frontCover[min(Int(height - flake.position.y) / Self.frontCell, frontSize.height - 1) * frontSize.width
+                           + min(Int(flake.position.x) / Self.frontCell, frontSize.width - 1)] {
+                buffer[count].scene = flakeNearness[min(Int(flake.depth * 255), 255)]
+                buffer[count].sceneLight = 1 - min(max((flake.depth - 0.45) / 0.45, 0), 1)
+            }
             count += 1
         }
         for splash in splashes where count < capacity {
@@ -1041,6 +1055,8 @@ final class SnowSimulation {
     /// How much snow has fallen over the whole picture, 0 to 1, as it grows step by step with the snowfall and melts:
     /// the same everywhere, so it comes as smoothly as time passes.
     private(set) var pictureLevel: Float = 0
+    /// How much the snow now falling veils the farthest things in the picture, 0 to 1: it eases after the snowfall.
+    private(set) var pictureVeil: Float = 0
     /// When a gust last cleared the snow: the picture's goes with it.
     private(set) var pictureBlownAt: Double = -10
     private var pictureTickedAt: Double = 0
@@ -1051,9 +1067,10 @@ final class SnowSimulation {
     /// A gust is clearing the snow, the picture's too.
     var pictureCleared: () -> Void = {}
     /// The snow in the picture is melting away with nothing falling: the simulation goes on until it is gone.
-    private var pictureThaws: Bool { terrain != nil && pictureLevel > 0 && pictureMelting && intensity <= 0 }
+    private var pictureThaws: Bool { terrain != nil && intensity <= 0 && ((pictureLevel > 0 && pictureMelting) || pictureVeil > 0) }
     private var pictureMelting: Bool { thaws || !accumulates || !modes.contains(.snow) }
-    /// Flakes this far and farther fall in the picture; nearer ones fall in front of it, onto the windows and the drift.
+    /// A flake this deep is as near as the nearest thing in the picture; deeper ones fall in front of all of it, onto
+    /// the windows and the drift. Depth runs on without a break: there is no line between the two kinds.
     private let sceneDepth: Float = 0.7
     /// How far apart in nearness a flake and a surface can be for the flake to land on it rather than pass it.
     private let sceneTolerance: Float = 0.025
@@ -1080,9 +1097,31 @@ final class SnowSimulation {
         return raw.map { $0 * 3 / total }
     }()
 
-    /// The surfaces of the wallpaper now shown, for the flakes to fall among; nil for none.
-    func setPicture(_ fresh: WallpaperTerrain?) {
+    /// The picture's air as the falling flakes' shader reads it, a cell to every terrain cell, RGBA: the light there,
+    /// and how near what stands there is. With a count that goes up whenever it changes.
+    private(set) var air: [UInt8] = []
+    private(set) var airVersion = 0
+    var airSize: (width: Int, height: Int) { air.isEmpty ? (0, 0) : (terrainCells.width, terrainCells.height) }
+
+    /// The surfaces of the wallpaper now shown, for the flakes to fall among, and its light; nil for none.
+    func setPicture(_ fresh: WallpaperTerrain?, light: WallpaperLight? = nil) {
         guard fresh != terrain else { return }
+        air = []
+        airVersion += 1
+        if let fresh, let light, light.width > 0, light.height > 0, light.pixels.count >= light.width * light.height * 4 {
+            air = [UInt8](repeating: 255, count: fresh.width * fresh.height * 4)
+            let lights = [UInt8](light.pixels), nears = [UInt8](fresh.near)
+            for y in 0..<fresh.height {
+                let ly = min(y * light.height / fresh.height, light.height - 1)
+                for x in 0..<fresh.width {
+                    let from = (ly * light.width + min(x * light.width / fresh.width, light.width - 1)) * 4, to = (y * fresh.width + x) * 4
+                    air[to] = lights[from]
+                    air[to + 1] = lights[from + 1]
+                    air[to + 2] = lights[from + 2]
+                    air[to + 3] = nears[y * fresh.width + x]
+                }
+            }
+        }
         terrain = fresh
         terrainNear = fresh.map { [UInt8]($0.near) } ?? []
         dabAmount = Array(repeating: 0, count: terrainNear.count)
@@ -1163,6 +1202,9 @@ final class SnowSimulation {
     private func tendPicture(dt: Float) {
         pictureTurn &+= 1
         guard terrain != nil else { return }
+        let thick = modes.contains(.snow) && !holding ? min(Self.flakesPerMegapoint(intensity) * density / Self.flakesPerMegapoint(1), 1) : 0
+        pictureVeil += (0.3 * thick.squareRoot() - pictureVeil) * min(dt / 12, 1)
+        if pictureVeil < 0.002 && thick == 0 { pictureVeil = 0 }
         if clock - pictureBlownAt < 1.5 {
             pictureLevel = 0
             if hasDabs {
@@ -2113,8 +2155,7 @@ final class SnowSimulation {
 
             // Each flake in the picture is looked at one step in four: it falls a few points meanwhile, far too
             // little to miss the surface it is coming down to.
-            if (i &+ pictureTurn) & 3 == 0 && flake.depth < sceneDepth && flake.settles && accumulates && flake.blown == 0 && flake.kind == .snow
-                && fallsInPicture(flake) {
+            if (i &+ pictureTurn) & 3 == 0 && flake.settles && accumulates && flake.blown == 0 && flake.kind == .snow && fallsInPicture(flake) {
                 recycle(i)
                 i -= 1
                 continue

@@ -110,6 +110,9 @@ struct WallpaperLight: Codable, Equatable {
     var height: Int
     var cell: Int
     var pixels: Data
+    /// The colour things fade into far off: of the farthest of what the picture shows, the sky if it has one. Red,
+    /// green and blue, 0 to 1.
+    var haze: [Float] = [0.8, 0.82, 0.85]
 }
 
 /// The top of something in the wallpaper that snow can lie on: a ridge against the sky, a roof, a branch.
@@ -144,7 +147,7 @@ enum Wallpaper {
     }
 
     /// Raise whenever what is found changes, so pictures already done are looked at again.
-    private static let version = 24
+    private static let version = 25
 
     /// What `picture(on:)` found for each wallpaper as each screen lays it out: asked every second, it opens a
     /// picture only once. For the main thread.
@@ -252,7 +255,9 @@ enum Wallpaper {
         let relief = WallpaperRelief(width: depth.width, height: depth.height, cell: cell, lightness: Data(lightness), tops: Data(tops(of: lightness, width: depth.width)),
                                      hold: Data(hold(of: depth, cell: Float(cell), screenHeight: Float(shown.height), ridges: ridges, columnWidth: columnWidth)),
                                      near: Data(depth.values.map { UInt8(min(max($0, 0), 1) * 255) }))
-        let found = WallpaperScene(ridges: ridges, light: light(of: shown), terrain: terrain(of: depth), relief: relief)
+        var light = light(of: shown)
+        light.haze = haze(of: shown, depth: depth)
+        let found = WallpaperScene(ridges: ridges, light: light, terrain: terrain(of: depth), relief: relief)
         if let file, let data = try? JSONEncoder().encode(found) {
             let folder = file.deletingLastPathComponent()
             try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -419,6 +424,27 @@ enum Wallpaper {
             }
         }
         return WallpaperLight(width: width, height: height, cell: cell, pixels: Data(pixels))
+    }
+
+    /// The mean colour of the farthest tenth of the picture: its sky, or failing one the mist or the far wood behind
+    /// everything else.
+    static func haze(of shown: Shown, depth: Grid) -> [Float] {
+        let ordered = depth.values.sorted()
+        let far = ordered[ordered.count / 10]
+        let cell = shown.width / depth.width
+        var sum = SIMD3<Float>(repeating: 0)
+        var count: Float = 0
+        shown.pixels.withUnsafeBufferPointer { p in
+            for y in stride(from: 0, to: depth.height, by: 2) {
+                for x in stride(from: 0, to: depth.width, by: 2) where depth.values[y * depth.width + x] <= far {
+                    let i = (y * cell * shown.width + x * cell) * 4
+                    sum += SIMD3(Float(p[i]), Float(p[i + 1]), Float(p[i + 2]))
+                    count += 1
+                }
+            }
+        }
+        guard count > 0 else { return [0.8, 0.82, 0.85] }
+        return [sum.x / count / 255, sum.y / count / 255, sum.z / count / 255]
     }
 
     // MARK: - Terrain

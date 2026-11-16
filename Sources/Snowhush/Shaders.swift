@@ -51,6 +51,8 @@ struct Sprite {
     float flipSpeed;
     float rain;
     float petal;
+    float scene;
+    float sceneLight;
 };
 
 struct SpriteOut {
@@ -692,11 +694,22 @@ static SpriteVaryings culled() {
 
 vertex SpriteVaryings spriteVertex(uint vid [[vertex_id]],
                                    const device Sprite *sprites [[buffer(0)]],
-                                   constant Uniforms &u [[buffer(1)]]) {
+                                   constant Uniforms &u [[buffer(1)]],
+                                   texture2d<float> air [[texture(0)]]) {
     // A running drop is drawn with the glass, from the field.
     float rain = rainOf(sprites[vid]);
     if (rain > 1.5 && rain < 2.5) return culled();
-    return pack(sprite(vid, sprites, u));
+    SpriteOut out = sprite(vid, sprites, u);
+    // A flake in the wallpaper's picture takes the picture's light where it falls, and fades out behind whatever
+    // stands nearer there than it is.
+    Sprite s = sprites[vid];
+    if (s.scene >= 0.0) {
+        constexpr sampler smooth(filter::linear, address::clamp_to_edge);
+        float4 here = air.sample(smooth, float2(s.position.x / u.viewSize.x, 1.0 - s.position.y / u.viewSize.y), level(0.0));
+        out.alpha *= smoothstep(-0.02, 0.02, s.scene - here.a);
+        out.light *= mix(float3(1.0), here.rgb, s.sceneLight);
+    }
+    return pack(out);
 }
 
 /// Only running drops add to the field.
