@@ -148,7 +148,7 @@ enum Wallpaper {
     }
 
     /// Raise whenever what is found changes, so pictures already done are looked at again.
-    private static let version = 31
+    private static let version = 32
 
     /// Which wallpaper a screen shows and how it lays it out, as the system tells it: nothing of the picture's file.
     struct Asked {
@@ -595,6 +595,7 @@ enum Wallpaper {
         let reach = max(Int((4 / cell).rounded()), 1)
         var steepness = [Float](repeating: -1, count: width * height)
         var sides = [Float](repeating: 0, count: width * height)
+        var falls = [Float](repeating: 0, count: width * height)
         var level: [Float] = []
         for y in (2 * reach)..<(height - 2 * reach) {
             for x in reach..<(width - reach) {
@@ -608,15 +609,22 @@ enum Wallpaper {
                 if below - above > 2 * jump.lowerBound && near - above < (below - above) / 2 { continue }
                 // The depth map squeezes the distance: far off, the same slope changes its depth less.
                 steepness[i] = max(down, 0) / (near + 0.15)
+                falls[i] = down
                 sides[i] = smoothstep(jump.lowerBound, jump.upperBound, abs(across))
                 if down > 0, abs(down) < jump.lowerBound, abs(across) < jump.lowerBound, (x + y) % 5 == 0 { level.append(steepness[i]) }
             }
         }
         level.sort()
         let flattest = level.isEmpty ? rise.upperBound : max(level[Int(Float(level.count - 1) * 0.85)], 1e-5)
+        // Ground runs nearer all the way down it. In a tangle of branches every twig is nearer at its top and farther
+        // again under it: slopes that face up and down by turns within a few points are no ground to lie on.
+        let around = max(Int((24 / cell).rounded()), 1)
+        let net = Grid(width: width, height: height, values: falls).blurred(radius: around).values
+        let gross = Grid(width: width, height: height, values: falls.map { abs($0) }).blurred(radius: around).values
         var hold = [Float](repeating: 0, count: width * height)
         for i in hold.indices where steepness[i] >= 0 {
-            hold[i] = smoothstep(0.3 * flattest, 1.3 * flattest, steepness[i]) * (1 - sides[i])
+            let lasting = smoothstep(0.15, 0.5, net[i] / max(gross[i], 1e-6))
+            hold[i] = smoothstep(0.3 * flattest, 1.3 * flattest, steepness[i]) * (1 - sides[i]) * lasting
         }
         // The top of anything nearer than what is over it, a crown, a rock, a far ridge, holds snow along its edge.
         let band = max(Int((6 / cell).rounded()), 1)
