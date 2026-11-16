@@ -1069,6 +1069,7 @@ final class SnowSimulation {
     private static let frontCell = 16
     /// The terrain's grid, kept apart from it: asking the terrain itself for every flake would copy it each time.
     private var terrainCells = (width: 0, height: 0, size: 1)
+    private var terrainSpan = (far: Float(0), close: Float(1))
     /// A dab's share of snow in each of the 5 by 5 cells around where a flake landed: a soft round bump.
     private static let dabWeights: [Float] = {
         let raw = (0..<25).map { k -> Float in
@@ -1090,6 +1091,7 @@ final class SnowSimulation {
         hasDabs = false
         pictureTop = 0
         terrainCells = (fresh?.width ?? 0, fresh?.height ?? 0, max(fresh?.cell ?? 1, 1))
+        terrainSpan = (fresh?.far ?? 0, fresh?.close ?? 1)
         if let fresh {
             // How near a flake of each depth is in the picture, and how high on the screen anything in it reaches.
             flakeNearness = (0..<256).map { fresh.far + (fresh.close - fresh.far) * pow(Float($0) / 255 / sceneDepth, 0.7) }
@@ -1114,23 +1116,27 @@ final class SnowSimulation {
         let level = terrainNear[cy * cells.width + cx]
         let own = flakeNearness[min(Int(flake.depth * 255), 255)]
         let near = Float(level) / 255
-        guard level > groundLevel, near >= own - sceneTolerance, let terrain else { return false }
-        if near > own + sceneTolerance { return true }
-        // It lands: a dab of snow around where it fell, bigger for a bigger flake, and the farther off the less of it
-        // shows, as everything there is smaller.
-        let nearness = min(max((near - terrain.far) / max(terrain.close - terrain.far, 0.01), 0), 1)
-        let dab = flake.size * flake.size * 0.004 * (0.3 + 0.7 * nearness)
+        guard level > groundLevel, near >= own - sceneTolerance else { return false }
+        if near <= own + sceneTolerance { layDab(size: flake.size, near: near, cx: cx, cy: cy) }
+        return true
+    }
+
+    /// A flake has landed in the picture: a dab of snow around where it fell, bigger for a bigger flake, and the
+    /// farther off the less of it shows, as everything there is smaller.
+    private func layDab(size: Float, near: Float, cx: Int, cy: Int) {
+        let cells = terrainCells
+        let nearness = min(max((near - terrainSpan.far) / max(terrainSpan.close - terrainSpan.far, 0.01), 0), 1)
+        let dab = size * size * 0.004 * (0.3 + 0.7 * nearness)
         for dy in -2...2 {
             for dx in -2...2 {
                 let nx = cx + dx, ny = cy + dy
-                guard nx >= 0, nx < terrain.width, ny >= 0, ny < terrain.height else { continue }
-                let k = ny * terrain.width + nx
+                guard nx >= 0, nx < cells.width, ny >= 0, ny < cells.height else { continue }
+                let k = ny * cells.width + nx
                 dabAmount[k] = min(dabAmount[k] + dab * Self.dabWeights[(dy + 2) * 5 + dx + 2], 1)
             }
         }
         dabsTouched = true
         hasDabs = true
-        return true
     }
 
     /// The snow in the picture grows with the snowfall, melts, or goes with a gust clearing the snow.

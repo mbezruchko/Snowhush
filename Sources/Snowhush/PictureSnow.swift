@@ -58,7 +58,10 @@ final class PictureSnow {
     private final class Desktop {
         let window: PictureWindow
         var picture: Wallpaper.Picture?
-        var scene: WallpaperScene?
+        /// Whether its wallpaper has been read, and how near the things in it are, for the flakes; the rest of what
+        /// was read the renderer has, for as long as this is the desktop it draws.
+        var read = false
+        var terrain: WallpaperTerrain?
         var front: Surface?
         var level: Float = -1
         var dabs = -1
@@ -85,6 +88,8 @@ final class PictureSnow {
     private var loaded: Wallpaper.Picture?
     private var timer: Timer?
     private var active = true
+    /// A wallpaper is being read.
+    private var reading = false
     /// Whether the system has been asked for the wallpaper since the Space or the screen last changed, when, and the
     /// date its store of wallpapers had then.
     private var asked = false
@@ -270,30 +275,42 @@ final class PictureSnow {
         guard wanted, active, let desktop = desktopShowing() else { return }
         if desktop !== current {
             current = desktop
-            simulation.setPicture(desktop.scene?.terrain)
+            simulation.setPicture(desktop.terrain)
             asked = false
         }
         let picture = wallpaperMayHaveChanged() ? Wallpaper.picture(on: screen) : desktop.picture
         if picture != desktop.picture {
             desktop.picture = picture
-            desktop.scene = nil
+            desktop.read = false
+            desktop.terrain = nil
             fade(desktop.window.snow, over: 0.3)
             clear(desktop)
             simulation.setPicture(nil)
-            if let picture {
-                let columnWidth = simulation.columnWidth
-                Self.lookout.async { [weak self, weak desktop] in
-                    let scene = Wallpaper.scene(in: picture, columnWidth: columnWidth)
-                    DispatchQueue.main.async {
-                        guard let self, let desktop, desktop.picture == picture else { return }
-                        desktop.scene = scene
-                        if desktop === self.current { self.simulation.setPicture(scene?.terrain) }
-                        self.look()
+        }
+        // The wallpaper is read when it is new, and again when the renderer has since drawn another desktop's: off
+        // the main thread, by another run of the app the first time and from what that kept after.
+        if let picture, !reading, !desktop.read || (desktop.terrain != nil && loaded != picture) {
+            reading = true
+            let columnWidth = simulation.columnWidth
+            Self.lookout.async { [weak self, weak desktop] in
+                let scene = Wallpaper.sceneReadApart(in: picture, columnWidth: columnWidth)
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.reading = false
+                    guard let desktop, desktop.picture == picture else { return }
+                    desktop.read = true
+                    desktop.terrain = scene?.terrain
+                    if desktop === self.current {
+                        self.renderer.load(scene, columnWidth: columnWidth)
+                        self.loaded = scene == nil ? nil : picture
+                        self.simulation.setPicture(scene?.terrain)
+                        desktop.level = -1
                     }
+                    self.look()
                 }
             }
         }
-        guard let scene = desktop.scene, !desktop.drawing else { return }
+        guard desktop.terrain != nil, loaded == desktop.picture, renderer.loaded, !desktop.drawing else { return }
         let level = simulation.pictureLevel
         guard level > 0 || simulation.hasDabs else {
             if desktop.front != nil { clear(desktop) }
@@ -306,18 +323,14 @@ final class PictureSnow {
             || (desktop.dabs != simulation.dabsVersion && now - desktop.drawnAt >= 3)
         // Behind other windows it is drawn now and then all the same, so that uncovered it is never far behind.
         guard changed, desktop.window.occlusionState.contains(.visible) || now - desktop.drawnAt > 15 else { return }
-        draw(desktop, scene: scene, level: level, now: now)
+        draw(desktop, level: level, now: now)
     }
 
-    private func draw(_ desktop: Desktop, scene: WallpaperScene, level: Float, now: CFTimeInterval) {
+    private func draw(_ desktop: Desktop, level: Float, now: CFTimeInterval) {
         // Each picture is drawn into a surface of its own, and the one before let go once this one shows: drawing into
         // the one on show would flicker, and keeping a second for next time would double the memory.
         let size = screen.frame.size
         guard let target = makeSurface(width: Int(size.width), height: Int(size.height)) else { return }
-        if loaded != desktop.picture || !renderer.loaded {
-            renderer.load(scene, columnWidth: simulation.columnWidth)
-            loaded = desktop.picture
-        }
         let dabs = simulation.dabsVersion
         let first = desktop.front == nil
         desktop.drawing = true

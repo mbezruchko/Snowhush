@@ -8,40 +8,51 @@ struct WallpaperScene: Codable, Equatable {
     var ridges: [WallpaperRidge]
     var light: WallpaperLight
     var terrain: WallpaperTerrain
-    var shade: WallpaperShade
+    var relief: WallpaperRelief
 }
 
-/// How light the wallpaper is, a cell to every `cell` points, top row first, 0 to 255: snow on it shows first where
-/// it is lighter than around, on flat ground and old snow, and last on the dark of trees and rock. With it, how much each
-/// cell is the top of something darker than what is just over it, a branch against the mist, a ledge under the sky. Both
-/// are kept on disk as PNGs.
-struct WallpaperShade: Codable, Equatable {
+/// What the snow lying in the wallpaper is drawn from, a cell to every `cell` points, top row first, each 0 to 255:
+/// how light the picture is, so snow shows first where it is lighter than around, on flat ground and old snow, and
+/// last on the dark of trees and rock; how much each cell is the top of something darker than what is just over it, a
+/// branch against the mist, a ledge under the sky; how well it holds snow, from 0 for the sky, a cliff or the side of
+/// something to 1 for ground facing up; and how near it is. Kept on disk as PNGs.
+struct WallpaperRelief: Codable, Equatable {
     var width: Int
     var height: Int
     var cell: Int
-    var pixels: Data
+    var lightness: Data
     var tops: Data
+    var hold: Data
+    var near: Data
 
-    init(width: Int, height: Int, cell: Int, pixels: Data, tops: Data) {
+    init(width: Int, height: Int, cell: Int, lightness: Data, tops: Data, hold: Data, near: Data) {
         self.width = width
         self.height = height
         self.cell = cell
-        self.pixels = pixels
+        self.lightness = lightness
         self.tops = tops
+        self.hold = hold
+        self.near = near
     }
 
-    private enum Keys: String, CodingKey { case width, height, cell, png, tops }
+    private enum Keys: String, CodingKey { case width, height, cell, lightness, tops, hold, near }
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: Keys.self)
-        width = try values.decode(Int.self, forKey: .width)
-        height = try values.decode(Int.self, forKey: .height)
+        let width = try values.decode(Int.self, forKey: .width), height = try values.decode(Int.self, forKey: .height)
+        self.width = width
+        self.height = height
         cell = try values.decode(Int.self, forKey: .cell)
-        guard let pixels = Self.gray(fromPNG: try values.decode(Data.self, forKey: .png), width: width, height: height),
-              let tops = Self.gray(fromPNG: try values.decode(Data.self, forKey: .tops), width: width, height: height)
-        else { throw DecodingError.dataCorruptedError(forKey: .png, in: values, debugDescription: "unreadable shade") }
-        self.pixels = pixels
-        self.tops = tops
+        func plane(_ key: Keys) throws -> Data {
+            guard let plane = Self.gray(fromPNG: try values.decode(Data.self, forKey: key), width: width, height: height) else {
+                throw DecodingError.dataCorruptedError(forKey: key, in: values, debugDescription: "unreadable plane")
+            }
+            return plane
+        }
+        lightness = try plane(.lightness)
+        tops = try plane(.tops)
+        hold = try plane(.hold)
+        near = try plane(.near)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -49,8 +60,10 @@ struct WallpaperShade: Codable, Equatable {
         try values.encode(width, forKey: .width)
         try values.encode(height, forKey: .height)
         try values.encode(cell, forKey: .cell)
-        try values.encode(Self.png(ofGray: pixels, width: width, height: height), forKey: .png)
+        try values.encode(Self.png(ofGray: lightness, width: width, height: height), forKey: .lightness)
         try values.encode(Self.png(ofGray: tops, width: width, height: height), forKey: .tops)
+        try values.encode(Self.png(ofGray: hold, width: width, height: height), forKey: .hold)
+        try values.encode(Self.png(ofGray: near, width: width, height: height), forKey: .near)
     }
 
     private static func gray(fromPNG png: Data, width: Int, height: Int) -> Data? {
@@ -78,15 +91,13 @@ struct WallpaperShade: Codable, Equatable {
     }
 }
 
-/// The picture's surfaces as depth sees them, a cell to every `cell` points, top row first: how near each is, and how
-/// well it holds snow, from 0 for the sky, a cliff or the edge of something to 1 for ground facing up.
+/// How near each spot of the wallpaper is, for the flakes that fall among its things: a cell to every `cell` points,
+/// top row first, 0 to 255 for 0 to 1.
 struct WallpaperTerrain: Codable, Equatable {
     var width: Int
     var height: Int
     var cell: Int
-    /// 0 to 255 for 0 to 1.
     var near: Data
-    var hold: Data
     /// How near the farthest and the nearest of the things in it are, the sky aside.
     var far: Float
     var close: Float
@@ -116,13 +127,14 @@ struct WallpaperRidge: Codable, Equatable {
 /// from a small network on the Neural Engine, and what is found is kept on disk, so it costs nothing on later launches.
 enum Wallpaper {
     /// A display's wallpaper and how it is laid out on it.
-    struct Picture: Equatable {
+    struct Picture: Equatable, Codable {
         let url: URL
         /// The screen's size in points.
         let size: CGSize
         /// Where the picture is drawn, in points from the screen's top left; it may reach past the screen.
         let placement: CGRect
-        let fill: NSColor?
+        /// The colour around a picture that doesn't fill the screen: red, green and blue.
+        let fill: [CGFloat]?
         let modified: Date
         let bytes: Int
 
@@ -132,7 +144,7 @@ enum Wallpaper {
     }
 
     /// Raise whenever what is found changes, so pictures already done are looked at again.
-    private static let version = 21
+    private static let version = 23
 
     /// What `picture(on:)` found for each wallpaper as each screen lays it out: asked every second, it opens a
     /// picture only once. For the main thread.
@@ -170,7 +182,8 @@ enum Wallpaper {
             let drawn = CGSize(width: pixels.width * scale, height: pixels.height * scale)
             placement = CGRect(x: (size.width - drawn.width) / 2, y: (size.height - drawn.height) / 2, width: drawn.width, height: drawn.height)
         }
-        return Picture(url: url, size: size, placement: placement, fill: fill, modified: values.contentModificationDate ?? .distantPast,
+        let colour = fill?.usingColorSpace(.deviceRGB).map { [$0.redComponent, $0.greenComponent, $0.blueComponent] }
+        return Picture(url: url, size: size, placement: placement, fill: colour, modified: values.contentModificationDate ?? .distantPast,
                        bytes: values.fileSize ?? 0)
     }
 
@@ -190,17 +203,56 @@ enum Wallpaper {
         return nil
     }
 
-    /// The ridges in the picture and its light, from the cache when it was looked at before. Slow the first time: call
-    /// it off the main thread.
+    /// What was found in a picture when it was looked at before, if it was.
+    static func remembered(_ picture: Picture, columnWidth: Float) -> WallpaperScene? {
+        guard let file = cacheFile(for: picture, columnWidth: columnWidth), let data = try? Data(contentsOf: file) else { return nil }
+        return try? JSONDecoder().decode(WallpaperScene.self, from: data)
+    }
+
+    /// The argument that makes the app read a wallpaper and quit instead of starting up.
+    static let readArgument = "--read-wallpaper"
+
+    /// What is in the picture, read by another run of the app when it wasn't looked at before. Reading takes the depth
+    /// network, and what running a network leaves behind in a process stays for as long as it lives: tens of megabytes
+    /// for one look. So a process of its own does the looking, keeps what it found on disk and quits. Slow the first
+    /// time: call it off the main thread.
+    static func sceneReadApart(in picture: Picture, columnWidth: Float) -> WallpaperScene? {
+        if let kept = remembered(picture, columnWidth: columnWidth) { return kept }
+        guard let executable = Bundle.main.executableURL, let asked = try? JSONEncoder().encode(picture),
+              let argument = String(data: asked, encoding: .utf8) else { return nil }
+        let reader = Process()
+        reader.executableURL = executable
+        reader.arguments = [readArgument, argument, "\(columnWidth)"]
+        reader.standardOutput = FileHandle.nullDevice
+        reader.standardError = FileHandle.nullDevice
+        let done = DispatchSemaphore(value: 0)
+        reader.terminationHandler = { _ in done.signal() }
+        guard (try? reader.run()) != nil else { return nil }
+        if done.wait(timeout: .now() + 60) == .timedOut { reader.terminate() }
+        return remembered(picture, columnWidth: columnWidth)
+    }
+
+    /// The other run's side of `sceneReadApart`: reads the wallpaper asked for in the arguments and keeps what it found.
+    static func readForAnotherRun(_ arguments: [String]) {
+        guard arguments.count >= 2, let asked = arguments[0].data(using: .utf8), let picture = try? JSONDecoder().decode(Picture.self, from: asked),
+              let columnWidth = Float(arguments[1]) else { return }
+        _ = scene(in: picture, columnWidth: columnWidth)
+    }
+
+    /// The ridges in the picture and its light, from the cache when it was looked at before. Slow the first time, and
+    /// it leaves the depth network's memory behind: for the app itself there is `sceneReadApart`.
     static func scene(in picture: Picture, columnWidth: Float, model: URL? = Bundle.main.url(forResource: modelName, withExtension: "mlmodelc")) -> WallpaperScene? {
         let file = cacheFile(for: picture, columnWidth: columnWidth)
-        if let file, let data = try? Data(contentsOf: file), let kept = try? JSONDecoder().decode(WallpaperScene.self, from: data) {
-            return kept
-        }
-        guard let model, let shown = render(picture), let depth = DepthMap(of: shown, model: model) else { return nil }
-        let ridges = find(in: shown, depth: depth, columnWidth: columnWidth)
-        let found = WallpaperScene(ridges: ridges, light: light(of: shown),
-                                   terrain: terrain(of: depth, size: picture.size, ridges: ridges, columnWidth: columnWidth), shade: shade(of: shown))
+        if let kept = remembered(picture, columnWidth: columnWidth) { return kept }
+        guard let model, let shown = render(picture), let network = Network(url: model), let depths = depths(of: shown, network: network) else { return nil }
+        let cell = 2
+        let lightness = lightness(of: shown, cell: cell)
+        let depth = snapped(depths.fine, to: lightness)
+        let ridges = find(in: shown, depth: depths.whole, columnWidth: columnWidth)
+        let relief = WallpaperRelief(width: depth.width, height: depth.height, cell: cell, lightness: Data(lightness), tops: Data(tops(of: lightness, width: depth.width)),
+                                     hold: Data(hold(of: depth, cell: Float(cell), screenHeight: Float(shown.height), ridges: ridges, columnWidth: columnWidth)),
+                                     near: Data(depth.values.map { UInt8(min(max($0, 0), 1) * 255) }))
+        let found = WallpaperScene(ridges: ridges, light: light(of: shown), terrain: terrain(of: depth), relief: relief)
         if let file, let data = try? JSONEncoder().encode(found) {
             let folder = file.deletingLastPathComponent()
             try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -255,8 +307,8 @@ enum Wallpaper {
         let drawn = pixels.withUnsafeMutableBytes { bytes -> Bool in
             guard let context = CGContext(data: bytes.baseAddress, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
                                           space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return false }
-            if let fill = picture.fill?.usingColorSpace(.deviceRGB) {
-                context.setFillColor(fill.cgColor)
+            if let fill = picture.fill, fill.count == 3 {
+                context.setFillColor(red: fill[0], green: fill[1], blue: fill[2], alpha: 1)
                 context.fill(CGRect(x: 0, y: 0, width: width, height: height))
             }
             context.interpolationQuality = .high
@@ -291,59 +343,6 @@ enum Wallpaper {
             self.width = width
             self.height = height
             self.values = values
-        }
-
-        /// Runs the network once, then lets it go.
-        init?(of shown: Shown, model url: URL) {
-            let configuration = MLModelConfiguration()
-            configuration.computeUnits = .cpuAndNeuralEngine
-            guard let model = try? MLModel(contentsOf: url, configuration: configuration),
-                  let constraint = model.modelDescription.inputDescriptionsByName["image"]?.imageConstraint,
-                  let image = shown.image() else { return nil }
-            let width = constraint.pixelsWide, height = constraint.pixelsHigh
-            var input: CVPixelBuffer?
-            guard CVPixelBufferCreate(nil, width, height, kCVPixelFormatType_32BGRA, nil, &input) == kCVReturnSuccess, let input else { return nil }
-            CVPixelBufferLockBaseAddress(input, [])
-            let context = CGContext(data: CVPixelBufferGetBaseAddress(input), width: width, height: height, bitsPerComponent: 8,
-                                    bytesPerRow: CVPixelBufferGetBytesPerRow(input), space: CGColorSpaceCreateDeviceRGB(),
-                                    bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
-            context?.interpolationQuality = .high
-            context?.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-            CVPixelBufferUnlockBaseAddress(input, [])
-            guard context != nil,
-                  let features = try? MLDictionaryFeatureProvider(dictionary: ["image": MLFeatureValue(pixelBuffer: input)]),
-                  let output = try? model.prediction(from: features),
-                  let name = model.modelDescription.outputDescriptionsByName.keys.first,
-                  let depth = output.featureValue(for: name)?.imageBufferValue else { return nil }
-            guard let values = Self.floats(of: depth) else { return nil }
-            let low = values.min() ?? 0, high = values.max() ?? 1
-            let range = max(high - low, 1e-6)
-            self.init(width: CVPixelBufferGetWidth(depth), height: CVPixelBufferGetHeight(depth), values: values.map { ($0 - low) / range })
-        }
-
-        /// Half floats read through vImage: Swift's Float16 isn't there on Intel Macs.
-        private static func floats(of buffer: CVPixelBuffer) -> [Float]? {
-            CVPixelBufferLockBaseAddress(buffer, .readOnly)
-            defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
-            let width = CVPixelBufferGetWidth(buffer), height = CVPixelBufferGetHeight(buffer)
-            guard let base = CVPixelBufferGetBaseAddress(buffer) else { return nil }
-            var values = [Float](repeating: 0, count: width * height)
-            let format = CVPixelBufferGetPixelFormatType(buffer)
-            if format == kCVPixelFormatType_OneComponent32Float {
-                for y in 0..<height {
-                    let row = (base + y * CVPixelBufferGetBytesPerRow(buffer)).assumingMemoryBound(to: Float.self)
-                    for x in 0..<width { values[y * width + x] = row[x] }
-                }
-                return values
-            }
-            guard format == kCVPixelFormatType_OneComponent16Half else { return nil }
-            values.withUnsafeMutableBytes { out in
-                var source = vImage_Buffer(data: base, height: vImagePixelCount(height), width: vImagePixelCount(width),
-                                           rowBytes: CVPixelBufferGetBytesPerRow(buffer))
-                var target = vImage_Buffer(data: out.baseAddress, height: vImagePixelCount(height), width: vImagePixelCount(width), rowBytes: width * 4)
-                vImageConvert_Planar16FtoPlanarF(&source, &target, 0)
-            }
-            return values
         }
 
         /// Bilinear, in the screen's points from its top left.
@@ -429,72 +428,95 @@ enum Wallpaper {
     /// Clouds come out a little nearer than the sky: only what is nearer still is ground for snow to lie on.
     static let ground: Float = 0.12
 
-    /// How near each spot of the picture is, and how well it holds snow. A surface facing up recedes as it rises on
-    /// the screen, so its depth grows nearer going down; a cliff facing the viewer stays as near all the way down. Where
-    /// the depth jumps at the top of something, the top holds snow up to its edge and the sky over it doesn't; above a
-    /// ridge's own edge, sharper than the depth map's, nothing lies.
-    static func terrain(of depth: DepthMap, size: CGSize, ridges: [WallpaperRidge], columnWidth: Float, cell: Int = 4) -> WallpaperTerrain {
-        let screen = SIMD2(Float(size.width), Float(size.height))
-        let width = Int((screen.x / Float(cell)).rounded(.up)), height = Int((screen.y / Float(cell)).rounded(.up))
+    /// How near each spot of the picture is, for the flakes: a cell to every four points, each the mean of the finer
+    /// depth's four.
+    static func terrain(of depth: Grid) -> WallpaperTerrain {
+        let width = depth.width / 2, height = depth.height / 2
         var near = [Float](repeating: 0, count: width * height)
         for y in 0..<height {
             for x in 0..<width {
-                near[y * width + x] = depth.value(x: (Float(x) + 0.5) * Float(cell), y: (Float(y) + 0.5) * Float(cell), screen: screen)
+                let i = 2 * y * depth.width + 2 * x
+                near[y * width + x] = (depth.values[i] + depth.values[i + 1] + depth.values[i + depth.width] + depth.values[i + depth.width + 1]) / 4
             }
         }
-        var hold = [Float](repeating: 0, count: width * height)
-        for y in 1..<(height - 1) {
-            for x in 1..<(width - 1) {
+        let things = near.filter { $0 > sky }.sorted()
+        let far = things.isEmpty ? sky : things[Int(Float(things.count - 1) * 0.02)]
+        let close = things.isEmpty ? 1 : things[Int(Float(things.count - 1) * 0.98)]
+        return WallpaperTerrain(width: width, height: height, cell: 4, near: Data(near.map { UInt8(min(max($0, 0), 1) * 255) }), far: far, close: close)
+    }
+
+    /// How well each cell of the depth holds snow, 0 to 255. A surface facing up recedes as it rises on the screen, so
+    /// its depth grows nearer going down; a cliff facing the viewer stays as near all the way down. How fast the depth
+    /// grows for level ground differs from picture to picture, with the lens and with how the network read it: so each
+    /// picture is measured against its own flattest ground. Where the depth jumps at the top of something, the top
+    /// holds snow up to its edge and the sky over it doesn't; above a ridge's own edge, nothing lies.
+    static func hold(of depth: Grid, cell: Float, screenHeight: Float, ridges: [WallpaperRidge], columnWidth: Float) -> [UInt8] {
+        let width = depth.width, height = depth.height
+        let smooth = depth.blurred(radius: 1).values
+        let fine = depth.values
+        // Slopes over four points each way, as much as a cell of the coarser depth they were first tuned on.
+        let reach = max(Int((4 / cell).rounded()), 1)
+        var steepness = [Float](repeating: -1, count: width * height)
+        var sides = [Float](repeating: 0, count: width * height)
+        var level: [Float] = []
+        for y in (2 * reach)..<(height - 2 * reach) {
+            for x in reach..<(width - reach) {
                 let i = y * width + x
-                guard near[i] > ground else { continue }
-                let down = (near[i + width] - near[i - width]) / 2
-                let across = (near[i + 1] - near[i - 1]) / 2
-                let above = near[max(y - 2, 0) * width + x], below = near[min(y + 2, height - 1) * width + x]
+                let near = smooth[i]
+                guard near > ground else { continue }
+                let down = (smooth[i + reach * width] - smooth[i - reach * width]) / 2
+                let across = (smooth[i + reach] - smooth[i - reach]) / 2
+                let above = smooth[i - 2 * reach * width], below = smooth[i + 2 * reach * width]
                 // Up in a jump in depth, nearer the far side than the near: the sky over the top of something.
-                if below - above > 2 * jump.lowerBound && near[i] - above < (below - above) / 2 { continue }
+                if below - above > 2 * jump.lowerBound && near - above < (below - above) / 2 { continue }
                 // The depth map squeezes the distance: far off, the same slope changes its depth less.
-                let facing = smoothstep(rise.lowerBound, rise.upperBound, down / (near[i] + 0.15))
-                let side = smoothstep(jump.lowerBound, jump.upperBound, abs(across))
-                hold[i] = facing * (1 - side)
+                steepness[i] = max(down, 0) / (near + 0.15)
+                sides[i] = smoothstep(jump.lowerBound, jump.upperBound, abs(across))
+                if down > 0, abs(down) < jump.lowerBound, abs(across) < jump.lowerBound, (x + y) % 5 == 0 { level.append(steepness[i]) }
+            }
+        }
+        level.sort()
+        let flattest = level.isEmpty ? rise.upperBound : max(level[Int(Float(level.count - 1) * 0.85)], 1e-5)
+        var hold = [Float](repeating: 0, count: width * height)
+        for i in hold.indices where steepness[i] >= 0 {
+            hold[i] = smoothstep(0.3 * flattest, 1.3 * flattest, steepness[i]) * (1 - sides[i])
+        }
+        // The top of anything nearer than what is over it, a crown, a rock, a far ridge, holds snow along its edge.
+        let band = max(Int((6 / cell).rounded()), 1)
+        for y in 1..<(height - 1 - band) {
+            for x in 0..<width {
+                let i = y * width + x
+                let step = fine[i + width] - fine[i - width]
+                guard step > 0.04, fine[i + width] > ground else { continue }
+                let top = 0.85 * smoothstep(0.04, 0.1, step)
+                for k in 1...band { hold[i + k * width] = max(hold[i + k * width], top) }
             }
         }
         // A ridge's own edge is sharper than the depth map's: its top holds snow right up to it, and nothing lies over it.
         func ridgeColumns(_ body: (_ x: Int, _ edge: Float) -> Void) {
             for ridge in ridges {
                 for (k, top) in ridge.tops.enumerated() {
-                    let x = Int((ridge.left + (Float(k) + 0.5) * columnWidth) / Float(cell))
-                    let edge = screen.y - top - 3.5
-                    if x >= 0, x < width, edge > 0 { body(x, edge) }
+                    let edge = screenHeight - top - 3.5
+                    guard edge > 0 else { continue }
+                    let from = Int((ridge.left + Float(k) * columnWidth) / cell), to = Int((ridge.left + Float(k + 1) * columnWidth) / cell)
+                    for x in max(from, 0)..<min(max(to, from + 1), width) { body(x, edge) }
                 }
             }
         }
         ridgeColumns { x, edge in
-            for y in max(Int(edge / Float(cell)), 0)..<min(Int((edge + 16) / Float(cell)), height) { hold[y * width + x] = max(hold[y * width + x], 0.8) }
+            for y in max(Int(edge / cell), 0)..<min(Int((edge + 16) / cell), height) { hold[y * width + x] = max(hold[y * width + x], 0.8) }
         }
-        // Softened over a few cells, the edges of what holds snow follow the land rather than the cells.
-        for pass in 0..<2 {
-            var soft = hold
-            let step = pass == 0 ? 1 : width
-            for i in hold.indices {
-                let a = i - step >= 0 && (pass == 1 || i % width > 0) ? hold[i - step] : hold[i]
-                let b = i + step < hold.count && (pass == 1 || i % width < width - 1) ? hold[i + step] : hold[i]
-                soft[i] = 0.25 * a + 0.5 * hold[i] + 0.25 * b
-            }
-            hold = soft
-        }
-        for i in hold.indices where near[i] <= ground { hold[i] = 0 }
+        // Softened over a few points, the edges of what holds snow follow the land rather than the cells.
+        hold = Grid(width: width, height: height, values: hold).blurred(radius: max(Int((3 / cell).rounded()), 1)).values
+        for i in hold.indices where fine[i] <= ground { hold[i] = 0 }
         ridgeColumns { x, edge in
-            for y in max(Int((edge - 28) / Float(cell)), 0)..<min(Int(edge / Float(cell)), height) { hold[y * width + x] = 0 }
+            for y in max(Int((edge - 28) / cell), 0)..<min(Int(edge / cell), height) { hold[y * width + x] = 0 }
         }
-        let things = near.filter { $0 > sky }.sorted()
-        let far = things.isEmpty ? sky : things[Int(Float(things.count - 1) * 0.02)]
-        let close = things.isEmpty ? 1 : things[Int(Float(things.count - 1) * 0.98)]
-        return WallpaperTerrain(width: width, height: height, cell: cell, near: Data(near.map { UInt8(min(max($0, 0), 1) * 255) }),
-                                hold: Data(hold.map { UInt8(min(max($0, 0), 1) * 255) }), far: far, close: close)
+        return hold.map { UInt8(min(max($0, 0), 1) * 255) }
     }
 
-    /// How light the picture is, a cell to every `cell` points.
-    static func shade(of shown: Shown, cell: Int = 2) -> WallpaperShade {
+    /// How light the picture is, a cell to every `cell` points, 0 to 255.
+    static func lightness(of shown: Shown, cell: Int) -> [UInt8] {
         let width = shown.width / cell, height = shown.height / cell
         var pixels = [UInt8](repeating: 0, count: width * height)
         shown.pixels.withUnsafeBufferPointer { p in
@@ -511,13 +533,18 @@ enum Wallpaper {
                 }
             }
         }
-        // The tops of darker things: lighter just over them than on them. Only those that run along a little, as a branch
-        // or a ledge does, not a speck of the picture's grain, and softened, so the snow on them has no pixels' edges.
+        return pixels
+    }
+
+    /// The tops of darker things: lighter just over them than on them. Only those that run along a little, as a branch
+    /// or a ledge does, not a speck of the picture's grain, and softened, so the snow on them has no cells' edges.
+    static func tops(of lightness: [UInt8], width: Int) -> [UInt8] {
+        let height = lightness.count / width
         var tops = [Float](repeating: 0, count: width * height)
         for y in 2..<height {
             for x in 0..<width {
-                let here = Float(pixels[y * width + x]) / 255
-                let over = Float(max(pixels[(y - 1) * width + x], pixels[(y - 2) * width + x])) / 255
+                let here = Float(lightness[y * width + x]) / 255
+                let over = Float(max(lightness[(y - 1) * width + x], lightness[(y - 2) * width + x])) / 255
                 tops[y * width + x] = smoothstep(0.04, 0.16, over - here)
             }
         }
@@ -533,15 +560,15 @@ enum Wallpaper {
                 soft[y * width + x] = sum / 16
             }
         }
-        return WallpaperShade(width: width, height: height, cell: cell, pixels: Data(pixels), tops: Data(soft.map { UInt8(min($0, 1) * 255) }))
+        return soft.map { UInt8(min($0, 1) * 255) }
     }
 
-    /// How fast, per cell down, the depth must grow nearer for a surface to hold snow at all, and to hold it fully.
+    /// How fast the depth grows nearer going down on ground that holds snow fully, where a picture has none to measure.
     static let rise: ClosedRange<Float> = 0.001...0.006
-    /// How steep a step in depth, per cell, is the edge of something rather than a surface.
+    /// How steep a step in depth, over four points, is the edge of something rather than a surface.
     static let jump: ClosedRange<Float> = 0.012...0.03
 
-    private static func smoothstep(_ a: Float, _ b: Float, _ x: Float) -> Float {
+    static func smoothstep(_ a: Float, _ b: Float, _ x: Float) -> Float {
         let t = min(max((x - a) / (b - a), 0), 1)
         return t * t * (3 - 2 * t)
     }

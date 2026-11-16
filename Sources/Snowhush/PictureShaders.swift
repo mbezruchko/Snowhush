@@ -40,15 +40,16 @@ vertex CoverOut pictureCoverVertex(uint vid [[vertex_id]], constant PictureUnifo
 fragment float4 pictureCoverFragment(CoverOut in [[stage_in]],
                                      constant PictureUniforms &u [[buffer(0)]],
                                      texture2d<float> dabs [[texture(0)]],
-                                     texture2d<float> hold [[texture(1)]],
+                                     texture2d<float> relief [[texture(1)]],
                                      texture2d<float> light [[texture(2)]],
-                                     texture2d<float> shade [[texture(3)]],
-                                     texture2d<float> noise [[texture(4)]]) {
+                                     texture2d<float> noise [[texture(3)]]) {
     constexpr sampler smooth(filter::linear, mip_filter::linear, address::clamp_to_edge);
     constexpr sampler tiled(filter::linear, address::repeat);
     float2 world = in.point;
     float2 uv = float2(world.x / u.viewSize.x, 1.0 - world.y / u.viewSize.y);
-    float2 holdNear = hold.sample(smooth, uv).rg;
+    // The relief's planes: how light the picture is, the tops of its dark things, how well it holds snow, how near.
+    float4 here = relief.sample(smooth, uv, level(0.0));
+    float2 holdNear = here.ba;
     if (holdNear.g <= u.range.z) discard_fragment();
     // What has fallen everywhere and the dabs of the flakes seen landing; the farther off, the less of it shows.
     float near = saturate((holdNear.g - u.range.x) / max(u.range.y - u.range.x, 0.01));
@@ -56,9 +57,9 @@ fragment float4 pictureCoverFragment(CoverOut in [[stage_in]],
     if (amount < 0.01) discard_fragment();
     // On the top of anything darker than what is just over it, a branch against the mist, a rock under the sky, snow
     // lies too, whichever way the surface under it faces.
-    float top = shade.sample(smooth, uv).g;
+    float top = here.g;
     // Elsewhere how light the picture is, a little softened, so the snow's edge follows its shapes, not its pixels.
-    float lightness = shade.sample(smooth, uv, level(1.0)).r;
+    float lightness = relief.sample(smooth, uv, level(1.0)).r;
     float holds = max(holdNear.r, top * 0.9);
     float snow = amount * holds;
     if (snow < 0.01) discard_fragment();
@@ -66,7 +67,7 @@ fragment float4 pictureCoverFragment(CoverOut in [[stage_in]],
     // things; last on the dark of trees and rock, which still show through deep snow, and in a dark wood only as a
     // dusting on what catches the light. A gradient noise at two scales, the finer turned against the coarser so
     // neither's grid lines the edge up, breaks up what is left alike.
-    float around = shade.sample(smooth, uv, level(4.0)).r;
+    float around = relief.sample(smooth, uv, level(4.0)).r;
     float grain = 0.6 * noise.sample(tiled, float2x2(0.8, 0.6, -0.6, 0.8) * world * (0.16 / 32.0)).r
         + 0.4 * noise.sample(tiled, world * (0.05 / 32.0)).r;
     // Far off, in mist or behind the trees, less of it shows, and only where the most of it lies.
@@ -77,9 +78,9 @@ fragment float4 pictureCoverFragment(CoverOut in [[stage_in]],
     // Lit as the picture is there, brightest where it faces up to the sky, and carrying the picture's own bumps and
     // hollows: as light as the picture is there against around it, bluer in its shadows.
     float3 tint = light.sample(smooth, uv).rgb;
-    float relief = clamp(0.5 + (lightness - around) * 2.6, 0.0, 1.0);
+    float lift = clamp(0.5 + (lightness - around) * 2.6, 0.0, 1.0);
     float3 shadow = float3(0.6, 0.66, 0.78), lit = float3(1.0, 1.0, 1.02);
-    float3 color = mix(shadow, lit, relief) * mix(0.85, 1.0, holds) * tint;
+    float3 color = mix(shadow, lit, lift) * mix(0.85, 1.0, holds) * tint;
     color += (hash(floor(in.position.xy)) - 0.5) * 0.03;
     color = hazed(color, tint, near);
     return float4(color * a, a);

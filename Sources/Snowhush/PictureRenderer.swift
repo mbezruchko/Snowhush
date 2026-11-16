@@ -34,8 +34,7 @@ final class PictureRenderer {
     private let capPipeline: MTLRenderPipelineState
     private let noise: MTLTexture
 
-    private var hold: MTLTexture?
-    private var shade: MTLTexture?
+    private var relief: MTLTexture?
     private var light: MTLTexture?
     private var dabs: MTLTexture?
     private var dabsVersion = -1
@@ -83,8 +82,7 @@ final class PictureRenderer {
         dabs = nil
         dabsVersion = -1
         guard let scene else {
-            hold = nil
-            shade = nil
+            relief = nil
             light = nil
             columns = nil
             caps = []
@@ -92,15 +90,23 @@ final class PictureRenderer {
         }
         let terrain = scene.terrain
         range = SIMD4(terrain.far, terrain.close, Wallpaper.ground, 0)
-        hold = texture(.rg8Unorm, width: terrain.width, height: terrain.height, bytes: Data(zip(terrain.hold, terrain.near).flatMap { [$0, $1] }), perPixel: 2)
         light = texture(.rgba8Unorm, width: scene.light.width, height: scene.light.height, bytes: scene.light.pixels, perPixel: 4)
-        shade = texture(.rg8Unorm, width: scene.shade.width, height: scene.shade.height,
-                        bytes: Data(zip(scene.shade.pixels, scene.shade.tops).flatMap { [$0, $1] }), perPixel: 2, mipmapped: true)
+        // The four planes of the relief side by side in one texture: lightness, tops, hold, near.
+        let relief = scene.relief
+        var planes = Data(count: relief.width * relief.height * 4)
+        planes.withUnsafeMutableBytes { (packed: UnsafeMutableRawBufferPointer) in
+            for (k, plane) in [relief.lightness, relief.tops, relief.hold, relief.near].enumerated() {
+                plane.withUnsafeBytes { (source: UnsafeRawBufferPointer) in
+                    for i in 0..<min(source.count, relief.width * relief.height) { packed[4 * i + k] = source[i] }
+                }
+            }
+        }
+        self.relief = texture(.rgba8Unorm, width: relief.width, height: relief.height, bytes: planes, perPixel: 4, mipmapped: true)
         layCaps(along: scene.ridges)
     }
 
     /// Whether a wallpaper's snow can be drawn.
-    var loaded: Bool { hold != nil && shade != nil && light != nil }
+    var loaded: Bool { relief != nil && light != nil }
 
     private func texture(_ format: MTLPixelFormat, width: Int, height: Int, bytes: Data, perPixel: Int, mipmapped: Bool = false) -> MTLTexture? {
         guard width > 0, height > 0, bytes.count >= width * height * perPixel else { return nil }
@@ -153,7 +159,7 @@ final class PictureRenderer {
     @discardableResult
     func draw(level: Float, dabs bytes: [UInt8], dabsSize: (width: Int, height: Int), dabsVersion version: Int,
               into target: MTLTexture, screen: SIMD2<Float>, then done: @escaping () -> Void) -> Bool {
-        guard let hold, let shade, let light, dabsSize.width > 0, bytes.count >= dabsSize.width * dabsSize.height,
+        guard let relief, let light, dabsSize.width > 0, bytes.count >= dabsSize.width * dabsSize.height,
               let commandBuffer = queue.makeCommandBuffer() else { return false }
         if dabs == nil || dabs?.width != dabsSize.width || dabs?.height != dabsSize.height {
             let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r8Unorm, width: dabsSize.width, height: dabsSize.height, mipmapped: false)
@@ -178,10 +184,9 @@ final class PictureRenderer {
         encoder.setVertexBytes(&uniforms, length: length, index: 0)
         encoder.setFragmentBytes(&uniforms, length: length, index: 0)
         encoder.setFragmentTexture(dabs, index: 0)
-        encoder.setFragmentTexture(hold, index: 1)
+        encoder.setFragmentTexture(relief, index: 1)
         encoder.setFragmentTexture(light, index: 2)
-        encoder.setFragmentTexture(shade, index: 3)
-        encoder.setFragmentTexture(noise, index: 4)
+        encoder.setFragmentTexture(noise, index: 3)
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         if let columns, !caps.isEmpty {
             encoder.setRenderPipelineState(capPipeline)
