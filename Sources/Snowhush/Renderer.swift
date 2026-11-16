@@ -72,6 +72,12 @@ final class Renderer: NSObject, MTKViewDelegate {
     private let spritePipeline: MTLRenderPipelineState
     private let pilePipeline: MTLRenderPipelineState
     private let ridgePipeline: MTLRenderPipelineState
+    private let coverPipeline: MTLRenderPipelineState
+    private var coverTexture: MTLTexture?
+    private var holdTexture: MTLTexture?
+    private var shadeTexture: MTLTexture?
+    private var coverVersion = -1
+    private var terrainVersion = -1
     private var ridgeLightTexture: MTLTexture?
     private var ridgeLightVersion = -1
     private let signPipeline: MTLRenderPipelineState
@@ -107,6 +113,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         self.spritePipeline = pipelines.sprite
         self.pilePipeline = pipelines.pile
         self.ridgePipeline = pipelines.ridge
+        self.coverPipeline = pipelines.cover
         self.signPipeline = pipelines.sign
         self.pumpkinPipeline = pipelines.pumpkin
         self.glassPipeline = pipelines.glass
@@ -115,7 +122,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     }
 
     private struct Pipelines {
-        let sprite, pile, ridge, sign, pumpkin, glass, field: MTLRenderPipelineState
+        let sprite, pile, ridge, cover, sign, pumpkin, glass, field: MTLRenderPipelineState
     }
 
     private struct PipelineKey: Hashable {
@@ -159,6 +166,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             sprite: pipeline("spriteVertex", "spriteFragment"),
             pile: pipeline("pileVertex", "pileFragment"),
             ridge: pipeline("ridgeVertex", "ridgeFragment"),
+            cover: pipeline("coverVertex", "coverFragment"),
             sign: pipeline("signVertex", "signFragment"),
             pumpkin: pipeline("pumpkinVertex", "pumpkinFragment"),
             glass: pipeline("glassVertex", "glassFragment"),
@@ -328,6 +336,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         if !simulation.hasGlassDrops { field = nil }
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return }
         drawPumpkins(pumpkins, with: encoder, uniforms: uniforms)
+        drawCover(with: encoder, uniforms: uniforms, target: pass.colorAttachments[0].texture)
         drawPiles(piles.filter { !$0.isDock }, with: encoder, uniforms: uniforms, heights: heightBuffer)
         drawSigns(simulation.signs, with: encoder, uniforms: uniforms)
         if sprites > 0 {
@@ -441,6 +450,74 @@ final class Renderer: NSObject, MTKViewDelegate {
                 encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
             }
         }
+    }
+
+    /// The snow lying on the wallpaper's surfaces, where the windows and the Dock leave it in sight. Nothing is drawn
+    /// while one window hides all of it.
+    private func drawCover(with encoder: MTLRenderCommandEncoder, uniforms: Uniforms, target: MTLTexture?) {
+        guard let bounds = simulation.coverBounds, let target else { return }
+        var occluders = simulation.coverOccluders
+        guard !occluders.contains(where: { $0.x <= bounds.x && $0.y <= bounds.y && $0.z >= bounds.z && $0.w >= bounds.w }),
+              let cover = coverTextures(), let scissor = scissor(around: bounds, margin: 2, in: target, uniforms: uniforms) else { return }
+        var uniforms = uniforms
+        uniforms.occluderCount = Int32(occluders.count)
+        if occluders.isEmpty { occluders = [SIMD4<Float>(repeating: 0)] }
+        let length = MemoryLayout<Uniforms>.stride
+        encoder.setRenderPipelineState(coverPipeline)
+        encoder.setVertexBytes(&uniforms, length: length, index: 0)
+        encoder.setFragmentBytes(&uniforms, length: length, index: 1)
+        encoder.setFragmentBytes(&occluders, length: occluders.count * MemoryLayout<SIMD4<Float>>.stride, index: 2)
+        encoder.setFragmentTexture(cover.cover, index: 0)
+        encoder.setFragmentTexture(cover.hold, index: 1)
+        encoder.setFragmentTexture(ridgeLight(), index: 2)
+        encoder.setFragmentTexture(cover.shade, index: 3)
+        encoder.setScissorRect(scissor)
+        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        encoder.setScissorRect(MTLScissorRect(x: 0, y: 0, width: target.width, height: target.height))
+    }
+
+    /// The snow on the wallpaper and how much each spot of it holds, as textures sent again only when they change; nil
+    /// while none has fallen.
+    private func coverTextures() -> (cover: MTLTexture, hold: MTLTexture, shade: MTLTexture)? {
+        let size = simulation.coverSize
+        guard size.width > 0, size.height > 0 else { return nil }
+        func texture(_ old: MTLTexture?) -> MTLTexture? {
+            if let old, old.width == size.width, old.height == size.height { return old }
+            let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r8Unorm, width: size.width, height: size.height, mipmapped: false)
+            descriptor.usage = .shaderRead
+            return device.makeTexture(descriptor: descriptor)
+        }
+        let region = MTLRegionMake2D(0, 0, size.width, size.height)
+        if terrainVersion != simulation.terrainVersion || holdTexture?.width != size.width {
+            terrainVersion = simulation.terrainVersion
+            holdTexture = texture(holdTexture)
+            simulation.coverHold?.withUnsafeBytes { holdTexture?.replace(region: region, mipmapLevel: 0, withBytes: $0.baseAddress!, bytesPerRow: size.width) }
+            shadeTexture = makeShade(simulation.pictureShade)
+        }
+        if coverVersion != simulation.coverVersion || coverTexture?.width != size.width {
+            coverVersion = simulation.coverVersion
+            coverTexture = texture(coverTexture)
+            simulation.cover.withUnsafeBytes { coverTexture?.replace(region: region, mipmapLevel: 0, withBytes: $0.baseAddress!, bytesPerRow: size.width) }
+        }
+        guard let coverTexture, let holdTexture, let shadeTexture else { return nil }
+        return (coverTexture, holdTexture, shadeTexture)
+    }
+
+    /// The wallpaper's lightness with its mipmaps, which give how light it is around each spot.
+    private func makeShade(_ shade: WallpaperShade?) -> MTLTexture? {
+        let shade = shade ?? WallpaperShade(width: 1, height: 1, cell: 1, pixels: Data([128]))
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r8Unorm, width: shade.width, height: shade.height, mipmapped: true)
+        descriptor.usage = .shaderRead
+        guard let texture = device.makeTexture(descriptor: descriptor) else { return nil }
+        shade.pixels.withUnsafeBytes {
+            texture.replace(region: MTLRegionMake2D(0, 0, shade.width, shade.height), mipmapLevel: 0, withBytes: $0.baseAddress!, bytesPerRow: shade.width)
+        }
+        if texture.mipmapLevelCount > 1, let commandBuffer = queue.makeCommandBuffer(), let blit = commandBuffer.makeBlitCommandEncoder() {
+            blit.generateMipmaps(for: texture)
+            blit.endEncoding()
+            commandBuffer.commit()
+        }
+        return texture
     }
 
     /// The wallpaper's light for the snow on it, as a texture made again only when the wallpaper changes; plain white

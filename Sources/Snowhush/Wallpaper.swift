@@ -7,6 +7,75 @@ import CryptoKit
 struct WallpaperScene: Codable, Equatable {
     var ridges: [WallpaperRidge]
     var light: WallpaperLight
+    var terrain: WallpaperTerrain
+    var shade: WallpaperShade
+}
+
+/// How light the wallpaper is, a cell to every `cell` points, top row first, 0 to 255: snow on it shows first where
+/// it is lighter than around, on flat ground and old snow, and last on the dark of trees and rock. Kept on disk as a PNG.
+struct WallpaperShade: Codable, Equatable {
+    var width: Int
+    var height: Int
+    var cell: Int
+    var pixels: Data
+
+    init(width: Int, height: Int, cell: Int, pixels: Data) {
+        self.width = width
+        self.height = height
+        self.cell = cell
+        self.pixels = pixels
+    }
+
+    private enum Keys: String, CodingKey { case width, height, cell, png }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: Keys.self)
+        let width = try values.decode(Int.self, forKey: .width), height = try values.decode(Int.self, forKey: .height)
+        self.width = width
+        self.height = height
+        cell = try values.decode(Int.self, forKey: .cell)
+        let png = try values.decode(Data.self, forKey: .png)
+        var decoded = Data(count: width * height)
+        let read = decoded.withUnsafeMutableBytes { bytes -> Bool in
+            guard let source = CGImageSourceCreateWithData(png as CFData, nil), let image = CGImageSourceCreateImageAtIndex(source, 0, nil),
+                  let context = CGContext(data: bytes.baseAddress, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width,
+                                          space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return false }
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+        guard read else { throw DecodingError.dataCorruptedError(forKey: .png, in: values, debugDescription: "unreadable shade") }
+        pixels = decoded
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: Keys.self)
+        try values.encode(width, forKey: .width)
+        try values.encode(height, forKey: .height)
+        try values.encode(cell, forKey: .cell)
+        let png = NSMutableData()
+        guard let provider = CGDataProvider(data: pixels as CFData),
+              let image = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 8, bytesPerRow: width, space: CGColorSpaceCreateDeviceGray(),
+                                  bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue), provider: provider, decode: nil,
+                                  shouldInterpolate: false, intent: .defaultIntent),
+              let destination = CGImageDestinationCreateWithData(png, "public.png" as CFString, 1, nil) else { return }
+        CGImageDestinationAddImage(destination, image, nil)
+        CGImageDestinationFinalize(destination)
+        try values.encode(png as Data, forKey: .png)
+    }
+}
+
+/// The picture's surfaces as depth sees them, a cell to every `cell` points, top row first: how near each is, and how
+/// well it holds snow, from 0 for the sky, a cliff or the edge of something to 1 for ground facing up.
+struct WallpaperTerrain: Codable, Equatable {
+    var width: Int
+    var height: Int
+    var cell: Int
+    /// 0 to 255 for 0 to 1.
+    var near: Data
+    var hold: Data
+    /// How near the farthest and the nearest of the things in it are, the sky aside.
+    var far: Float
+    var close: Float
 }
 
 /// The light snow would take on across the wallpaper, a cell to every `cell` points, top row first, RGBA: from the
@@ -49,7 +118,7 @@ enum Wallpaper {
     }
 
     /// Raise whenever what is found changes, so pictures already done are looked at again.
-    private static let version = 11
+    private static let version = 15
 
     /// What the screen shows of its wallpaper now; nil for a moving or missing one.
     static func picture(on screen: NSScreen) -> Picture? {
@@ -105,7 +174,9 @@ enum Wallpaper {
             return kept
         }
         guard let model, let shown = render(picture), let depth = DepthMap(of: shown, model: model) else { return nil }
-        let found = WallpaperScene(ridges: find(in: shown, depth: depth, columnWidth: columnWidth), light: light(of: shown))
+        let ridges = find(in: shown, depth: depth, columnWidth: columnWidth)
+        let found = WallpaperScene(ridges: ridges, light: light(of: shown),
+                                   terrain: terrain(of: depth, size: picture.size, ridges: ridges, columnWidth: columnWidth), shade: shade(of: shown))
         if let file, let data = try? JSONEncoder().encode(found) {
             let folder = file.deletingLastPathComponent()
             try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -322,6 +393,108 @@ enum Wallpaper {
         return WallpaperLight(width: width, height: height, cell: cell, pixels: Data(pixels))
     }
 
+    // MARK: - Terrain
+
+    /// The sky's nearness and less, in the depth map's own range.
+    static let sky: Float = 0.06
+    /// Clouds come out a little nearer than the sky: only what is nearer still is ground for snow to lie on.
+    static let ground: Float = 0.12
+
+    /// How near each spot of the picture is, and how well it holds snow. A surface facing up recedes as it rises on
+    /// the screen, so its depth grows nearer going down; a cliff facing the viewer stays as near all the way down. Where
+    /// the depth jumps at the top of something, the top holds snow up to its edge and the sky over it doesn't; above a
+    /// ridge's own edge, sharper than the depth map's, nothing lies.
+    static func terrain(of depth: DepthMap, size: CGSize, ridges: [WallpaperRidge], columnWidth: Float, cell: Int = 4) -> WallpaperTerrain {
+        let screen = SIMD2(Float(size.width), Float(size.height))
+        let width = Int((screen.x / Float(cell)).rounded(.up)), height = Int((screen.y / Float(cell)).rounded(.up))
+        var near = [Float](repeating: 0, count: width * height)
+        for y in 0..<height {
+            for x in 0..<width {
+                near[y * width + x] = depth.value(x: (Float(x) + 0.5) * Float(cell), y: (Float(y) + 0.5) * Float(cell), screen: screen)
+            }
+        }
+        var hold = [Float](repeating: 0, count: width * height)
+        for y in 1..<(height - 1) {
+            for x in 1..<(width - 1) {
+                let i = y * width + x
+                guard near[i] > ground else { continue }
+                let down = (near[i + width] - near[i - width]) / 2
+                let across = (near[i + 1] - near[i - 1]) / 2
+                let above = near[max(y - 2, 0) * width + x], below = near[min(y + 2, height - 1) * width + x]
+                // Up in a jump in depth, nearer the far side than the near: the sky over the top of something.
+                if below - above > 2 * jump.lowerBound && near[i] - above < (below - above) / 2 { continue }
+                // The depth map squeezes the distance: far off, the same slope changes its depth less.
+                let facing = smoothstep(rise.lowerBound, rise.upperBound, down / (near[i] + 0.15))
+                let side = smoothstep(jump.lowerBound, jump.upperBound, abs(across))
+                hold[i] = facing * (1 - side)
+            }
+        }
+        // A ridge's own edge is sharper than the depth map's: its top holds snow right up to it, and nothing lies over it.
+        func ridgeColumns(_ body: (_ x: Int, _ edge: Float) -> Void) {
+            for ridge in ridges {
+                for (k, top) in ridge.tops.enumerated() {
+                    let x = Int((ridge.left + (Float(k) + 0.5) * columnWidth) / Float(cell))
+                    let edge = screen.y - top - 3.5
+                    if x >= 0, x < width, edge > 0 { body(x, edge) }
+                }
+            }
+        }
+        ridgeColumns { x, edge in
+            for y in max(Int(edge / Float(cell)), 0)..<min(Int((edge + 16) / Float(cell)), height) { hold[y * width + x] = max(hold[y * width + x], 0.8) }
+        }
+        // Softened over a few cells, the edges of what holds snow follow the land rather than the cells.
+        for pass in 0..<2 {
+            var soft = hold
+            let step = pass == 0 ? 1 : width
+            for i in hold.indices {
+                let a = i - step >= 0 && (pass == 1 || i % width > 0) ? hold[i - step] : hold[i]
+                let b = i + step < hold.count && (pass == 1 || i % width < width - 1) ? hold[i + step] : hold[i]
+                soft[i] = 0.25 * a + 0.5 * hold[i] + 0.25 * b
+            }
+            hold = soft
+        }
+        for i in hold.indices where near[i] <= ground { hold[i] = 0 }
+        ridgeColumns { x, edge in
+            for y in max(Int((edge - 28) / Float(cell)), 0)..<min(Int(edge / Float(cell)), height) { hold[y * width + x] = 0 }
+        }
+        let things = near.filter { $0 > sky }.sorted()
+        let far = things.isEmpty ? sky : things[Int(Float(things.count - 1) * 0.02)]
+        let close = things.isEmpty ? 1 : things[Int(Float(things.count - 1) * 0.98)]
+        return WallpaperTerrain(width: width, height: height, cell: cell, near: Data(near.map { UInt8(min(max($0, 0), 1) * 255) }),
+                                hold: Data(hold.map { UInt8(min(max($0, 0), 1) * 255) }), far: far, close: close)
+    }
+
+    /// How light the picture is, a cell to every `cell` points.
+    static func shade(of shown: Shown, cell: Int = 2) -> WallpaperShade {
+        let width = shown.width / cell, height = shown.height / cell
+        var pixels = [UInt8](repeating: 0, count: width * height)
+        shown.pixels.withUnsafeBufferPointer { p in
+            for y in 0..<height {
+                for x in 0..<width {
+                    var sum: Float = 0
+                    for dy in 0..<cell {
+                        for dx in 0..<cell {
+                            let i = ((y * cell + dy) * shown.width + x * cell + dx) * 4
+                            sum += 0.2126 * Float(p[i]) + 0.7152 * Float(p[i + 1]) + 0.0722 * Float(p[i + 2])
+                        }
+                    }
+                    pixels[y * width + x] = UInt8(min(sum / Float(cell * cell), 255))
+                }
+            }
+        }
+        return WallpaperShade(width: width, height: height, cell: cell, pixels: Data(pixels))
+    }
+
+    /// How fast, per cell down, the depth must grow nearer for a surface to hold snow at all, and to hold it fully.
+    static let rise: ClosedRange<Float> = 0.001...0.006
+    /// How steep a step in depth, per cell, is the edge of something rather than a surface.
+    static let jump: ClosedRange<Float> = 0.012...0.03
+
+    private static func smoothstep(_ a: Float, _ b: Float, _ x: Float) -> Float {
+        let t = min(max((x - a) / (b - a), 0), 1)
+        return t * t * (3 - 2 * t)
+    }
+
     // MARK: - Finding the ridges
 
     /// How much nearer, in the depth map's own range, a thing must be than what is right above it for its top to count.
@@ -408,7 +581,7 @@ enum Wallpaper {
         var ridges: [(ridge: WallpaperRidge, score: Float)] = []
         for piece in pieces {
             // Sunk a little into the thing's top, so no sky shows under the snow.
-            let tops = piece.rows.map { screen.y - $0 - 2.5 }
+            let tops = piece.rows.map { screen.y - $0 - 4 }
             let lowest = tops.min() ?? 0, highest = tops.max() ?? 0
             guard lowest > bottomMargin, highest < screen.y - topMargin else { continue }
             let near = piece.near.reduce(0, +) / Float(piece.near.count)

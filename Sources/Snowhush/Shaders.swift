@@ -1114,6 +1114,62 @@ vertex PileOut pileVertex(uint vid [[vertex_id]], constant Uniforms &u [[buffer(
     return out;
 }
 
+// Snow lying on the wallpaper's surfaces, over the whole screen but where the windows hide it.
+struct CoverOut {
+    float4 position [[position]];
+    float2 point;
+};
+
+vertex CoverOut coverVertex(uint vid [[vertex_id]], constant Uniforms &u [[buffer(0)]]) {
+    float2 corner = float2(float((vid << 1) & 2), float(vid & 2));
+    CoverOut out;
+    out.position = float4(corner * 2.0 - 1.0, 0.0, 1.0);
+    out.point = corner * u.viewSize;
+    return out;
+}
+
+static float coverNoise(float2 p) {
+    float2 i = floor(p), f = fract(p);
+    float2 s = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + float2(1.0, 0.0)), s.x), mix(hash(i + float2(0.0, 1.0)), hash(i + float2(1.0, 1.0)), s.x), s.y);
+}
+
+fragment float4 coverFragment(CoverOut in [[stage_in]],
+                              constant Uniforms &u [[buffer(1)]],
+                              constant float4 *occluders [[buffer(2)]],
+                              texture2d<float> cover [[texture(0)]],
+                              texture2d<float> hold [[texture(1)]],
+                              texture2d<float> light [[texture(2)]],
+                              texture2d<float> shade [[texture(3)]]) {
+    float2 world = in.point;
+    for (int k = 0; k < u.occluderCount; k++) {
+        float4 o = occluders[k];
+        if (world.x >= o.x && world.x < o.z && world.y >= o.y && world.y < o.w) discard_fragment();
+    }
+    constexpr sampler smooth(filter::linear, address::clamp_to_edge);
+    float2 uv = float2(world.x / u.viewSize.x, 1.0 - world.y / u.viewSize.y);
+    float holds = hold.sample(smooth, uv).r;
+    float snow = cover.sample(smooth, uv).r * holds;
+    if (snow < 0.01) discard_fragment();
+    // Snow shows first where the picture is lighter than around it, on flat ground and old snow, and last on the dark
+    // of trees and rock, which still show through deep snow; a grainy noise breaks up what is left alike.
+    float lightness = shade.sample(smooth, uv).r;
+    float around = shade.sample(smooth, uv, level(4.0)).r;
+    float grain = 0.6 * coverNoise(world * 0.45) + 0.4 * coverNoise(world * 0.09);
+    float threshold = 0.55 - (lightness - around) * 3.0 + (grain - 0.5) * 0.4;
+    float a = smoothstep(threshold - 0.2, threshold + 0.14, snow * 1.25) * 0.9;
+    if (a <= 0.0) discard_fragment();
+    // Lit as the picture is there, brightest where it faces up to the sky, and carrying the picture's own bumps and
+    // hollows: as light as the picture is there against around it, bluer in its shadows, grainy close up.
+    float3 tint = light.sample(smooth, uv).rgb;
+    float relief = clamp(0.5 + (lightness - around) * 2.6, 0.0, 1.0);
+    float3 shadow = float3(0.6, 0.66, 0.78), lit = float3(1.0, 1.0, 1.02);
+    float3 color = mix(shadow, lit, relief) * mix(0.85, 1.0, holds) * tint * u.light.rgb;
+    color *= 0.97 + 0.06 * hash(floor(world * 0.7));
+    color += (hash(floor(in.position.xy)) - 0.5) * 0.03;
+    return float4(color * a, a);
+}
+
 // Snow along a ridge in the wallpaper: a band hugging it from just under its bed to just over its surface, column
 // edge by column edge, so a long slanted ridge doesn't shade the whole box around it.
 vertex PileOut ridgeVertex(uint vid [[vertex_id]], constant Uniforms &u [[buffer(0)]], const device float *h [[buffer(1)]]) {
@@ -1213,7 +1269,8 @@ fragment float4 ridgeFragment(PileOut in [[stage_in]],
                               texture2d<float> light [[texture(0)]]) {
     constexpr sampler smooth(filter::linear, address::clamp_to_edge);
     float2 world = in.point + u.origin;
-    float3 tint = light.sample(smooth, float2(world.x / u.viewSize.x, 1.0 - world.y / u.viewSize.y)).rgb;
+    // Matched to the snow lying on the slopes under it, so the two read as one.
+    float3 tint = light.sample(smooth, float2(world.x / u.viewSize.x, 1.0 - world.y / u.viewSize.y)).rgb * float3(0.86, 0.89, 0.95);
     return pileColor(in, heights, u, occluders, tint);
 }
 
