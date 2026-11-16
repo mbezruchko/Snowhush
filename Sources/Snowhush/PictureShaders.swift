@@ -64,7 +64,7 @@ fragment float4 pictureLieFragment(CoverOut in [[stage_in]],
     if (holdNear.g <= u.range.z) return float4(0.0);
     // What has fallen everywhere and the dabs of the flakes seen landing; the farther off, the less of it shows.
     float near = saturate((holdNear.g - u.range.x) / max(u.range.y - u.range.x, 0.01));
-    float amount = min(dabs.sample(smooth, uv).r + u.level, 1.0) * mix(0.6, 1.0, near);
+    float amount = min(dabs.sample(smooth, uv).r + u.level, 1.5) * mix(0.6, 1.0, near);
     // On the top of anything darker than what is just over it, a branch against the mist, a rock under the sky, snow
     // lies too, whichever way the surface under it faces.
     float top = here.g;

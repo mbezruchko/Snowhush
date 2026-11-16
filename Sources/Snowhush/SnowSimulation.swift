@@ -1052,9 +1052,11 @@ final class SnowSimulation {
     private(set) var dabs: [UInt8] = []
     private(set) var dabsVersion = 0
     var dabsSize: (width: Int, height: Int) { (terrain?.width ?? 0, terrain?.height ?? 0) }
-    /// How much snow has fallen over the whole picture, 0 to 1, as it grows step by step with the snowfall and melts:
-    /// the same everywhere, so it comes as smoothly as time passes.
+    /// How much snow has fallen over the whole picture, as it grows step by step with the snowfall and melts: the same
+    /// everywhere, so it comes as smoothly as time passes. Up to 1 it comes to cover what holds it; from there to
+    /// `deepest`, far more slowly and only while nothing melts it, it lies deeper and buries more.
     private(set) var pictureLevel: Float = 0
+    static let deepest: Float = 2
     /// How much the snow now falling veils the farthest things in the picture, 0 to 1: it eases after the snowfall.
     private(set) var pictureVeil: Float = 0
     /// When a gust last cleared the snow: the picture's goes with it.
@@ -1179,6 +1181,36 @@ final class SnowSimulation {
     }
 
     /// The snow in the picture grows with the snowfall, melts, or goes with a gust clearing the snow.
+    /// The snow in the picture as it is `seconds` later. At the usual snowfall it takes about eight minutes to cover all
+    /// it can, and then most of an hour to lie as deep as it gets; melting, it never lies deeper than it covers, and
+    /// goes in a few minutes once the snowfall stops.
+    private func snowInPicture(for seconds: Float) {
+        let snowing = modes.contains(.snow) && accumulates && !holding
+        let falling = snowing ? Self.flakesPerMegapoint(intensity) * density / Self.flakesPerMegapoint(0.5) : 0
+        let most: Float = pictureMelting ? 1 : Self.deepest
+        var left = seconds
+        if pictureLevel < 1, falling > 0 {
+            let covering = min(left, (1 - pictureLevel) * 480 / falling)
+            pictureLevel += falling * covering / 480
+            left -= covering
+        }
+        if pictureLevel >= 1, pictureLevel < most, falling > 0 { pictureLevel = min(pictureLevel + falling * left / 3000, most) }
+        if pictureLevel > most { pictureLevel = max(most, pictureLevel - seconds / 300) }
+        if falling <= 0, pictureMelting { pictureLevel = max(0, pictureLevel - seconds / 180) }
+    }
+
+    /// Puts back the snow that lay in the picture when the app last ran.
+    func restorePicture(level: Float) {
+        pictureLevel = min(max(level, 0), Self.deepest)
+    }
+
+    /// The display was dark or away for `seconds`: it went on snowing meanwhile.
+    func passPicture(seconds: Float) {
+        guard terrain != nil, seconds > 0 else { return }
+        snowInPicture(for: min(seconds, 8 * 3600))
+        stirred()
+    }
+
     /// Marks where the windows and the Dock stand in front of the wallpaper, when they have moved: a flake over them
     /// is in front of them, not in the picture, and with a window over the whole screen that is every flake.
     private func coverPicture() {
@@ -1213,13 +1245,7 @@ final class SnowSimulation {
                 dabsTouched = true
             }
         } else {
-            let snowing = modes.contains(.snow) && accumulates && !holding
-            let falling = snowing ? Self.flakesPerMegapoint(intensity) * density / Self.flakesPerMegapoint(0.5) : 0
-            // At the usual snowfall it takes about eight minutes to cover all it can; melting, it keeps a little over half
-            // while it snows, and goes in a few minutes once it stops.
-            pictureLevel = min(pictureLevel + falling * dt / 480, 1)
-            let floor: Float = pictureMelting && falling > 0 && accumulates && modes.contains(.snow) ? 0.55 : 0
-            if pictureMelting && pictureLevel > floor { pictureLevel = max(floor, pictureLevel - dt / (falling > 0 ? 900 : 180)) }
+            snowInPicture(for: dt)
             // The dabs left by the flakes seen landing melt as the rest does, a second at a time.
             if clock - pictureTickedAt >= 1 {
                 let elapsed = Float(min(clock - pictureTickedAt, 5))

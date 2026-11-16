@@ -1,6 +1,5 @@
 import Accelerate
 import AppKit
-import CoreML
 import CryptoKit
 
 /// What snow on the wallpaper needs to know of it: where it can lie, and how the picture lights it.

@@ -200,7 +200,9 @@ final class PictureRenderer {
             pass.colorAttachments[0].storeAction = .store
             return pass
         }
-        var uniforms = Uniforms(viewSize: screen, scale: Float(target.width) / max(screen.x, 1), level: level, range: range,
+        // The first snow shows soon; past covering what holds it, it goes on getting deeper at half the pace.
+        let amount = level <= 1 ? pow(max(level, 0), 0.6) : 1 + (level - 1) * 0.5
+        var uniforms = Uniforms(viewSize: screen, scale: Float(target.width) / max(screen.x, 1), level: amount, range: range,
                                 thickest: max(Self.depth * pow(level, 0.7), 0.01), veil: veil, haze: haze)
         let length = MemoryLayout<Uniforms>.stride
         // How the snow lies, at half the size: nothing it is worked out from is finer.

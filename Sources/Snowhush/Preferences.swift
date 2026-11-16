@@ -33,6 +33,7 @@ enum Preferences {
     private static let installedAtKey = "installedAt"
     private static let showInScreenshotsKey = "showInScreenshots"
     private static let deepInteractionKey = "deepInteraction"
+    private static let pictureLevelKey = "pictureLevel"
     private static let halloweenKey = "halloweenOn"
     private static let halloweenSkippedKey = "halloweenSkipped"
     private static let modeKey = "mode"
@@ -184,6 +185,12 @@ enum Preferences {
     static var fallingOpacity: Double {
         get { min(max(defaults.double(forKey: fallingOpacityKey), opacityRange.lowerBound), opacityRange.upperBound) }
         set { defaults.set(newValue, forKey: fallingOpacityKey) }
+    }
+
+    /// How much snow lies in the wallpaper's picture, kept from one run of the app to the next.
+    static var pictureLevel: Float {
+        get { defaults.float(forKey: pictureLevelKey) }
+        set { defaults.set(newValue, forKey: pictureLevelKey) }
     }
 
     /// Drawn at the display's highest rate all the time, instead of only while something is pushed around.

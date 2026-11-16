@@ -90,6 +90,9 @@ final class PictureSnow {
     private var loaded: Wallpaper.Picture?
     private var timer: Timer?
     private var active = true
+    /// The snow's level as last kept for the next run of the app, and when the display last went dark or away.
+    private var kept: Float = 0
+    private var restedAt: CFTimeInterval?
     /// A wallpaper is being read.
     private var reading = false
     /// Whether the system has been asked for the wallpaper since the Space or the screen last changed, when, and the
@@ -131,6 +134,8 @@ final class PictureSnow {
         self.device = device
         self.renderer = renderer
         self.simulation = simulation
+        kept = Preferences.pictureLevel
+        simulation.restorePicture(level: kept)
     }
 
     func fit(to screen: NSScreen) {
@@ -145,8 +150,25 @@ final class PictureSnow {
 
     /// `active` while the display is awake and shown.
     func setActive(_ active: Bool) {
+        guard active != self.active else { return }
         self.active = active
-        if active { wake() } else { rest() }
+        if active {
+            // It went on snowing while no one was looking.
+            if let restedAt, wanted { simulation.passPicture(seconds: Float(CACurrentMediaTime() - restedAt)) }
+            restedAt = nil
+            wake()
+        } else {
+            restedAt = CACurrentMediaTime()
+            keep()
+            rest()
+        }
+    }
+
+    /// Keeps the snow's level for the next run of the app.
+    private func keep() {
+        guard wanted else { return }
+        kept = simulation.pictureLevel
+        Preferences.pictureLevel = kept
     }
 
     /// Starts looking again, a second apart: for another wallpaper, and for snow to draw.
@@ -210,6 +232,8 @@ final class PictureSnow {
 
     /// A gust has cleared the snow: the picture's goes with it.
     func cleared() {
+        kept = 0
+        Preferences.pictureLevel = 0
         for desktop in desktops.values where desktop !== current { clear(desktop) }
         guard let desktop = current, desktop.front != nil else { return }
         let fade = CABasicAnimation(keyPath: "opacity")
@@ -316,6 +340,7 @@ final class PictureSnow {
         }
         guard desktop.terrain != nil, loaded == desktop.picture, renderer.loaded, !desktop.drawing else { return }
         let level = simulation.pictureLevel, veil = simulation.pictureVeil
+        if abs(level - kept) >= 0.02 { keep() }
         guard level > 0 || simulation.hasDabs || veil > 0 else {
             if desktop.front != nil { clear(desktop) }
             if simulation.isEmpty { rest() }
