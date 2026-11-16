@@ -118,7 +118,7 @@ enum Wallpaper {
     }
 
     /// Raise whenever what is found changes, so pictures already done are looked at again.
-    private static let version = 15
+    private static let version = 16
 
     /// What the screen shows of its wallpaper now; nil for a moving or missing one.
     static func picture(on screen: NSScreen) -> Picture? {
@@ -587,6 +587,18 @@ enum Wallpaper {
             let near = piece.near.reduce(0, +) / Float(piece.near.count)
             // Hardly nearer than the sky: the edge of a cloud.
             guard near > 0.1 else { continue }
+            // Up and down all along, as the tops of a row of trees go: no ridgeline for a cap of snow to follow.
+            let climb = (2..<max(2, tops.count - 2)).reduce(Float(0)) { $0 + abs(tops[$1 + 2] - tops[$1 - 2]) } / (4 * columnWidth * Float(max(tops.count - 4, 1)))
+            var turns = 0
+            var heading: Float = 0
+            for k in stride(from: 0, to: tops.count - 4, by: 4) {
+                let rise = tops[k + 4] - tops[k]
+                guard abs(rise) > 3 else { continue }
+                if heading != 0 && (rise > 0) != (heading > 0) { turns += 1 }
+                heading = rise
+            }
+            let length = Float(tops.count) * columnWidth
+            guard climb < 0.7, Float(turns) / length * 100 < 2, length >= 100 || climb < 0.45 else { continue }
             ridges.append((WallpaperRidge(left: Float(piece.first) * columnWidth, tops: tops, nearness: near), piece.score))
         }
         return keepBest(ridges, columnWidth: columnWidth)
