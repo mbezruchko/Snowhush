@@ -39,6 +39,8 @@ enum Preferences {
     private static let autumnKey = "autumn"
     private static let performanceKey = "performance"
     private static let fallingOpacityKey = "fallingOpacity"
+    private static let generatorSoundKey = "generatorSound"
+    private static let generatorVolumeKey = "generatorVolume"
 
     static func registerDefaults() {
         let calm = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
@@ -64,6 +66,8 @@ enum Preferences {
             autumnKey: false,
             mixedKey: false,
             fallingOpacityKey: 1.0,
+            generatorSoundKey: false,
+            generatorVolumeKey: 0.5,
         ])
         if defaults.object(forKey: accumulateKey) != nil {
             if !defaults.bool(forKey: accumulateKey) {
@@ -184,5 +188,17 @@ enum Preferences {
     static var maxPerformance: Bool {
         get { defaults.integer(forKey: performanceKey) == 1 }
         set { defaults.set(newValue ? 1 : 0, forKey: performanceKey) }
+    }
+
+    /// A generator heard running outside while the snow falls.
+    static var generatorSound: Bool {
+        get { defaults.bool(forKey: generatorSoundKey) }
+        set { defaults.set(newValue, forKey: generatorSoundKey) }
+    }
+
+    /// How loud the generator is, from 0 to 1.
+    static var generatorVolume: Double {
+        get { min(max(defaults.double(forKey: generatorVolumeKey), 0), 1) }
+        set { defaults.set(newValue, forKey: generatorVolumeKey) }
     }
 }

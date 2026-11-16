@@ -28,6 +28,8 @@
 "taskbar" = "タスクバーの後ろ";
 "screenshots" = "スクリーンショットに表示";
 "performance" = "最大パフォーマンス";
+"sound" = "サウンド";
+"sound.generator" = "発電機";
 "login" = "ログイン時に開く";
 "updates" = "アップデートを確認…";
 "support" = "Snowhushを支援";

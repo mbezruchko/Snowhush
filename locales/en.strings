@@ -32,6 +32,8 @@
 "taskbar" = "Behind Taskbar";
 "screenshots" = "Show in Screenshots";
 "performance" = "Max Performance";
+"sound" = "Sound";
+"sound.generator" = "Generator";
 "login" = "Open at Login";
 "updates" = "Check for Updates…";
 "support" = "Support Snowhush";

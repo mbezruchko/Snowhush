@@ -33,6 +33,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var screenshotsItem: NSMenuItem!
     private var deepInteractionItem: NSMenuItem!
     private var loginItem: NSMenuItem!
+    private var generatorItem: NSMenuItem!
+    private let volumeSlider = MenuSlider(range: 0...1)
+    private var volumeItem: NSMenuItem!
+    private let generator = GeneratorSound()
     private var observers: [NSObjectProtocol] = []
     private var screensAsleep = false
     private let screenshots = ScreenshotWatch()
@@ -57,6 +61,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         surfaces = Preferences.surfaces
         thaws = Preferences.meltSnow
         behindWindows = Preferences.behindWindows
+        generator.volume = Preferences.generatorVolume
+        generator.enabled = Preferences.generatorSound
         snowfallHeld = !Preferences.welcomed
         syncScreens()
         // With no display attached yet, the snow comes once one is.
@@ -206,6 +212,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         screenshotsItem = toggle(tr("screenshots"), #selector(toggleScreenshots), to: settings)
         maxPerformanceItem = toggle(tr("performance"), #selector(toggleMaxPerformance), to: settings)
         settings.addItem(.separator())
+        settings.addItem(.sectionHeader(title: tr("sound")))
+        generatorItem = toggle(tr("sound.generator"), #selector(toggleGeneratorSound), to: settings)
+        volumeSlider.changed = { [unowned self] volume in
+            Preferences.generatorVolume = volume
+            generator.volume = volume
+        }
+        volumeItem = NSMenuItem()
+        volumeItem.view = volumeSlider
+        settings.addItem(volumeItem)
+        settings.addItem(.separator())
         settings.addItem(.sectionHeader(title: tr("general")))
         loginItem = toggle(tr("login"), #selector(toggleOpenAtLogin), to: settings)
         let updates = settings.addItem(withTitle: tr("updates"), action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)), keyEquivalent: "")
@@ -287,6 +303,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         fullScreenItem.state = Preferences.showOverFullScreen ? .on : .off
         fullScreenItem.isEnabled = !behindWindows
         screenshotsItem.state = Preferences.showInScreenshots ? .on : .off
+        generatorItem.state = Preferences.generatorSound ? .on : .off
+        volumeSlider.value = Preferences.generatorVolume
+        volumeItem.isHidden = !Preferences.generatorSound
         loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
     }
 
@@ -397,6 +416,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         for snow in screens { snow.simulation.switchMode(to: Preferences.modes, direction: direction, calm: calm) }
     }
 
+    @objc private func toggleGeneratorSound() {
+        Preferences.generatorSound.toggle()
+        generator.enabled = Preferences.generatorSound
+        volumeItem.isHidden = !Preferences.generatorSound
+    }
+
     @objc private func toggleMaxPerformance() {
         Preferences.maxPerformance.toggle()
         for snow in screens { snow.maxFrameRate = Preferences.maxPerformance }
@@ -480,6 +505,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
 
     private func updateActivity() {
         let awake = !screensAsleep && !screenLocked && !sessionInactive
+        generator.active = awake
         for snow in screens {
             snow.occlusionChanged()
             snow.setActive(awake && !snow.givesWay && (snow.window.occlusionState.contains(.visible) || snow.fading), asleep: !awake)

@@ -28,6 +28,8 @@
 "taskbar" = "在任务栏后面";
 "screenshots" = "在截图中显示";
 "performance" = "最高性能";
+"sound" = "声音";
+"sound.generator" = "发电机";
 "login" = "登录时打开";
 "updates" = "检查更新…";
 "support" = "支持 Snowhush";
