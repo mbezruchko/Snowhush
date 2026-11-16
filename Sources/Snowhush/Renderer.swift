@@ -76,6 +76,36 @@ final class Renderer: NSObject, MTKViewDelegate {
     private var coverTexture: MTLTexture?
     private var holdTexture: MTLTexture?
     private var shadeTexture: MTLTexture?
+    /// A gradient noise that tiles, 32 cells across 256 pixels: unlike noise of values at a grid's corners it has no
+    /// square blobs for a threshold to cut out. Made once, sampled where the snow's edge needs breaking up.
+    private lazy var coverNoise: MTLTexture? = {
+        let size = 256, cells = 32
+        var random = SystemRandomNumberGenerator()
+        let slopes = (0..<(cells * cells)).map { _ -> SIMD2<Float> in
+            let angle = Float.random(in: 0..<(2 * .pi), using: &random)
+            return SIMD2(cos(angle), sin(angle))
+        }
+        func slope(_ x: Int, _ y: Int) -> SIMD2<Float> { slopes[((y + cells) % cells) * cells + (x + cells) % cells] }
+        var pixels = [UInt8](repeating: 0, count: size * size)
+        let step = Float(cells) / Float(size)
+        for py in 0..<size {
+            for px in 0..<size {
+                let p = SIMD2(Float(px) + 0.5, Float(py) + 0.5) * step
+                let i = SIMD2(p.x.rounded(.down), p.y.rounded(.down)), f = p - i
+                let x = Int(i.x), y = Int(i.y)
+                let s = f * f * f * (f * (f * 6 - 15) + 10)
+                let a = simd_dot(slope(x, y), f), b = simd_dot(slope(x + 1, y), f - SIMD2(1, 0))
+                let c = simd_dot(slope(x, y + 1), f - SIMD2(0, 1)), d = simd_dot(slope(x + 1, y + 1), f - SIMD2(1, 1))
+                let top = a + (b - a) * s.x, bottom = c + (d - c) * s.x
+                pixels[py * size + px] = UInt8(min(max(0.5 + 0.75 * (top + (bottom - top) * s.y), 0), 1) * 255)
+            }
+        }
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r8Unorm, width: size, height: size, mipmapped: false)
+        descriptor.usage = .shaderRead
+        let texture = device.makeTexture(descriptor: descriptor)
+        texture?.replace(region: MTLRegionMake2D(0, 0, size, size), mipmapLevel: 0, withBytes: pixels, bytesPerRow: size)
+        return texture
+    }()
     private var coverVersion = -1
     private var terrainVersion = -1
     private var ridgeLightTexture: MTLTexture?
@@ -471,6 +501,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         encoder.setFragmentTexture(cover.hold, index: 1)
         encoder.setFragmentTexture(ridgeLight(), index: 2)
         encoder.setFragmentTexture(cover.shade, index: 3)
+        encoder.setFragmentTexture(coverNoise, index: 4)
         var range = simulation.coverRange
         encoder.setFragmentBytes(&range, length: MemoryLayout<SIMD4<Float>>.stride, index: 3)
         encoder.setScissorRect(scissor)
@@ -507,12 +538,13 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     /// The wallpaper's lightness with its mipmaps, which give how light it is around each spot.
     private func makeShade(_ shade: WallpaperShade?) -> MTLTexture? {
-        let shade = shade ?? WallpaperShade(width: 1, height: 1, cell: 1, pixels: Data([128]))
-        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r8Unorm, width: shade.width, height: shade.height, mipmapped: true)
+        let shade = shade ?? WallpaperShade(width: 1, height: 1, cell: 1, pixels: Data([128]), tops: Data([0]))
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rg8Unorm, width: shade.width, height: shade.height, mipmapped: true)
         descriptor.usage = .shaderRead
         guard let texture = device.makeTexture(descriptor: descriptor) else { return nil }
-        shade.pixels.withUnsafeBytes {
-            texture.replace(region: MTLRegionMake2D(0, 0, shade.width, shade.height), mipmapLevel: 0, withBytes: $0.baseAddress!, bytesPerRow: shade.width)
+        let both = Data(zip(shade.pixels, shade.tops).flatMap { [$0, $1] })
+        both.withUnsafeBytes {
+            texture.replace(region: MTLRegionMake2D(0, 0, shade.width, shade.height), mipmapLevel: 0, withBytes: $0.baseAddress!, bytesPerRow: 2 * shade.width)
         }
         if texture.mipmapLevelCount > 1, let commandBuffer = queue.makeCommandBuffer(), let blit = commandBuffer.makeBlitCommandEncoder() {
             blit.generateMipmaps(for: texture)

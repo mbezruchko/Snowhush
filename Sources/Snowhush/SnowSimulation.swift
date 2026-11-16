@@ -753,7 +753,7 @@ final class SnowSimulation {
         tendGlass(dt: dt)
         haunt(dt: dt)
         settle(dt: dt)
-        tendCover()
+        tendCover(dt: dt)
         tendLeaves(dt: dt)
         if let next = nextMode, gust == nil, grains.isEmpty || clock - switchedAt > 6 {
             nextMode = nil
@@ -1083,6 +1083,7 @@ final class SnowSimulation {
                 phases: (random.range(0, 2 * .pi), random.range(0, 2 * .pi))
             )
             ridge.lie(along: found.tops.map { $0 - highest })
+            ridge.nearness = min(max(found.nearness, 0), 1)
             var bands: [Int: (low: Float, high: Float)] = [:]
             // A flake near a stretch's edge may land on a column of the next one: each band takes in its neighbours'.
             for i in 0..<ridge.count {
@@ -1144,7 +1145,7 @@ final class SnowSimulation {
     /// How well each cell holds snow and how near it is, side by side, for the renderer.
     private(set) var coverHoldNear: Data?
     /// The nearness of the farthest and nearest things in the wallpaper, and of what counts as ground.
-    var coverRange: SIMD4<Float> { SIMD4(terrain?.far ?? 0, terrain?.close ?? 1, Wallpaper.ground, 0) }
+    var coverRange: SIMD4<Float> { SIMD4(terrain?.far ?? 0, terrain?.close ?? 1, Wallpaper.ground, coverLevel) }
     var coverSize: (width: Int, height: Int) { (terrain?.width ?? 0, terrain?.height ?? 0) }
     private(set) var coverBounds: SIMD4<Float>?
     /// What hides the wallpaper: the windows and the Dock.
@@ -1158,6 +1159,16 @@ final class SnowSimulation {
     /// How far apart in nearness a flake and a surface can be for the flake to land on it rather than pass it.
     private let sceneTolerance: Float = 0.025
     private let groundLevel = UInt8(Wallpaper.ground * 255)
+    /// A dab's share of snow in each of the 5 by 5 cells around where a flake landed: a soft round bump adding up to
+    /// what the old 3 by 3 one did.
+    private static let dabWeights: [Float] = {
+        let raw = (0..<25).map { k -> Float in
+            let dx = Float(k % 5 - 2), dy = Float(k / 5 - 2)
+            return exp(-(dx * dx + dy * dy) / 2.2)
+        }
+        let total = raw.reduce(0, +)
+        return raw.map { $0 * 3 / total }
+    }()
 
     private(set) var terrainVersion = 0
     /// How light the wallpaper is, for the renderer.
@@ -1205,14 +1216,17 @@ final class SnowSimulation {
         let own = terrain.far + (terrain.close - terrain.far) * pow(flake.depth / sceneDepth, 0.7)
         if near > own + sceneTolerance { return true }
         guard near >= own - sceneTolerance else { return false }
-        // It lands: a dab of snow around where it fell, bigger for a bigger flake.
-        let dab = flake.size * flake.size * 0.004
-        for dy in -1...1 {
-            for dx in -1...1 {
+        // It lands: a dab of snow around where it fell, bigger for a bigger flake, and the farther off the less of it
+        // shows, as everything there is smaller.
+        let nearness = min(max((near - terrain.far) / max(terrain.close - terrain.far, 0.01), 0), 1)
+        let dab = flake.size * flake.size * 0.004 * (0.3 + 0.7 * nearness)
+        // Spread soft and round over a few cells, so no cell's square edge shows in the snow it makes.
+        for dy in -2...2 {
+            for dx in -2...2 {
                 let nx = cx + dx, ny = cy + dy
                 guard nx >= 0, nx < terrain.width, ny >= 0, ny < terrain.height else { continue }
                 let k = ny * terrain.width + nx
-                coverAmount[k] = min(coverAmount[k] + dab * (dx == 0 && dy == 0 ? 1 : 0.5), 1)
+                coverAmount[k] = min(coverAmount[k] + dab * Self.dabWeights[(dy + 2) * 5 + dx + 2], 1)
             }
         }
         coverTouched = true
@@ -1221,30 +1235,33 @@ final class SnowSimulation {
 
     /// Once a second the snow in the picture grows with the snowfall, or melts, or goes with a gust clearing the
     /// snow; a few times a second what changed is written out for the renderer.
-    private func tendCover() {
+    /// How much snow has fallen over the whole picture, 0 to 1, as it grows step by step with the snowfall and melts:
+    /// the same everywhere, so it comes as smoothly as time passes. The flakes seen landing add their own dabs to it.
+    private(set) var coverLevel: Float = 0
+
+    private func tendCover(dt: Float) {
         guard terrain != nil else { return }
         if clock - coverBlownAt < 1.5 {
             let keep = Float(max(0, 1 - (clock - coverBlownAt) / 1.5))
+            coverLevel = min(coverLevel, keep)
             for k in coverAmount.indices { coverAmount[k] = min(coverAmount[k], keep) }
             coverTouched = true
-        } else if clock - coverTickedAt >= 1 {
-            let elapsed = Float(min(clock - coverTickedAt, 5))
-            coverTickedAt = clock
+        } else {
             let snowing = modes.contains(.snow) && accumulates && !holding
             let falling = snowing ? Self.flakesPerMegapoint(intensity) * density / Self.flakesPerMegapoint(0.5) : 0
-            // At the usual snowfall it takes about six minutes to cover all it can; melting, it keeps a little over half.
-            let grow = falling * elapsed / 360
-            let floor: Float = !accumulates || !modes.contains(.snow) ? 0 : falling > 0 ? 0.55 : 0
-            let melt = thaws || !accumulates || !modes.contains(.snow) ? elapsed / (falling > 0 ? 900 : 180) : 0
-            if grow > 0 || melt > 0 {
-                // Everything nearer than the sky gathers it: what holds it on top of what is for the renderer to say.
-                for k in coverAmount.indices where terrainNear[k] > groundLevel {
-                    var amount = min(coverAmount[k] + grow, 1)
-                    if amount > floor { amount = max(floor, amount - melt) }
-                    coverAmount[k] = amount
-                }
+            let melting = thaws || !accumulates || !modes.contains(.snow)
+            // At the usual snowfall it takes about eight minutes to cover all it can; melting, it keeps a little over half
+            // while it snows, and goes in a few minutes once it stops.
+            coverLevel = min(coverLevel + falling * dt / 480, 1)
+            let floor: Float = melting && falling > 0 && accumulates && modes.contains(.snow) ? 0.55 : 0
+            if melting && coverLevel > floor { coverLevel = max(floor, coverLevel - dt / (falling > 0 ? 900 : 180)) }
+            // The dabs left by the flakes seen landing melt as the rest does, a second at a time.
+            if melting, clock - coverTickedAt >= 1 {
+                let elapsed = Float(min(clock - coverTickedAt, 5))
+                for k in coverAmount.indices where coverAmount[k] > 0 { coverAmount[k] = max(0, coverAmount[k] - elapsed / 180) }
                 coverTouched = true
             }
+            if clock - coverTickedAt >= 1 { coverTickedAt = clock }
         }
         guard coverTouched, clock - coverWrittenAt >= 0.25 else { return }
         coverTouched = false
@@ -2243,7 +2260,8 @@ final class SnowSimulation {
                             drift: flake.velocity.x)
                     } else {
                         // A flake over the wallpaper stands for the snow falling over the whole scene it shows.
-                        let catches = hit.layer.onWallpaper ? ridgeCatch : 1
+                        // The farther off the ridge, the less a flake's worth of snow shows on it.
+                        let catches = hit.layer.onWallpaper ? ridgeCatch * (0.3 + 0.7 * hit.layer.nearness) : 1
                         hit.layer.deposit(flake.size * flake.size * deposition * flake.mass * catches * hit.layer.fill(hit.index), at: flake.position.x, wide: true)
                     }
                     heightsChanged = true

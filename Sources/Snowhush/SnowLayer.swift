@@ -40,6 +40,8 @@ final class SnowLayer {
     var isDock = false
     /// Lies on the top of something in the wallpaper, behind every window.
     private(set) var onWallpaper = false
+    /// How near the thing in the wallpaper it lies on looks, from 0 for the horizon to 1 for right in front.
+    var nearness: Float = 1
     /// For a layer on the wallpaper, which never moves: over each stretch of the screen it crosses, how low and how
     /// high its bed lies there, relative to `origin.y`. The simulation looks up landing flakes by these.
     var bands: [(stretch: Int, low: Float, high: Float)] = []

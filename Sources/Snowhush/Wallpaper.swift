@@ -12,29 +12,48 @@ struct WallpaperScene: Codable, Equatable {
 }
 
 /// How light the wallpaper is, a cell to every `cell` points, top row first, 0 to 255: snow on it shows first where
-/// it is lighter than around, on flat ground and old snow, and last on the dark of trees and rock. Kept on disk as a PNG.
+/// it is lighter than around, on flat ground and old snow, and last on the dark of trees and rock. With it, how much each
+/// cell is the top of something darker than what is just over it, a branch against the mist, a ledge under the sky. Both
+/// are kept on disk as PNGs.
 struct WallpaperShade: Codable, Equatable {
     var width: Int
     var height: Int
     var cell: Int
     var pixels: Data
+    var tops: Data
 
-    init(width: Int, height: Int, cell: Int, pixels: Data) {
+    init(width: Int, height: Int, cell: Int, pixels: Data, tops: Data) {
         self.width = width
         self.height = height
         self.cell = cell
         self.pixels = pixels
+        self.tops = tops
     }
 
-    private enum Keys: String, CodingKey { case width, height, cell, png }
+    private enum Keys: String, CodingKey { case width, height, cell, png, tops }
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: Keys.self)
-        let width = try values.decode(Int.self, forKey: .width), height = try values.decode(Int.self, forKey: .height)
-        self.width = width
-        self.height = height
+        width = try values.decode(Int.self, forKey: .width)
+        height = try values.decode(Int.self, forKey: .height)
         cell = try values.decode(Int.self, forKey: .cell)
-        let png = try values.decode(Data.self, forKey: .png)
+        guard let pixels = Self.gray(fromPNG: try values.decode(Data.self, forKey: .png), width: width, height: height),
+              let tops = Self.gray(fromPNG: try values.decode(Data.self, forKey: .tops), width: width, height: height)
+        else { throw DecodingError.dataCorruptedError(forKey: .png, in: values, debugDescription: "unreadable shade") }
+        self.pixels = pixels
+        self.tops = tops
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: Keys.self)
+        try values.encode(width, forKey: .width)
+        try values.encode(height, forKey: .height)
+        try values.encode(cell, forKey: .cell)
+        try values.encode(Self.png(ofGray: pixels, width: width, height: height), forKey: .png)
+        try values.encode(Self.png(ofGray: tops, width: width, height: height), forKey: .tops)
+    }
+
+    private static func gray(fromPNG png: Data, width: Int, height: Int) -> Data? {
         var decoded = Data(count: width * height)
         let read = decoded.withUnsafeMutableBytes { bytes -> Bool in
             guard let source = CGImageSourceCreateWithData(png as CFData, nil), let image = CGImageSourceCreateImageAtIndex(source, 0, nil),
@@ -43,24 +62,19 @@ struct WallpaperShade: Codable, Equatable {
             context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
             return true
         }
-        guard read else { throw DecodingError.dataCorruptedError(forKey: .png, in: values, debugDescription: "unreadable shade") }
-        pixels = decoded
+        return read ? decoded : nil
     }
 
-    func encode(to encoder: Encoder) throws {
-        var values = encoder.container(keyedBy: Keys.self)
-        try values.encode(width, forKey: .width)
-        try values.encode(height, forKey: .height)
-        try values.encode(cell, forKey: .cell)
+    private static func png(ofGray gray: Data, width: Int, height: Int) -> Data {
         let png = NSMutableData()
-        guard let provider = CGDataProvider(data: pixels as CFData),
+        guard let provider = CGDataProvider(data: gray as CFData),
               let image = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 8, bytesPerRow: width, space: CGColorSpaceCreateDeviceGray(),
                                   bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue), provider: provider, decode: nil,
                                   shouldInterpolate: false, intent: .defaultIntent),
-              let destination = CGImageDestinationCreateWithData(png, "public.png" as CFString, 1, nil) else { return }
+              let destination = CGImageDestinationCreateWithData(png, "public.png" as CFString, 1, nil) else { return Data() }
         CGImageDestinationAddImage(destination, image, nil)
         CGImageDestinationFinalize(destination)
-        try values.encode(png as Data, forKey: .png)
+        return png as Data
     }
 }
 
@@ -118,7 +132,7 @@ enum Wallpaper {
     }
 
     /// Raise whenever what is found changes, so pictures already done are looked at again.
-    private static let version = 18
+    private static let version = 21
 
     /// What the screen shows of its wallpaper now; nil for a moving or missing one.
     static func picture(on screen: NSScreen) -> Picture? {
@@ -387,7 +401,8 @@ enum Wallpaper {
                 let gray = lightness(best.x, best.y, best.z)
                 best = SIMD3(repeating: gray) + (best - SIMD3(repeating: gray)) * 0.4
                 let hue = SIMD3<Float>(repeating: 0.25) + best / max(best.x, best.y, best.z, 0.05) * 0.75
-                let tint = hue * min(max(lightest * 1.15 + 0.1, 0.62), 1)
+                // About as bright as the light is there: dim in a night picture, as the snow already in it is.
+                let tint = hue * min(max(lightest * 1.1 + 0.08, 0.45), 0.95)
                 let i = (y * width + x) * 4
                 pixels[i] = UInt8(min(tint.x, 1) * 255)
                 pixels[i + 1] = UInt8(min(tint.y, 1) * 255)
@@ -486,7 +501,29 @@ enum Wallpaper {
                 }
             }
         }
-        return WallpaperShade(width: width, height: height, cell: cell, pixels: Data(pixels))
+        // The tops of darker things: lighter just over them than on them. Only those that run along a little, as a branch
+        // or a ledge does, not a speck of the picture's grain, and softened, so the snow on them has no pixels' edges.
+        var tops = [Float](repeating: 0, count: width * height)
+        for y in 2..<height {
+            for x in 0..<width {
+                let here = Float(pixels[y * width + x]) / 255
+                let over = Float(max(pixels[(y - 1) * width + x], pixels[(y - 2) * width + x])) / 255
+                tops[y * width + x] = smoothstep(0.04, 0.16, over - here)
+            }
+        }
+        var along = tops
+        for y in 0..<height {
+            for x in 1..<(width - 1) { along[y * width + x] = min(tops[y * width + x - 1], tops[y * width + x], tops[y * width + x + 1]) }
+        }
+        var soft = along
+        for y in 1..<(height - 1) {
+            for x in 1..<(width - 1) {
+                var sum: Float = 0
+                for dy in -1...1 { for dx in -1...1 { sum += along[(y + dy) * width + x + dx] * (dx == 0 ? 2 : 1) * (dy == 0 ? 2 : 1) } }
+                soft[y * width + x] = sum / 16
+            }
+        }
+        return WallpaperShade(width: width, height: height, cell: cell, pixels: Data(pixels), tops: Data(soft.map { UInt8(min($0, 1) * 255) }))
     }
 
     /// How fast, per cell down, the depth must grow nearer for a surface to hold snow at all, and to hold it fully.
