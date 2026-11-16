@@ -295,6 +295,36 @@ final class PictureSnow {
         return desktop
     }
 
+    /// Finds which wallpaper a desktop shows. The system is asked here; the picture's file is looked at off the main
+    /// thread, since a first look into a folder the system guards waits for the user to allow it, and nothing else
+    /// must wait with it.
+    private func ask(for desktop: Desktop) {
+        guard let asked = Wallpaper.asked(on: screen) else {
+            show(nil, on: desktop)
+            return
+        }
+        Self.lookout.async { [weak self, weak desktop] in
+            let picture = Wallpaper.picture(asked)
+            DispatchQueue.main.async {
+                guard let self, let desktop else { return }
+                self.show(picture, on: desktop)
+                self.look()
+            }
+        }
+    }
+
+    /// A desktop's wallpaper is `picture` now: the snow of another one goes.
+    private func show(_ picture: Wallpaper.Picture?, on desktop: Desktop) {
+        guard picture != desktop.picture else { return }
+        desktop.picture = picture
+        desktop.read = false
+        desktop.terrain = nil
+        desktop.light = nil
+        fade(desktop.window.snow, over: 0.3)
+        clear(desktop)
+        if desktop === current { simulation.setPicture(nil) }
+    }
+
     /// Looks at the desktop showing: for another wallpaper on it, which is then read off the main thread, and for
     /// snow that has changed, which is drawn. With nothing falling, lying or melting it rests until woken.
     private func look() {
@@ -304,19 +334,10 @@ final class PictureSnow {
             simulation.setPicture(desktop.terrain, light: desktop.light)
             asked = false
         }
-        let picture = wallpaperMayHaveChanged() ? Wallpaper.picture(on: screen) : desktop.picture
-        if picture != desktop.picture {
-            desktop.picture = picture
-            desktop.read = false
-            desktop.terrain = nil
-            desktop.light = nil
-            fade(desktop.window.snow, over: 0.3)
-            clear(desktop)
-            simulation.setPicture(nil)
-        }
+        if wallpaperMayHaveChanged() { ask(for: desktop) }
         // The wallpaper is read when it is new, and again when the renderer has since drawn another desktop's: off
         // the main thread, by another run of the app the first time and from what that kept after.
-        if let picture, !reading, !desktop.read || (desktop.terrain != nil && loaded != picture) {
+        if let picture = desktop.picture, !reading, !desktop.read || (desktop.terrain != nil && loaded != picture) {
             reading = true
             let columnWidth = simulation.columnWidth
             Self.lookout.async { [weak self, weak desktop] in

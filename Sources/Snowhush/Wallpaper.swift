@@ -148,23 +148,28 @@ enum Wallpaper {
     /// Raise whenever what is found changes, so pictures already done are looked at again.
     private static let version = 25
 
-    /// What `picture(on:)` found for each wallpaper as each screen lays it out: asked every second, it opens a
-    /// picture only once. For the main thread.
-    private static var known: [String: Picture?] = [:]
+    /// Which wallpaper a screen shows and how it lays it out, as the system tells it: nothing of the picture's file.
+    struct Asked {
+        let url: URL
+        let size: CGSize
+        let scaling: NSImageScaling
+        let clips: Bool
+        let fill: NSColor?
+    }
 
-    /// What the screen shows of its wallpaper now; nil for a moving or missing one.
-    static func picture(on screen: NSScreen) -> Picture? {
+    /// Asks the system which wallpaper the screen shows now; nil for none. For the main thread: it opens no file.
+    static func asked(on screen: NSScreen) -> Asked? {
         guard let url = NSWorkspace.shared.desktopImageURL(for: screen) else { return nil }
         let options = NSWorkspace.shared.desktopImageOptions(for: screen) ?? [:]
         let scaling = (options[.imageScaling] as? NSNumber).flatMap { NSImageScaling(rawValue: $0.uintValue) } ?? .scaleProportionallyUpOrDown
         let clips = (options[.allowClipping] as? NSNumber)?.boolValue ?? true
-        let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
-        let key = "\(url.path)|\(screen.frame.size)|\(scaling.rawValue)|\(clips)|\(values?.contentModificationDate?.timeIntervalSince1970 ?? 0)|\(values?.fileSize ?? 0)"
-        if let found = known[key] { return found }
-        let found = picture(url: url, size: screen.frame.size, scaling: scaling, clips: clips, fill: options[.fillColor] as? NSColor)
-        if known.count >= 16 { known.removeAll() }
-        known[key] = found
-        return found
+        return Asked(url: url, size: screen.frame.size, scaling: scaling, clips: clips, fill: options[.fillColor] as? NSColor)
+    }
+
+    /// The wallpaper asked about, with its file looked at. Never for the main thread: the file may lie in a folder the
+    /// system guards, as Downloads, and the first look at it then waits for as long as the user takes to allow it.
+    static func picture(_ asked: Asked) -> Picture? {
+        picture(url: asked.url, size: asked.size, scaling: asked.scaling, clips: asked.clips, fill: asked.fill)
     }
 
     static func picture(url picked: URL, size: CGSize, scaling: NSImageScaling, clips: Bool, fill: NSColor?) -> Picture? {
