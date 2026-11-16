@@ -303,6 +303,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         for snow in screens {
             snow.simulation.accumulates = !surfaces.isEmpty
             snow.simulation.groundSettles = surfaces.contains(.ground)
+            snow.picture?.wanted = surfaces.contains(.wallpaper)
         }
         if surfaces.isDisjoint(with: .tracked) { screens.forEach { $0.dropWindowSnow() } }
         if let menu = statusItem.menu {
@@ -344,6 +345,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         for snow in screens {
             snow.window.showsInScreenshots = Preferences.showInScreenshots
             snow.dock.window.showsInScreenshots = Preferences.showInScreenshots
+            snow.picture?.showsInScreenshots = Preferences.showInScreenshots
         }
     }
 

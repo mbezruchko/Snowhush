@@ -1114,91 +1114,6 @@ vertex PileOut pileVertex(uint vid [[vertex_id]], constant Uniforms &u [[buffer(
     return out;
 }
 
-// Snow lying on the wallpaper's surfaces, over the whole screen but where the windows hide it.
-struct CoverOut {
-    float4 position [[position]];
-    float2 point;
-};
-
-vertex CoverOut coverVertex(uint vid [[vertex_id]], constant Uniforms &u [[buffer(0)]]) {
-    float2 corner = float2(float((vid << 1) & 2), float(vid & 2));
-    CoverOut out;
-    out.position = float4(corner * 2.0 - 1.0, 0.0, 1.0);
-    out.point = corner * u.viewSize;
-    return out;
-}
-
-fragment float4 coverFragment(CoverOut in [[stage_in]],
-                              constant Uniforms &u [[buffer(1)]],
-                              constant float4 *occluders [[buffer(2)]],
-                              constant float4 &range [[buffer(3)]],
-                              texture2d<float> cover [[texture(0)]],
-                              texture2d<float> hold [[texture(1)]],
-                              texture2d<float> light [[texture(2)]],
-                              texture2d<float> shade [[texture(3)]],
-                              texture2d<float> noise [[texture(4)]]) {
-    float2 world = in.point;
-    for (int k = 0; k < u.occluderCount; k++) {
-        float4 o = occluders[k];
-        if (world.x >= o.x && world.x < o.z && world.y >= o.y && world.y < o.w) discard_fragment();
-    }
-    constexpr sampler smooth(filter::linear, address::clamp_to_edge);
-    float2 uv = float2(world.x / u.viewSize.x, 1.0 - world.y / u.viewSize.y);
-    float2 holdNear = hold.sample(smooth, uv).rg;
-    if (holdNear.g <= range.z) discard_fragment();
-    // What has fallen everywhere and the dabs of the flakes seen landing; the farther off, the less of it shows.
-    float near = saturate((holdNear.g - range.x) / max(range.y - range.x, 0.01));
-    float amount = min(cover.sample(smooth, uv).r + range.w, 1.0) * mix(0.6, 1.0, near);
-    if (amount < 0.01) discard_fragment();
-    // On the top of anything darker than what is just over it, a branch against the mist, a rock under the sky, snow
-    // lies too, whichever way the surface under it faces.
-    float top = shade.sample(smooth, uv).g;
-    // Elsewhere how light the picture is, a little softened, so the snow's edge follows its shapes, not its pixels.
-    float lightness = shade.sample(smooth, uv, level(1.0)).r;
-    float holds = max(holdNear.r, top * 0.9);
-    float snow = amount * holds;
-    if (snow < 0.01) discard_fragment();
-    // Snow shows first where the picture is lighter than around it, on flat ground and old snow, and on the tops of
-    // things; last on the dark of trees and rock, which still show through deep snow, and in a dark wood only as a
-    // dusting on what catches the light. A grainy noise breaks up what is left alike.
-    float around = shade.sample(smooth, uv, level(4.0)).r;
-    // Two scales of a gradient noise tiled from a texture, the finer turned against the coarser, so neither's grid
-    // lines the edge up.
-    constexpr sampler tiled(filter::linear, address::repeat);
-    float grain = 0.6 * noise.sample(tiled, float2x2(0.8, 0.6, -0.6, 0.8) * world * (0.16 / 32.0)).r
-        + 0.4 * noise.sample(tiled, world * (0.05 / 32.0)).r;
-    // Far off, in mist or behind the trees, less of it shows, and only where the most of it lies.
-    float threshold = 0.55 - (lightness - around) * 2.2 + (grain - 0.5) * 0.45 + max(0.0, 0.28 - around) * 1.8 - top * 0.7
-        + (1.0 - smoothstep(0.0, 0.45, near)) * 0.6;
-    // Snow is opaque: where it lies it hides what is under it, and only its very edge lets that through.
-    float a = smoothstep(threshold - 0.12, threshold + 0.06, snow * 1.25) * 0.9;
-    if (a <= 0.0) discard_fragment();
-    // Lit as the picture is there, brightest where it faces up to the sky, and carrying the picture's own bumps and
-    // hollows: as light as the picture is there against around it, bluer in its shadows, grainy close up.
-    float3 tint = light.sample(smooth, uv).rgb;
-    float relief = clamp(0.5 + (lightness - around) * 2.6, 0.0, 1.0);
-    float3 shadow = float3(0.6, 0.66, 0.78), lit = float3(1.0, 1.0, 1.02);
-    float3 color = mix(shadow, lit, relief) * mix(0.85, 1.0, holds) * tint * u.light.rgb;
-    // Far off, the air between softens it toward the light of the sky: the farther, the paler.
-    float haze = pow(1.0 - near, 1.5) * 0.45;
-    color = mix(color, tint * 0.92, haze);
-    return float4(color * a, a);
-}
-
-// Snow along a ridge in the wallpaper: a band hugging it from just under its bed to just over its surface, column
-// edge by column edge, so a long slanted ridge doesn't shade the whole box around it.
-vertex PileOut ridgeVertex(uint vid [[vertex_id]], constant Uniforms &u [[buffer(0)]], const device float *h [[buffer(1)]]) {
-    int n = u.columnCount;
-    int edge = int(vid >> 1);
-    int a = clamp(edge - 1, 0, n - 1), b = clamp(edge, 0, n - 1);
-    float y = (vid & 1) ? max(h[a], h[b]) + 3.0 : min(h[n + a], h[n + b]) - 3.0;
-    float2 p = float2(float(edge) * u.columnWidth, y);
-    PileOut out;
-    out.position = float4((p + u.origin + u.shake.xy) / u.viewSize * 2.0 - 1.0, 0.0, 1.0);
-    out.point = p;
-    return out;
-}
-
 static float heightAt(const device float *h, constant Uniforms &u, float x) {
     float f = x / u.columnWidth - 0.5;
     float base = floor(f);
@@ -1207,8 +1122,10 @@ static float heightAt(const device float *h, constant Uniforms &u, float x) {
     return mix(h[i], h[j], saturate(f - base));
 }
 
-// `tint` is the light the snow takes on: white, or for snow on the wallpaper the picture's own light there.
-static float4 pileColor(PileOut in, const device float *heights, constant Uniforms &u, constant float4 *occluders, float3 tint) {
+fragment float4 pileFragment(PileOut in [[stage_in]],
+                             const device float *heights [[buffer(0)]],
+                             constant Uniforms &u [[buffer(1)]],
+                             constant float4 *occluders [[buffer(2)]]) {
     float2 world = in.point + u.origin;
     for (int k = 0; k < u.occluderCount; k++) {
         float4 o = occluders[k];
@@ -1264,29 +1181,10 @@ static float4 pileColor(PileOut in, const device float *heights, constant Unifor
     }
 
     // Night dims fallen leaves without draining their colour.
-    color *= mix(u.light.rgb * tint, mix(float3(1.0), u.light.rgb, 0.4) * mix(float3(1.0), tint, 0.5), leafy);
+    color *= mix(u.light.rgb, mix(float3(1.0), u.light.rgb, 0.4), leafy);
     color = mix(color, u.rim.rgb, u.rim.a * exp(-depth / 2.5) * (1.0 - leafy));
     color = mix(color, candle, candlelight(u, world) * (0.35 + 0.65 * exp(-depth / 14.0)) * 0.55);
     return float4(color * coverage, coverage);
-}
-
-fragment float4 pileFragment(PileOut in [[stage_in]],
-                             const device float *heights [[buffer(0)]],
-                             constant Uniforms &u [[buffer(1)]],
-                             constant float4 *occluders [[buffer(2)]]) {
-    return pileColor(in, heights, u, occluders, float3(1.0));
-}
-
-fragment float4 ridgeFragment(PileOut in [[stage_in]],
-                              const device float *heights [[buffer(0)]],
-                              constant Uniforms &u [[buffer(1)]],
-                              constant float4 *occluders [[buffer(2)]],
-                              texture2d<float> light [[texture(0)]]) {
-    constexpr sampler smooth(filter::linear, address::clamp_to_edge);
-    float2 world = in.point + u.origin;
-    // Matched to the snow lying on the slopes under it, so the two read as one.
-    float3 tint = light.sample(smooth, float2(world.x / u.viewSize.x, 1.0 - world.y / u.viewSize.y)).rgb * float3(0.76, 0.79, 0.86);
-    return pileColor(in, heights, u, occluders, tint);
 }
 
 struct SignUniforms {

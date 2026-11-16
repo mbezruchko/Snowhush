@@ -134,13 +134,23 @@ enum Wallpaper {
     /// Raise whenever what is found changes, so pictures already done are looked at again.
     private static let version = 21
 
+    /// What `picture(on:)` found for each wallpaper as each screen lays it out: asked every second, it opens a
+    /// picture only once. For the main thread.
+    private static var known: [String: Picture?] = [:]
+
     /// What the screen shows of its wallpaper now; nil for a moving or missing one.
     static func picture(on screen: NSScreen) -> Picture? {
         guard let url = NSWorkspace.shared.desktopImageURL(for: screen) else { return nil }
         let options = NSWorkspace.shared.desktopImageOptions(for: screen) ?? [:]
         let scaling = (options[.imageScaling] as? NSNumber).flatMap { NSImageScaling(rawValue: $0.uintValue) } ?? .scaleProportionallyUpOrDown
         let clips = (options[.allowClipping] as? NSNumber)?.boolValue ?? true
-        return picture(url: url, size: screen.frame.size, scaling: scaling, clips: clips, fill: options[.fillColor] as? NSColor)
+        let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+        let key = "\(url.path)|\(screen.frame.size)|\(scaling.rawValue)|\(clips)|\(values?.contentModificationDate?.timeIntervalSince1970 ?? 0)|\(values?.fileSize ?? 0)"
+        if let found = known[key] { return found }
+        let found = picture(url: url, size: screen.frame.size, scaling: scaling, clips: clips, fill: options[.fillColor] as? NSColor)
+        if known.count >= 16 { known.removeAll() }
+        known[key] = found
+        return found
     }
 
     static func picture(url picked: URL, size: CGSize, scaling: NSImageScaling, clips: Bool, fill: NSColor?) -> Picture? {
