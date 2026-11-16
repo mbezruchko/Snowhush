@@ -15,7 +15,7 @@
   &nbsp;·&nbsp;
   <a href="https://snowhush.app"><picture><source media="(prefers-color-scheme: dark)" srcset=".github/readme/link-dark.svg"><img src=".github/readme/link-light.svg" width="20" height="16" align="absmiddle" alt=""></picture>snowhush.app</a>
   <br>
-  <sub>macOS 14 or later · Windows 10 or 11 · Linux with KDE Plasma 6, Hyprland, Sway or niri · free, source available</sub>
+  <sub>macOS 14 or later · Windows 10 or 11 · Linux with KDE Plasma 6, Hyprland, Sway or niri on Wayland; basic GNOME/X11 overlay from source · free, source available</sub>
 </p>
 
 https://github.com/user-attachments/assets/291c3cd5-3563-4b86-8b66-dfd924f980fc
@@ -59,6 +59,20 @@ windows/build.sh      # dist/Snowhush-Setup.exe, cross-compiled from macOS
 ```
 
 ### Linux
+
+#### GNOME on X11
+
+In a GNOME **Xorg** session, run the small GTK overlay directly:
+
+```sh
+sudo apt install python3-gi python3-cairo gir1.2-gtk-3.0 gir1.2-wnck-3.0  # Debian/Ubuntu
+python3 linux/install-gnome-x11.py   # adds Snowhush (GNOME X11) to your applications menu
+./linux/gnome-x11.py                  # or run directly from this checkout
+```
+
+It draws falling snow above the desktop and lets clicks pass through to other apps. Snow settles on visible windows, follows them when they move, shakes loose on a quick drag, falls when they close or minimize, and scatters when the pointer sweeps over it. The small control window changes intensity from 0 to 10 (0 pauses new snow); closing it quits. A tray icon is also offered where the desktop displays legacy tray icons, but GNOME Shell usually does not, so the control window stays available. Requires an X11 compositor (GNOME's default). To update an existing user-local launcher, rerun the installer with `--force`. This X11 version does not hide itself in screenshots or pause automatically when the screen locks. It is not included in the Rust AppImage or packages yet.
+
+#### Wayland
 
 `linux/` is a native version for Wayland: KDE Plasma 6, Hyprland, Sway and niri. It shares the snow's physics with the Windows version and draws with OpenGL ES in a layer-shell overlay. Wayland doesn't tell apps where other windows are or where the pointer is, so each compositor is asked in its own way: on KDE, Snowhush loads a small KWin script (`linux/src/snowhush.js`) while it runs, which reports both; Hyprland answers over its IPC socket, which tells both too; Sway and niri answer over theirs, though they don't tell where the pointer is, and niri only where floating windows are, so on niri only those collect snow.
 
