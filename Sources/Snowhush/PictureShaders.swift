@@ -10,6 +10,8 @@ struct PictureUniforms {
     float level;
     // The nearness of the farthest and the nearest things in the wallpaper, and of what counts as ground.
     float4 range;
+    // How thick the snow lies now where it lies thickest, in points.
+    float thickest;
 };
 
 static float hash(float2 p) {
@@ -36,13 +38,14 @@ vertex CoverOut pictureCoverVertex(uint vid [[vertex_id]], constant PictureUnifo
     return out;
 }
 
-// Snow lying on the wallpaper's surfaces.
-fragment float4 pictureCoverFragment(CoverOut in [[stage_in]],
-                                     constant PictureUniforms &u [[buffer(0)]],
-                                     texture2d<float> dabs [[texture(0)]],
-                                     texture2d<float> relief [[texture(1)]],
-                                     texture2d<float> light [[texture(2)]],
-                                     texture2d<float> noise [[texture(3)]]) {
+// The first of two passes: how thick the snow lies on each spot of the wallpaper's surfaces, how much of one it covers,
+// and how much of a dusting is on the rest. Red is the thickness in sixteenths of `thickest` points; green the dusting;
+// blue how much of the spot is covered.
+fragment float4 pictureLieFragment(CoverOut in [[stage_in]],
+                                   constant PictureUniforms &u [[buffer(0)]],
+                                   texture2d<float> dabs [[texture(0)]],
+                                   texture2d<float> relief [[texture(1)]],
+                                   texture2d<float> noise [[texture(3)]]) {
     constexpr sampler smooth(filter::linear, mip_filter::linear, address::clamp_to_edge);
     constexpr sampler tiled(filter::linear, address::repeat);
     float2 world = in.point;
@@ -50,11 +53,10 @@ fragment float4 pictureCoverFragment(CoverOut in [[stage_in]],
     // The relief's planes: how light the picture is, the tops of its dark things, how well it holds snow, how near.
     float4 here = relief.sample(smooth, uv, level(0.0));
     float2 holdNear = here.ba;
-    if (holdNear.g <= u.range.z) discard_fragment();
+    if (holdNear.g <= u.range.z) return float4(0.0);
     // What has fallen everywhere and the dabs of the flakes seen landing; the farther off, the less of it shows.
     float near = saturate((holdNear.g - u.range.x) / max(u.range.y - u.range.x, 0.01));
     float amount = min(dabs.sample(smooth, uv).r + u.level, 1.0) * mix(0.6, 1.0, near);
-    if (amount < 0.01) discard_fragment();
     // On the top of anything darker than what is just over it, a branch against the mist, a rock under the sky, snow
     // lies too, whichever way the surface under it faces.
     float top = here.g;
@@ -62,7 +64,7 @@ fragment float4 pictureCoverFragment(CoverOut in [[stage_in]],
     float lightness = relief.sample(smooth, uv, level(1.0)).r;
     float holds = max(holdNear.r, top * 0.9);
     float snow = amount * holds;
-    if (snow < 0.01) discard_fragment();
+    if (snow < 0.005) return float4(0.0);
     // Snow shows first where the picture is lighter than around it, on flat ground and old snow, and on the tops of
     // things; last on the dark of trees and rock, which still show through deep snow, and in a dark wood only as a
     // dusting on what catches the light. A gradient noise at two scales, the finer turned against the coarser so
@@ -71,19 +73,72 @@ fragment float4 pictureCoverFragment(CoverOut in [[stage_in]],
     float grain = 0.6 * noise.sample(tiled, float2x2(0.8, 0.6, -0.6, 0.8) * world * (0.16 / 32.0)).r
         + 0.4 * noise.sample(tiled, world * (0.05 / 32.0)).r;
     // Far off, in mist or behind the trees, less of it shows, and only where the most of it lies.
-    float threshold = 0.55 - (lightness - around) * 2.2 + (grain - 0.5) * 0.45 + max(0.0, 0.28 - around) * 1.8 - top * 0.7
-        + (1.0 - smoothstep(0.0, 0.45, near)) * 0.6;
-    float a = smoothstep(threshold - 0.12, threshold + 0.06, snow * 1.25) * 0.9;
-    if (a <= 0.0) discard_fragment();
-    // Lit as the picture is there, brightest where it faces up to the sky, and carrying the picture's own bumps and
-    // hollows: as light as the picture is there against around it, bluer in its shadows.
+    float threshold = 0.55 - (lightness - around) * 2.2 + (grain - 0.5) * 0.45 + max(0.0, 0.28 - around) * 0.8 - top * 0.7
+        + (1.0 - smoothstep(0.0, 0.45, near)) * 0.45;
+    float cover = smoothstep(threshold - 0.12, threshold + 0.06, snow * 1.25);
+    // The same depth of snow looks thinner the farther off it lies, and lies thinner on what holds it less well. Before
+    // it covers a spot it only dusts it, where the picture's grain catches the light first.
+    float thick = cover * mix(0.25, 1.0, near) * mix(0.55, 1.0, holds);
+    float fine = here.r - relief.sample(smooth, uv, level(2.0)).r;
+    float dust = smoothstep(0.35, 1.0, snow * 1.25 / max(threshold, 0.1)) * (1.0 - cover) * saturate(fine * 14.0) * holdNear.r;
+    return float4(thick, dust, cover, 1.0);
+}
+
+// The second pass: the snow as it is seen. Snow that lies thick stands up from what it lies on: it reaches a little
+// over its upper edge, shows a face in shadow along its lower edge, and shades the bare ground just under it.
+fragment float4 pictureShowFragment(CoverOut in [[stage_in]],
+                                    constant PictureUniforms &u [[buffer(0)]],
+                                    texture2d<float> lie [[texture(0)]],
+                                    texture2d<float> relief [[texture(1)]],
+                                    texture2d<float> light [[texture(2)]]) {
+    constexpr sampler smooth(filter::linear, mip_filter::linear, address::clamp_to_edge);
+    float2 world = in.point;
+    float2 uv = float2(world.x / u.viewSize.x, 1.0 - world.y / u.viewSize.y);
+    float2 point = 1.0 / u.viewSize;
+    float4 here = lie.sample(smooth, uv);
+    // How far under the snow's surface this spot is: of the snow lying here, and of the snow lying just below on the
+    // screen that stands up this far, rounded over like a pillow.
+    float own = here.r * u.thickest;
+    float risen = -1.0;
+    int reach = int(ceil(u.thickest));
+    for (int k = 1; k <= reach; k++) {
+        for (int j = -1; j <= 1; j++) {
+            float2 from = float2(float(j) * 1.5, float(k));
+            float there = lie.sample(smooth, uv + from * point).r * u.thickest;
+            risen = max(risen, there - length(from * float2(1.3, 1.0)));
+        }
+    }
+    float covered = max(here.b, saturate(risen * u.scale + 0.5));
+    // Bare ground: a dusting where one lies, and the shade of the snow standing just over it.
+    float over = max(lie.sample(smooth, uv - float2(0.0, 1.5) * point).b, lie.sample(smooth, uv - float2(0.0, 3.5) * point).b * 0.6);
+    float shade = over * (1.0 - covered) * 0.2 * saturate(u.thickest / 3.0);
+    float4 relieved = relief.sample(smooth, uv, level(0.0));
+    float near = saturate((relieved.a - u.range.x) / max(u.range.y - u.range.x, 0.01));
     float3 tint = light.sample(smooth, uv).rgb;
+    float dusting = here.g * 0.22 * (1.0 - covered);
+    float4 ground = float4(tint * 0.95 * dusting, dusting + shade * (1.0 - dusting));
+    if (covered <= 0.0) {
+        if (ground.a <= 0.002) discard_fragment();
+        return ground;
+    }
+    // Lit as the picture is there, and carrying the picture's own bumps and hollows: as light as the picture is there
+    // against around it, bluer in its shadows.
+    float lightness = relief.sample(smooth, uv, level(1.0)).r;
+    float around = relief.sample(smooth, uv, level(4.0)).r;
     float lift = clamp(0.5 + (lightness - around) * 2.6, 0.0, 1.0);
     float3 shadow = float3(0.6, 0.66, 0.78), lit = float3(1.0, 1.0, 1.02);
-    float3 color = mix(shadow, lit, lift) * mix(0.85, 1.0, holds) * tint;
+    float3 color = mix(shadow, lit, lift) * mix(0.85, 1.0, max(relieved.b, relieved.g * 0.9));
+    // Its lip catches the sky; its face along the lower edge, where bare ground shows just below, is in its own shade.
+    float under = max(own, risen);
+    color *= 1.0 + 0.1 * saturate(1.0 - under / 1.5);
+    float below = max(lie.sample(smooth, uv + float2(0.0, 1.5) * point).b, lie.sample(smooth, uv + float2(0.0, 3.0) * point).b);
+    float face = here.b * (1.0 - below) * saturate(u.thickest / 3.0);
+    color = mix(color, float3(0.52, 0.6, 0.76), face * 0.55);
+    color *= tint;
     color += (hash(floor(in.position.xy)) - 0.5) * 0.03;
     color = hazed(color, tint, near);
-    return float4(color * a, a);
+    float a = covered * 0.9;
+    return float4(color * a, a) + ground * (1.0 - a);
 }
 
 // One column of a ridge: its top from the screen's bottom, that top smoothed along the ridge, and how much of a

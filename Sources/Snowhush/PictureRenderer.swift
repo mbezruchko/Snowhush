@@ -11,6 +11,7 @@ final class PictureRenderer {
         var scale: Float
         var level: Float
         var range: SIMD4<Float>
+        var thickest: Float
     }
 
     private struct CapUniforms {
@@ -30,8 +31,11 @@ final class PictureRenderer {
 
     private let device: MTLDevice
     private let queue: MTLCommandQueue
-    private let coverPipeline: MTLRenderPipelineState
+    private let liePipeline: MTLRenderPipelineState
+    private let showPipeline: MTLRenderPipelineState
     private let capPipeline: MTLRenderPipelineState
+    /// Where the first pass leaves how the snow lies, for the second to show: half the picture's size across.
+    private var lie: MTLTexture?
     private let noise: MTLTexture
 
     private var relief: MTLTexture?
@@ -46,7 +50,9 @@ final class PictureRenderer {
     /// A cap's full thickness on the nearest ridge once all the snow has fallen, in points.
     private static let capDepth: Float = 9
 
-    private static var built: [UInt64: (cover: MTLRenderPipelineState, cap: MTLRenderPipelineState)] = [:]
+    private static var built: [UInt64: (lie: MTLRenderPipelineState, show: MTLRenderPipelineState, cap: MTLRenderPipelineState)] = [:]
+    /// How thick the snow lies on the nearest level ground once all of it has fallen, in points.
+    private static let depth: Float = 5
 
     init(device: MTLDevice) throws {
         guard let queue = device.makeCommandQueue(), let noise = Self.makeNoise(device: device) else { throw RendererError.unavailable }
@@ -54,25 +60,26 @@ final class PictureRenderer {
         self.queue = queue
         self.noise = noise
         if let pipelines = Self.built[device.registryID] {
-            (coverPipeline, capPipeline) = pipelines
+            (liePipeline, showPipeline, capPipeline) = pipelines
         } else {
             let library = try device.makeLibrary(source: pictureShaderSource, options: nil)
-            func pipeline(_ vertex: String, _ fragment: String) throws -> MTLRenderPipelineState {
+            func pipeline(_ vertex: String, _ fragment: String, format: MTLPixelFormat = .bgra8Unorm, blended: Bool = true) throws -> MTLRenderPipelineState {
                 let descriptor = MTLRenderPipelineDescriptor()
                 descriptor.vertexFunction = library.makeFunction(name: vertex)
                 descriptor.fragmentFunction = library.makeFunction(name: fragment)
                 let attachment = descriptor.colorAttachments[0]!
-                attachment.pixelFormat = .bgra8Unorm
-                attachment.isBlendingEnabled = true
+                attachment.pixelFormat = format
+                attachment.isBlendingEnabled = blended
                 attachment.sourceRGBBlendFactor = .one
                 attachment.sourceAlphaBlendFactor = .one
                 attachment.destinationRGBBlendFactor = .oneMinusSourceAlpha
                 attachment.destinationAlphaBlendFactor = .oneMinusSourceAlpha
                 return try device.makeRenderPipelineState(descriptor: descriptor)
             }
-            coverPipeline = try pipeline("pictureCoverVertex", "pictureCoverFragment")
+            liePipeline = try pipeline("pictureCoverVertex", "pictureLieFragment", format: .rgba8Unorm, blended: false)
+            showPipeline = try pipeline("pictureCoverVertex", "pictureShowFragment")
             capPipeline = try pipeline("pictureCapVertex", "pictureCapFragment")
-            Self.built[device.registryID] = (coverPipeline, capPipeline)
+            Self.built[device.registryID] = (liePipeline, showPipeline, capPipeline)
         }
     }
 
@@ -172,21 +179,42 @@ final class PictureRenderer {
             dabsVersion = version
             dabs.replace(region: MTLRegionMake2D(0, 0, dabsSize.width, dabsSize.height), mipmapLevel: 0, withBytes: bytes, bytesPerRow: dabsSize.width)
         }
-        let pass = MTLRenderPassDescriptor()
-        pass.colorAttachments[0].texture = target
-        pass.colorAttachments[0].loadAction = .clear
-        pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0)
-        pass.colorAttachments[0].storeAction = .store
-        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return false }
-        var uniforms = Uniforms(viewSize: screen, scale: Float(target.width) / max(screen.x, 1), level: level, range: range)
+        let half = (width: max(target.width / 2, 1), height: max(target.height / 2, 1))
+        if lie == nil || lie?.width != half.width || lie?.height != half.height {
+            let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: half.width, height: half.height, mipmapped: false)
+            descriptor.usage = [.renderTarget, .shaderRead]
+            descriptor.storageMode = .private
+            lie = device.makeTexture(descriptor: descriptor)
+        }
+        guard let lie else { return false }
+        func pass(into texture: MTLTexture) -> MTLRenderPassDescriptor {
+            let pass = MTLRenderPassDescriptor()
+            pass.colorAttachments[0].texture = texture
+            pass.colorAttachments[0].loadAction = .clear
+            pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0)
+            pass.colorAttachments[0].storeAction = .store
+            return pass
+        }
+        var uniforms = Uniforms(viewSize: screen, scale: Float(target.width) / max(screen.x, 1), level: level, range: range,
+                                thickest: max(Self.depth * pow(level, 0.7), 0.01))
         let length = MemoryLayout<Uniforms>.stride
-        encoder.setRenderPipelineState(coverPipeline)
+        // How the snow lies, at half the size: nothing it is worked out from is finer.
+        guard let lying = commandBuffer.makeRenderCommandEncoder(descriptor: pass(into: lie)) else { return false }
+        lying.setRenderPipelineState(liePipeline)
+        lying.setVertexBytes(&uniforms, length: length, index: 0)
+        lying.setFragmentBytes(&uniforms, length: length, index: 0)
+        lying.setFragmentTexture(dabs, index: 0)
+        lying.setFragmentTexture(relief, index: 1)
+        lying.setFragmentTexture(noise, index: 3)
+        lying.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        lying.endEncoding()
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass(into: target)) else { return false }
+        encoder.setRenderPipelineState(showPipeline)
         encoder.setVertexBytes(&uniforms, length: length, index: 0)
         encoder.setFragmentBytes(&uniforms, length: length, index: 0)
-        encoder.setFragmentTexture(dabs, index: 0)
+        encoder.setFragmentTexture(lie, index: 0)
         encoder.setFragmentTexture(relief, index: 1)
         encoder.setFragmentTexture(light, index: 2)
-        encoder.setFragmentTexture(noise, index: 3)
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         if let columns, !caps.isEmpty {
             encoder.setRenderPipelineState(capPipeline)

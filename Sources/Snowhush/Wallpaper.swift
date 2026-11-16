@@ -144,7 +144,7 @@ enum Wallpaper {
     }
 
     /// Raise whenever what is found changes, so pictures already done are looked at again.
-    private static let version = 23
+    private static let version = 24
 
     /// What `picture(on:)` found for each wallpaper as each screen lays it out: asked every second, it opens a
     /// picture only once. For the main thread.
@@ -540,12 +540,15 @@ enum Wallpaper {
     /// or a ledge does, not a speck of the picture's grain, and softened, so the snow on them has no cells' edges.
     static func tops(of lightness: [UInt8], width: Int) -> [UInt8] {
         let height = lightness.count / width
+        // Measured against how light it is around: in a dark wood the lit top of a bough is only a little lighter than
+        // the shade under it, and is as much a top as a rock against the sky.
+        let around = Grid(width: width, height: height, values: lightness.map { Float($0) / 255 }).blurred(radius: 6).values
         var tops = [Float](repeating: 0, count: width * height)
         for y in 2..<height {
             for x in 0..<width {
                 let here = Float(lightness[y * width + x]) / 255
                 let over = Float(max(lightness[(y - 1) * width + x], lightness[(y - 2) * width + x])) / 255
-                tops[y * width + x] = smoothstep(0.04, 0.16, over - here)
+                tops[y * width + x] = smoothstep(0.12, 0.5, (over - here) / (around[y * width + x] + 0.1))
             }
         }
         var along = tops
