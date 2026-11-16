@@ -47,8 +47,8 @@ vertex CoverOut pictureCoverVertex(uint vid [[vertex_id]], constant PictureUnifo
 }
 
 // The first of two passes: how thick the snow lies on each spot of the wallpaper's surfaces, how much of one it covers,
-// and how much of a dusting is on the rest. Red is the thickness in sixteenths of `thickest` points; green the dusting;
-// blue how much of the spot is covered.
+// and how much of a dusting is on the rest. Red is the thickness in sixteenths of `thickest` points; green how much of
+// the spot a dusting whitens; blue how much of the spot is covered.
 fragment float4 pictureLieFragment(CoverOut in [[stage_in]],
                                    constant PictureUniforms &u [[buffer(0)]],
                                    texture2d<float> dabs [[texture(0)]],
@@ -72,12 +72,19 @@ fragment float4 pictureLieFragment(CoverOut in [[stage_in]],
     float lightness = relief.sample(smooth, uv, level(1.0)).r;
     float holds = max(holdNear.r, top * 0.9);
     float snow = amount * holds;
-    if (snow < 0.005) return float4(0.0);
+    float around = relief.sample(smooth, uv, level(4.0)).r;
+    // What stands too steep to hold a cover catches snow all the same, on ledges too small for the depth map to know
+    // of: the needles of a bough, the lip of a crack, whatever is lit from above with its own shade right under it.
+    // The best lit of them whiten first.
+    float under = relief.sample(smooth, uv + float2(0.0, 2.5) / u.viewSize, level(0.0)).r;
+    // In what is nearly black the least grain is lighter than what is under it: there it takes a real step.
+    float shelf = saturate((here.r - under) / (around + 0.1) * 5.0 - 0.4) * smoothstep(0.012, 0.04, here.r - under);
+    float frost = saturate(shelf * amount * 1.6 - 0.25) * 0.7;
+    if (snow < 0.005) return float4(0.0, frost, 0.0, 1.0);
     // Snow shows first where the picture is lighter than around it, on flat ground and old snow, and on the tops of
     // things; last on the dark of trees and rock, which still show through deep snow, and in a dark wood only as a
     // dusting on what catches the light. A gradient noise at two scales, the finer turned against the coarser so
     // neither's grid lines the edge up, breaks up what is left alike.
-    float around = relief.sample(smooth, uv, level(4.0)).r;
     float grain = 0.6 * noise.sample(tiled, float2x2(0.8, 0.6, -0.6, 0.8) * world * (0.16 / 32.0)).r
         + 0.4 * noise.sample(tiled, world * (0.05 / 32.0)).r;
     // Far off, in mist or behind the trees, less of it shows, and only where the most of it lies.
@@ -88,8 +95,8 @@ fragment float4 pictureLieFragment(CoverOut in [[stage_in]],
     // it covers a spot it only dusts it, where the picture's grain catches the light first.
     float thick = cover * mix(0.25, 1.0, near) * mix(0.55, 1.0, holds);
     float fine = here.r - relief.sample(smooth, uv, level(2.0)).r;
-    float dust = smoothstep(0.35, 1.0, snow * 1.25 / max(threshold, 0.1)) * (1.0 - cover) * saturate(fine * 14.0) * holdNear.r;
-    return float4(thick, dust, cover, 1.0);
+    float dust = smoothstep(0.35, 1.0, snow * 1.25 / max(threshold, 0.1)) * saturate(fine * 14.0) * holdNear.r * 0.22;
+    return float4(thick, max(dust, frost) * (1.0 - cover), cover, 1.0);
 }
 
 // The second pass: the snow as it is seen. Snow that lies thick stands up from what it lies on: it reaches a little
@@ -123,7 +130,7 @@ fragment float4 pictureShowFragment(CoverOut in [[stage_in]],
     float4 relieved = relief.sample(smooth, uv, level(0.0));
     float near = saturate((relieved.a - u.range.x) / max(u.range.y - u.range.x, 0.01));
     float3 tint = light.sample(smooth, uv).rgb;
-    float dusting = here.g * 0.22 * (1.0 - covered);
+    float dusting = here.g * (1.0 - covered);
     float4 ground = float4(tint * 0.95 * dusting, dusting + shade * (1.0 - dusting));
     // Nothing veils the sky, which is the distance's own colour; what is hardly nearer than the sky takes the veil on
     // by degrees, so no edge shows where the sky ends.
