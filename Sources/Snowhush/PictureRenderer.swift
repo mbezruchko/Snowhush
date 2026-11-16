@@ -158,7 +158,14 @@ final class PictureRenderer {
                 let low = max(k - 5, 0), high = min(k + 5, count - 1)
                 let smooth = tops[low...high].reduce(0, +) / Float(high - low + 1)
                 let room = k < ridge.room.count ? ridge.room[k] : 1
-                values += [tops[k], smooth, lie * uneven * taper * room, 0]
+                // A cap sinks its foot three points into a mountain's top, and hardly at all into a branch's.
+                let foot = 1 + 2 * Wallpaper.smoothstep(0.25, 0.9, room)
+                // On a branch the cap goes by the branch's own thickness, however near it is: about three quarters
+                // of it once the snow covers all it can.
+                let near = min(max(ridge.nearness, 0), 1)
+                let slim = min(room / (0.35 + 0.65 * near), 1)
+                let carried = slim + (1 - slim) * Wallpaper.smoothstep(0.6, 0.95, room)
+                values += [tops[k], smooth, lie * uneven * taper * carried, foot]
             }
         }
         columns = values.isEmpty ? nil : device.makeBuffer(bytes: values, length: values.count * MemoryLayout<Float>.stride, options: .storageModeShared)

@@ -154,13 +154,13 @@ fragment float4 pictureShowFragment(CoverOut in [[stage_in]],
     return float4(u.haze.rgb * veil, veil) + seen * (1.0 - veil);
 }
 
-// One column of a ridge: its top from the screen's bottom, that top smoothed along the ridge, and how much of a
-// cap's full thickness lies there.
+// One column of a ridge: its top from the screen's bottom, that top smoothed along the ridge, how much of a cap's
+// full thickness lies there, and how far the cap's foot is sunk into the top of the thing it lies on.
 struct CapColumn {
     float top;
     float smoothTop;
     float share;
-    float pad;
+    float foot;
 };
 
 struct CapUniforms {
@@ -174,12 +174,10 @@ struct CapUniforms {
 struct CapOut {
     float4 position [[position]];
     float2 point;
-    // How far above the snow's surface, how far above the cap's sunken foot, and how thick the cap is there.
+    // How far above the snow's surface, how far up from the cap's sunken foot to the thing's top, and how thick the
+    // cap is there.
     float3 lie;
 };
-
-// How far a cap's foot is sunk into the top of the thing it lies on.
-constant float capFoot = 3.0;
 
 // The cap of snow along a ridge: over its bumps a little, more in its dips, so its surface runs smoother than the
 // ridge under it.
@@ -190,13 +188,13 @@ vertex CapOut pictureCapVertex(uint vid [[vertex_id]],
     CapColumn column = columns[vid >> 1];
     float thick = c.thickness * column.share;
     float surface = max(column.top + 0.35 * thick, column.smoothTop + thick);
-    float foot = column.top - capFoot;
+    float foot = column.top - column.foot;
     float y = (vid & 1) ? surface + 1.0 : foot;
     float2 p = float2(c.left + (float(vid >> 1) + 0.5) * c.columnWidth, y);
     CapOut out;
     out.position = float4(p / u.viewSize * 2.0 - 1.0, 0.0, 1.0);
     out.point = p;
-    out.lie = float3(y - surface, y - foot, thick);
+    out.lie = float3(y - surface, (y - foot) / column.foot, thick);
     return out;
 }
 
@@ -206,7 +204,7 @@ fragment float4 pictureCapFragment(CapOut in [[stage_in]],
                                    texture2d<float> light [[texture(2)]]) {
     constexpr sampler smooth(filter::linear, address::clamp_to_edge);
     float depth = -in.lie.x;
-    float coverage = saturate(depth * u.scale + 0.5) * saturate(in.lie.y / capFoot) * saturate(in.lie.z / 0.75) * 0.94;
+    float coverage = saturate(depth * u.scale + 0.5) * saturate(in.lie.y) * saturate(in.lie.z / 0.75) * 0.94;
     if (coverage <= 0.0) discard_fragment();
     float2 uv = float2(in.point.x / u.viewSize.x, 1.0 - in.point.y / u.viewSize.y);
     // Matched to the snow lying on the slopes under it, so the two read as one.

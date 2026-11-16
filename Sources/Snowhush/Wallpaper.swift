@@ -148,7 +148,7 @@ enum Wallpaper {
     }
 
     /// Raise whenever what is found changes, so pictures already done are looked at again.
-    private static let version = 26
+    private static let version = 31
 
     /// Which wallpaper a screen shows and how it lays it out, as the system tells it: nothing of the picture's file.
     struct Asked {
@@ -258,7 +258,11 @@ enum Wallpaper {
         let lightness = lightness(of: shown, cell: cell)
         let depth = snapped(depths.fine, to: lightness)
         var ridges = find(in: shown, depth: depths.whole, columnWidth: columnWidth)
-        for k in ridges.indices { ridges[k].room = room(on: ridges[k], depth: depth, cell: Float(cell), screenHeight: Float(shown.height), columnWidth: columnWidth) }
+        for k in ridges.indices {
+            let body = body(under: ridges[k], in: shown, depth: depth, cell: Float(cell), columnWidth: columnWidth)
+            ridges[k].room = body.room
+            ridges[k].tops = zip(ridges[k].tops, body.lift).map { $0 + $1 }
+        }
         let relief = WallpaperRelief(width: depth.width, height: depth.height, cell: cell, lightness: Data(lightness), tops: Data(tops(of: lightness, width: depth.width)),
                                      hold: Data(hold(of: depth, cell: Float(cell), screenHeight: Float(shown.height), ridges: ridges, columnWidth: columnWidth)),
                                      near: Data(depth.values.map { UInt8(min(max($0, 0), 1) * 255) }))
@@ -461,26 +465,104 @@ enum Wallpaper {
     /// Clouds come out a little nearer than the sky: only what is nearer still is ground for snow to lie on.
     static let ground: Float = 0.12
 
-    /// How much of a full cap each column of a ridge can carry, by how far the thing under it reaches down before
-    /// what is behind it shows again: a cap can't stand thicker than a fraction of what it stands on.
-    static func room(on ridge: WallpaperRidge, depth: Grid, cell: Float, screenHeight: Float, columnWidth: Float) -> [Float] {
-        let deepest = 20
-        var room = ridge.tops.enumerated().map { k, top -> Float in
-            let x = Int((ridge.left + (Float(k) + 0.5) * columnWidth) / cell)
-            let row = Int((screenHeight - top) / cell) + 2
-            guard x >= 0, x < depth.width, row >= 0, row < depth.height else { return 1 }
-            let near = depth.values[row * depth.width + x]
-            var body = 0
-            while body < deepest, row + body + 1 < depth.height, depth.values[(row + body + 1) * depth.width + x] > near - 0.05 { body += 1 }
-            return min(Float(body + 2) / Float(deepest), 1)
+    /// How thick the thing under each column of a ridge is, as the room it leaves for a cap, 0 to 1, and how far over
+    /// the ridge's line its own top edge shows, in points. A cap can't stand much thicker than what it stands on. A
+    /// mountain goes on down from its ridge: in the depth map it steps nearer there and stays so. A branch is a
+    /// sliver: it steps nearer and, a few points down, back again. How thick the sliver is, and where its top edge
+    /// lies, the picture itself shows better than the depth map, which smears it.
+    static func body(under ridge: WallpaperRidge, in shown: Shown, depth: Grid, cell: Float, columnWidth: Float) -> (room: [Float], lift: [Float]) {
+        let full: Float = 12
+        let size = max(Int(cell), 1)
+        func colour(_ x: Int, _ y: Int) -> SIMD3<Float> {
+            var sum = SIMD3<Float>(repeating: 0)
+            for dx in -1...1 {
+                let i = (y * shown.width + min(max(x + dx, 0), shown.width - 1)) * 4
+                sum += SIMD3(Float(shown.pixels[i]), Float(shown.pixels[i + 1]), Float(shown.pixels[i + 2]))
+            }
+            return sum / 3
         }
-        // Evened out along the ridge: a cap doesn't thin for a single column's gap.
-        let raw = room
-        for k in raw.indices {
-            let low = max(k - 4, 0), high = min(k + 4, raw.count - 1)
-            room[k] = raw[low...high].reduce(0, +) / Float(high - low + 1)
+        var slivers: [Bool] = []
+        var thick: [Float] = [], lifts: [Float] = []
+        for (k, top) in ridge.tops.enumerated() {
+            let x = Int(ridge.left + (Float(k) + 0.5) * columnWidth)
+            let y = shown.height - Int(top)
+            var sliver = false
+            var thickness = full, lift: Float = 0
+            if x >= 0, x < shown.width, y >= 16, y + 16 < shown.height {
+                func near(_ r: Int) -> Float {
+                    depth.values[min((y + r) / size, depth.height - 1) * depth.width + min(x / size, depth.width - 1)]
+                }
+                var front: Float = 0, under = Float.infinity
+                for r in stride(from: -6, through: 2, by: 2) { front = max(front, near(r)) }
+                for r in stride(from: 4, through: 14, by: 2) { under = min(under, near(r)) }
+                let step = front - near(-12)
+                if step > 0.02, front - under >= max(0.3 * step, 0.02) {
+                    sliver = true
+                    thickness = 5
+                    lift = 3.5
+                    var behind = SIMD3<Float>(repeating: 0)
+                    for r in -13 ... -10 { behind += colour(x, y + r) }
+                    behind /= 4
+                    let rows = Array(-8...12)
+                    let unlike = rows.map { r -> Float in
+                        let apart = colour(x, y + r) - behind
+                        return (apart * apart).sum().squareRoot()
+                    }
+                    // The sliver is what stands out most from what is over it; where nothing does, it is taken for
+                    // a few points thick.
+                    if let peak = unlike[0...12].max(), peak >= 10, let at = unlike[0...12].firstIndex(of: peak) {
+                        var first = at, last = at
+                        while first > 0, unlike[first - 1] > peak / 2 { first -= 1 }
+                        while last < unlike.count - 1, unlike[last + 1] > peak / 2 { last += 1 }
+                        thickness = Float(last - first + 1)
+                        lift = max(Float(-rows[first]), -2)
+                    }
+                }
+            }
+            slivers.append(sliver)
+            thick.append(thickness)
+            lifts.append(lift)
         }
-        return room
+        // The depth map misses stretches of a branch and sees a stray sliver in a ridge. A thing that is a sliver
+        // along most of its length is one all along, and one that hardly ever is, isn't.
+        let found = slivers
+        let share = Float(found.filter { $0 }.count) / Float(max(found.count, 1))
+        if share < 0.15 {
+            return ([Float](repeating: 1, count: found.count), [Float](repeating: 0, count: found.count))
+        } else if share >= 0.5 {
+            let known = zip(found, thick).filter { $0.0 }.map { $0.1 }.sorted()
+            for k in found.indices where !found[k] {
+                slivers[k] = true
+                thick[k] = known[known.count / 2]
+            }
+        }
+        // The middle of what the columns around say, then evened out: a branch stays thin where it crosses a trunk,
+        // and a ridge doesn't thin for one stray column.
+        func evened(_ values: [Float]) -> [Float] {
+            var middle = values
+            for k in values.indices {
+                let around = values[max(k - 8, 0)...min(k + 8, values.count - 1)].sorted()
+                middle[k] = around[around.count / 2]
+            }
+            var even = middle
+            for k in middle.indices {
+                let low = max(k - 3, 0), high = min(k + 3, middle.count - 1)
+                even[k] = middle[low...high].reduce(0, +) / Float(high - low + 1)
+            }
+            return even
+        }
+        let room = evened(zip(slivers, thick).map { $0 ? min(max($1 / full, 0.12), 1) : 1 })
+        // Only the columns where the sliver showed say where its top is.
+        var known = lifts
+        for k in known.indices where !found[k] {
+            known[k] = (1...(slivers[k] ? found.count : 8)).lazy.compactMap { d -> Float? in
+                if k - d >= 0, found[k - d] { return lifts[k - d] }
+                if k + d < lifts.count, found[k + d] { return lifts[k + d] }
+                return nil
+            }.first ?? 0
+        }
+        let lift = zip(evened(known), room).map { $0 * (1 - smoothstep(0.25, 0.9, $1)) }
+        return (room, lift)
     }
 
     /// How near each spot of the picture is, for the flakes: a cell to every four points, each the mean of the finer
@@ -548,24 +630,31 @@ enum Wallpaper {
             }
         }
         // A ridge's own edge is sharper than the depth map's: its top holds snow right up to it, and nothing lies over it.
-        func ridgeColumns(_ body: (_ x: Int, _ edge: Float) -> Void) {
+        func ridgeColumns(_ body: (_ x: Int, _ edge: Float, _ room: Float) -> Void) {
             for ridge in ridges {
                 for (k, top) in ridge.tops.enumerated() {
                     let edge = screenHeight - top - 3.5
                     guard edge > 0 else { continue }
                     let from = Int((ridge.left + Float(k) * columnWidth) / cell), to = Int((ridge.left + Float(k + 1) * columnWidth) / cell)
-                    for x in max(from, 0)..<min(max(to, from + 1), width) { body(x, edge) }
+                    let room = k < ridge.room.count ? ridge.room[k] : 1
+                    for x in max(from, 0)..<min(max(to, from + 1), width) { body(x, edge, room) }
                 }
             }
         }
-        ridgeColumns { x, edge in
-            for y in max(Int(edge / cell), 0)..<min(Int((edge + 16) / cell), height) { hold[y * width + x] = max(hold[y * width + x], 0.8) }
+        // Under a thing no thicker than a branch there is only what is behind it, which holds none of its snow.
+        ridgeColumns { x, edge, room in
+            let under = 3.5 + 12.5 * smoothstep(0.25, 0.9, room)
+            for y in max(Int(edge / cell), 0)..<min(Int((edge + under) / cell), height) { hold[y * width + x] = max(hold[y * width + x], 0.8) }
         }
         // Softened over a few points, the edges of what holds snow follow the land rather than the cells.
         hold = Grid(width: width, height: height, values: hold).blurred(radius: max(Int((3 / cell).rounded()), 1)).values
         for i in hold.indices where fine[i] <= ground { hold[i] = 0 }
-        ridgeColumns { x, edge in
+        ridgeColumns { x, edge, room in
             for y in max(Int((edge - 28) / cell), 0)..<min(Int(edge / cell), height) { hold[y * width + x] = 0 }
+            // A branch carries its snow on top, as its cap: what the depth map takes for a ledge under it is air.
+            let thick = smoothstep(0.25, 0.9, room)
+            guard thick < 1 else { return }
+            for y in max(Int(edge / cell), 0)..<min(Int((edge + 20) / cell), height) { hold[y * width + x] *= thick }
         }
         return hold.map { UInt8(min(max($0, 0), 1) * 255) }
     }
