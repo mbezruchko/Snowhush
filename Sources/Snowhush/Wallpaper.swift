@@ -148,7 +148,7 @@ enum Wallpaper {
     }
 
     /// Raise whenever what is found changes, so pictures already done are looked at again.
-    private static let version = 38
+    private static let version = 40
 
     /// Which wallpaper a screen shows and how it lays it out, as the system tells it: nothing of the picture's file.
     struct Asked {
@@ -266,8 +266,9 @@ enum Wallpaper {
         let relief = WallpaperRelief(width: depth.width, height: depth.height, cell: cell, lightness: Data(lightness), tops: Data(tops(of: lightness, width: depth.width)),
                                      hold: Data(hold(of: depth, lightness: lightness, cell: Float(cell), screenHeight: Float(shown.height), ridges: ridges, columnWidth: columnWidth)),
                                      near: Data(depth.values.map { UInt8(min(max($0, 0), 1) * 255) }))
-        var light = light(of: shown)
-        light.haze = haze(of: shown, depth: depth)
+        let far = haze(of: shown, depth: depth)
+        var light = light(of: shown, sky: far)
+        light.haze = far
         let found = WallpaperScene(ridges: ridges, light: light, terrain: terrain(of: depth), relief: relief)
         if let file, let data = try? JSONEncoder().encode(found) {
             let folder = file.deletingLastPathComponent()
@@ -376,62 +377,107 @@ enum Wallpaper {
 
     // MARK: - Light
 
-    /// Snow lit by the picture. Snow is the brightest thing around and is lit as what it lies on is, so each cell
-    /// takes the colour of the brightest light on the thing under it: the bright half of the pixels in each cell
-    /// of a few at and below it, the one that is lightest. The snow keeps most of that light's hue and as much of
-    /// its brightness as is there, so it glows orange under a sunset and greys at dusk, like the snow already in
-    /// the picture.
-    static func light(of shown: Shown, cell: Int = 16) -> WallpaperLight {
+    /// Snow lit by the picture, a cell to every sixteen points. Snow is as white as anything gets: it looks as the
+    /// whitest things about it do, the snow or cloud already in the picture, and a little brighter for being fresh. So
+    /// each cell takes the whitest quarter of its pixels, of a few cells at and below it the lightest. What is that
+    /// white, and not strongly coloured as lit rock is, shows the light's own colour, and the snow keeps most of it:
+    /// blue at the blue hour, glowing under a sunset. Of the colour of anything less white it keeps a little, and
+    /// none where the bright things are of another colour than all about them: twigs and lamps among needles are
+    /// things, not light. Where nothing about is white, in a dark wood, the snow is lit by the sky the picture has,
+    /// `sky`, and takes its cast: in the dark the colour of a few pixels is anyone's guess, and beige snow in a blue
+    /// picture is a wrong one.
+    static func light(of shown: Shown, sky: [Float], cell: Int = 16) -> WallpaperLight {
         let width = (shown.width + cell - 1) / cell, height = (shown.height + cell - 1) / cell
-        func lightness(_ r: Float, _ g: Float, _ b: Float) -> Float { 0.2126 * r + 0.7152 * g + 0.0722 * b }
-        var level = [Float](repeating: 0, count: width * height)
-        var counts = [Float](repeating: 0, count: width * height)
+        func lightness(_ c: SIMD3<Float>) -> Float { 0.2126 * c.x + 0.7152 * c.y + 0.0722 * c.z }
+        let bins = 32
+        var counts = [UInt16](repeating: 0, count: width * height * bins)
+        var all = [Int](repeating: 0, count: 256)
         shown.pixels.withUnsafeBufferPointer { p in
             for y in 0..<shown.height {
                 let row = (y / cell) * width
                 for x in 0..<shown.width {
                     let i = (y * shown.width + x) * 4
-                    level[row + x / cell] += lightness(Float(p[i]), Float(p[i + 1]), Float(p[i + 2]))
-                    counts[row + x / cell] += 1
+                    let level = (2126 * Int(p[i]) + 7152 * Int(p[i + 1]) + 722 * Int(p[i + 2])) / 10000
+                    counts[(row + x / cell) * bins + level * bins / 256] += 1
+                    all[level] += 1
                 }
             }
         }
-        for k in level.indices { level[k] /= max(counts[k], 1) }
-        var bright = [SIMD4<Float>](repeating: .zero, count: width * height)
+        // Where each cell's whitest quarter begins.
+        var quarters = [Int](repeating: 0, count: width * height)
+        for k in quarters.indices {
+            var total = 0
+            for b in 0..<bins { total += Int(counts[k * bins + b]) }
+            var seen = 0, bin = bins - 1
+            while bin > 0, seen + Int(counts[k * bins + bin]) < total / 4 {
+                seen += Int(counts[k * bins + bin])
+                bin -= 1
+            }
+            quarters[k] = bin
+        }
+        var whites = [SIMD4<Float>](repeating: .zero, count: width * height)
+        var sums = [SIMD4<Float>](repeating: .zero, count: width * height)
         shown.pixels.withUnsafeBufferPointer { p in
             for y in 0..<shown.height {
                 let row = (y / cell) * width
                 for x in 0..<shown.width {
                     let i = (y * shown.width + x) * 4
                     let k = row + x / cell
-                    let r = Float(p[i]), g = Float(p[i + 1]), b = Float(p[i + 2])
-                    if lightness(r, g, b) >= level[k] { bright[k] += SIMD4(r, g, b, 255) }
+                    let level = (2126 * Int(p[i]) + 7152 * Int(p[i + 1]) + 722 * Int(p[i + 2])) / 10000
+                    let colour = SIMD4(Float(p[i]), Float(p[i + 1]), Float(p[i + 2]), 255)
+                    sums[k] += colour
+                    if level * bins / 256 >= quarters[k] { whites[k] += colour }
                 }
             }
         }
-        let colours = bright.map { $0.w > 0 ? SIMD3($0.x, $0.y, $0.z) / $0.w : SIMD3(repeating: 0) }
+        let colours = whites.map { $0.w > 0 ? SIMD3($0.x, $0.y, $0.z) / $0.w : SIMD3(repeating: 0) }
+        let means = sums.map { $0.w > 0 ? SIMD3($0.x, $0.y, $0.z) / $0.w : SIMD3(repeating: 0) }
+        // The whitest fiftieth of the whole picture: what white looks like in it. Snow is never far under that, or
+        // under what can be told from the dark at all.
+        var above = 0, whitest = 255
+        while whitest > 0, above + all[whitest] < shown.width * shown.height / 50 {
+            above += all[whitest]
+            whitest -= 1
+        }
+        let white = Float(whitest) / 255
+        let least = max(0.9 * white, 0.45)
+        // A colour as a cast on white, keeping `kept` of how far it is from grey.
+        func cast(_ c: SIMD3<Float>, kept: Float) -> SIMD3<Float> {
+            let grey = lightness(c)
+            guard grey > 0.004 else { return SIMD3(repeating: 1) }
+            let mixed = SIMD3(repeating: grey) + (c - SIMD3(repeating: grey)) * kept
+            return (mixed / grey).clamped(lowerBound: SIMD3(repeating: 0.6), upperBound: SIMD3(repeating: 1.5))
+        }
+        let overhead = cast(SIMD3(sky[0], sky[1], sky[2]), kept: 0.35)
         var pixels = [UInt8](repeating: 255, count: width * height * 4)
         for y in 0..<height {
             for x in 0..<width {
-                var best = SIMD3<Float>(repeating: 0), lightest: Float = -1
+                var best = SIMD3<Float>(repeating: 0), lightest: Float = -1, whole = SIMD3<Float>(repeating: 0)
                 for dy in 0...2 {
                     for dx in -1...1 {
-                        let c = colours[min(max(y + dy, 0), height - 1) * width + min(max(x + dx, 0), width - 1)]
-                        let l = lightness(c.x, c.y, c.z)
-                        if l > lightest { lightest = l; best = c }
+                        let k = min(max(y + dy, 0), height - 1) * width + min(max(x + dx, 0), width - 1)
+                        let l = lightness(colours[k])
+                        if l > lightest {
+                            lightest = l
+                            best = colours[k]
+                            whole = means[k]
+                        }
                     }
                 }
-                // Snow takes the colour of the light falling on things, not of the things: of moss or a tinted picture's
-                // green or teal it keeps a little; of a sunset's glow, enough to glow.
-                let gray = lightness(best.x, best.y, best.z)
-                best = SIMD3(repeating: gray) + (best - SIMD3(repeating: gray)) * 0.4
-                let hue = SIMD3<Float>(repeating: 0.25) + best / max(best.x, best.y, best.z, 0.05) * 0.75
-                // About as bright as the light is there: dim in a night picture, as the snow already in it is.
-                let tint = hue * min(max(lightest * 1.1 + 0.08, 0.45), 0.95)
+                // As white as the picture's whites and not strongly coloured: it shows the light itself.
+                let strong = (best.max() - best.min()) / max(best.max(), 0.02)
+                let shows = smoothstep(0.5, 0.9, lightest / max(white, 0.05)) * (1 - smoothstep(0.3, 0.6, strong))
+                let own = cast(best, kept: 0.25 + 0.55 * shows)
+                let level = min(max(lightest * 1.2, least), 0.95)
+                let dim = min(max((least - lightest * 1.2) / least, 0), 1)
+                let apart = cast(best, kept: 1) - cast(whole, kept: 1)
+                let alike = lightness(whole) > 0.03 ? 1 - smoothstep(0.3, 0.7, (apart * apart).sum().squareRoot()) : 1
+                let sure = smoothstep(0.06, 0.2, lightest) * (1 - 0.5 * dim) * alike
+                let tint = (overhead + (own - overhead) * sure) * level
                 let i = (y * width + x) * 4
-                pixels[i] = UInt8(min(tint.x, 1) * 255)
-                pixels[i + 1] = UInt8(min(tint.y, 1) * 255)
-                pixels[i + 2] = UInt8(min(tint.z, 1) * 255)
+                pixels[i] = UInt8(min(max(tint.x, 0), 1) * 255)
+                pixels[i + 1] = UInt8(min(max(tint.y, 0), 1) * 255)
+                pixels[i + 2] = UInt8(min(max(tint.z, 0), 1) * 255)
             }
         }
         return WallpaperLight(width: width, height: height, cell: cell, pixels: Data(pixels))
