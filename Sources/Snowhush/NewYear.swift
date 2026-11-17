@@ -29,6 +29,30 @@ enum NewYear {
         return t >= -10 && t < 75 ? t : nil
     }
 
+    /// How many rockets go up a minute through the season: three, and more and more the nearer the New Year is,
+    /// twenty at midnight, falling back to three over the hour after.
+    static func fireworksPerMinute() -> Float {
+        let now = Date()
+        if let rate = fireworksRate, now.timeIntervalSince(rate.at) < 2 { return rate.value }
+        let value = fireworksPerMinute(at: now)
+        fireworksRate = (value, now)
+        return value
+    }
+
+    /// Worked out at most every two seconds: it goes by the calendar, which is slow to ask every frame.
+    private static var fireworksRate: (value: Float, at: Date)?
+
+    static func fireworksPerMinute(at date: Date) -> Float {
+        guard isSeason(at: date) else { return 0 }
+        // By the calendar even while midnight is previewed: that shows the countdown and its first rocket only.
+        let parts = Calendar.current.dateComponents([.year, .month], from: date)
+        guard let midnight = Calendar.current.date(from: DateComponents(year: (parts.year ?? 0) + (parts.month == 12 ? 1 : 0), month: 1, day: 1))
+        else { return 3 }
+        let t = date.timeIntervalSince(midnight)
+        let rise = t < 0 ? exp(t / (3 * 24 * 3600)) : exp(-t / 1800)
+        return Float(3 + 17 * rise)
+    }
+
     private static let previewsMidnight = UserDefaults.standard.bool(forKey: "previewMidnight")
     private static let launched = Date()
 

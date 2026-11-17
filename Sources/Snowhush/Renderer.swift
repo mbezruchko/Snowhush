@@ -248,6 +248,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
         simulation.setBorrowed(borrowedSnow())
         simulation.celebration = simulation.tree != nil ? NewYear.celebration() : nil
+        simulation.fireworksPerMinute = simulation.tree != nil ? NewYear.fireworksPerMinute() : 0
         let cursor = cursorLocation()
         let changed = simulation.step(dt: dt, cursor: cursor)
         stepped()

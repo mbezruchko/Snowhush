@@ -1,10 +1,10 @@
 import simd
 
-/// The New Year's midnight on the desktop: a rocket rises now and then, three a minute at most, and bursts into
-/// sparks that droop and fade, the burst flashing and lighting the snow in its colour. They are seen only where the
-/// desktop is, behind the windows. With a wallpaper whose depth is known, most are let off far away in it, from
-/// behind whatever in the picture is nearer: the farther, the smaller and lower, and hidden behind what stands in
-/// front.
+/// Fireworks on the desktop through the New Year's season: rockets rise three a minute, more often the nearer the
+/// New Year is, twenty a minute at most about midnight, and burst into sparks that droop and fade, the burst flashing
+/// and lighting the snow in its colour. They are seen only where the desktop is, behind the windows. With a wallpaper
+/// whose depth is known, most are let off far away in it, from behind whatever in the picture is nearer: the farther,
+/// the smaller and lower, and hidden behind what stands in front.
 final class Fireworks {
     struct Spark {
         var position: SIMD2<Float>
@@ -55,8 +55,8 @@ final class Fireworks {
     private let height: Float
     /// Where rockets may rise: clear of the tree on the left.
     private let left: Float
-    private var nextLaunch: Float = 0
-    private var shown: Float = -1
+    private var clock: Float = 0
+    private var nextLaunch: Float = -1
     private static let colors: [SIMD3<Float>] = [
         SIMD3(1, 0.25, 0.2), SIMD3(0.3, 1, 0.45), SIMD3(0.35, 0.55, 1), SIMD3(1, 0.8, 0.35),
         SIMD3(0.85, 0.4, 1), SIMD3(1, 1, 1), SIMD3(0.3, 0.95, 1), SIMD3(1, 0.5, 0.8),
@@ -71,16 +71,19 @@ final class Fireworks {
 
     var isEmpty: Bool { sparks.isEmpty }
 
-    /// Seconds past midnight that rockets go up in.
-    private static let show: Range<Float> = 0..<58
+    /// Seconds to the next rocket at `perMinute` a minute, never less than three: twenty a minute at most.
+    private static func wait(_ perMinute: Float) -> Float {
+        guard perMinute > 0 else { return .infinity }
+        return max(3, 60 / perMinute * Float.random(in: 0.6...1.4))
+    }
 
-    func step(dt: Float, time: Float) {
-        if shown < 0 { nextLaunch = max(time, 0) }
-        shown = time
-        // The first right at midnight, then one every twenty to thirty seconds: three a minute at most.
-        if Self.show.contains(time), time >= nextLaunch, sparks.count < Self.maxSparks {
+    /// Moves them on by `dt`, letting off rockets `perMinute` on average, and one right away at `midnight`.
+    func step(dt: Float, perMinute: Float, midnight: Bool) {
+        clock += dt
+        if nextLaunch < 0 || midnight { nextLaunch = midnight ? clock : clock + Self.wait(perMinute) }
+        if perMinute > 0, clock >= nextLaunch, sparks.count < Self.maxSparks {
             launch()
-            nextLaunch = time + Float.random(in: 20...30)
+            nextLaunch = clock + Self.wait(perMinute)
         }
 
         var bursts: [(SIMD2<Float>, Shell, Float, Float)] = []

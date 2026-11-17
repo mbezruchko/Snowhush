@@ -716,6 +716,9 @@ final class SnowSimulation {
     private(set) var tree: ChristmasTree?
     /// Seconds past the New Year's midnight while it is celebrated, from the countdown on; nil otherwise.
     var celebration: Double?
+    private var celebratedAt: Double?
+    /// How many rockets go up a minute now, on average.
+    var fireworksPerMinute: Float = 0
     private(set) var fireworks: Fireworks?
     /// Where the tree's trunk stands, from the left edge of the screen.
     let treeX: Float = 124
@@ -811,7 +814,7 @@ final class SnowSimulation {
             layer.previousBaseY = layer.base.y
         }
         // Only a cursor that actually displaces snow needs the full rate; one passing near it or resting in it changes nothing.
-        let pushed = clock - lastWindowMotion < 0.6 || clock - lastCursorPush < 0.3 || gust != nil || fireworks != nil || !snowballs.isEmpty || clock - hitAt < 0.6
+        let pushed = clock - lastWindowMotion < 0.6 || clock - lastCursorPush < 0.3 || gust != nil || !(fireworks?.isEmpty ?? true) || !snowballs.isEmpty || clock - hitAt < 0.6
         // The steady trickle off window corners is a few tiny grains at a time; they read fine at the calm rate.
         let flying = grains.count > 24 || clock < scatteredUntil || abs(slideWind) > 20
         if pushed {
@@ -1169,9 +1172,12 @@ final class SnowSimulation {
         return frames
     }
 
-    /// Midnight: fireworks over the screen, and sparklers in the hands come out of the presents.
+    /// Fireworks now and then through the season, more and more toward the New Year; at midnight a rocket right away,
+    /// and sparklers in the hands come out of the presents.
     private func celebrate(around tree: ChristmasTree, dt: Float) {
-        if let t = celebration, t >= 0, t < 75, fireworks == nil {
+        let midnight = (celebratedAt ?? -1) < 0 && (celebration ?? -1) >= 0
+        celebratedAt = celebration
+        if fireworks == nil, fireworksPerMinute > 0 || celebration != nil {
             let fireworks = Fireworks(width: width, height: height, left: treeX + 150)
             fireworks.behind = { [unowned self] x, near in ridge(at: x, nearerThan: near) }
             self.fireworks = fireworks
@@ -1179,9 +1185,9 @@ final class SnowSimulation {
         // Let off far away in the wallpaper too, while its depth is known.
         fireworks?.span = terrain != nil ? (terrainSpan.far, terrainSpan.close) : nil
         guard let fireworks else { return }
-        fireworks.step(dt: dt, time: Float(celebration ?? 1000))
+        fireworks.step(dt: dt, perMinute: fireworksPerMinute, midnight: midnight)
         for point in tree.sparklers { fireworks.sparkle(at: point, dt: dt) }
-        if celebration == nil, fireworks.isEmpty { self.fireworks = nil }
+        if fireworksPerMinute == 0, celebration == nil, fireworks.isEmpty { self.fireworks = nil }
     }
 
     // MARK: - Snow in the picture
