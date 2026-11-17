@@ -69,13 +69,17 @@ final class SnowballFight {
     private var boardShown = ""
     /// Told of each Command-click anywhere, where it was on the screens.
     var clicked: (NSPoint) -> Void = { _ in }
+    /// Takes Command-clicks on the wallpaper, so that the desktop doesn't also get them.
+    private var catcher: ClickCatcher?
+    private var catching = false
     /// The fight on the main display: it alone answers what happens in the room, so that a friend throws once.
     var main = true
 
     init(device: MTLDevice, simulation: SnowSimulation) {
         self.device = device
         self.simulation = simulation
-        // Clicks go on to whatever they were for; one with Command held over the wallpaper also throws.
+        // A Command-click on a window goes on to it, and throws over the wallpaper if it was the catcher's to take but
+        // came before it could.
         monitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
             guard event.modifierFlags.contains(.command) else { return }
             self?.clicked(NSEvent.mouseLocation)
@@ -99,6 +103,7 @@ final class SnowballFight {
         if let roomObserver { NotificationCenter.default.removeObserver(roomObserver) }
         for figure in figures.values { remove(figure) }
         board.removeFromSuperlayer()
+        catcher?.orderOut(nil)
     }
 
     private func remove(_ figure: Figure) {
@@ -108,6 +113,8 @@ final class SnowballFight {
 
     /// In a wallpaper with no ground to stand on: no snowmen, only the round at the top of `window`.
     func showRound(in window: PictureWindow) {
+        catcher?.orderOut(nil)
+        catcher = nil
         if window !== self.window || ground != nil {
             for figure in figures.values { remove(figure) }
             figures = [:]
@@ -124,6 +131,7 @@ final class SnowballFight {
 
     /// Puts the snowmen in `window`'s picture, on `ground`: the friends in the room, or the bot when there are none.
     func place(in window: PictureWindow, ground: SnowmanGround, now: Double) {
+        catchClicks(over: window.frame)
         if ground.id != self.ground?.id {
             for figure in figures.values { remove(figure) }
             figures = [:]
@@ -200,6 +208,22 @@ final class SnowballFight {
         guard figure.moveOwed != nil else { return }
         figure.moveOwed = nil
         figure.bot.moveAway()
+    }
+
+    /// Lays the catcher over `frame`, taking clicks while Command is held.
+    private func catchClicks(over frame: NSRect) {
+        if catcher?.frame != frame {
+            catcher?.orderOut(nil)
+            let catcher = ClickCatcher(frame: frame) { [weak self] in self?.clicked(NSEvent.mouseLocation) }
+            catcher.orderFrontRegardless()
+            self.catcher = catcher
+            catching = false
+        }
+        let command = NSEvent.modifierFlags.contains(.command)
+        if command != catching {
+            catching = command
+            catcher?.ignoresMouseEvents = !command
+        }
     }
 
     /// Five hearts: full for each whole one left, fainter for one that has taken a hit or two, an outline for each
@@ -410,5 +434,43 @@ final class SnowballFight {
         } else if at == me, let simulation {
             simulation.throwAtScreen(from: SIMD2(simulation.width * Float.random(in: 0.3...0.7), simulation.height * 0.4), size: 6)
         }
+    }
+}
+
+/// A clear panel over the desktop's icons and under every other window and widget, taking clicks only while Command
+/// is held: a Command-click on the wallpaper then throws a snowball and is not also the desktop's, which would select,
+/// open or move the files under it. Clicking it never makes the app active.
+private final class ClickCatcher: NSPanel {
+    private final class Catching: NSView {
+        var clicked: () -> Void = {}
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+        override func mouseDown(with event: NSEvent) { clicked() }
+    }
+
+    init(frame: NSRect, clicked: @escaping () -> Void) {
+        super.init(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        isOpaque = false
+        backgroundColor = .clear
+        hasShadow = false
+        ignoresMouseEvents = true
+        isReleasedWhenClosed = false
+        hidesOnDeactivate = false
+        becomesKeyOnlyIfNeeded = true
+        animationBehavior = .none
+        collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopIconWindow)) + 1)
+        sharingType = .none
+        let view = Catching(frame: NSRect(origin: .zero, size: frame.size))
+        view.clicked = clicked
+        contentView = view
+        setFrame(frame, display: false)
+    }
+
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+
+    // Borderless windows are otherwise pushed below the menu bar.
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        frameRect
     }
 }
