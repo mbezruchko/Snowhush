@@ -937,9 +937,14 @@ final class SnowSimulation {
         for mote in motes where count < capacity {
             let t = mote.age / mote.life
             if mote.still {
-                buffer[count] = Sprite(position: mote.position, size: mote.size, alpha: mote.alpha * (1 - t * t) * fallingOpacity, soft: mote.soft)
+                // Come down, it takes the frost's colour, the picture's light there, and dims to it at once, then
+                // goes into the frost it left.
+                let s = min(mote.age / 0.3, 1)
+                let settled = s * s * (3 - 2 * s)
+                buffer[count] = Sprite(position: mote.position, size: mote.size, alpha: mote.alpha * (1 - 0.5 * settled) * (1 - t * t) * fallingOpacity,
+                                       soft: mote.soft)
                 buffer[count].scene = mote.scene
-                buffer[count].sceneLight = mote.sceneLight
+                buffer[count].sceneLight = mote.sceneLight + (1 - mote.sceneLight) * settled
             } else {
                 let fade = min(1, mote.age / 0.06) * pow(1 - t, 1.5)
                 buffer[count] = Sprite(position: mote.position, size: mote.size * (1 + t), alpha: mote.alpha * fade * fallingOpacity, soft: 1)
