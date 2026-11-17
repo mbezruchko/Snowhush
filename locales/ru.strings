@@ -80,3 +80,4 @@
 "fight.closed" = "Комната закрыта";
 "fight.failed" = "Не удалось подключиться";
 "fight.unavailable" = "Игра по сети сейчас недоступна";
+"surface.selection" = "Выделение";

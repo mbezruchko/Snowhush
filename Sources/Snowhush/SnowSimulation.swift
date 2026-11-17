@@ -864,7 +864,7 @@ final class SnowSimulation {
             )
             count += 1
         }
-        let inPicture = pictureTop > 0
+        let inPicture = pictureTop > 0 && pictureDepth
         for flake in flakes where count < capacity {
             let petal = flake.kind == .blossom
             let tilt = isFlower(flake.leaf, petal: petal) ? flowerTilt(seed: flake.leaf, phase: flake.phase) : nil
@@ -1183,7 +1183,7 @@ final class SnowSimulation {
             self.fireworks = fireworks
         }
         // Let off far away in the wallpaper too, while its depth is known.
-        fireworks?.span = terrain != nil ? (terrainSpan.far, terrainSpan.close) : nil
+        fireworks?.span = terrain != nil && pictureDepth ? (terrainSpan.far, terrainSpan.close) : nil
         guard let fireworks else { return }
         fireworks.step(dt: dt, perMinute: fireworksPerMinute, midnight: midnight)
         for point in tree.sparklers { fireworks.sparkle(at: point, dt: dt) }
@@ -1230,6 +1230,10 @@ final class SnowSimulation {
     private(set) var hasDabs = false
     /// A gust is clearing the snow, the picture's too.
     var pictureCleared: () -> Void = {}
+    /// Snow lies in the wallpaper's picture: Accumulate's Wallpaper.
+    var pictureFrost = true
+    /// The flakes fall into the wallpaper's depth, hidden behind what is nearer: Deep Interaction.
+    var pictureDepth = true
     /// The snow in the picture is melting away with nothing falling: the simulation goes on until it is gone.
     private var pictureThaws: Bool { terrain != nil && intensity <= 0 && ((pictureLevel > 0 && pictureMelting) || pictureVeil > 0) }
     private var pictureMelting: Bool { thaws || !accumulates || !modes.contains(.snow) }
@@ -1325,7 +1329,7 @@ final class SnowSimulation {
         let own = flakeNearness[min(Int(flake.depth * 255), 255)]
         let near = Float(level) / 255
         guard level > groundLevel, near >= own - sceneTolerance else { return false }
-        if near <= own + sceneTolerance {
+        if near <= own + sceneTolerance, pictureFrost, accumulates {
             layDab(size: flake.size, near: near, cx: cx, cy: cy, x: x, y: y)
             if motes.count < maxMotes {
                 motes.append(Mote(position: flake.position, velocity: .zero, size: flake.size, alpha: flake.alpha, life: 1.6, soft: flake.soft, still: true, scene: own,
@@ -1375,7 +1379,7 @@ final class SnowSimulation {
 
     /// The same for the snow in any picture, from its `level`: a wallpaper on a Space out of sight is snowed on too.
     func snowInPicture(from level: Float, after seconds: Float) -> Float {
-        let snowing = modes.contains(.snow) && accumulates && !holding
+        let snowing = modes.contains(.snow) && accumulates && !holding && pictureFrost
         let falling = snowing ? Self.flakesPerMegapoint(intensity) * density / Self.flakesPerMegapoint(0.5) : 0
         let most: Float = pictureMelting ? 1 : Self.deepest
         var level = level, left = seconds
@@ -1425,7 +1429,8 @@ final class SnowSimulation {
     private func tendPicture(dt: Float) {
         pictureTurn &+= 1
         guard terrain != nil else { return }
-        let thick = modes.contains(.snow) && !holding ? min(Self.flakesPerMegapoint(intensity) * density / Self.flakesPerMegapoint(1), 1) : 0
+        let thick = modes.contains(.snow) && !holding && pictureFrost ? min(Self.flakesPerMegapoint(intensity) * density / Self.flakesPerMegapoint(1), 1) : 0
+        if !pictureFrost { pictureLevel = 0 }
         pictureVeil += (0.3 * thick.squareRoot() - pictureVeil) * min(dt / 12, 1)
         if pictureVeil < 0.002 && thick == 0 { pictureVeil = 0 }
         if clock - pictureBlownAt < 1.5 {
@@ -2434,7 +2439,7 @@ final class SnowSimulation {
             }
             // Each flake in the picture is looked at one step in four: it falls a few points meanwhile, far too
             // little to miss the surface it is coming down to.
-            if (i &+ pictureTurn) & 3 == 0 && flake.settles && accumulates && flake.blown == 0 && flake.kind == .snow && fallsInPicture(flake) {
+            if (i &+ pictureTurn) & 3 == 0 && flake.settles && pictureDepth && flake.blown == 0 && flake.kind == .snow && fallsInPicture(flake) {
                 recycle(i)
                 i -= 1
                 continue
@@ -2942,7 +2947,7 @@ final class SnowSimulation {
 
     /// A snowball come down in the picture without hitting anything: snow lies where it burst, and a puff goes up.
     private func splat(_ ball: PictureBall) {
-        if terrain != nil {
+        if terrain != nil, pictureFrost {
             let x = ball.to.x, y = height - ball.to.y
             let cells = terrainCells
             let reach = max(ball.end * 0.9 / Float(cells.size), 1)

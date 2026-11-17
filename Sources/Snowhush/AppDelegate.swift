@@ -77,7 +77,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         refreshHalloween()
         halloweenTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in self?.refreshHalloween() }
         observeSystem()
-        Marquee.enabled = Preferences.deepInteraction
+        Marquee.enabled = Preferences.surfaces.contains(.selection)
         screenshots.stepAside = { [weak self] aside in self?.screens.forEach { $0.stepAside(aside) } }
         screenshots.start()
         if snowfallHeld {
@@ -101,7 +101,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         for screen in current {
             if let existing = screens.first(where: { $0.displayID == screen.displayID }) {
                 existing.fit(to: screen)
-            } else if let snow = ScreenSnow(screen: screen, device: device, displays: displays, surfaces: { [unowned self] in surfaces }) {
+            } else if let snow = ScreenSnow(screen: screen, device: device, displays: displays, surfaces: { [unowned self] in
+                // The wallpaper's depth needs the windows too: a flake over one is in front of it, not in the picture.
+                surfaces.union(Preferences.depth ? .wallpaper : [])
+            }) {
                 snow.simulation.snowfallHeld = snowfallHeld
                 snow.simulation.snowfallReleased = { [weak self] in self?.releaseSnowfall() }
                 snow.halloween = halloween
@@ -286,7 +289,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         (meltItem.view as? MenuToggle)?.fit(meltItem.title)
         // Top to bottom, as they lie on the screen, the wallpaper behind them all first. Rain splashes on the ground
         // whatever it says.
-        let choices: [Surfaces] = [.wallpaper, .widgets, .windows, .dock] + (heaps.isEmpty ? [] : [.ground])
+        let choices: [Surfaces] = [.wallpaper, .selection, .widgets, .windows, .dock] + (heaps.isEmpty ? [] : [.ground])
         if surfacePicker.choices != choices { surfacePicker.choices = choices }
         surfacePicker.on = surfaces
         let lit = choices.filter(surfaces.contains)
@@ -297,8 +300,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         if !accumulateRow.open { accumulateRow.fit(accumulateItem.title, least: surfacePicker.frame.width) }
         meltItem.state = thaws ? .on : .off
         meltItem.isEnabled = !surfaces.isEmpty
-        deepInteractionItem.state = Preferences.deepInteraction ? .on : .off
-        deepInteractionItem.isEnabled = surfaces.contains(.windows)
+        deepInteractionItem.state = Preferences.depth ? .on : .off
         clearItem.isEnabled = screens.contains { $0.simulation.hasSnow || $0.simulation.spriteCount > 0 }
         halloweenItem.state = Halloween.isWanted ? .on : .off
         halloweenItem.isEnabled = modes == [.snow]
@@ -325,8 +327,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         for snow in screens {
             snow.simulation.accumulates = !surfaces.isEmpty
             snow.simulation.groundSettles = surfaces.contains(.ground)
-            snow.picture?.wanted = surfaces.contains(.wallpaper)
+            snow.picture?.frost = surfaces.contains(.wallpaper)
+            snow.picture?.wanted = surfaces.contains(.wallpaper) || Preferences.depth
         }
+        Marquee.enabled = surfaces.contains(.selection)
         if surfaces.isDisjoint(with: .tracked) { screens.forEach { $0.dropWindowSnow() } }
         if let menu = statusItem.menu {
             menuNeedsUpdate(menu)
@@ -341,8 +345,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     }
 
     @objc private func toggleDeepInteraction() {
-        Preferences.deepInteraction.toggle()
-        Marquee.enabled = Preferences.deepInteraction
+        Preferences.depth.toggle()
+        for snow in screens {
+            snow.picture?.depth = Preferences.depth
+            snow.picture?.wanted = surfaces.contains(.wallpaper) || Preferences.depth
+        }
     }
 
     @objc private func clearSnow() {

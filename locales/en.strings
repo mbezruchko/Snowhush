@@ -88,3 +88,4 @@
 "fight.closed" = "The room was closed";
 "fight.failed" = "Couldn’t connect";
 "fight.unavailable" = "Playing online is unavailable for now";
+"surface.selection" = "Selection";

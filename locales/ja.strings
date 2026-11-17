@@ -80,3 +80,4 @@
 "fight.closed" = "ルームが閉じられました";
 "fight.failed" = "接続できませんでした";
 "fight.unavailable" = "現在オンラインで遊べません";
+"surface.selection" = "選択範囲";

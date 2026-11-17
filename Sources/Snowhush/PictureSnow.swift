@@ -138,6 +138,23 @@ final class PictureSnow {
     }
 
     /// Snow settles in the wallpaper at all.
+    /// Snow lies in the picture: Accumulate's Wallpaper. Without it the picture is read only for its depth, and nothing
+    /// of it is drawn.
+    var frost = true {
+        didSet {
+            simulation.pictureFrost = frost
+            guard frost != oldValue else { return }
+            if !frost { for desktop in desktops.values { clear(desktop) } }
+            look()
+        }
+    }
+
+    /// The flakes fall into the picture's depth and snowmen walk its ground: Deep Interaction.
+    var depth = true {
+        didSet { simulation.pictureDepth = depth }
+    }
+
+    /// The wallpaper is read at all: for its snow, its depth or both.
     var wanted = false {
         didSet {
             guard wanted != oldValue else { return }
@@ -285,7 +302,7 @@ final class PictureSnow {
     /// A gust has cleared the snow: the picture's goes with it.
     /// The snow in the picture has changed: it is drawn at once, in a step too small to see.
     func refresh() {
-        guard wanted, active, let desktop = current, desktop.terrain != nil, loaded == desktop.picture, renderer.loaded, !desktop.drawing,
+        guard wanted, frost, active, let desktop = current, desktop.terrain != nil, loaded == desktop.picture, renderer.loaded, !desktop.drawing,
               desktop.front != nil, desktop.window.occlusionState.contains(.visible) else { return }
         let level = simulation.pictureLevel, veil = simulation.pictureVeil, now = CACurrentMediaTime()
         guard level != desktop.level || veil != desktop.veil || desktop.dabs != simulation.dabsVersion, now - desktop.drawnAt >= 0.15 else { return }
@@ -294,7 +311,7 @@ final class PictureSnow {
 
     /// Moves the snowball fight on a frame, while there is one to have in the wallpaper shown.
     func stepFight() {
-        guard SnowballFight.wanted, wanted, active, let desktop = current, let ground = desktop.ground, loaded == desktop.picture,
+        guard SnowballFight.wanted, wanted, depth, active, let desktop = current, let ground = desktop.ground, loaded == desktop.picture,
               let relief = renderer.reliefTexture else {
             endFight()
             return
@@ -554,6 +571,10 @@ final class PictureSnow {
             }
         }
         guard desktop.terrain != nil, loaded == desktop.picture, renderer.loaded, !desktop.drawing else { return }
+        guard frost else {
+            if desktop.front != nil { clear(desktop) }
+            return
+        }
         let level = simulation.pictureLevel, veil = simulation.pictureVeil
         if abs(level - kept) >= 0.02 { keep() }
         guard level > 0 || simulation.hasDabs || veil > 0 else {

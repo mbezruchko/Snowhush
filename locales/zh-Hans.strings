@@ -80,3 +80,4 @@
 "fight.closed" = "房间已关闭";
 "fight.failed" = "无法连接";
 "fight.unavailable" = "在线游戏暂时不可用";
+"surface.selection" = "选择框";

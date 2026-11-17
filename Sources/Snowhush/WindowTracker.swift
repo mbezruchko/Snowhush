@@ -675,7 +675,7 @@ final class WindowTracker {
             dockStays = false
         }
         dockWasOut = dockOut
-        if collects.contains(.windows), let band = Marquee.rect(over: list), band.intersects(screen), band.width >= 16 {
+        if collects.contains(.selection), let band = Marquee.rect(over: list), band.intersects(screen), band.width >= 16 {
             // The rubber band lies on the desktop, behind every window, and hides nothing: it is see-through.
             let frame = CGRect(x: band.minX - screen.minX, y: screen.maxY - band.maxY, width: band.width, height: band.height)
             let region = CGRect(x: frame.minX, y: frame.maxY, width: frame.width, height: 40)
@@ -1034,7 +1034,7 @@ enum Marquee {
     /// A window number no window has: the rubber band's.
     static let id = CGWindowID.max - 1
 
-    /// Followed only with Deep Interaction on.
+    /// Followed only while snow settles on a selection.
     static var enabled = false {
         didSet {
             guard enabled != oldValue else { return }

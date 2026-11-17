@@ -9,8 +9,11 @@ struct Surfaces: OptionSet {
     static let widgets = Surfaces(rawValue: 8)
     /// The tops of things in the wallpaper.
     static let wallpaper = Surfaces(rawValue: 16)
-    /// What the window list is read for: the snow on the wallpaper hides behind every window.
-    static let tracked: Surfaces = [.dock, .windows, .widgets, .wallpaper]
+    /// A selection dragged across the desktop.
+    static let selection = Surfaces(rawValue: 32)
+    /// What the window list is read for: the snow on the wallpaper hides behind every window, and a selection is found
+    /// among the windows.
+    static let tracked: Surfaces = [.dock, .windows, .widgets, .wallpaper, .selection]
 }
 
 enum Preferences {
@@ -32,7 +35,10 @@ enum Preferences {
     private static let welcomedKey = "welcomed"
     private static let installedAtKey = "installedAt"
     private static let showInScreenshotsKey = "showInScreenshots"
+    /// Before Deep Interaction meant the wallpaper's depth, it meant snow settling on a selection on the desktop.
     private static let deepInteractionKey = "deepInteraction"
+    private static let selectionKey = "settleSelection"
+    private static let depthKey = "wallpaperDepth"
     private static let pictureLevelKey = "pictureLevel"
     private static let halloweenKey = "halloweenOn"
     private static let halloweenSkippedKey = "halloweenSkipped"
@@ -65,7 +71,8 @@ enum Preferences {
             wallpaperKey: true,
             snowOnWindowsKey: true,
             showInScreenshotsKey: false,
-            deepInteractionKey: false,
+            selectionKey: false,
+            depthKey: true,
             halloweenKey: false,
             halloweenSkippedKey: 0,
             newYearKey: false,
@@ -79,6 +86,10 @@ enum Preferences {
                 for key in [groundKey, dockKey, widgetsKey, wallpaperKey, snowOnWindowsKey] { defaults.set(false, forKey: key) }
             }
             defaults.removeObject(forKey: accumulateKey)
+        }
+        if defaults.object(forKey: deepInteractionKey) != nil {
+            defaults.set(defaults.bool(forKey: deepInteractionKey), forKey: selectionKey)
+            defaults.removeObject(forKey: deepInteractionKey)
         }
         if defaults.object(forKey: installedAtKey) == nil {
             defaults.set(defaults.bool(forKey: welcomedKey) ? 0 : Date().timeIntervalSince1970, forKey: installedAtKey)
@@ -102,7 +113,7 @@ enum Preferences {
         get {
             var surfaces: Surfaces = []
             for (surface, key) in [(Surfaces.ground, groundKey), (.dock, dockKey), (.widgets, widgetsKey), (.windows, snowOnWindowsKey),
-                                   (.wallpaper, wallpaperKey)]
+                                   (.wallpaper, wallpaperKey), (.selection, selectionKey)]
             where defaults.bool(forKey: key) {
                 surfaces.insert(surface)
             }
@@ -110,7 +121,7 @@ enum Preferences {
         }
         set {
             for (surface, key) in [(Surfaces.ground, groundKey), (.dock, dockKey), (.widgets, widgetsKey), (.windows, snowOnWindowsKey),
-                                   (.wallpaper, wallpaperKey)] {
+                                   (.wallpaper, wallpaperKey), (.selection, selectionKey)] {
                 defaults.set(newValue.contains(surface), forKey: key)
             }
         }
@@ -141,10 +152,11 @@ enum Preferences {
         set { defaults.set(newValue, forKey: showInScreenshotsKey) }
     }
 
-    /// The snow also settles on what the desktop draws without a window of its own: a selection dragged across it.
-    static var deepInteraction: Bool {
-        get { defaults.bool(forKey: deepInteractionKey) }
-        set { defaults.set(newValue, forKey: deepInteractionKey) }
+    /// Deep Interaction: the snow falls into the wallpaper's depth, behind what is nearer in it, and what lives in the
+    /// wallpaper walks its ground.
+    static var depth: Bool {
+        get { defaults.bool(forKey: depthKey) }
+        set { defaults.set(newValue, forKey: depthKey) }
     }
 
     /// Halloween turned on from the menu, for every day.
