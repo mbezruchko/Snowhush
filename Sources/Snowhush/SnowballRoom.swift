@@ -242,9 +242,12 @@ final class SnowballRoom {
             state = .open(me: me)
             post()
         case "player":
-            guard let id = event["id"], let name = event["name"], !players.contains(where: { $0.id == id }) else { return }
-            players.append(Player(id: id, name: name))
-            // Someone new comes into a fresh round, everyone whole: all start it as they hear of him.
+            guard let id = event["id"], let name = event["name"] else { return }
+            if !players.contains(where: { $0.id == id }) {
+                players.append(Player(id: id, name: name))
+            }
+            // Someone new, or back after his Mac slept, comes into a fresh round, everyone whole: all start it as they
+            // hear of him.
             startRound()
             post()
         case "left":

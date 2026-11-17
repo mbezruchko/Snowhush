@@ -55,3 +55,42 @@ async fn friends_meet_and_throw() {
     hosting.leave().await;
     assert!(matches!(wait_for(&anna, |e| matches!(e, Event::Closed { .. })).await, Event::Closed { .. }));
 }
+
+/// Everything that comes within `time`.
+async fn drain(room: &Room, time: Duration) -> Vec<Event> {
+    let deadline = tokio::time::Instant::now() + time;
+    let mut events = vec![];
+    while tokio::time::Instant::now() < deadline {
+        while let Some(event) = room.next() {
+            events.push(event);
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    events
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn coming_back_leaves_no_ghost() {
+    let hosting = host("Host".into(), None).await.unwrap();
+    let Event::Room { ticket, .. } = wait_for(&hosting, |e| matches!(e, Event::Room { .. })).await else { unreachable!() };
+    let anna = join(ticket.clone(), "Anna".into(), None).await.unwrap();
+    let Event::Joined { me: anna_id } = wait_for(&anna, |e| matches!(e, Event::Joined { .. })).await else { unreachable!() };
+    wait_for(&hosting, |e| matches!(e, Event::Player { .. })).await;
+
+    // Anna comes back while the host still holds her way from before, as after her Mac slept: she is who she was.
+    let again = join(ticket.clone(), "Anna".into(), None).await.unwrap();
+    assert_eq!(wait_for(&again, |e| matches!(e, Event::Joined { .. })).await, Event::Joined { me: anna_id.clone() });
+    let heard = drain(&again, Duration::from_secs(2)).await;
+    assert!(!heard.iter().any(|e| matches!(e, Event::Player { id, .. } if *id == anna_id)), "{heard:?}");
+    let seen = drain(&hosting, Duration::from_secs(1)).await;
+    assert!(!seen.contains(&Event::Left { id: anna_id.clone() }), "{seen:?}");
+
+    // Someone new hears of her once.
+    let boris = join(ticket, "Boris".into(), None).await.unwrap();
+    let players: Vec<Event> = drain(&boris, Duration::from_secs(3)).await.into_iter().filter(|e| matches!(e, Event::Player { .. })).collect();
+    assert_eq!(players.len(), 2, "{players:?}");
+    anna.leave().await;
+    again.leave().await;
+    boris.leave().await;
+    hosting.leave().await;
+}

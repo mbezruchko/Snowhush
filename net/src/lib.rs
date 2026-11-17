@@ -18,7 +18,7 @@ use std::{
 use anyhow::{Context, Result, anyhow, bail};
 use data_encoding::BASE64URL_NOPAD;
 use iroh::{
-    Endpoint, EndpointAddr, EndpointId, RelayMap, RelayMode, RelayUrl,
+    Endpoint, EndpointAddr, EndpointId, RelayMap, RelayMode, RelayUrl, SecretKey,
     endpoint::{Connection, RecvStream, SendStream, presets},
 };
 use serde::{Deserialize, Serialize};
@@ -61,13 +61,19 @@ enum Wire {
     Throw { from: String, at: String },
 }
 
+/// Hosting: a guest's name, the way to send to it, and which of its connections that is.
+struct Guest {
+    name: String,
+    tx: mpsc::UnboundedSender<Wire>,
+    connection: Connection,
+}
+
 pub struct Room {
     endpoint: Endpoint,
     me: EndpointId,
     name: String,
     events: Mutex<VecDeque<Event>>,
-    /// Hosting: each guest's name and the way to send to it.
-    guests: Mutex<HashMap<EndpointId, (String, mpsc::UnboundedSender<Wire>)>>,
+    guests: Mutex<HashMap<EndpointId, Guest>>,
     /// A guest: the way to send to the host.
     host: Mutex<Option<mpsc::UnboundedSender<Wire>>>,
 }
@@ -79,9 +85,9 @@ impl Room {
 
     /// Hosting: sends to every guest but `except`.
     fn pass_on(&self, wire: &Wire, except: Option<EndpointId>) {
-        for (id, (_, tx)) in self.guests.lock().unwrap().iter() {
+        for (id, guest) in self.guests.lock().unwrap().iter() {
             if Some(*id) != except {
-                let _ = tx.send(wire.clone());
+                let _ = guest.tx.send(wire.clone());
             }
         }
     }
@@ -107,9 +113,17 @@ fn tell_loose(event: Event) {
     LOOSE.lock().unwrap().push_back(event);
 }
 
-/// An endpoint speaking only a room's protocol; through `relay` when given, else iroh's own relays.
-async fn bind(relay: Option<String>) -> Result<Endpoint> {
+/// The key each player of this app joined a host's room with, by host and name: coming back into a room, after the
+/// Mac slept or the way to it was lost, a player is the one he was, not another beside his own ghost. Only for as long
+/// as the app runs.
+static JOINED_AS: Mutex<Option<HashMap<(EndpointId, String), SecretKey>>> = Mutex::new(None);
+
+/// An endpoint speaking only a room's protocol, as `key` if given; through `relay` when given, else iroh's own relays.
+async fn bind(relay: Option<String>, key: Option<SecretKey>) -> Result<Endpoint> {
     let mut builder = Endpoint::builder(presets::N0).alpns(vec![ALPN.to_vec()]);
+    if let Some(key) = key {
+        builder = builder.secret_key(key);
+    }
     if let Some(relay) = relay.filter(|r| !r.is_empty()) {
         let url: RelayUrl = relay.parse().context("the relay's address")?;
         builder = builder.relay_mode(RelayMode::Custom(RelayMap::from(url)));
@@ -203,7 +217,7 @@ fn clean(name: &str) -> String {
 }
 
 pub async fn host(name: String, relay: Option<String>) -> Result<Arc<Room>> {
-    let endpoint = bind(relay).await?;
+    let endpoint = bind(relay, None).await?;
     // The invite carries where the host can be found: wait a little for a relay to be reached, but not for ever, as
     // on one network the addresses alone do.
     let _ = tokio::time::timeout(Duration::from_secs(8), endpoint.online()).await;
@@ -232,6 +246,7 @@ pub async fn host(name: String, relay: Option<String>) -> Result<Arc<Room>> {
 }
 
 /// Hosting: takes in a guest, tells it who is there and the others of it, and passes on what it says until it goes.
+/// A guest coming back takes the place of the way it had before, which may not yet be known to be lost.
 async fn welcome(room: Arc<Room>, connection: Connection) -> Result<()> {
     let id = connection.remote_id();
     let (mut send, mut recv) = connection.accept_bi().await?;
@@ -239,19 +254,27 @@ async fn welcome(room: Arc<Room>, connection: Connection) -> Result<()> {
         bail!("no hello");
     };
     let name = clean(&name);
-    if room.guests.lock().unwrap().len() + 1 >= MAX_PLAYERS {
-        connection.close(1u32.into(), b"full");
-        bail!("full");
+    {
+        let guests = room.guests.lock().unwrap();
+        if !guests.contains_key(&id) && guests.len() + 1 >= MAX_PLAYERS {
+            connection.close(1u32.into(), b"full");
+            bail!("full");
+        }
     }
     write(&mut send, &Wire::Player { id: room.me.to_string(), name: room.name.clone() }).await?;
-    let present: Vec<(EndpointId, String)> = room.guests.lock().unwrap().iter().map(|(id, (name, _))| (*id, name.clone())).collect();
+    let present: Vec<(EndpointId, String)> =
+        room.guests.lock().unwrap().iter().filter(|(other, _)| **other != id).map(|(other, guest)| (*other, guest.name.clone())).collect();
     for (other, other_name) in present {
         write(&mut send, &Wire::Player { id: other.to_string(), name: other_name }).await?;
     }
     let (tx, rx) = mpsc::unbounded_channel();
     spawn_writer(send, rx);
-    room.pass_on(&Wire::Player { id: id.to_string(), name: name.clone() }, None);
-    room.guests.lock().unwrap().insert(id, (name.clone(), tx));
+    // The others hear of him even when he comes back, as he comes back into a fresh round.
+    room.pass_on(&Wire::Player { id: id.to_string(), name: name.clone() }, Some(id));
+    let before = room.guests.lock().unwrap().insert(id, Guest { name: name.clone(), tx, connection: connection.clone() });
+    if let Some(before) = before {
+        before.connection.close(0u32.into(), b"replaced");
+    }
     room.tell(Event::Player { id: id.to_string(), name });
     // Throws go to everyone; who threw is who sent it, whatever it says.
     let mut last = tokio::time::Instant::now() - Duration::from_secs(1);
@@ -267,7 +290,13 @@ async fn welcome(room: Arc<Room>, connection: Connection) -> Result<()> {
             room.tell(Event::Throw { from: id.to_string(), at });
         }
     }
-    room.guests.lock().unwrap().remove(&id);
+    {
+        let mut guests = room.guests.lock().unwrap();
+        if guests.get(&id).is_none_or(|guest| guest.connection.stable_id() != connection.stable_id()) {
+            return Ok(());
+        }
+        guests.remove(&id);
+    }
     room.pass_on(&Wire::Left { id: id.to_string() }, None);
     room.tell(Event::Left { id: id.to_string() });
     Ok(())
@@ -275,13 +304,16 @@ async fn welcome(room: Arc<Room>, connection: Connection) -> Result<()> {
 
 pub async fn join(ticket: String, name: String, relay: Option<String>) -> Result<Arc<Room>> {
     let addr = decode_ticket(&ticket)?;
-    let endpoint = bind(relay).await?;
+    let name = clean(&name);
+    let known = (addr.id, name.clone());
+    let key = JOINED_AS.lock().unwrap().as_ref().and_then(|keys| keys.get(&known).cloned());
+    let endpoint = bind(relay, key).await?;
+    JOINED_AS.lock().unwrap().get_or_insert_with(HashMap::new).insert(known, endpoint.secret_key().clone());
     let me = endpoint.id();
     let connection = tokio::time::timeout(Duration::from_secs(25), endpoint.connect(addr, ALPN))
         .await
         .map_err(|_| anyhow!("the room did not answer"))??;
     let (mut send, mut recv) = connection.open_bi().await?;
-    let name = clean(&name);
     write(&mut send, &Wire::Hello { name: name.clone() }).await?;
     let (tx, rx) = mpsc::unbounded_channel();
     spawn_writer(send, rx);
