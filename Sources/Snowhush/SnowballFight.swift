@@ -66,12 +66,12 @@ final class SnowballFight {
     private static let botHits = 6
     private var botBackAt: Double?
     /// How teased the bot is: each snowball thrown at or near him adds one, fading to a third in three minutes. Out
-    /// once it is past `teased`, he comes back as a screamer, ten minutes apart at most.
+    /// once it is past `teased`, something under the snow wakes, ten minutes apart at most.
     private var botAnger: Float = 0
     private var botAngerAt: Double = 0
     private static let teased: Float = 16
-    private var screamedAt = -Double.infinity
-    private var screamer: Screamer?
+    private var wokenAt = -Double.infinity
+    private var awakening: Awakening?
     /// The round as this player sees it, at the top of the desktop while in a room: own hearts, wins, who won.
     private let board = CATextLayer()
     private var boardShown = ""
@@ -428,11 +428,11 @@ final class SnowballFight {
                     let anger = botAnger * exp(-Float(now - botAngerAt) / 180)
                     // To be seen at once: defaults write com.mbezruchko.Snowhush previewScreamer -bool true.
                     let preview = UserDefaults.standard.bool(forKey: "previewScreamer")
-                    if preview || anger >= Self.teased && now - screamedAt > 600 {
+                    if preview || anger >= Self.teased && now - wokenAt > 600 {
                         botAnger = 0
-                        screamedAt = now
-                        botBackAt = now + 5 + Screamer.duration
-                        scream(near: figure.bot.foot.x)
+                        wokenAt = now
+                        botBackAt = now + 5 + Awakening.duration
+                        awaken()
                     }
                 } else if botLives % SnowballRoom.hitsPerHeart == 0 {
                     figure.bot.moveAway()
@@ -446,16 +446,20 @@ final class SnowballFight {
     }
 
     /// The bot's revenge, a moment after he has fallen apart, once his pieces are still.
-    private func scream(near x: Float) {
-        guard let window, screamer == nil else { return }
+    private func awaken() {
+        guard let window, awakening == nil else { return }
         let frame = window.frame, sharing = window.sharingType
         let due = CACurrentMediaTime() + 1.4
-        Screamer.draw(for: frame.size) { [weak self] pictures in
-            guard let self, let pictures, self.screamer == nil else { return }
-            let screamer = Screamer(size: frame.size, x: CGFloat(x), pictures: pictures)
-            self.screamer = screamer
+        Awakening.draw(for: frame.size) { [weak self] pictures in
+            guard let self, let pictures, self.awakening == nil else { return }
+            let awakening = Awakening(size: frame.size, pictures: pictures)
+            self.awakening = awakening
             DispatchQueue.main.asyncAfter(deadline: .now() + max(due - CACurrentMediaTime(), 0)) { [weak self] in
-                screamer.show(over: frame, sharing: sharing) { self?.screamer = nil }
+                guard let picture = self?.window else {
+                    self?.awakening = nil
+                    return
+                }
+                awakening.show(in: picture, over: frame, sharing: sharing) { self?.awakening = nil }
             }
         }
     }
