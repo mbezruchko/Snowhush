@@ -164,7 +164,7 @@ final class ScreenSnow {
         }
         simulation.stirred = { [unowned self] in wake() }
         simulation.pictureCleared = { [unowned self] in picture?.cleared() }
-        simulation.dabsLaid = { [unowned self] in picture?.landed() }
+        simulation.pictureChanged = { [unowned self] in picture?.refresh() }
         picture?.wanted = settled.contains(.wallpaper)
         renderer.interactiveFrameRate = Self.interactiveFrameRate(of: screen)
         measure()

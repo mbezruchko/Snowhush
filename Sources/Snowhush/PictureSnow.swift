@@ -78,13 +78,13 @@ final class PictureSnow {
         var terrain: WallpaperTerrain?
         var light: WallpaperLight?
         var front: Surface?
+        /// The picture shown before `front`, kept to draw the next one into.
+        var back: Surface?
         var level: Float = -1
         var veil: Float = -1
         var dabs = -1
         var drawing = false
         var drawnAt: CFTimeInterval = 0
-        /// Until when the picture last drawn is still fading in over the one before.
-        var fadingUntil: CFTimeInterval = 0
         /// Shown at half its size while its Space is away, to take a quarter of the memory.
         var shrunk = false
         var observer: NSObjectProtocol?
@@ -268,11 +268,13 @@ final class PictureSnow {
     }
 
     /// A gust has cleared the snow: the picture's goes with it.
-    /// Flakes have come down in the picture: the frost they leave shows there now, not at the next look.
-    func landed() {
+    /// The snow in the picture has changed: it is drawn at once, in a step too small to see.
+    func refresh() {
         guard wanted, active, let desktop = current, desktop.terrain != nil, loaded == desktop.picture, renderer.loaded, !desktop.drawing,
-              desktop.dabs != simulation.dabsVersion, CACurrentMediaTime() >= desktop.fadingUntil, desktop.window.occlusionState.contains(.visible) else { return }
-        draw(desktop, level: simulation.pictureLevel, veil: simulation.pictureVeil, now: CACurrentMediaTime())
+              desktop.front != nil, desktop.window.occlusionState.contains(.visible) else { return }
+        let level = simulation.pictureLevel, veil = simulation.pictureVeil, now = CACurrentMediaTime()
+        guard level != desktop.level || veil != desktop.veil || desktop.dabs != simulation.dabsVersion, now - desktop.drawnAt >= 0.15 else { return }
+        draw(desktop, level: level, veil: veil, now: now)
     }
 
     func cleared() {
@@ -302,6 +304,7 @@ final class PictureSnow {
     private func clear(_ desktop: Desktop) {
         desktop.window.snow.contents = nil
         desktop.front = nil
+        desktop.back = nil
         desktop.shrunk = false
         desktop.level = -1
     }
@@ -491,35 +494,36 @@ final class PictureSnow {
             return
         }
         let now = CACurrentMediaTime()
-        // What the flakes seen landing add in a second can't be told; in a few it can.
+        // The surface to draw the next picture into is let go while there is nothing to draw.
+        if now - desktop.drawnAt > 5 { desktop.back = nil }
         let changed = abs(level - desktop.level) >= Self.step || abs(veil - desktop.veil) >= 0.01 || desktop.shrunk
             || (desktop.dabs != simulation.dabsVersion && now - desktop.drawnAt >= 1)
         // Behind other windows it is drawn now and then all the same, so that uncovered it is never far behind.
-        guard changed, now >= desktop.fadingUntil, desktop.window.occlusionState.contains(.visible) || now - desktop.drawnAt > 15 else { return }
+        guard changed, now - desktop.drawnAt >= 0.15, desktop.window.occlusionState.contains(.visible) || now - desktop.drawnAt > 15 else { return }
         draw(desktop, level: level, veil: veil, now: now)
     }
 
     private func draw(_ desktop: Desktop, level: Float, veil: Float, now: CFTimeInterval) {
-        // Each picture is drawn into a surface of its own, and the one before let go once this one shows: drawing into
-        // the one on show would flicker, and keeping a second for next time would double the memory.
+        // Two surfaces take turns: the picture is drawn into the one not on show, which the one before it was. Drawing
+        // into the one on show would flicker, and a new surface for each picture would leave the ones let go in
+        // memory for a while, several of them at a time.
         let size = screen.frame.size
-        guard let target = makeSurface(width: Int(size.width), height: Int(size.height)) else { return }
+        let width = Int(size.width), height = Int(size.height)
+        let kept = desktop.back.flatMap { $0.texture.width == width && $0.texture.height == height ? $0 : nil }
+        desktop.back = nil
+        guard let target = kept ?? makeSurface(width: width, height: height) else { return }
         let dabs = simulation.dabsVersion
-        let first = desktop.front == nil, returned = desktop.shrunk
+        let first = desktop.front == nil
         desktop.drawing = true
         let drawn = renderer.draw(level: level, veil: veil, dabs: simulation.dabs, specks: simulation.specks, dabsSize: simulation.dabsSize, dabsVersion: dabs, into: target.texture,
                                   screen: SIMD2(Float(size.width), Float(size.height))) { [weak self, weak desktop] in
             guard let self, let desktop else { return }
             desktop.drawing = false
-            // The snow comes in softly, and each picture fades in over the one before for about as long as passed
-            // between them, so that the frost grows on without a step anyone could catch. The next is drawn only once
-            // this one is in: one taking its place midway would jump. Back at full size after its Space was away it
-            // is the same picture, and just takes its place.
-            let start = CACurrentMediaTime()
-            let duration = first ? 2.5 : returned ? 0 : min(max(start - desktop.drawnAt, 0.3), 2) * 0.9
-            if duration > 0 { fade(desktop.window.snow, over: duration) }
-            desktop.fadingUntil = start + duration
+            // The first snow comes in softly; after that each picture is drawn so soon after the last that it differs
+            // by less than the eye can tell, and just takes its place. The picture going is drawn into next.
+            if first { appear(desktop.window.snow) }
             desktop.window.snow.contents = target.surface
+            desktop.back = desktop.front
             desktop.front = target
             desktop.shrunk = false
             desktop.level = level
@@ -527,7 +531,19 @@ final class PictureSnow {
             desktop.dabs = dabs
             desktop.drawnAt = now
         }
-        if !drawn { desktop.drawing = false }
+        if !drawn {
+            desktop.drawing = false
+            desktop.back = target
+        }
+    }
+
+    /// Fades the layer in without a transition, which would keep copies of its picture as it fades.
+    private func appear(_ layer: CALayer) {
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 0
+        fade.toValue = 1
+        fade.duration = 2.5
+        layer.add(fade, forKey: "appearing")
     }
 
     private func fade(_ layer: CALayer, over duration: CFTimeInterval) {
@@ -568,6 +584,7 @@ final class PictureSnow {
         guard scaled == kvImageNoError else { return }
         desktop.window.snow.contents = small.surface
         desktop.front = small
+        desktop.back = nil
         desktop.shrunk = true
     }
 }

@@ -1072,8 +1072,14 @@ final class SnowSimulation {
     /// written out with `dabs`.
     private var speckAmount: [Float] = []
     private(set) var specks: [UInt8] = []
-    /// `dabs` and `specks` have been written out afresh.
-    var dabsLaid: () -> Void = {}
+    /// `speckAmount` as drawn, coming in over most of a second rather than at once; and its way still to go.
+    private var speckShown: [Float] = []
+    private var speckGap: [Float] = []
+    private var specksEasing = false
+    private var pictureLevelWritten: Float = -1
+    private var pictureVeilWritten: Float = -1
+    /// The snow in the picture has changed: what has fallen everywhere, the veil, or `dabs` and `specks`.
+    var pictureChanged: () -> Void = {}
     var dabsSize: (width: Int, height: Int) { (terrain?.width ?? 0, terrain?.height ?? 0) }
     /// How much snow has fallen over the whole picture, as it grows step by step with the snowfall and melts: the same
     /// everywhere, so it comes as smoothly as time passes. Up to 1 it comes to cover what holds it; from there to
@@ -1152,6 +1158,9 @@ final class SnowSimulation {
         dabAmount = Array(repeating: 0, count: terrainNear.count)
         dabs = Array(repeating: 0, count: terrainNear.count)
         speckAmount = dabAmount
+        speckShown = dabAmount
+        speckGap = dabAmount
+        specksEasing = false
         specks = dabs
         dabsVersion += 1
         hasDabs = false
@@ -1291,6 +1300,8 @@ final class SnowSimulation {
             if hasDabs {
                 for k in dabAmount.indices { dabAmount[k] = 0 }
                 for k in speckAmount.indices { speckAmount[k] = 0 }
+                for k in speckShown.indices { speckShown[k] = 0 }
+                specksEasing = false
                 hasDabs = false
                 dabsTouched = true
             }
@@ -1314,10 +1325,32 @@ final class SnowSimulation {
                 }
             }
         }
-        // Written out often enough for the frost to show where a flake came down as it fades there.
-        guard dabsTouched, clock - dabsWrittenAt >= 0.5 else { return }
-        dabsTouched = false
+        // Told five times a second while anything in it changes: in steps that small the picture can be drawn one
+        // after another without fading each in over the last, and a fade would keep copies of the whole screen.
+        guard clock - dabsWrittenAt >= 0.2,
+              dabsTouched || specksEasing || pictureLevel != pictureLevelWritten || pictureVeil != pictureVeilWritten else { return }
+        let elapsed = Float(min(clock - dabsWrittenAt, 1))
         dabsWrittenAt = clock
+        pictureLevelWritten = pictureLevel
+        pictureVeilWritten = pictureVeil
+        defer { pictureChanged() }
+        guard dabsTouched || specksEasing else { return }
+        dabsTouched = false
+        // A flake's frost comes in over most of a second.
+        let count = vDSP_Length(speckAmount.count)
+        vDSP_vsub(speckShown, 1, speckAmount, 1, &speckGap, 1, count)
+        var widest: Float = 0
+        vDSP_maxmgv(speckGap, 1, &widest, count)
+        if widest < 0.5 / 255 {
+            speckShown.withUnsafeMutableBufferPointer { shown in
+                speckAmount.withUnsafeBufferPointer { shown.baseAddress!.update(from: $0.baseAddress!, count: $0.count) }
+            }
+            specksEasing = false
+        } else {
+            var share = min(elapsed / 0.5, 1)
+            vDSP_vsma(speckGap, 1, &share, speckShown, 1, &speckShown, 1, count)
+            specksEasing = true
+        }
         // A quarter of a million cells a second: in one vector pass, not one by one.
         let cells = terrainCells
         dabAmount.withUnsafeMutableBufferPointer { amounts in
@@ -1329,7 +1362,7 @@ final class SnowSimulation {
                 vImageConvert_PlanarFtoPlanar8(&source, &target, 1, 0, vImage_Flags(kvImageNoFlags))
             }
         }
-        speckAmount.withUnsafeMutableBufferPointer { amounts in
+        speckShown.withUnsafeMutableBufferPointer { amounts in
             specks.withUnsafeMutableBufferPointer { bytes in
                 var source = vImage_Buffer(data: amounts.baseAddress, height: vImagePixelCount(cells.height), width: vImagePixelCount(cells.width),
                                            rowBytes: cells.width * MemoryLayout<Float>.stride)
@@ -1339,7 +1372,6 @@ final class SnowSimulation {
             }
         }
         dabsVersion += 1
-        dabsLaid()
     }
 
     // MARK: - Windows
