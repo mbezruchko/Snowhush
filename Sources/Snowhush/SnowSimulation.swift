@@ -654,7 +654,7 @@ final class SnowSimulation {
     private var revengeDue = false
     /// Where the third scared ghost crumbled: the avenger comes up out of its snow.
     private var revengeAt: (layer: SnowLayer, x: Float)?
-    private var snowballs: [(from: SIMD2<Float>, to: SIMD2<Float>, age: Float, start: Float)] = []
+    private var snowballs: [(from: SIMD2<Float>, to: SIMD2<Float>, age: Float, start: Float, flight: Float)] = []
     /// Snowballs thrown into the wallpaper's picture, away from the screen: each shrinks as it goes off, and is hidden
     /// behind what in the picture is nearer than it.
     private var pictureBalls: [PictureBall] = []
@@ -1043,8 +1043,9 @@ final class SnowSimulation {
             }
         }
         for ball in snowballs where count < capacity {
-            let t = min(ball.age / 0.5, 1)
-            let position = ball.from + (ball.to - ball.from) * (1 - pow(1 - t, 2)) + SIMD2(0, sin(t * .pi) * 60)
+            let t = min(ball.age / ball.flight, 1)
+            // A long flight from far off rises higher on its way.
+            let position = ball.from + (ball.to - ball.from) * (1 - pow(1 - t, 2)) + SIMD2(0, sin(t * .pi) * (60 + 90 * (ball.flight - 0.5)))
             buffer[count] = Sprite(position: position, size: ball.start + (152 - ball.start) * t * t, alpha: 1, soft: 0.12)
             count += 1
         }
@@ -2915,7 +2916,7 @@ final class SnowSimulation {
         if !ghost.threw, since >= 1.06 {
             ghost.threw = true
             let target = SIMD2(random.range(0.15, 0.85) * width, random.range(0.35, 0.85) * height)
-            snowballs.append((paw(of: ghost, at: 0.6), target, 0, 7))
+            snowballs.append((paw(of: ghost, at: 0.6), target, 0, 7, 0.5))
         }
         if ghost.threw, ghost.booAt < ghost.standAt, since >= 2 { ghost.booAt = ghost.age }
     }
@@ -2925,7 +2926,7 @@ final class SnowSimulation {
         var i = snowballs.count - 1
         while i >= 0 {
             snowballs[i].age += dt
-            if snowballs[i].age >= 0.5 {
+            if snowballs[i].age >= snowballs[i].flight {
                 shatter(at: snowballs[i].to)
                 snowballs.remove(at: i)
             }
@@ -2943,19 +2944,28 @@ final class SnowSimulation {
     }
 
     /// Throws a snowball out of the picture at the screen, from `point` where it is `size` across, to burst against
-    /// the glass about the middle of the screen.
-    func throwAtScreen(from point: SIMD2<Float>, size: Float) {
+    /// the glass about the middle of the screen: from `near` in the picture, the farther off, the longer it flies.
+    func throwAtScreen(from point: SIMD2<Float>, size: Float, near: Float? = nil) {
         let target = SIMD2(random.range(0.25, 0.75) * width, random.range(0.3, 0.75) * height)
-        snowballs.append((point, target, 0, size))
+        snowballs.append((point, target, 0, size, near.map { 0.5 + 1.3 * pow(farness($0), 1.2) } ?? 0.5))
         stirred()
+    }
+
+    /// How far off `near` is in the picture, 0 nearest to 1 farthest.
+    private func farness(_ near: Float) -> Float {
+        1 - min(max((near - terrainSpan.far) / max(terrainSpan.close - terrainSpan.far, 0.01), 0), 1)
     }
 
     /// Throws a snowball from in front of the screen into the picture, at `point` where the picture is `near`, where
     /// it is `size` across when it gets there. `landed` is told where it came down and says whether it hit something;
     /// if not, it bursts on whatever is there.
-    func throwIntoPicture(from start: SIMD2<Float>, to point: SIMD2<Float>, near: Float, size: Float, startSize: Float = 46, landed: @escaping (SIMD2<Float>) -> Bool) {
-        let far = 1 - min(max((near - terrainSpan.far) / max(terrainSpan.close - terrainSpan.far, 0.01), 0), 1)
-        pictureBalls.append(PictureBall(from: start, to: point, near: near, start: startSize, end: size, duration: 0.5 + 0.45 * far, landed: landed))
+    func throwIntoPicture(from start: SIMD2<Float>, to point: SIMD2<Float>, near: Float, size: Float, startSize: Float = 46, from origin: Float? = nil,
+                          landed: @escaping (SIMD2<Float>) -> Bool) {
+        // The farther it has to go, the longer it flies: from in front of the screen by how far off it lands, from one
+        // in the picture to another by how far apart in depth they are and across the screen.
+        let far = farness(near)
+        let flight = origin.map { 0.45 + 1.1 * abs(farness($0) - far) + 0.6 * far + simd_distance(start, point) / 2400 } ?? 0.45 + 1.4 * pow(far, 1.2)
+        pictureBalls.append(PictureBall(from: start, to: point, near: near, start: startSize, end: size, duration: flight, landed: landed))
         stirred()
     }
 

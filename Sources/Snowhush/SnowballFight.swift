@@ -268,12 +268,12 @@ final class SnowballFight {
             let covered = covers.contains { $0.x < reach.z && $0.z > reach.x && $0.y < reach.w && $0.w > reach.y }
             let moved = figure.bot.step(dt: dt, now: now, canThrow: visible && !covered) { [weak self] hand, size, target in
                 guard let target else {
-                    simulation.throwAtScreen(from: hand, size: size)
+                    simulation.throwAtScreen(from: hand, size: size, near: figure.bot.near)
                     return
                 }
                 // At a friend's snowman, across the picture.
                 guard let other = self?.figures[target]?.bot else { return }
-                simulation.throwIntoPicture(from: hand, to: other.middle, near: other.near, size: other.height * 0.1, startSize: size) { landed in
+                simulation.throwIntoPicture(from: hand, to: other.middle, near: other.near, size: other.height * 0.1, startSize: size, from: figure.bot.near) { landed in
                     other.hit(at: landed, now: CACurrentMediaTime())
                     simulation.puff(at: landed, near: other.near, size: other.height * 0.14)
                     return true
