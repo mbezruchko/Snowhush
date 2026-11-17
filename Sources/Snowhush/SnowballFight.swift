@@ -169,11 +169,17 @@ final class SnowballFight {
     }
 
     /// Throws a snowball from in front of the screen at `point` in the picture, where it is `near`; it hits a
-    /// snowman still there when it comes down, and a friend's tells the friend.
+    /// snowman still there when it comes down, and a friend's tells the friend. No throw goes quite where it is
+    /// aimed: it strays by about a third of a snowman's height there, so that one aimed at a snowman's middle hits him
+    /// about every other time.
     func throwBall(at point: SIMD2<Float>, near: Float, size: Float, screenWidth: Float) {
         guard let simulation else { return }
         let start = SIMD2(screenWidth * 0.5 + (point.x - screenWidth * 0.5) * 0.35, -30)
-        simulation.throwIntoPicture(from: start, to: point, near: near, size: size) { [weak self, unowned simulation] landed in
+        let height = size * 10
+        let u = Float.random(in: Float.ulpOfOne..<1), v = Float.random(in: 0..<1)
+        let spread = (-2 * log(u)).squareRoot()
+        let landing = point + SIMD2(cos(2 * .pi * v) * 0.3, sin(2 * .pi * v) * 0.25) * spread * height
+        simulation.throwIntoPicture(from: start, to: landing, near: near, size: size) { [weak self, unowned simulation] landed in
             guard let self, let (id, figure) = figures.first(where: { $0.value.bot.contains(landed) && abs($0.value.bot.near - near) < 0.08 }) else { return false }
             figure.bot.hit(at: landed, now: CACurrentMediaTime())
             simulation.puff(at: landed, near: figure.bot.near, size: size * 1.4)
