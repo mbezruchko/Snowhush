@@ -104,7 +104,7 @@ struct SnowmanGround {
 
     /// How tall a snowman stands, in points, as near as `near`: the farther off, the smaller.
     func height(near: Float) -> Float {
-        (22 + 124 * pow(nearness(near), 1.35)) * screen.y / 1440
+        (16 + 93 * pow(nearness(near), 1.35)) * screen.y / 1440
     }
 
     func walkable(_ cell: SIMD2<Int>) -> Bool {
