@@ -223,6 +223,11 @@ pub fn fills(report: &Report, id: WindowId, area: &Area) -> bool {
     })
 }
 
+/// Whether a window is still open, on this desktop or another.
+pub fn exists(report: &Report, id: WindowId) -> bool {
+    report.windows.iter().any(|window| window_id(&window.id) == id) || elsewhere(report, id)
+}
+
 /// Whether a window that left the list went to another desktop or activity, rather than closing or minimizing.
 pub fn elsewhere(report: &Report, id: WindowId) -> bool {
     report.elsewhere.iter().any(|other| window_id(other) == id)

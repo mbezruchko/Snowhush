@@ -18,6 +18,7 @@
 "surface.dock" = "Dock";
 "surface.widgets" = "Widgets";
 "surface.windows" = "Fenêtres";
+"surface.wallpaper" = "Fond";
 "surface.panel" = "Panneau";
 "all" = "Tout";
 "melt.snow" = "Fonte de la neige";
@@ -58,6 +59,8 @@
 "setup.update" = "Mettre à jour";
 "setup.same" = "Snowhush {old} est déjà là. Réinstaller la version {version} le répare.";
 "setup.reinstall" = "Réinstaller";
+"setup.older" = "Remplace Snowhush {old} par la version {version}, plus ancienne.";
+"setup.downgrade" = "Rétrograder";
 "setup.installing" = "Installation…";
 "setup.settle" = "Laissez-la se poser.";
 "setup.done" = "Snowhush est installé. Vous le trouverez dans le menu Démarrer.";

@@ -6,7 +6,6 @@ use std::time::SystemTime;
 
 use zbus::blocking::Connection;
 
-use snowhush_core::geometry::smoothstep;
 use snowhush_core::halloween;
 
 use crate::windows::Area;
@@ -14,7 +13,7 @@ use crate::windows::Area;
 /// Clock-based rather than solar: close enough for mood, and needs no location.
 pub fn daylight() -> [f32; 3] {
     let hour = hour();
-    let day = smoothstep(6.0, 8.5, hour) * (1.0 - smoothstep(17.5, 20.5, hour));
+    let day = halloween::daylight_share(hour);
     let golden = ((-((hour - 7.6) / 1.1).powi(2)).exp() + (-((hour - 18.6) / 1.2).powi(2)).exp()).min(1.0);
     let night = [0.86, 0.89, 0.97];
     let warm = [1.0, 0.965, 0.915];

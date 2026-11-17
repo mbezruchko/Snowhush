@@ -61,7 +61,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         behindWindows = Preferences.behindWindows
         snowfallHeld = !Preferences.welcomed
         syncScreens()
-        guard !screens.isEmpty else {
+        // With no display attached yet, the snow comes once one is.
+        guard !screens.isEmpty || NSScreen.screens.isEmpty else {
             NSApp.terminate(nil)
             return
         }
@@ -268,8 +269,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         meltItem.title = tr(heaps.contains(.snow) ? "melt.snow" : heaps == [.blossom] ? "melt.blossom" : "melt.autumn")
         clearItem.title = tr("clear", heaps)
         (meltItem.view as? MenuToggle)?.fit(meltItem.title)
-        // Top to bottom, as they lie on the screen. Rain splashes on the ground whatever it says.
-        let choices: [Surfaces] = [.widgets, .windows, .dock] + (heaps.isEmpty ? [] : [.ground])
+        // Top to bottom, as they lie on the screen, the wallpaper behind them all first. Rain splashes on the ground
+        // whatever it says.
+        let choices: [Surfaces] = [.wallpaper, .widgets, .windows, .dock] + (heaps.isEmpty ? [] : [.ground])
         if surfacePicker.choices != choices { surfacePicker.choices = choices }
         surfacePicker.on = surfaces
         let lit = choices.filter(surfaces.contains)
@@ -307,6 +309,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         for snow in screens {
             snow.simulation.accumulates = !surfaces.isEmpty
             snow.simulation.groundSettles = surfaces.contains(.ground)
+            snow.picture?.wanted = surfaces.contains(.wallpaper)
         }
         if surfaces.isDisjoint(with: .tracked) { screens.forEach { $0.dropWindowSnow() } }
         if let menu = statusItem.menu {
@@ -348,6 +351,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         for snow in screens {
             snow.window.showsInScreenshots = Preferences.showInScreenshots
             snow.dock.window.showsInScreenshots = Preferences.showInScreenshots
+            snow.picture?.showsInScreenshots = Preferences.showInScreenshots
         }
     }
 
@@ -474,8 +478,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         observe(distributed, Notification.Name("com.apple.screenIsLocked")) { $0.screenLocked = true }
         observe(distributed, Notification.Name("com.apple.screenIsUnlocked")) { $0.screenLocked = false }
         observe(.default, NSWindow.didChangeOcclusionStateNotification) { _ in }
-        observe(.default, NSApplication.didChangeScreenParametersNotification) { $0.syncScreens() }
-        observe(workspace, NSWorkspace.activeSpaceDidChangeNotification) { $0.screens.forEach { $0.spaceChanged() } }
+        observe(.default, NSApplication.didChangeScreenParametersNotification) {
+            Spaces.invalidate()
+            $0.syncScreens()
+        }
+        observe(workspace, NSWorkspace.activeSpaceDidChangeNotification) {
+            Spaces.invalidate()
+            $0.screens.forEach { $0.spaceChanged() }
+        }
         observe(workspace, NSWorkspace.didActivateApplicationNotification) { $0.screens.forEach { $0.watchWindows() } }
     }
 

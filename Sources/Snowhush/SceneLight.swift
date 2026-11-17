@@ -15,9 +15,17 @@ final class SceneLight {
     private(set) var lantern: Float = 0
     var halloween = false
 
-    private var wallpaper: (url: URL, modified: Date?)?
     private var wallpaperTint = SIMD4<Float>(repeating: 0)
     private var updatedAt: CFTimeInterval = -.infinity
+
+    private struct Picture: Hashable {
+        let url: URL
+        let modified: Date?
+    }
+    /// Read on the main thread only: a picture takes a quarter of a second to decode, so each is decoded once, off it.
+    private static var tints: [Picture: SIMD4<Float>] = [:]
+    private static var waiting: [Picture: [() -> Void]] = [:]
+    private static let decoder = DispatchQueue(label: "Snowhush.wallpaperTint", qos: .utility)
 
     func invalidate() {
         updatedAt = -.infinity
@@ -42,14 +50,25 @@ final class SceneLight {
 
     private func updateWallpaper(screen: NSScreen?) {
         guard let screen, let url = NSWorkspace.shared.desktopImageURL(for: screen) else {
-            wallpaper = nil
             wallpaperTint = .zero
             return
         }
         let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
-        guard wallpaper?.url != url || wallpaper?.modified != modified else { return }
-        wallpaper = (url, modified)
-        wallpaperTint = Self.tint(fromPictureAt: url) ?? .zero
+        let picture = Picture(url: url, modified: modified)
+        if let tint = Self.tints[picture] {
+            wallpaperTint = tint
+            return
+        }
+        let decoding = Self.waiting[picture] != nil
+        Self.waiting[picture, default: []].append { [weak self] in self?.invalidate() }
+        guard !decoding else { return }
+        Self.decoder.async {
+            let tint = Self.tint(fromPictureAt: url) ?? .zero
+            DispatchQueue.main.async {
+                Self.tints[picture] = tint
+                Self.waiting.removeValue(forKey: picture)?.forEach { $0() }
+            }
+        }
     }
 
     private static func hour(at date: Date) -> Float {

@@ -1,3 +1,4 @@
+import Accelerate
 import CoreGraphics
 import Foundation
 import simd
@@ -59,6 +60,11 @@ struct Sprite {
     var rain: Float = 0
     /// One for a cherry blossom petal or flower instead of a leaf.
     var petal: Float = 0
+    /// For a flake falling in the wallpaper's picture, how near it is there: it shows only in front of what the
+    /// picture has at that spot. Below zero for anything else.
+    var scene: Float = -1
+    /// How much of the picture's light at that spot the flake takes: all of it far off, none right in front.
+    var sceneLight: Float = 0
 }
 
 /// A Halloween sign a ghost holds up, or lets fall into the snow.
@@ -222,6 +228,12 @@ private struct Mote {
     var alpha: Float
     var age: Float = 0
     var life: Float
+    var soft: Float = 1
+    /// A flake come to rest in the picture, fading into the frost it leaves: it neither moves nor spreads, and is lit
+    /// and hidden as the picture is at its nearness.
+    var still = false
+    var scene: Float = -1
+    var sceneLight: Float = 0
 }
 
 /// Snow, leaves and petals gathered from here and there, to come off as one.
@@ -588,8 +600,8 @@ final class SnowSimulation {
     private var windowsChanged = false
     private var lastWindowMotion: Double = -10
     private var lastCursorPush: Double = -10
-    /// Snow on windows that left the screen for another Space, kept until the window shows up again.
-    private var dormant: [CGWindowID: SnowLayer] = [:]
+    /// Snow on windows that left the screen for another Space, kept until the window shows up again, with when it left.
+    private var dormant: [CGWindowID: (ledge: SnowLayer, since: Double)] = [:]
     /// Where the left edge of each notification banner was at the last update.
     private var bannerEdges: [CGWindowID: Float] = [:]
     /// Windows that went off screen without a word yet on why; a Space switch keeps their snow, anything else drops it.
@@ -696,12 +708,15 @@ final class SnowSimulation {
     /// Nothing falls, lies, waits for its window or haunts, and nothing will until the snow is stirred.
     var isEmpty: Bool {
         intensity <= 0 && !halloween && tree == nil && flakes.isEmpty && grains.isEmpty && motes.isEmpty && ghosts.isEmpty
-            && fallingSigns.isEmpty && snowballs.isEmpty && gust == nil && dormant.isEmpty && parking.isEmpty && lying.isEmpty && nextMode == nil
+            && fallingSigns.isEmpty && snowballs.isEmpty && gust == nil && !dormant.values.contains { $0.ledge.top > 0 } && parking.isEmpty && lying.isEmpty && nextMode == nil
             && splashes.isEmpty && glassDrops.isEmpty && !wet
-            && !layers.contains { $0.top > 0 }
+            && !layers.contains { $0.top > 0 } && !pictureThaws
     }
     /// Running drops or beads on the glass, drawn from a field of their own.
     var hasGlassDrops: Bool { glassDrops.contains { !$0.hanging } }
+    /// Where the running drops and beads last written add to their field, in points, left, bottom, right, top: each
+    /// reaches as far as the sprite shader draws it. Nil when none was written.
+    private(set) var glassReach: SIMD4<Float>?
     var spriteCount: Int {
         lying.count + flakes.count + grains.count + motes.count + ghosts.count * 2 + snowballs.count + splashes.count + glassDrops.count
             + ledgeList.reduce(0) { $0 + $1.spray.count + $1.film.count }
@@ -742,6 +757,7 @@ final class SnowSimulation {
         tendGlass(dt: dt)
         haunt(dt: dt)
         settle(dt: dt)
+        tendPicture(dt: dt)
         tendLeaves(dt: dt)
         if let next = nextMode, gust == nil, grains.isEmpty || clock - switchedAt > 6 {
             nextMode = nil
@@ -782,6 +798,7 @@ final class SnowSimulation {
 
     func writeSprites(into buffer: UnsafeMutablePointer<Sprite>, capacity: Int) -> Int {
         var count = 0
+        glassReach = nil
         let shown = markShown()
         for leaf in lying where count < capacity && leaf.layer.shown == shown {
             let layer = leaf.layer
@@ -808,6 +825,7 @@ final class SnowSimulation {
             )
             count += 1
         }
+        let inPicture = pictureTop > 0
         for flake in flakes where count < capacity {
             let petal = flake.kind == .blossom
             let tilt = isFlower(flake.leaf, petal: petal) ? flowerTilt(seed: flake.leaf, phase: flake.phase) : nil
@@ -830,6 +848,14 @@ final class SnowSimulation {
                 rain: flake.rain ? 1 : 0,
                 petal: petal ? 1 : 0
             )
+            // A snowflake over the wallpaper is in its picture: lit as the picture is there, and hidden behind
+            // whatever in it is nearer. Over a window or the Dock it is in front of them, and of the picture.
+            if inPicture, flake.kind == .snow, flake.blown == 0, flake.position.x >= 0, flake.position.x < width, flake.position.y >= 0, flake.position.y < height,
+               !frontCover[min(Int(height - flake.position.y) / Self.frontCell, frontSize.height - 1) * frontSize.width
+                           + min(Int(flake.position.x) / Self.frontCell, frontSize.width - 1)] {
+                buffer[count].scene = flakeNearness[min(Int(flake.depth * 255), 255)]
+                buffer[count].sceneLight = 1 - min(max((flake.depth - 0.45) / 0.45, 0), 1)
+            }
             count += 1
         }
         for splash in splashes where count < capacity {
@@ -839,7 +865,7 @@ final class SnowSimulation {
         }
         for ledge in ledgeList {
             for piece in ledge.film where count < capacity {
-                let position = ledge.base + (piece.from + piece.to) * 0.5
+                let position = ledge.origin + (piece.from + piece.to) * 0.5
                 guard !ledge.faceOccluders.contains(where: { $0.x < position.x && $0.z > position.x && $0.y < position.y && $0.w > position.y }) else { continue }
                 // It dries from its edges in, thinning as it fades.
                 let dry = piece.age / piece.life
@@ -854,7 +880,7 @@ final class SnowSimulation {
                 count += 1
             }
             for droplet in ledge.spray where count < capacity {
-                let position = ledge.base + droplet.offset
+                let position = ledge.origin + droplet.offset
                 guard !ledge.faceOccluders.contains(where: { $0.x < position.x && $0.z > position.x && $0.y < position.y && $0.w > position.y }) else { continue }
                 buffer[count] = Sprite(
                     position: position,
@@ -867,7 +893,7 @@ final class SnowSimulation {
             }
         }
         for drop in glassDrops where count < capacity {
-            let position = drop.layer.base + drop.offset
+            let position = drop.layer.origin + drop.offset
             // A window in front of the one it runs down hides it.
             guard !drop.layer.faceOccluders.contains(where: { $0.x < position.x && $0.z > position.x && $0.y < position.y && $0.w > position.y }) else { continue }
             // It swells out of nothing as it gathers on the edge, down from the edge, its top staying where it gathers.
@@ -876,7 +902,7 @@ final class SnowSimulation {
             let half = drop.bead ? beadWidth(drop.radius) : halfWidth(drop.radius, still: still)
             // Held back, a running drop's water piles up in its front; jolted, it squashes and stretches for a moment.
             let since = drop.age - drop.jolted
-            buffer[count] = Sprite(
+            let sprite = Sprite(
                 position: position + SIMD2(0, still ? 0 : half * (1 - grown)),
                 velocity: still ? .zero : SIMD2(drop.slope, -1) * drop.speed,
                 size: half * 2 * grown,
@@ -889,7 +915,14 @@ final class SnowSimulation {
                 turnSpeed: still ? 0 : drop.jiggle * exp(-since / 0.15) * cos(since * 2 * .pi * 11),
                 rain: drop.hanging ? 3 : 2
             )
+            buffer[count] = sprite
             count += 1
+            if !drop.hanging {
+                let speed = simd_length(sprite.velocity)
+                let reach = max(sprite.size, 1.5) * 1.1 + min(speed * 0.08, sprite.size * 0.9) + speed * 0.024 + 1
+                let bounds = SIMD4(lowHalf: sprite.position - reach, highHalf: sprite.position + reach)
+                glassReach = glassReach.map { SIMD4(lowHalf: simd_min($0.lowHalf, bounds.lowHalf), highHalf: simd_max($0.highHalf, bounds.highHalf)) } ?? bounds
+            }
         }
         for grain in grains where count < capacity && !grain.bulk {
             if grain.kind.leafy {
@@ -923,8 +956,19 @@ final class SnowSimulation {
         }
         for mote in motes where count < capacity {
             let t = mote.age / mote.life
-            let fade = min(1, mote.age / 0.06) * pow(1 - t, 1.5)
-            buffer[count] = Sprite(position: mote.position, size: mote.size * (1 + t), alpha: mote.alpha * fade * fallingOpacity, soft: 1)
+            if mote.still {
+                // Come down, it takes the frost's colour, the picture's light there, and dims to it at once, then
+                // goes into the frost it left.
+                let s = min(mote.age / 0.3, 1)
+                let settled = s * s * (3 - 2 * s)
+                buffer[count] = Sprite(position: mote.position, size: mote.size, alpha: mote.alpha * (1 - 0.5 * settled) * (1 - t * t) * fallingOpacity,
+                                       soft: mote.soft)
+                buffer[count].scene = mote.scene
+                buffer[count].sceneLight = mote.sceneLight + (1 - mote.sceneLight) * settled
+            } else {
+                let fade = min(1, mote.age / 0.06) * pow(1 - t, 1.5)
+                buffer[count] = Sprite(position: mote.position, size: mote.size * (1 + t), alpha: mote.alpha * fade * fallingOpacity, soft: 1)
+            }
             count += 1
         }
         for ghost in ghosts where count < capacity {
@@ -1069,11 +1113,328 @@ final class SnowSimulation {
         if celebration == nil, fireworks.isEmpty { self.fireworks = nil }
     }
 
+    // MARK: - Snow in the picture
+
+    /// How near each spot of the wallpaper is, a cell to every `terrain.cell` points from the screen's top left, 0 to 255.
+    private var terrain: WallpaperTerrain?
+    private var terrainNear: [UInt8] = []
+    /// What the flakes seen landing in the picture have left there, 0 to 1 a cell.
+    private var dabAmount: [Float] = []
+    /// `dabAmount` as the picture's snow is drawn from it, 0 to 255, written out now and then; with a count that goes
+    /// up each time.
+    private(set) var dabs: [UInt8] = []
+    private(set) var dabsVersion = 0
+    /// The frost each flake seen landing leaves right where it came down, 0 to 1 a cell; and as drawn, 0 to 255,
+    /// written out with `dabs`.
+    private var speckAmount: [Float] = []
+    private(set) var specks: [UInt8] = []
+    /// `speckAmount` as drawn, coming in over most of a second rather than at once; and its way still to go.
+    private var speckShown: [Float] = []
+    private var speckGap: [Float] = []
+    private var specksEasing = false
+    private var pictureLevelWritten: Float = -1
+    private var pictureVeilWritten: Float = -1
+    /// The snow in the picture has changed: what has fallen everywhere, the veil, or `dabs` and `specks`.
+    var pictureChanged: () -> Void = {}
+    var dabsSize: (width: Int, height: Int) { (terrain?.width ?? 0, terrain?.height ?? 0) }
+    /// How much snow has fallen over the whole picture, as it grows step by step with the snowfall and melts: the same
+    /// everywhere, so it comes as smoothly as time passes. Up to 1 it comes to cover what holds it; from there to
+    /// `deepest`, far more slowly and only while nothing melts it, it lies deeper and buries more.
+    private(set) var pictureLevel: Float = 0
+    static let deepest: Float = 2
+    /// How much the snow now falling veils the farthest things in the picture, 0 to 1: it eases after the snowfall.
+    private(set) var pictureVeil: Float = 0
+    /// When a gust last cleared the snow: the picture's goes with it.
+    private(set) var pictureBlownAt: Double = -10
+    private var pictureTickedAt: Double = 0
+    private var dabsWrittenAt: Double = 0
+    private var dabsTouched = false
+    /// A flake seen landing has left snow that hasn't melted yet.
+    private(set) var hasDabs = false
+    /// A gust is clearing the snow, the picture's too.
+    var pictureCleared: () -> Void = {}
+    /// The snow in the picture is melting away with nothing falling: the simulation goes on until it is gone.
+    private var pictureThaws: Bool { terrain != nil && intensity <= 0 && ((pictureLevel > 0 && pictureMelting) || pictureVeil > 0) }
+    private var pictureMelting: Bool { thaws || !accumulates || !modes.contains(.snow) }
+    /// A flake this deep is as near as the nearest thing in the picture; deeper ones fall in front of all of it, onto
+    /// the windows and the drift. Depth runs on without a break: there is no line between the two kinds.
+    private let sceneDepth: Float = 0.7
+    /// How far apart in nearness a flake and a surface can be for the flake to land on it rather than pass it.
+    private let sceneTolerance: Float = 0.025
+    private let groundLevel = UInt8(Wallpaper.ground * 255)
+    private var flakeNearness = [Float](repeating: 0, count: 256)
+    private var pictureTop: Float = 0
+    private var pictureTurn = 0
+    /// What stands in front of the wallpaper, a cell to every `frontCell` points from the screen's top left, and the
+    /// frames it was marked from.
+    private var frontCover: [Bool] = [false]
+    private var frontSize = (width: 1, height: 1)
+    private var frontFrames: [SIMD4<Float>] = []
+    private static let frontCell = 16
+    /// The terrain's grid, kept apart from it: asking the terrain itself for every flake would copy it each time.
+    private var terrainCells = (width: 0, height: 0, size: 1)
+    private var terrainSpan = (far: Float(0), close: Float(1))
+    /// A dab's share of snow in each of the 5 by 5 cells around where a flake landed: a soft round bump.
+    private static let dabWeights: [Float] = {
+        let raw = (0..<25).map { k -> Float in
+            let dx = Float(k % 5 - 2), dy = Float(k / 5 - 2)
+            return exp(-(dx * dx + dy * dy) / 2.2)
+        }
+        let total = raw.reduce(0, +)
+        return raw.map { $0 * 3 / total }
+    }()
+
+    /// The picture's air as the falling flakes' shader reads it, a cell to every terrain cell, RGBA: the light there,
+    /// and how near what stands there is. With a count that goes up whenever it changes.
+    private(set) var air: [UInt8] = []
+    private(set) var airVersion = 0
+    var airSize: (width: Int, height: Int) { air.isEmpty ? (0, 0) : (terrainCells.width, terrainCells.height) }
+
+    /// The surfaces of the wallpaper now shown, for the flakes to fall among, and its light; nil for none.
+    func setPicture(_ fresh: WallpaperTerrain?, light: WallpaperLight? = nil) {
+        guard fresh != terrain else { return }
+        air = []
+        airVersion += 1
+        if let fresh, let light, light.width > 0, light.height > 0, light.pixels.count >= light.width * light.height * 4 {
+            air = [UInt8](repeating: 255, count: fresh.width * fresh.height * 4)
+            let lights = [UInt8](light.pixels), nears = [UInt8](fresh.near)
+            for y in 0..<fresh.height {
+                let ly = min(y * light.height / fresh.height, light.height - 1)
+                for x in 0..<fresh.width {
+                    let from = (ly * light.width + min(x * light.width / fresh.width, light.width - 1)) * 4, to = (y * fresh.width + x) * 4
+                    air[to] = lights[from]
+                    air[to + 1] = lights[from + 1]
+                    air[to + 2] = lights[from + 2]
+                    air[to + 3] = nears[y * fresh.width + x]
+                }
+            }
+        }
+        terrain = fresh
+        terrainNear = fresh.map { [UInt8]($0.near) } ?? []
+        dabAmount = Array(repeating: 0, count: terrainNear.count)
+        dabs = Array(repeating: 0, count: terrainNear.count)
+        speckAmount = dabAmount
+        speckShown = dabAmount
+        speckGap = dabAmount
+        specksEasing = false
+        specks = dabs
+        dabsVersion += 1
+        hasDabs = false
+        pictureTop = 0
+        terrainCells = (fresh?.width ?? 0, fresh?.height ?? 0, max(fresh?.cell ?? 1, 1))
+        terrainSpan = (fresh?.far ?? 0, fresh?.close ?? 1)
+        if let fresh {
+            // How near a flake of each depth is in the picture, and how high on the screen anything in it reaches.
+            flakeNearness = (0..<256).map { fresh.far + (fresh.close - fresh.far) * pow(Float($0) / 255 / sceneDepth, 0.7) }
+            if let first = terrainNear.firstIndex(where: { $0 > groundLevel }) {
+                pictureTop = height - Float(first / fresh.width * fresh.cell)
+            }
+        }
+        stirred()
+    }
+
+    /// A flake far enough off falls in the picture, at its own depth. Where something in the wallpaper is nearer than
+    /// it, it has gone behind that; where a surface is as near as it is, it lands there and leaves a little snow.
+    /// Over a window or the Dock it is in front of them, not in the picture. Returns whether it is gone.
+    private func fallsInPicture(_ flake: Flake) -> Bool {
+        // Most flakes are over the sky or still in front of what is under them: those are told apart first, cheaply.
+        guard flake.position.y < pictureTop, flake.position.y >= 0 else { return false }
+        let x = flake.position.x, y = height - flake.position.y
+        guard x >= 0, x < width else { return false }
+        if frontCover[min(Int(y) / Self.frontCell, frontSize.height - 1) * frontSize.width + min(Int(x) / Self.frontCell, frontSize.width - 1)] { return false }
+        let cells = terrainCells
+        let cx = min(Int(x) / cells.size, cells.width - 1), cy = min(Int(y) / cells.size, cells.height - 1)
+        let level = terrainNear[cy * cells.width + cx]
+        let own = flakeNearness[min(Int(flake.depth * 255), 255)]
+        let near = Float(level) / 255
+        guard level > groundLevel, near >= own - sceneTolerance else { return false }
+        if near <= own + sceneTolerance {
+            layDab(size: flake.size, near: near, cx: cx, cy: cy, x: x, y: y)
+            if motes.count < maxMotes {
+                motes.append(Mote(position: flake.position, velocity: .zero, size: flake.size, alpha: flake.alpha, life: 1.6, soft: flake.soft, still: true, scene: own,
+                                  sceneLight: 1 - min(max((flake.depth - 0.45) / 0.45, 0), 1)))
+            }
+        }
+        return true
+    }
+
+    /// A flake has landed in the picture: a dab of snow around where it fell, bigger for a bigger flake, and the
+    /// farther off the less of it shows, as everything there is smaller.
+    private func layDab(size: Float, near: Float, cx: Int, cy: Int, x: Float, y: Float) {
+        let cells = terrainCells
+        let nearness = min(max((near - terrainSpan.far) / max(terrainSpan.close - terrainSpan.far, 0.01), 0), 1)
+        let dab = size * size * 0.004 * (0.3 + 0.7 * nearness)
+        for dy in -2...2 {
+            for dx in -2...2 {
+                let nx = cx + dx, ny = cy + dy
+                guard nx >= 0, nx < cells.width, ny >= 0, ny < cells.height else { continue }
+                let k = ny * cells.width + nx
+                dabAmount[k] = min(dabAmount[k] + dab * Self.dabWeights[(dy + 2) * 5 + dx + 2], 1)
+            }
+        }
+        // The frost lies where the flake touched, shared among the four cells round that point as the texture will
+        // blend them back, so that it shows there and not at a cell's middle.
+        let fx = x / Float(cells.size) - 0.5, fy = y / Float(cells.size) - 0.5
+        let x0 = Int(fx.rounded(.down)), y0 = Int(fy.rounded(.down))
+        let ax = fx - Float(x0), ay = fy - Float(y0)
+        let speck = min(size * 0.3, 0.9) * (0.6 + 0.4 * nearness) * 1.6
+        for (dx, dy, share) in [(0, 0, (1 - ax) * (1 - ay)), (1, 0, ax * (1 - ay)), (0, 1, (1 - ax) * ay), (1, 1, ax * ay)] {
+            let nx = x0 + dx, ny = y0 + dy
+            guard nx >= 0, nx < cells.width, ny >= 0, ny < cells.height else { continue }
+            let k = ny * cells.width + nx
+            speckAmount[k] = min(speckAmount[k] + speck * share, 1)
+        }
+        dabsTouched = true
+        hasDabs = true
+    }
+
+    /// The snow in the picture grows with the snowfall, melts, or goes with a gust clearing the snow.
+    /// The snow in the picture as it is `seconds` later. At the usual snowfall it takes about eight minutes to cover all
+    /// it can, and then most of an hour to lie as deep as it gets; melting, it never lies deeper than it covers, and
+    /// goes in a few minutes once the snowfall stops.
+    private func snowInPicture(for seconds: Float) {
+        pictureLevel = snowInPicture(from: pictureLevel, after: seconds)
+    }
+
+    /// The same for the snow in any picture, from its `level`: a wallpaper on a Space out of sight is snowed on too.
+    func snowInPicture(from level: Float, after seconds: Float) -> Float {
+        let snowing = modes.contains(.snow) && accumulates && !holding
+        let falling = snowing ? Self.flakesPerMegapoint(intensity) * density / Self.flakesPerMegapoint(0.5) : 0
+        let most: Float = pictureMelting ? 1 : Self.deepest
+        var level = level, left = seconds
+        if level < 1, falling > 0 {
+            let covering = min(left, (1 - level) * 480 / falling)
+            level += falling * covering / 480
+            left -= covering
+        }
+        if level >= 1, level < most, falling > 0 { level = min(level + falling * left / 3000, most) }
+        if level > most { level = max(most, level - seconds / 300) }
+        if falling <= 0, pictureMelting { level = max(0, level - seconds / 180) }
+        return level
+    }
+
+    /// Puts back the snow that lay in the picture when the app last ran, or lies in the one now showing.
+    func restorePicture(level: Float) {
+        pictureLevel = min(max(level, 0), Self.deepest)
+    }
+
+    /// The display was dark or away for `seconds`: it went on snowing meanwhile.
+    func passPicture(seconds: Float) {
+        guard terrain != nil, seconds > 0 else { return }
+        snowInPicture(for: min(seconds, 8 * 3600))
+        stirred()
+    }
+
+    /// Marks where the windows and the Dock stand in front of the wallpaper, when they have moved: a flake over them
+    /// is in front of them, not in the picture, and with a window over the whole screen that is every flake.
+    private func coverPicture() {
+        var frames = windowFrames
+        if let dock = layers.first(where: \.isDock) { frames.append(SIMD4(dock.origin.x, 0, dock.origin.x + dock.width, dock.origin.y)) }
+        let size = (width: max(Int(width) / Self.frontCell + 1, 1), height: max(Int(height) / Self.frontCell + 1, 1))
+        guard frames != frontFrames || size != frontSize else { return }
+        frontFrames = frames
+        frontSize = size
+        frontCover = Array(repeating: false, count: size.width * size.height)
+        for frame in frames {
+            let columns = max(Int(frame.x) / Self.frontCell, 0)..<min(Int(frame.z) / Self.frontCell + 1, size.width)
+            let rows = max(Int(height - frame.w) / Self.frontCell, 0)..<min(Int(height - frame.y) / Self.frontCell + 1, size.height)
+            guard !columns.isEmpty, !rows.isEmpty else { continue }
+            for row in rows {
+                for column in columns { frontCover[row * size.width + column] = true }
+            }
+        }
+    }
+
+    private func tendPicture(dt: Float) {
+        pictureTurn &+= 1
+        guard terrain != nil else { return }
+        let thick = modes.contains(.snow) && !holding ? min(Self.flakesPerMegapoint(intensity) * density / Self.flakesPerMegapoint(1), 1) : 0
+        pictureVeil += (0.3 * thick.squareRoot() - pictureVeil) * min(dt / 12, 1)
+        if pictureVeil < 0.002 && thick == 0 { pictureVeil = 0 }
+        if clock - pictureBlownAt < 1.5 {
+            pictureLevel = 0
+            if hasDabs {
+                for k in dabAmount.indices { dabAmount[k] = 0 }
+                for k in speckAmount.indices { speckAmount[k] = 0 }
+                for k in speckShown.indices { speckShown[k] = 0 }
+                specksEasing = false
+                hasDabs = false
+                dabsTouched = true
+            }
+        } else {
+            snowInPicture(for: dt)
+            // The dabs left by the flakes seen landing melt as the rest does, a second at a time.
+            if clock - pictureTickedAt >= 1 {
+                let elapsed = Float(min(clock - pictureTickedAt, 5))
+                pictureTickedAt = clock
+                if pictureMelting && hasDabs {
+                    var loss = -elapsed / 180, none: Float = 0, most: Float = 0, mostSpeck: Float = 0
+                    let count = vDSP_Length(dabAmount.count)
+                    vDSP_vsadd(dabAmount, 1, &loss, &dabAmount, 1, count)
+                    vDSP_vthres(dabAmount, 1, &none, &dabAmount, 1, count)
+                    vDSP_maxv(dabAmount, 1, &most, count)
+                    vDSP_vsadd(speckAmount, 1, &loss, &speckAmount, 1, count)
+                    vDSP_vthres(speckAmount, 1, &none, &speckAmount, 1, count)
+                    vDSP_maxv(speckAmount, 1, &mostSpeck, count)
+                    hasDabs = most > 0 || mostSpeck > 0
+                    dabsTouched = true
+                }
+            }
+        }
+        // Told five times a second while anything in it changes: in steps that small the picture can be drawn one
+        // after another without fading each in over the last, and a fade would keep copies of the whole screen.
+        guard clock - dabsWrittenAt >= 0.2,
+              dabsTouched || specksEasing || pictureLevel != pictureLevelWritten || pictureVeil != pictureVeilWritten else { return }
+        let elapsed = Float(min(clock - dabsWrittenAt, 1))
+        dabsWrittenAt = clock
+        pictureLevelWritten = pictureLevel
+        pictureVeilWritten = pictureVeil
+        defer { pictureChanged() }
+        guard dabsTouched || specksEasing else { return }
+        dabsTouched = false
+        // A flake's frost comes in over most of a second.
+        let count = vDSP_Length(speckAmount.count)
+        vDSP_vsub(speckShown, 1, speckAmount, 1, &speckGap, 1, count)
+        var widest: Float = 0
+        vDSP_maxmgv(speckGap, 1, &widest, count)
+        if widest < 0.5 / 255 {
+            speckShown.withUnsafeMutableBufferPointer { shown in
+                speckAmount.withUnsafeBufferPointer { shown.baseAddress!.update(from: $0.baseAddress!, count: $0.count) }
+            }
+            specksEasing = false
+        } else {
+            var share = min(elapsed / 0.5, 1)
+            vDSP_vsma(speckGap, 1, &share, speckShown, 1, &speckShown, 1, count)
+            specksEasing = true
+        }
+        // A quarter of a million cells a second: in one vector pass, not one by one.
+        let cells = terrainCells
+        dabAmount.withUnsafeMutableBufferPointer { amounts in
+            dabs.withUnsafeMutableBufferPointer { bytes in
+                var source = vImage_Buffer(data: amounts.baseAddress, height: vImagePixelCount(cells.height), width: vImagePixelCount(cells.width),
+                                           rowBytes: cells.width * MemoryLayout<Float>.stride)
+                var target = vImage_Buffer(data: bytes.baseAddress, height: vImagePixelCount(cells.height), width: vImagePixelCount(cells.width),
+                                           rowBytes: cells.width)
+                vImageConvert_PlanarFtoPlanar8(&source, &target, 1, 0, vImage_Flags(kvImageNoFlags))
+            }
+        }
+        speckShown.withUnsafeMutableBufferPointer { amounts in
+            specks.withUnsafeMutableBufferPointer { bytes in
+                var source = vImage_Buffer(data: amounts.baseAddress, height: vImagePixelCount(cells.height), width: vImagePixelCount(cells.width),
+                                           rowBytes: cells.width * MemoryLayout<Float>.stride)
+                var target = vImage_Buffer(data: bytes.baseAddress, height: vImagePixelCount(cells.height), width: vImagePixelCount(cells.width),
+                                           rowBytes: cells.width)
+                vImageConvert_PlanarFtoPlanar8(&source, &target, 1, 0, vImage_Flags(kvImageNoFlags))
+            }
+        }
+        dabsVersion += 1
+    }
+
     // MARK: - Windows
 
     func spaceChanged() {
         spaceChangedAt = clock
-        for entry in parking { dormant[entry.id] = entry.ledge }
+        for entry in parking { keepAway(entry.id, entry.ledge) }
         parking.removeAll()
     }
 
@@ -1113,7 +1474,7 @@ final class SnowSimulation {
                 } else {
                     move(ledge, left: left, right: right, top: top, columns: columns, interval: interval)
                 }
-            } else if let returning = dormant.removeValue(forKey: surface.id) ?? unpark(surface.id) {
+            } else if let returning = dormant.removeValue(forKey: surface.id)?.ledge ?? unpark(surface.id) {
                 ledge = returning
                 restore(returning, left: left, top: top, columns: columns)
                 ledges[surface.id] = returning
@@ -1141,21 +1502,41 @@ final class SnowSimulation {
         for id in ledges.keys where !seen.contains(id) {
             guard let ledge = ledges.removeValue(forKey: id) else { continue }
             if elsewhere.contains(id) {
-                dormant[id] = ledge
+                keepAway(id, ledge)
             } else if !parked.contains(id) {
                 // The Dock slides down out of sight, about its height in a fifth of a second: its snow drops along with
                 // it instead of hanging behind while gravity picks it up.
                 let sink = ledge.isDock ? SIMD2<Float>(0, -450) : .zero
                 shed(ledge, share: 1, velocity: ledge.trackVelocity + ledge.offsetVelocity + sink)
             } else if clock - spaceChangedAt < 0.6 {
-                dormant[id] = ledge
+                keepAway(id, ledge)
             } else {
                 parking.append((id, ledge, clock))
             }
         }
-        if dormant.count > 200, let stale = dormant.keys.first { dormant[stale] = nil }
         ledgeList = Array(ledges.values)
         layers = [ground] + ledgeList
+    }
+
+    /// Keeps the snow of a window gone to another Space for its return; a bare window gets a fresh ledge when it's back.
+    /// Only so many are kept, the one gone longest dropped first. The water on its glass would dry out of sight long
+    /// before.
+    private func keepAway(_ id: CGWindowID, _ ledge: SnowLayer) {
+        ledge.spray.removeAll()
+        ledge.film.removeAll()
+        guard ledge.top > 0 || lying.contains(where: { $0.layer === ledge }) else { return }
+        dormant[id] = (ledge, clock)
+        if dormant.count > 200, let oldest = dormant.lazy.filter({ $0.key != id }).min(by: { $0.value.since < $1.value.since })?.key {
+            dormant[oldest] = nil
+        }
+    }
+
+    /// The windows away whose snow waits for them.
+    var awayIDs: [CGWindowID] { Array(dormant.keys) }
+
+    /// Lets go of the snow kept for windows away that closed meanwhile: only those in `open` wait on.
+    func forgetClosed(keeping open: Set<CGWindowID>) {
+        dormant = dormant.filter { open.contains($0.key) }
     }
 
     private func unpark(_ id: CGWindowID) -> SnowLayer? {
@@ -1326,7 +1707,9 @@ final class SnowSimulation {
         let leafy = ledge.blend.leaves > 0.5
         let (stick, hold, rub) = leafy ? (leafAdhesion, leafGrip, leafSlip) : (adhesion, grip, slip)
         let fall = -gravity - acceleration.y
-        if lift > 0 || fall > stick {
+        // The Dock comes out easing to a stop, braking harder than gravity all the way: its snow would be thrown off and
+        // hang above it.
+        if !ledge.isDock && (lift > 0 || fall > stick) {
             liftVelocity += fall * dt
             lift += liftVelocity * dt
             if lift <= 0 {
@@ -1919,6 +2302,7 @@ final class SnowSimulation {
     }
 
     private func advanceFlakes(dt: Float) {
+        if pictureTop > 0 { coverPicture() }
         let wind = breeze() + slideWind
         // A Space's wind is short: the flakes take it up faster than the slow breeze, or it would be gone first.
         let follow = min(1, dt * (1.2 + abs(slideWind) * 0.03))
@@ -1967,6 +2351,13 @@ final class SnowSimulation {
             if flake.settles && accumulates && flake.blown == 0 && flake.kind == .snow, let tree,
                let perch = tree.catcher(x: flake.position.x, from: previousY, to: flake.position.y, chance: 0.75) {
                 tree.add(flake.size * flake.size * deposition * flake.mass, to: perch.index, along: perch.along, falling: flake.velocity)
+                recycle(i)
+                i -= 1
+                continue
+            }
+            // Each flake in the picture is looked at one step in four: it falls a few points meanwhile, far too
+            // little to miss the surface it is coming down to.
+            if (i &+ pictureTurn) & 3 == 0 && flake.settles && accumulates && flake.blown == 0 && flake.kind == .snow && fallsInPicture(flake) {
                 recycle(i)
                 i -= 1
                 continue
@@ -2151,9 +2542,11 @@ final class SnowSimulation {
                 motes.swapAt(i, motes.count - 1)
                 motes.removeLast()
             } else {
-                mote.velocity.y -= 35 * dt
-                mote.velocity *= damping
-                mote.position += (mote.velocity + SIMD2(drift, 0)) * dt
+                if !mote.still {
+                    mote.velocity.y -= 35 * dt
+                    mote.velocity *= damping
+                    mote.position += (mote.velocity + SIMD2(drift, 0)) * dt
+                }
                 motes[i] = mote
             }
             i -= 1
@@ -2297,7 +2690,7 @@ final class SnowSimulation {
     /// The sign the ghost holds up, its stick in the raised paw, rising out of the snow beside it as it is pulled up.
     private func sign(of ghost: Ghost) -> SignSprite? {
         guard let caption = ghost.sign, ghost.signUp > 0 else { return nil }
-        let (ground, center) = placement(of: ghost)
+        let (ground, _) = placement(of: ghost)
         // The paw's tip when raised to hold it, in the ghost's own coordinates.
         let paw = paw(of: ghost, at: 0.35)
         return SignSprite(
@@ -2757,7 +3150,7 @@ final class SnowSimulation {
         }
         radius = min(radius, largest)
         // It gathers right under the edge: its top, once it has swelled to its size, at the edge.
-        let along = x - ledge.base.x, edge = -corner(of: ledge, at: x - ledge.base.x)
+        let along = x - ledge.origin.x, edge = -corner(of: ledge, at: x - ledge.origin.x)
         glassDrops.append(GlassDrop(
             layer: ledge,
             offset: SIMD2(along, edge - halfWidth(radius, still: false)),
@@ -2901,7 +3294,7 @@ final class SnowSimulation {
         let deepest = min(sprayDeepest, ledge.face * 0.4)
         let room = ledgeList.reduce(0) { $0 + $1.spray.count } < maxSpray && Float(ledge.spray.count) < ledge.width * sprayAlong
         for _ in 0..<count {
-            let along = x - ledge.base.x + random.range(-1, 1) * (8 + 16 * depth)
+            let along = x - ledge.origin.x + random.range(-1, 1) * (8 + 16 * depth)
             let below = -log(1 - random.next() * 0.999) * sprayReach
             guard along > 2, along < ledge.width - 2, below < deepest else { continue }
             let u = random.next()
@@ -2978,16 +3371,16 @@ final class SnowSimulation {
         let reach = cursorRadius * 0.8
         for ledge in ledgeList where !ledge.spray.isEmpty || !ledge.film.isEmpty {
             let near = wiping.map { path in
-                min(path.from.y, path.to.y) - reach < ledge.base.y && max(path.from.y, path.to.y) + reach > ledge.base.y - ledge.face
-                    && min(path.from.x, path.to.x) - reach < ledge.base.x + ledge.width && max(path.from.x, path.to.x) + reach > ledge.base.x
+                min(path.from.y, path.to.y) - reach < ledge.origin.y && max(path.from.y, path.to.y) + reach > ledge.origin.y - ledge.face
+                    && min(path.from.x, path.to.x) - reach < ledge.origin.x + ledge.width && max(path.from.x, path.to.x) + reach > ledge.origin.x
             } ?? false
-            let width = ledge.width, face = ledge.face, base = ledge.base, covers = ledge.faceOccluders
+            let width = ledge.width, face = ledge.face, origin = ledge.origin, covers = ledge.faceOccluders
             func off(_ offset: SIMD2<Float>) -> Bool {
                 offset.x < 0 || offset.x > width || -offset.y > face
             }
             func wiped(_ offset: SIMD2<Float>, by margin: Float) -> Bool {
                 guard near, let wiping else { return false }
-                let position = base + offset
+                let position = origin + offset
                 let path = wiping.to - wiping.from
                 let along = min(max(simd_dot(position - wiping.from, path) / max(simd_length_squared(path), 0.0001), 0), 1)
                 return simd_distance(position, wiping.from + path * along) < reach + margin
@@ -3103,7 +3496,7 @@ final class SnowSimulation {
     private func wipes(_ point: SIMD2<Float>, _ drop: GlassDrop, dt: Float) -> Bool {
         // What it has just smeared out it passes on over.
         guard simd_length(cursorVelocity) > 40, drop.age > 0.3 || !drop.bead else { return false }
-        let position = drop.layer.base + drop.offset
+        let position = drop.layer.origin + drop.offset
         let from = point - cursorVelocity * dt
         let path = point - from
         let along = min(max(simd_dot(position - from, path) / max(simd_length_squared(path), 0.0001), 0), 1)
@@ -3119,7 +3512,7 @@ final class SnowSimulation {
         let speed = simd_length(cursorVelocity)
         let direction = cursorVelocity / speed
         let across = SIMD2(-direction.y, direction.x)
-        let length = min(max(simd_dot(point - (drop.layer.base + drop.offset), direction), 6), 45)
+        let length = min(max(simd_dot(point - (drop.layer.origin + drop.offset), direction), 6), 45)
         let count = min(9, max(2, Int(length / 5)))
         let spots = (0..<count).map { k in (Float(k) + random.range(0.2, 0.8)) / Float(count) }
         let weights = spots.map { 1.15 - $0 }
@@ -3151,7 +3544,7 @@ final class SnowSimulation {
 
     /// Whether the cursor, at `point`, brushes a hanging drop where it shows.
     private func touches(_ point: SIMD2<Float>, _ drop: GlassDrop) -> Bool {
-        let cling = drop.layer.base + drop.offset
+        let cling = drop.layer.origin + drop.offset
         let depth = (1 + 1.2 * drop.fill) * drop.radius * glassScale
         guard abs(point.x - cling.x) < spread(of: drop) + cursorRadius * 0.7,
               point.y < cling.y + cursorRadius * 0.5, point.y > cling.y - depth - cursorRadius else { return false }
@@ -3166,7 +3559,7 @@ final class SnowSimulation {
     /// The part of a hanging drop that lets go falls like any raindrop, to burst on whatever is below, and runs on down
     /// a window it lands on.
     private func fall(_ drop: GlassDrop, share: Float? = nil, below: Float? = nil, flick: SIMD2<Float> = .zero, thrown: SIMD2<Float>? = nil) {
-        let position = drop.layer.base + drop.offset - SIMD2(0, below ?? 2.6 * drop.radius * glassScale)
+        let position = drop.layer.origin + drop.offset - SIMD2(0, below ?? 2.6 * drop.radius * glassScale)
         guard raining, position.y > 2 else { return }
         var velocity = thrown ?? flick * 0.5
         let speed = simd_length(velocity)
@@ -3266,6 +3659,8 @@ final class SnowSimulation {
         tree?.clearSnow { area, position, _, spread in
             if !calm { release(area, at: position + SIMD2(0, -3), velocity: SIMD2(direction < 0 ? -500 : 500, 60), spread: spread, scatter: 0.4) }
         }
+        pictureBlownAt = clock
+        pictureCleared()
         // Snow kept for windows on other Spaces goes too, out of sight.
         dormant.removeAll()
         for entry in parking {
@@ -3623,7 +4018,7 @@ final class SnowSimulation {
     private func tendLeaves(dt: Float) {
         guard !lying.isEmpty else { return }
         let shown = markShown()
-        lazy var kept = Set(dormant.values.map(ObjectIdentifier.init) + parking.map { ObjectIdentifier($0.ledge) })
+        lazy var kept = Set(dormant.values.map { ObjectIdentifier($0.ledge) } + parking.map { ObjectIdentifier($0.ledge) })
         let speed = simd_length(cursorVelocity)
         for k in lying.indices.reversed() {
             var leaf = lying[k]
@@ -3793,12 +4188,14 @@ extension SnowSimulation {
         ledge.track += shift
         ledge.previousBaseY += shift.y
         ledge.occluders = ledge.occluders.map { $0 + SIMD4(shift.x, shift.y, shift.x, shift.y) }
+        ledge.faceOccluders = ledge.faceOccluders.map { $0 + SIMD4(shift.x, shift.y, shift.x, shift.y) }
         ledges[id] = ledge
         lying += carried.leaves
         glassDrops += carried.drops
         ledgeList = Array(ledges.values)
         layers = [ground] + ledgeList
         windowsChanged = true
+        stirred()
     }
 
     /// The snow on a window kept here, to lend to a display it reaches over: `shift` takes these coordinates to that
@@ -3848,6 +4245,7 @@ extension SnowSimulation {
         let fill = ledge.index(at: x).map { ledge.fill($0) } ?? 1
         _ = ledge.deposit(snow.area * fill, at: x, wide: true)
         heightsChanged = true
+        stirred()
     }
 
     /// The snow thrown past a shared edge since the last call, in this display's coordinates.
@@ -3858,6 +4256,8 @@ extension SnowSimulation {
 
     /// Goes on with snow thrown in from a neighbouring display; `shift` takes its coordinates to these.
     func adoptStrays(_ thrown: [StraySnow], shift: SIMD2<Float>) {
+        guard !thrown.isEmpty else { return }
+        defer { stirred() }
         for stray in thrown {
             switch stray.piece {
             case .flake(var flake):

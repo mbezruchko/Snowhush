@@ -36,7 +36,6 @@ const GLYPHS: [[[&[u8]; 7]; 2]; 5] = [
     [glyph!("rain-white"), glyph!("rain-black")],
     [glyph!("blossom-white"), glyph!("blossom-black")],
 ];
-const MODES: [Mode; 4] = [Mode::Snow, Mode::Autumn, Mode::Rain, Mode::Blossom];
 /// The panel's menu can't hold a slider: Intensity and Opacity offer these, in percent.
 const INTENSITY_STOPS: [u32; 5] = [0, 25, 50, 75, 100];
 const OPACITY_STOPS: [u32; 5] = [100, 80, 60, 40, 20];
@@ -59,7 +58,7 @@ impl Tray {
     }
 
     fn halloween(&self) -> bool {
-        self.settings.modes() == [Mode::Snow] && self.settings.halloween.wanted(self.today)
+        self.settings.picked.modes() == [Mode::Snow] && self.settings.halloween.wanted(self.today)
     }
 
     fn change(&mut self, change: impl FnOnce(&mut Settings) -> Command) {
@@ -69,16 +68,15 @@ impl Tray {
     }
 
     fn pick(&mut self, mode: Mode) {
-        if self.settings.pick(mode) {
+        if self.settings.picked.pick(mode) {
             self.switch_modes();
         }
     }
 
     fn switch_modes(&mut self) {
         self.settings.save();
-        let settings = self.settings;
         let calm = !prefs::animations_enabled();
-        let _ = self.commands.send(Command::Mode { mode: settings.mode, mixed: settings.mixed, mix: settings.mix, calm });
+        let _ = self.commands.send(Command::Mode { picked: self.settings.picked, calm });
     }
 }
 
@@ -101,7 +99,7 @@ impl ksni::Tray for Tray {
         let glyph = if self.halloween() {
             2
         } else {
-            match self.settings.mode {
+            match self.settings.picked.mode {
                 Mode::Snow => 0,
                 Mode::Autumn => 1,
                 Mode::Rain => 3,
@@ -111,14 +109,24 @@ impl ksni::Tray for Tray {
         self.glyphs[glyph][usize::from(self.light)].clone()
     }
 
+    fn watcher_online(&self) {
+        log!("tray: the panel's tray is back");
+    }
+
+    /// Waits for a panel's tray to come, as when Snowhush starts before the panel.
+    fn watcher_offline(&self, reason: ksni::OfflineReason) -> bool {
+        log!("tray: no panel's tray yet ({reason:?})");
+        true
+    }
+
     fn tool_tip(&self) -> ksni::ToolTip {
         ksni::ToolTip { title: "Snowhush".into(), ..Default::default() }
     }
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
         let settings = self.settings;
-        let picked = settings.modes();
-        let falling: Vec<Mode> = MODES.iter().copied().filter(|mode| picked.contains(mode)).collect();
+        let picked = settings.picked.modes();
+        let falling: Vec<Mode> = Mode::ALL.iter().copied().filter(|mode| picked.contains(mode)).collect();
         // Rain doesn't lie anywhere: nothing to keep, melt or clear.
         let heaps: Vec<Mode> = falling.iter().copied().filter(|&mode| mode != Mode::Rain).collect();
         let lies = !heaps.is_empty();
@@ -132,9 +140,9 @@ impl ksni::Tray for Tray {
         let mut kinds: Vec<MenuItem<Self>> = vec![
             CheckmarkItem {
                 label: tr("mixed").into(),
-                checked: settings.mixed,
+                checked: settings.picked.mixed,
                 activate: Box::new(|tray: &mut Tray| {
-                    tray.settings.toggle_mixed();
+                    tray.settings.picked.toggle_mixed();
                     tray.switch_modes();
                 }),
                 ..Default::default()
@@ -143,9 +151,9 @@ impl ksni::Tray for Tray {
             MenuItem::Separator,
         ];
         let labels = [tr("snow"), tr("autumn"), tr("rain"), tr("blossom")];
-        if settings.mixed {
+        if settings.picked.mixed {
             // Mixed, the kinds are checkboxes: a third picked takes the place of the one picked before the other.
-            for (&mode, &label) in MODES.iter().zip(&labels) {
+            for (&mode, &label) in Mode::ALL.iter().zip(&labels) {
                 kinds.push(
                     CheckmarkItem {
                         label: label.into(),
@@ -159,9 +167,9 @@ impl ksni::Tray for Tray {
         } else {
             kinds.push(
                 RadioGroup {
-                    selected: MODES.iter().position(|&m| m == settings.mode).unwrap_or(0),
+                    selected: Mode::ALL.iter().position(|&m| m == settings.picked.mode).unwrap_or(0),
                     select: Box::new(|tray: &mut Tray, index| {
-                        if let Some(&mode) = MODES.get(index) {
+                        if let Some(&mode) = Mode::ALL.get(index) {
                             tray.pick(mode);
                         }
                     }),

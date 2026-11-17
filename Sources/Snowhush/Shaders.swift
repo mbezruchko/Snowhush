@@ -53,6 +53,8 @@ struct Sprite {
     float flipSpeed;
     float rain;
     float petal;
+    float scene;
+    float sceneLight;
 };
 
 struct SpriteOut {
@@ -156,17 +158,6 @@ static float noise(float x) {
     float i = floor(x);
     float f = fract(x);
     return mix(hash(float2(i, 0.0)), hash(float2(i + 1.0, 0.0)), f * f * (3.0 - 2.0 * f));
-}
-
-/// Golden, amber, orange, rust or brown, a little lighter or darker.
-static float3 leafColor(float seed) {
-    float k = fract(seed * 7.13);
-    float3 c = k < 0.3 ? float3(0.97, 0.78, 0.22)
-        : k < 0.55 ? float3(0.95, 0.56, 0.13)
-        : k < 0.75 ? float3(0.86, 0.36, 0.11)
-        : k < 0.9 ? float3(0.72, 0.2, 0.09)
-        : float3(0.58, 0.38, 0.17);
-    return c * (0.86 + 0.24 * fract(seed * 31.7));
 }
 
 /// Blush, soft pink, pink or nearly white, a little lighter or darker.
@@ -702,9 +693,45 @@ static SpriteOut sprite(uint vid, const device Sprite *sprites, constant Uniform
     return out;
 }
 
+/// Its kind as its fragments see it: a leaf is never rain.
+static float rainOf(Sprite s) {
+    return s.leaf != 0.0 ? 0.0 : s.rain;
+}
+
+/// A sprite left out of a pass: a pixel's point far off the screen, so none of its fragments runs.
+static SpriteVaryings culled() {
+    SpriteVaryings v = {};
+    v.position = float4(2.0, 2.0, 2.0, 1.0);
+    v.pointSize = 1.0;
+    return v;
+}
+
 vertex SpriteVaryings spriteVertex(uint vid [[vertex_id]],
                                    const device Sprite *sprites [[buffer(0)]],
-                                   constant Uniforms &u [[buffer(1)]]) {
+                                   constant Uniforms &u [[buffer(1)]],
+                                   texture2d<float> air [[texture(0)]]) {
+    // A running drop is drawn with the glass, from the field.
+    float rain = rainOf(sprites[vid]);
+    if (rain > 1.5 && rain < 2.5) return culled();
+    SpriteOut out = sprite(vid, sprites, u);
+    // A flake in the wallpaper's picture takes the picture's light where it falls, and fades out behind whatever
+    // stands nearer there than it is.
+    Sprite s = sprites[vid];
+    if (s.scene >= 0.0) {
+        constexpr sampler smooth(filter::linear, address::clamp_to_edge);
+        float4 here = air.sample(smooth, float2(s.position.x / u.viewSize.x, 1.0 - s.position.y / u.viewSize.y), level(0.0));
+        out.alpha *= smoothstep(-0.02, 0.02, s.scene - here.a);
+        out.light *= mix(float3(1.0), here.rgb, s.sceneLight);
+    }
+    return pack(out);
+}
+
+/// Only running drops add to the field.
+vertex SpriteVaryings fieldVertex(uint vid [[vertex_id]],
+                                  const device Sprite *sprites [[buffer(0)]],
+                                  constant Uniforms &u [[buffer(1)]]) {
+    float rain = rainOf(sprites[vid]);
+    if (!(rain > 1.5 && rain < 2.5)) return culled();
     return pack(sprite(vid, sprites, u));
 }
 

@@ -171,6 +171,17 @@ unsafe extern "system" fn procedure(window: HWND, message: u32, wparam: WPARAM, 
             tick();
             LRESULT(0)
         }
+        WM_CLOSE => {
+            get_started();
+            LRESULT(0)
+        }
+        WM_DESTROY => {
+            if WELCOME.with_borrow(|welcome| welcome.as_ref().is_some_and(|welcome| welcome.window == window)) {
+                WELCOME.set(None);
+                finish(true);
+            }
+            LRESULT(0)
+        }
         _ => unsafe { DefWindowProcW(window, message, wparam, lparam) },
     }
 }

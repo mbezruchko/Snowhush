@@ -164,6 +164,92 @@ fn a_screen_rests_only_once_its_snow_is_gone_and_none_is_coming() {
 }
 
 #[test]
+fn a_screen_rests_while_a_bare_window_is_away() {
+    let mut simulation = SnowSimulation::new(1280.0, 800.0, 0.0);
+    let none = HashSet::new();
+    simulation.update_windows(&[surface(7, 300.0, 600.0, 500.0)], 0.2, &none, &none, false);
+    run(&mut simulation, 1.0, AWAY);
+    simulation.update_windows(&[], 0.2, &none, &HashSet::from([7]), false);
+    run(&mut simulation, 1.0, AWAY);
+    assert!(simulation.is_empty(), "a window with nothing on it kept the screen awake while away");
+}
+
+#[test]
+fn snow_waiting_for_a_window_that_closed_away_is_let_go() {
+    let none = HashSet::new();
+    let windows = [surface(7, 300.0, 600.0, 500.0), surface(8, 900.0, 600.0, 300.0)];
+    let mut simulation = SnowSimulation::new(1280.0, 800.0, 1.0);
+    simulation.update_windows(&windows, 0.2, &none, &none, false);
+    run(&mut simulation, 20.0, AWAY);
+    simulation.set_intensity(0.0);
+    run(&mut simulation, 30.0, AWAY);
+    simulation.update_windows(&[], 0.2, &none, &HashSet::from([7, 8]), false);
+    simulation.forget_closed(|id| id == 8);
+    simulation.update_windows(&windows, 0.2, &none, &none, false);
+    run(&mut simulation, 0.5, AWAY);
+    let snow_on = |window: &WindowSurface| {
+        piles(&simulation).iter().filter(|(origin, _)| origin.y > 300.0 && (origin.x - window.frame.x).abs() < 1.0).map(|pile| pile.1).sum::<f32>()
+    };
+    assert_eq!(snow_on(&windows[0]), 0.0, "the closed window's snow came back");
+    assert!(snow_on(&windows[1]) > 0.0, "the open window lost its snow");
+}
+
+#[test]
+fn leaves_waiting_for_a_window_that_closed_away_fall_from_where_it_was() {
+    let none = HashSet::new();
+    let mut simulation = SnowSimulation::new(1280.0, 800.0, 0.75);
+    simulation.set_mode(Mode::Autumn);
+    simulation.thaws = false;
+    simulation.update_windows(&[surface(7, 300.0, 600.0, 500.0)], 0.2, &none, &none, false);
+    run(&mut simulation, 90.0, AWAY);
+    simulation.set_intensity(0.0);
+    run(&mut simulation, 20.0, AWAY);
+    simulation.update_windows(&[], 0.2, &none, &HashSet::from([7]), false);
+    run(&mut simulation, 0.5, AWAY);
+    let leaves = |simulation: &SnowSimulation| -> Vec<V2> {
+        let mut sprites = vec![Sprite::default(); simulation.sprite_count()];
+        let count = simulation.write_sprites(&mut sprites);
+        sprites[..count].iter().filter(|sprite| sprite.leaf[0] > 0.0 && sprite.position.y > 400.0).map(|sprite| sprite.position).collect()
+    };
+    assert!(leaves(&simulation).is_empty(), "leaves showed on a window away");
+
+    simulation.forget_closed(|_| false);
+    simulation.step(DT, AWAY);
+    let falling = leaves(&simulation);
+    assert!(falling.len() > 5, "the closed window's leaves vanished: {}", falling.len());
+    assert!(falling.iter().all(|p| p.x > 280.0 && p.x < 820.0 && p.y > 580.0), "the leaves fell from elsewhere: {falling:?}");
+    let height = |leaves: &[V2]| leaves.iter().map(|p| p.y).sum::<f32>() / leaves.len().max(1) as f32;
+    run(&mut simulation, 1.0, AWAY);
+    let (from, to) = (height(&falling), height(&leaves(&simulation)));
+    assert!(to < from - 20.0, "the leaves hung in the air: {from} -> {to}");
+}
+
+#[test]
+fn snow_waiting_for_windows_away_drops_the_longest_gone_first() {
+    let none = HashSet::new();
+    let windows: Vec<WindowSurface> = (0..201).map(|i| surface(i + 1, 10.0 + i as f32 * 40.0, 400.0, 36.0)).collect();
+    let mut simulation = SnowSimulation::new(8100.0, 500.0, 1.0);
+    simulation.update_windows(&windows, 0.2, &none, &none, false);
+    run(&mut simulation, 20.0, AWAY);
+    simulation.set_intensity(0.0);
+    run(&mut simulation, 5.0, AWAY);
+    let snow_on = |simulation: &SnowSimulation, window: &WindowSurface| {
+        piles(simulation).iter().filter(|(origin, _)| origin.y > 300.0 && (origin.x - window.frame.x).abs() < 1.0).map(|pile| pile.1).sum::<f32>()
+    };
+    assert!(windows.iter().all(|window| snow_on(&simulation, window) > 0.0), "a window without snow");
+    for gone in 1..=windows.len() {
+        let away = HashSet::from([windows[gone - 1].id]);
+        simulation.update_windows(&windows[gone..], 0.2, &none, &away, false);
+        simulation.step(DT, AWAY);
+    }
+    simulation.update_windows(&[windows[0].clone(), windows[1].clone(), windows[200].clone()], 0.2, &none, &none, false);
+    run(&mut simulation, 0.5, AWAY);
+    assert_eq!(snow_on(&simulation, &windows[0]), 0.0, "the window gone longest kept its snow");
+    assert!(snow_on(&simulation, &windows[1]) > 0.0, "the next window lost its snow");
+    assert!(snow_on(&simulation, &windows[200]) > 0.0, "the window gone last lost its snow");
+}
+
+#[test]
 fn a_calm_gust_melts_the_drifts_where_they_lie() {
     let mut simulation = SnowSimulation::new(1280.0, 800.0, 0.75);
     run(&mut simulation, 90.0, AWAY);
@@ -884,6 +970,19 @@ fn leaves_lie_where_they_land() {
 }
 
 #[test]
+fn leaves_lying_still_ask_for_no_redraw() {
+    let mut simulation = SnowSimulation::new(800.0, 600.0, 0.75);
+    simulation.set_mode(Mode::Autumn);
+    run(&mut simulation, 60.0, AWAY);
+    simulation.set_intensity(0.0);
+    // Once the heaps have slumped into shape, a whole second passes with nothing to redraw.
+    let rested = (0..180).any(|_| (0..60).filter(|_| simulation.step(DT, AWAY)).count() == 0);
+    assert!(rested, "leaves lying still redrawn every frame");
+    assert!(leaf_sprites(&simulation) > 0, "no leaves lying");
+    assert!(!simulation.is_empty(), "leaves still lie");
+}
+
+#[test]
 fn cherry_blossom_petals_fall_and_lie_as_leaves_do() {
     let mut simulation = SnowSimulation::new(800.0, 600.0, 0.75);
     simulation.set_mode(Mode::Blossom);
@@ -1150,6 +1249,44 @@ fn rain_runs_down_a_window_and_hangs_under_its_bottom_edge() {
 }
 
 #[test]
+fn the_glass_is_drawn_around_every_drop_on_it() {
+    let none = HashSet::new();
+    let mut simulation = SnowSimulation::new(1200.0, 900.0, 0.75);
+    simulation.set_mode(Mode::Rain);
+    simulation.update_windows(&[surface(1, 200.0, 700.0, 800.0)], 0.2, &none, &none, false);
+    let mut seen = false;
+    for _ in 0..(20.0 / DT) as usize {
+        simulation.step(DT, AWAY);
+        let drops = rain_sprites(&simulation, 2.0);
+        let Some([left, bottom, right, top]) = simulation.glass_bounds() else {
+            assert!(drops.is_empty(), "{} drops on the glass, none of it drawn", drops.len());
+            continue;
+        };
+        seen = true;
+        // The quad rainVertex draws each one on, in points, at 1x and 2x.
+        for scale in [1.0, 2.0] {
+            let mut reached = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
+            for drop in &drops {
+                let speed = drop.velocity.length();
+                let length = (speed * 0.08).min(drop.size * 0.9) + speed * 0.024;
+                let travel = if speed > 0.0 { -drop.velocity / speed * length } else { V2::ZERO };
+                let half = ((drop.size * scale).max(1.5) * 2.2 + length * scale + 2.0).max(2.0) / scale * 0.5;
+                let middle = drop.position + travel * 0.5;
+                reached = [
+                    reached[0].min(middle.x - half),
+                    reached[1].min(middle.y - half),
+                    reached[2].max(middle.x + half),
+                    reached[3].max(middle.y + half),
+                ];
+            }
+            let outside = [left - reached[0], bottom - reached[1], reached[2] - right, reached[3] - top];
+            assert!(outside.iter().all(|&past| past < 0.01), "a drop drawn {outside:?} past the glass at {scale}x");
+        }
+    }
+    assert!(seen, "no drop on the glass");
+}
+
+#[test]
 fn rain_spatters_the_glass_and_leaves_wet_uneven_trails() {
     let none = HashSet::new();
     let mut simulation = SnowSimulation::new(1200.0, 900.0, 0.75);
@@ -1189,6 +1326,23 @@ fn switching_to_rain_clears_the_snow_first() {
     let streaks = rain_sprites(&simulation, 1.0).len();
     assert!(streaks > 0, "no rain falling");
     assert_eq!(streaks, simulation.sprite_count(), "snow left over");
+}
+
+#[test]
+fn snow_left_lying_in_the_rain_melts_as_fast_as_under_snowfall() {
+    let melted = |mode: Mode| {
+        let mut simulation = SnowSimulation::new(800.0, 600.0, 0.75);
+        simulation.thaws = true;
+        run(&mut simulation, 40.0, AWAY);
+        simulation.set_snowfall_held(true);
+        simulation.set_mode(mode);
+        run(&mut simulation, 15.0, AWAY);
+        let before = piles(&simulation)[0].1;
+        run(&mut simulation, 30.0, AWAY);
+        1.0 - piles(&simulation).first().map_or(0.0, |ground| ground.1) / before
+    };
+    let (snow, rain) = (melted(Mode::Snow), melted(Mode::Rain));
+    assert!(rain > snow * 0.7 && rain < snow * 1.5, "{snow} of the snow melted under held snowfall, {rain} in the rain");
 }
 
 #[test]
@@ -1234,4 +1388,79 @@ fn picks_a_language_from_system_tags() {
     assert_eq!(code("zh_TW"), None);
     assert_eq!(code("C"), None);
     assert_eq!(code("nl-NL"), None);
+}
+
+#[test]
+fn loads_saved_kinds() {
+    use crate::modes::Picked;
+    let unmixed = |mode, mix| Picked { mode, mixed: false, mix };
+    assert_eq!(Picked::load(None, None, None, [None, None]), unmixed(Mode::Snow, [Mode::Autumn, Mode::Snow]));
+    assert_eq!(Picked::load(None, Some(1), None, [None, None]), unmixed(Mode::Autumn, [Mode::Snow, Mode::Autumn]));
+    assert_eq!(Picked::load(Some(9), Some(1), None, [None, None]).mode, Mode::Autumn);
+    assert_eq!(Picked::load(Some(9), Some(0), None, [None, None]).mode, Mode::Snow);
+    assert_eq!(Picked::load(Some(2), Some(1), None, [None, None]).mode, Mode::Rain);
+    assert_eq!(Picked::load(Some(3), None, Some(1), [Some(2), Some(0)]), Picked { mode: Mode::Blossom, mixed: true, mix: [Mode::Rain, Mode::Snow] });
+    assert_eq!(Picked::load(Some(2), None, None, [Some(1), Some(1)]).mix, [Mode::Snow, Mode::Rain]);
+    assert_eq!(Picked::load(Some(0), None, None, [Some(1), Some(4)]).mix, [Mode::Autumn, Mode::Snow]);
+    assert_eq!(Picked::load(Some(1), None, None, [None, Some(2)]).mix, [Mode::Snow, Mode::Autumn]);
+}
+
+#[test]
+fn saved_kinds_load_back() {
+    use crate::modes::{Picked, SAVED, kind, number};
+    assert_eq!(SAVED.map(number), [0, 1, 2, 3]);
+    assert_eq!(kind(4), None);
+    assert!(Mode::ALL.iter().all(|&m| kind(number(m)) == Some(m)));
+    for mode in SAVED {
+        for a in SAVED {
+            for b in SAVED.into_iter().filter(|&b| b != a) {
+                for mixed in [false, true] {
+                    let picked = Picked { mode, mixed, mix: [a, b] };
+                    let autumn = Some((mode == Mode::Autumn) as u32);
+                    let loaded = Picked::load(Some(number(mode)), autumn, Some(mixed as u32), [Some(number(a)), Some(number(b))]);
+                    assert_eq!(loaded, picked);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn picks_kinds() {
+    use crate::modes::Picked;
+    let mut picked = Picked { mode: Mode::Snow, mixed: false, mix: [Mode::Autumn, Mode::Snow] };
+    assert!(!picked.pick(Mode::Snow));
+    assert!(picked.pick(Mode::Rain));
+    assert_eq!(picked, Picked { mode: Mode::Rain, mixed: false, mix: [Mode::Autumn, Mode::Snow] });
+    assert_eq!(picked.modes(), [Mode::Rain]);
+
+    let mut picked = Picked { mode: Mode::Autumn, mixed: true, mix: [Mode::Snow, Mode::Autumn] };
+    assert!(!picked.pick(Mode::Snow));
+    assert!(!picked.pick(Mode::Autumn));
+    assert!(picked.pick(Mode::Rain));
+    assert_eq!(picked, Picked { mode: Mode::Rain, mixed: true, mix: [Mode::Autumn, Mode::Rain] });
+    assert!(picked.pick(Mode::Blossom));
+    assert_eq!(picked.modes(), [Mode::Rain, Mode::Blossom]);
+    assert_eq!(picked.mode, Mode::Blossom);
+}
+
+#[test]
+fn toggles_mixed() {
+    use crate::modes::Picked;
+    let mut picked = Picked { mode: Mode::Rain, mixed: false, mix: [Mode::Snow, Mode::Autumn] };
+    picked.toggle_mixed();
+    assert_eq!(picked, Picked { mode: Mode::Rain, mixed: true, mix: [Mode::Autumn, Mode::Rain] });
+    assert!(picked.pick(Mode::Blossom));
+    picked.toggle_mixed();
+    assert_eq!(picked.modes(), [Mode::Blossom]);
+    picked.toggle_mixed();
+    assert_eq!(picked.mix, [Mode::Rain, Mode::Blossom]);
+
+    let mut picked = Picked { mode: Mode::Snow, mixed: false, mix: [Mode::Snow, Mode::Rain] };
+    picked.toggle_mixed();
+    assert_eq!(picked.mix, [Mode::Rain, Mode::Snow]);
+
+    let mut picked = Picked { mode: Mode::Snow, mixed: false, mix: [Mode::Snow, Mode::Snow] };
+    picked.toggle_mixed();
+    assert_eq!(picked.mix, [Mode::Autumn, Mode::Snow]);
 }

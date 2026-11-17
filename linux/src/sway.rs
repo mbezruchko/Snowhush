@@ -1,20 +1,21 @@
 //! Sway's windows, from its IPC socket (`$SWAYSOCK`): the tree of windows, the workspaces showing and the
 //! outputs. Sway announces windows opening, closing and changing workspace, but not a floating window
 //! being dragged, so the tree is also asked for ten times a second, and at about the frame rate while a
-//! floating window moves and for a moment after anything Sway announces.
+//! floating window moves and for a moment after anything Sway announces; less, while the snow doesn't need it:
+//! see `Demand`.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
-use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::mpsc::{self, TryRecvError};
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
 use crate::log;
-use crate::source::{Display, Report, Shared, Window};
+use crate::source::{self, Display, Report, Shared, Window};
 
 const GET_WORKSPACES: u32 = 1;
 const SUBSCRIBE: u32 = 2;
@@ -111,14 +112,35 @@ pub fn start(shared: Arc<Shared>) -> Result<(), String> {
             let mut last: Option<(Report, HashMap<String, Rect>)> = None;
             let mut moved_at: Option<Instant> = None;
             let mut event_at: Option<Instant> = None;
+            let mut failing: Option<Duration> = None;
             loop {
+                let demand = shared.windows_demand();
                 let (mut report, floating) = match ask(&mut requests) {
                     Ok(answer) => answer,
                     Err(error) => {
-                        log!("sway: {error}");
-                        return;
+                        if failing.is_none() {
+                            log!("sway: {error}; the windows are asked for again");
+                        }
+                        let wait = source::backoff(failing);
+                        failing = Some(wait);
+                        std::thread::sleep(wait);
+                        loop {
+                            match changes.try_recv() {
+                                Ok(()) => {}
+                                Err(TryRecvError::Empty) => break,
+                                Err(TryRecvError::Disconnected) => return,
+                            }
+                        }
+                        // A request that failed halfway leaves the connection out of step with its answers.
+                        if let Ok(stream) = UnixStream::connect(&path) {
+                            requests = stream;
+                        }
+                        continue;
                     }
                 };
+                if failing.take().is_some() {
+                    log!("sway: the windows are answered again");
+                }
                 let now = Instant::now();
                 if let Some((_, before)) = &last
                     && floating.iter().any(|(id, rect)| before.get(id).is_some_and(|was| was != rect))
@@ -132,13 +154,9 @@ pub fn start(shared: Arc<Shared>) -> Result<(), String> {
                 let alert = event_at.is_some_and(|at| now - at < ALERT);
                 let wait = if report.moving || alert { MOVING } else { CALM };
                 last = Some((report, floating));
-                match changes.recv_timeout(wait) {
-                    Ok(()) => {
-                        event_at = Some(Instant::now());
-                        while changes.try_recv().is_ok() {}
-                    }
-                    Err(RecvTimeoutError::Timeout) => {}
-                    Err(RecvTimeoutError::Disconnected) => return,
+                let Some(changed) = shared.wait(&changes, demand, wait) else { return };
+                if !changed.is_empty() {
+                    event_at = Some(Instant::now());
                 }
             }
         })

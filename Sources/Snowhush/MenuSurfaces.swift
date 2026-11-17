@@ -215,13 +215,14 @@ final class SurfacePicker: NSView {
         case .ground: tr("surface.ground")
         case .dock: tr("surface.dock")
         case .widgets: tr("surface.widgets")
+        case .wallpaper: tr("surface.wallpaper")
         default: tr("surface.windows")
         }
     }
 
     static func drawIcon(_ surface: Surfaces, in box: NSRect, color: NSColor, pointSize: CGFloat = 18) {
         guard surface == .ground else {
-            let symbol = surface == .dock ? "dock.rectangle" : surface == .widgets ? "widget.small" : "macwindow"
+            let symbol = surface == .dock ? "dock.rectangle" : surface == .widgets ? "widget.small" : surface == .wallpaper ? "mountain.2" : "macwindow"
             guard let image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
                 .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: pointSize, weight: .medium).applying(.init(paletteColors: [color])))
             else { return }

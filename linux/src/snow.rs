@@ -21,6 +21,7 @@ use zbus::blocking::Connection as Bus;
 
 use snowhush_core::geometry::V2;
 use snowhush_core::halloween::{Choice, Today};
+use snowhush_core::modes::Picked;
 use snowhush_core::simulation::{Borrowed, Mapping, Mode, SnowSimulation, Stray, WindowId};
 
 use crate::chores;
@@ -30,7 +31,7 @@ use crate::log;
 use crate::prefs::Settings;
 use crate::render::{Ambient, Gpu};
 use crate::screen::{self, PowerBudget, Screen};
-use crate::source::{Report, Shared, Source};
+use crate::source::{Demand, Report, Shared, Source};
 use crate::tray::Tray;
 use crate::windows::{self, Area};
 
@@ -57,9 +58,7 @@ pub enum Command {
     /// Other kinds fall, once what lies is cleared away as `ClearSnow` clears it; a kind only joining what falls
     /// starts at once.
     Mode {
-        mode: Mode,
-        mixed: bool,
-        mix: [Mode; 2],
+        picked: Picked,
         calm: bool,
     },
     Power(PowerBudget),
@@ -77,6 +76,9 @@ pub struct App {
     layer_shell: LayerShell,
     qh: QueueHandle<App>,
     gpu: Gpu,
+    /// When the graphics were last started again after the driver lost them.
+    gpu_renewed_at: Option<Instant>,
+    wayland: Connection,
     bus: Bus,
     shared: Arc<Shared>,
     source: Source,
@@ -122,6 +124,11 @@ pub fn run() -> Result<(), String> {
     };
     // Only now: a second copy that stops here must not wipe the running one's log.
     crate::log::start();
+    let report_panic = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        log!("panic on the {} thread: {info}", std::thread::current().name().unwrap_or("unnamed"));
+        report_panic(info);
+    }));
     log!("Snowhush {}", env!("CARGO_PKG_VERSION"));
 
     let connection = Connection::connect_to_env().map_err(|error| format!("Wayland: {error}"))?;
@@ -150,6 +157,8 @@ pub fn run() -> Result<(), String> {
         layer_shell,
         qh: qh.clone(),
         gpu,
+        gpu_renewed_at: None,
+        wayland: connection.clone(),
         bus: bus.clone(),
         source: Source::start(&bus, shared.clone(), settings.show_in_screenshots),
         shared,
@@ -172,21 +181,35 @@ pub fn run() -> Result<(), String> {
         backdrops_wanted: chores::start(bus.clone(), commands.clone()),
         stats: Stats::new(now),
     };
-    // The displays are known after a round trip; the snow starts on them right away.
-    queue.roundtrip(&mut app).map_err(|error| error.to_string())?;
-    app.sync_screens();
-    WaylandSource::new(connection, queue).insert(event_loop.handle()).map_err(|error| error.to_string())?;
+    let result = 'run: {
+        // The displays are known after a round trip; the snow starts on them right away.
+        if let Err(error) = queue.roundtrip(&mut app) {
+            break 'run Err(error.to_string());
+        }
+        app.sync_screens();
+        if let Err(error) = WaylandSource::new(connection, queue).insert(event_loop.handle()) {
+            break 'run Err(error.to_string());
+        }
 
-    use ksni::blocking::TrayMethods;
-    app.tray = Tray::new(settings, commands.clone()).spawn().inspect_err(|error| log!("tray: {error}")).ok();
-    watch_lock(&bus, commands);
+        use ksni::blocking::TrayMethods;
+        app.tray = Tray::new(settings, commands.clone()).assume_sni_available(true).spawn().inspect_err(|error| log!("tray: {error}")).ok();
+        watch_lock(&bus, commands);
 
-    while !app.quit {
-        let timeout = app.timeout();
-        event_loop.dispatch(timeout, &mut app).map_err(|error| error.to_string())?;
-        app.tick()?;
-    }
+        loop {
+            if app.quit {
+                break Ok(());
+            }
+            let timeout = app.timeout();
+            if let Err(error) = event_loop.dispatch(timeout, &mut app) {
+                break Err(error.to_string());
+            }
+            if let Err(error) = app.tick() {
+                break Err(error);
+            }
+        }
+    };
 
+    // Also when the Wayland connection broke: the KWin script must not outlive the app.
     app.source.stop(&app.bus);
     if let Some(tray) = app.tray.take() {
         tray.shutdown().wait();
@@ -194,7 +217,7 @@ pub fn run() -> Result<(), String> {
     for screen in app.screens.drain(..) {
         screen.release(&app.gpu);
     }
-    Ok(())
+    result
 }
 
 /// Pauses the snow while the screen is locked.
@@ -309,11 +332,9 @@ impl App {
                 let direction = self.screens.first().map_or(-1.0, |screen| screen.simulation.breeze_direction());
                 self.screens.iter_mut().for_each(|screen| screen.simulation.blow_away(direction, calm));
             }
-            Command::Mode { mode, mixed, mix, calm } => {
-                self.settings.mode = mode;
-                self.settings.mixed = mixed;
-                self.settings.mix = mix;
-                let modes = self.settings.modes();
+            Command::Mode { picked, calm } => {
+                self.settings.picked = picked;
+                let modes = self.settings.picked.modes();
                 let direction = self.screens.first().map_or(-1.0, |screen| screen.simulation.breeze_direction());
                 let now = Instant::now();
                 self.screens.iter_mut().for_each(|screen| {
@@ -391,6 +412,7 @@ impl App {
         }
 
         if self.locked {
+            self.shared.set_demand(Demand::Off, false);
             return Ok(());
         }
         // Behind the windows the snow still settles on them: what lies on a window's top edge is above it, in plain view.
@@ -409,6 +431,7 @@ impl App {
         }
         let mut released = false;
         let mut reshaped = false;
+        let mut gpu_lost = false;
         for screen in self.screens.iter_mut().filter(|screen| screen.next_due <= now) {
             // Shown over a full-screen app, the snow reaches the display's edges while the app has put the panels away,
             // so the drift lies along the bottom instead of over a panel no longer there. An overview isn't an app.
@@ -432,18 +455,55 @@ impl App {
                     self.stats.frame(drew, began.elapsed(), screen.simulation.sprite_count());
                     released |= screen.simulation.take_snowfall_released();
                 }
-                Err(error) => log!("{}: frame failed: {error}", screen.name),
+                Err(error) => gpu_lost |= screen.failing() || error.contains(&khronos_egl::Error::ContextLost.to_string()),
             }
+        }
+        if gpu_lost {
+            self.renew_gpu(now);
         }
         if released {
             self.screens.iter_mut().for_each(|screen| screen.simulation.set_snowfall_held(false));
         }
-        self.pass_snow();
+        self.pass_snow(now);
         if reshaped {
             self.place_screens();
         }
+        self.tell_demand();
         self.stats.report(Instant::now());
         Ok(())
+    }
+
+    /// Tells the compositor's sources what the snow needs: nothing while no display shows it, the windows now and then
+    /// while no snow shows, and the pointer while there is anything for it to part. The windows stay followed closely
+    /// with snow on windows off too, since the same answers move the ground with the panels.
+    fn tell_demand(&self) {
+        let awake = self.screens.iter().any(|screen| !screen.stalled());
+        let busy = self.screens.iter().any(|screen| !screen.stalled() && !screen.hidden() && !screen.simulation.is_empty());
+        let windows = if !awake {
+            Demand::Off
+        } else if busy {
+            Demand::Live
+        } else {
+            Demand::Calm
+        };
+        self.shared.set_demand(windows, busy);
+    }
+
+    /// Starts the graphics again after the driver lost them, as after a GPU reset or some suspends; each display's
+    /// surface is made again on the new ones at its next frame.
+    fn renew_gpu(&mut self, now: Instant) {
+        if self.gpu_renewed_at.is_some_and(|at| now - at < Duration::from_secs(10)) {
+            return;
+        }
+        self.gpu_renewed_at = Some(now);
+        self.screens.iter_mut().for_each(|screen| screen.drop_surface(&self.gpu));
+        match Gpu::new(self.wayland.backend().display_ptr().cast()) {
+            Ok(gpu) => {
+                self.gpu = gpu;
+                log!("graphics lost; started again on {}", self.gpu.adapter);
+            }
+            Err(error) => log!("graphics lost; starting again failed: {error}"),
+        }
     }
 
     /// The light of the hour, and Halloween with it: its ghosts, its night and the tray's pumpkin.
@@ -455,7 +515,7 @@ impl App {
                 tray.update(|tray| tray.today = today);
             }
         }
-        let halloween = self.settings.modes() == [Mode::Snow] && self.settings.halloween.wanted(today);
+        let halloween = self.settings.picked.modes() == [Mode::Snow] && self.settings.halloween.wanted(today);
         if halloween != self.halloween {
             self.halloween = halloween;
             log!("halloween: {halloween}");
@@ -575,8 +635,8 @@ impl App {
 
     /// Passes on the snow that went from one display to another this frame: snow that fell on a window's drift
     /// lent by another display goes to that one, and snow thrown past an edge two displays share goes on falling
-    /// on the other side.
-    fn pass_snow(&mut self) {
+    /// on the other side. A display resting wakes for what it gets.
+    fn pass_snow(&mut self, now: Instant) {
         for index in 0..self.screens.len() {
             let here = self.screens[index].area();
             for caught in self.screens[index].simulation.take_caught() {
@@ -584,6 +644,7 @@ impl App {
                 let Some(home) = self.screens.iter_mut().find(|other| other.name == *owner) else { continue };
                 let shift = V2::new((here.x - home.area().x) as f32, 0.0);
                 home.simulation.catch(&caught, Mapping::shift(shift));
+                home.stir(now);
             }
             let mut passed: Vec<(usize, Vec<Stray>)> = Vec::new();
             for stray in self.screens[index].simulation.take_strays() {
@@ -604,6 +665,7 @@ impl App {
                 let there = self.screens[next].area();
                 let shift = V2::new((here.x - there.x) as f32, (there.bottom() - here.bottom()) as f32);
                 self.screens[next].simulation.adopt_strays(strays, Mapping::shift(shift));
+                self.screens[next].stir(now);
             }
         }
     }
@@ -641,7 +703,7 @@ fn new_simulation(bounds: &Area, settings: &Settings, budget: PowerBudget) -> Sn
     simulation.accumulates = settings.accumulates();
     simulation.ground_settles = settings.ground;
     simulation.falling_opacity = settings.opacity as f32 / 100.0;
-    simulation.set_modes(&settings.modes());
+    simulation.set_modes(&settings.picked.modes());
     simulation.set_density(density(budget));
     simulation
 }

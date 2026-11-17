@@ -7,8 +7,10 @@ struct Surfaces: OptionSet {
     static let dock = Surfaces(rawValue: 2)
     static let windows = Surfaces(rawValue: 4)
     static let widgets = Surfaces(rawValue: 8)
-    /// What the window list is read for.
-    static let tracked: Surfaces = [.dock, .windows, .widgets]
+    /// The tops of things in the wallpaper.
+    static let wallpaper = Surfaces(rawValue: 16)
+    /// What the window list is read for: the snow on the wallpaper hides behind every window.
+    static let tracked: Surfaces = [.dock, .windows, .widgets, .wallpaper]
 }
 
 enum Preferences {
@@ -25,11 +27,13 @@ enum Preferences {
     private static let groundKey = "settleGround"
     private static let dockKey = "settleDock"
     private static let widgetsKey = "settleWidgets"
+    private static let wallpaperKey = "settleWallpaper"
     private static let snowOnWindowsKey = "snowOnWindows"
     private static let welcomedKey = "welcomed"
     private static let installedAtKey = "installedAt"
     private static let showInScreenshotsKey = "showInScreenshots"
     private static let deepInteractionKey = "deepInteraction"
+    private static let pictureLevelKey = "pictureLevel"
     private static let halloweenKey = "halloweenOn"
     private static let halloweenSkippedKey = "halloweenSkipped"
     private static let newYearKey = "newYearOn"
@@ -44,6 +48,12 @@ enum Preferences {
 
     static func registerDefaults() {
         let calm = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        if let stop = defaults.object(forKey: snowfallKey) as? Int {
+            if defaults.object(forKey: intensityKey) == nil {
+                defaults.set([0, 0.25, 0.5, 0.75, 0.5][min(max(stop, 0), 4)], forKey: intensityKey)
+            }
+            defaults.removeObject(forKey: snowfallKey)
+        }
         defaults.register(defaults: [
             intensityKey: calm ? 0.25 : 0.5,
             behindWindowsKey: false,
@@ -52,6 +62,7 @@ enum Preferences {
             groundKey: true,
             dockKey: true,
             widgetsKey: true,
+            wallpaperKey: true,
             snowOnWindowsKey: true,
             showInScreenshotsKey: false,
             deepInteractionKey: false,
@@ -63,12 +74,9 @@ enum Preferences {
             mixedKey: false,
             fallingOpacityKey: 1.0,
         ])
-        if defaults.object(forKey: intensityKey) == nil, let stop = defaults.object(forKey: snowfallKey) as? Int {
-            defaults.set([0, 0.25, 0.5, 0.75, 0.5][min(max(stop, 0), 4)], forKey: intensityKey)
-        }
         if defaults.object(forKey: accumulateKey) != nil {
             if !defaults.bool(forKey: accumulateKey) {
-                for key in [groundKey, dockKey, widgetsKey, snowOnWindowsKey] { defaults.set(false, forKey: key) }
+                for key in [groundKey, dockKey, widgetsKey, wallpaperKey, snowOnWindowsKey] { defaults.set(false, forKey: key) }
             }
             defaults.removeObject(forKey: accumulateKey)
         }
@@ -93,14 +101,16 @@ enum Preferences {
     static var surfaces: Surfaces {
         get {
             var surfaces: Surfaces = []
-            for (surface, key) in [(Surfaces.ground, groundKey), (.dock, dockKey), (.widgets, widgetsKey), (.windows, snowOnWindowsKey)]
+            for (surface, key) in [(Surfaces.ground, groundKey), (.dock, dockKey), (.widgets, widgetsKey), (.windows, snowOnWindowsKey),
+                                   (.wallpaper, wallpaperKey)]
             where defaults.bool(forKey: key) {
                 surfaces.insert(surface)
             }
             return surfaces
         }
         set {
-            for (surface, key) in [(Surfaces.ground, groundKey), (.dock, dockKey), (.widgets, widgetsKey), (.windows, snowOnWindowsKey)] {
+            for (surface, key) in [(Surfaces.ground, groundKey), (.dock, dockKey), (.widgets, widgetsKey), (.windows, snowOnWindowsKey),
+                                   (.wallpaper, wallpaperKey)] {
                 defaults.set(newValue.contains(surface), forKey: key)
             }
         }
@@ -191,6 +201,12 @@ enum Preferences {
     static var fallingOpacity: Double {
         get { min(max(defaults.double(forKey: fallingOpacityKey), opacityRange.lowerBound), opacityRange.upperBound) }
         set { defaults.set(newValue, forKey: fallingOpacityKey) }
+    }
+
+    /// How much snow lies in the wallpaper's picture, kept from one run of the app to the next.
+    static var pictureLevel: Float {
+        get { defaults.float(forKey: pictureLevelKey) }
+        set { defaults.set(newValue, forKey: pictureLevelKey) }
     }
 
     /// Drawn at the display's highest rate all the time, instead of only while something is pushed around.

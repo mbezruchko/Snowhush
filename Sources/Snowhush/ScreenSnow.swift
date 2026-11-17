@@ -12,6 +12,8 @@ final class ScreenSnow {
     private let tracker: WindowTracker
     private let displays: Displays
     private let light = SceneLight()
+    /// The snow lying in the wallpaper, in windows of its own at the desktop's level.
+    let picture: PictureSnow?
     private(set) var screen: NSScreen
     /// Awake and showing; at rest with nothing to draw, the view may still be paused.
     private var active = true
@@ -63,6 +65,7 @@ final class ScreenSnow {
     /// Looks for the desktop sliding back in while a full-screen app hides the snow.
     private var lookout: Timer?
     private var asleep = false
+    private var closedCheckedAt: CFTimeInterval = 0
     /// Asks for the snow to be woken or put to rest again.
     var activityChanged: () -> Void = {}
     /// Faded all the way out for a full-screen app: the snow keeps falling until then.
@@ -131,6 +134,8 @@ final class ScreenSnow {
         dock = DockOverlay(screen: screen, device: device)
         dock.window.showsInScreenshots = Preferences.showInScreenshots
         renderer.dockOverlay = dock
+        picture = PictureSnow(screen: screen, device: device, simulation: simulation)
+        picture?.showsInScreenshots = Preferences.showInScreenshots
         view = Self.makeView(device: device, size: screen.frame.size)
         treeView = TreeView(device: device)
         renderer.treeView = treeView
@@ -151,6 +156,7 @@ final class ScreenSnow {
             window.notificationLevel = tracked ? tracker.notificationLevel : nil
             watchForFullScreen(now: now, tracked: tracked)
             guard tracked else { return nil }
+            forgetClosed(now: now)
             for (id, display) in update?.handed ?? [:] { displays.hand(id, from: self, to: display) }
             simulation.windowFrames = tracker.covers.map { SIMD4(Float($0.minX), Float($0.minY), Float($0.maxX), Float($0.maxY)) }
             return update
@@ -168,6 +174,9 @@ final class ScreenSnow {
             renderer.releaseFrames(of: view)
         }
         simulation.stirred = { [unowned self] in wake() }
+        simulation.pictureCleared = { [unowned self] in picture?.cleared() }
+        simulation.pictureChanged = { [unowned self] in picture?.refresh() }
+        picture?.wanted = settled.contains(.wallpaper)
         renderer.interactiveFrameRate = Self.interactiveFrameRate(of: screen)
         measure()
         view.delegate = renderer
@@ -189,6 +198,7 @@ final class ScreenSnow {
         Renderer.fitDrawable(of: view)
         placeTree()
         simulation.resize(width: Float(screen.frame.width), height: Float(screen.frame.height))
+        picture?.fit(to: screen)
         light.invalidate()
         renderer.interactiveFrameRate = Self.interactiveFrameRate(of: screen)
         measure()
@@ -217,11 +227,16 @@ final class ScreenSnow {
         simulation.density = budget == .saver ? 0.75 : 1
     }
 
-    /// `asleep` with the screens off, locked or switched away from: nothing is seen, so the frames are given back.
+    /// `asleep` with the screens off, locked or switched away from. Inactive, nothing is seen, so the frames are given
+    /// back.
     func setActive(_ active: Bool, asleep: Bool) {
-        self.asleep = asleep
+        if asleep != self.asleep {
+            self.asleep = asleep
+            restartLookout()
+        }
         self.active = active
-        if asleep { renderer.releaseFrames(of: view) }
+        picture?.setActive(active)
+        if !active { renderer.releaseFrames(of: view) }
         guard view.isPaused == active else { return }
         if active { Renderer.fitDrawable(of: view) }
         view.isPaused = !active
@@ -229,10 +244,20 @@ final class ScreenSnow {
     }
 
     private func wake() {
+        picture?.wake()
         guard active, view.isPaused else { return }
         Renderer.fitDrawable(of: view)
         view.isPaused = false
         renderer.resetClock()
+    }
+
+    /// Now and then the snow kept for windows away lets go of those that closed there.
+    private func forgetClosed(now: CFTimeInterval) {
+        guard now - closedCheckedAt >= 5 else { return }
+        closedCheckedAt = now
+        let away = simulation.awayIDs
+        guard !away.isEmpty else { return }
+        simulation.forgetClosed(keeping: WindowTracker.open(among: away))
     }
 
     func dropWindowSnow() {
@@ -310,8 +335,7 @@ final class ScreenSnow {
         if covered != was {
             fullScreenSpaces = nil
             leaving = false
-            lookout?.invalidate()
-            lookout = covered ? startLookout() : nil
+            restartLookout()
         }
         if covered && !was { following = false }
         if was && !covered {
@@ -351,6 +375,11 @@ final class ScreenSnow {
         guard !occluded, abs(window.alphaValue - slideAlpha) > 0.002 else { return }
         window.alphaValue = slideAlpha
         dock.window.alphaValue = slideAlpha
+    }
+
+    private func restartLookout() {
+        lookout?.invalidate()
+        lookout = covered && !asleep ? startLookout() : nil
     }
 
     /// Nothing is drawn under a full-screen app, so a few times a second the window list is read for the desktop
@@ -423,6 +452,7 @@ final class ScreenSnow {
     func spaceChanged() {
         checkCovered()
         simulation.spaceChanged()
+        picture?.spaceChanged()
         light.invalidate()
         watchWindows()
         window.holdInPlace()
@@ -431,6 +461,7 @@ final class ScreenSnow {
 
     /// Out of the screenshot tool's way, or back in place.
     func stepAside(_ aside: Bool) {
+        picture?.stepAside(aside)
         if aside {
             window.orderOut(nil)
             dock.window.orderOut(nil)
@@ -451,6 +482,7 @@ final class ScreenSnow {
         view.delegate = nil
         window.orderOut(nil)
         dock.close()
+        picture?.close()
     }
 
     /// Window bounds come in global coordinates with the origin at the top left of the primary display.

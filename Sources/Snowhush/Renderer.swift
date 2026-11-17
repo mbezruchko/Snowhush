@@ -78,6 +78,8 @@ final class Renderer: NSObject, MTKViewDelegate {
     private let queue: MTLCommandQueue
     private let spritePipeline: MTLRenderPipelineState
     private let pilePipeline: MTLRenderPipelineState
+    private var airTexture: MTLTexture?
+    private var airVersion = -1
     private let signPipeline: MTLRenderPipelineState
     private let pumpkinPipeline: MTLRenderPipelineState
     /// Drops on the glass: their bumps added up into a field, and the glass drawn from it.
@@ -103,6 +105,35 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     init(device: MTLDevice, pixelFormat: MTLPixelFormat, simulation: SnowSimulation) throws {
         guard let queue = device.makeCommandQueue() else { throw RendererError.unavailable }
+        let pipelines = try Self.pipelines(for: device, pixelFormat: pixelFormat)
+        self.device = device
+        self.queue = queue
+        self.simulation = simulation
+        self.semaphore = DispatchSemaphore(value: framesInFlight)
+        self.spritePipeline = pipelines.sprite
+        self.pilePipeline = pipelines.pile
+        self.signPipeline = pipelines.sign
+        self.pumpkinPipeline = pipelines.pumpkin
+        self.glassPipeline = pipelines.glass
+        self.fieldPipeline = pipelines.field
+        super.init()
+    }
+
+    private struct Pipelines {
+        let sprite, pile, sign, pumpkin, glass, field: MTLRenderPipelineState
+    }
+
+    private struct PipelineKey: Hashable {
+        let device: UInt64
+        let pixelFormat: UInt
+    }
+
+    /// Built once for each GPU and shared by every display's renderer: compiling the shaders takes about half a second.
+    private static var built: [PipelineKey: Pipelines] = [:]
+
+    private static func pipelines(for device: MTLDevice, pixelFormat: MTLPixelFormat) throws -> Pipelines {
+        let key = PipelineKey(device: device.registryID, pixelFormat: pixelFormat.rawValue)
+        if let pipelines = built[key] { return pipelines }
         let library = try device.makeLibrary(source: shaderSource, options: nil)
 
         func pipeline(_ vertex: String, _ fragment: String) throws -> MTLRenderPipelineState {
@@ -119,17 +150,8 @@ final class Renderer: NSObject, MTKViewDelegate {
             return try device.makeRenderPipelineState(descriptor: descriptor)
         }
 
-        self.device = device
-        self.queue = queue
-        self.simulation = simulation
-        self.semaphore = DispatchSemaphore(value: framesInFlight)
-        self.spritePipeline = try pipeline("spriteVertex", "spriteFragment")
-        self.pilePipeline = try pipeline("pileVertex", "pileFragment")
-        self.signPipeline = try pipeline("signVertex", "signFragment")
-        self.pumpkinPipeline = try pipeline("pumpkinVertex", "pumpkinFragment")
-        self.glassPipeline = try pipeline("glassVertex", "glassFragment")
         let field = MTLRenderPipelineDescriptor()
-        field.vertexFunction = library.makeFunction(name: "spriteVertex")
+        field.vertexFunction = library.makeFunction(name: "fieldVertex")
         field.fragmentFunction = library.makeFunction(name: "fieldFragment")
         let adding = field.colorAttachments[0]!
         adding.pixelFormat = .rg16Float
@@ -138,8 +160,16 @@ final class Renderer: NSObject, MTKViewDelegate {
         adding.destinationRGBBlendFactor = .one
         adding.sourceAlphaBlendFactor = .one
         adding.destinationAlphaBlendFactor = .one
-        self.fieldPipeline = try device.makeRenderPipelineState(descriptor: field)
-        super.init()
+        let pipelines = try Pipelines(
+            sprite: pipeline("spriteVertex", "spriteFragment"),
+            pile: pipeline("pileVertex", "pileFragment"),
+            sign: pipeline("signVertex", "signFragment"),
+            pumpkin: pipeline("pumpkinVertex", "pumpkinFragment"),
+            glass: pipeline("glassVertex", "glassFragment"),
+            field: device.makeRenderPipelineState(descriptor: field)
+        )
+        built[key] = pipelines
+        return pipelines
     }
 
     func resetClock() {
@@ -170,6 +200,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     /// ones, once the screen shows them no more, so a second clear frame follows the first.
     func releaseFrames(of view: MTKView) {
         guard view.drawableSize != Self.released else { return }
+        field = nil
         Self.resize(view, to: Self.released)
         clear(view)
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.handBack) { [weak self, weak view] in
@@ -311,15 +342,18 @@ final class Renderer: NSObject, MTKViewDelegate {
         drawSigns(simulation.signs, with: encoder, uniforms: uniforms)
         if sprites > 0 {
             encoder.setRenderPipelineState(spritePipeline)
+            encoder.setVertexTexture(pictureAir(), index: 0)
             encoder.setVertexBuffer(spriteBuffer, offset: 0, index: 0)
             encoder.setVertexBytes(&uniforms, length: uniformsLength, index: 1)
             encoder.setFragmentBytes(&uniforms, length: uniformsLength, index: 1)
             encoder.drawPrimitives(type: .point, vertexStart: 0, vertexCount: sprites)
         }
-        if let glass {
+        // The glass shows at most 2 points below the drops.
+        if let glass, let scissor = scissor(around: simulation.glassReach, margin: 4, in: glass, uniforms: uniforms) {
             encoder.setRenderPipelineState(glassPipeline)
             encoder.setFragmentTexture(glass, index: 0)
             encoder.setFragmentBytes(&uniforms, length: uniformsLength, index: 1)
+            encoder.setScissorRect(scissor)
             encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         }
         encoder.endEncoding()
@@ -408,14 +442,33 @@ final class Renderer: NSObject, MTKViewDelegate {
         fieldPass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0)
         fieldPass.colorAttachments[0].storeAction = .store
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: fieldPass) else { return nil }
-        var uniforms = uniforms
-        encoder.setRenderPipelineState(fieldPipeline)
-        encoder.setVertexBuffer(sprites, offset: 0, index: 0)
-        encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
-        encoder.setFragmentBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
-        encoder.drawPrimitives(type: .point, vertexStart: 0, vertexCount: count)
+        if let scissor = scissor(around: simulation.glassReach, margin: 8, in: field, uniforms: uniforms) {
+            var uniforms = uniforms
+            encoder.setRenderPipelineState(fieldPipeline)
+            encoder.setVertexBuffer(sprites, offset: 0, index: 0)
+            encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+            encoder.setFragmentBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+            encoder.setScissorRect(scissor)
+            encoder.drawPrimitives(type: .point, vertexStart: 0, vertexCount: count)
+        }
         encoder.endEncoding()
         return field
+    }
+
+    /// `reach`, shaken as the frame is, and `margin` points around it, in the pixels of `target`; nil when that holds
+    /// none of them.
+    private func scissor(around reach: SIMD4<Float>?, margin: Float, in target: MTLTexture, uniforms: Uniforms) -> MTLScissorRect? {
+        guard let reach else { return nil }
+        let (width, height) = (Float(target.width), Float(target.height))
+        let pixels = SIMD2(width, height) / uniforms.viewSize
+        let low = (reach.lowHalf + uniforms.shake.lowHalf - margin) * pixels
+        let high = (reach.highHalf + uniforms.shake.lowHalf + margin) * pixels
+        let left = min(max(low.x.rounded(.down), 0), width)
+        let right = min(max(high.x.rounded(.up), 0), width)
+        let top = min(max((height - high.y).rounded(.down), 0), height)
+        let bottom = min(max((height - low.y).rounded(.up), 0), height)
+        guard right > left, bottom > top else { return nil }
+        return MTLScissorRect(x: Int(left), y: Int(top), width: Int(right - left), height: Int(bottom - top))
     }
 
     /// Draws the Dock's snow into its own strip below the Dock, and clears the strip once after the snow is gone.
@@ -437,6 +490,20 @@ final class Renderer: NSObject, MTKViewDelegate {
             clearDock(into: commandBuffer)
             commandBuffer.commit()
         }
+    }
+
+    /// The wallpaper's light and nearness for the flakes falling in its picture, as a texture made again only when the
+    /// wallpaper changes; one clear cell while there is none.
+    private func pictureAir() -> MTLTexture? {
+        guard airVersion != simulation.airVersion || airTexture == nil else { return airTexture }
+        airVersion = simulation.airVersion
+        let size = simulation.airSize
+        let cells = size.width > 0 ? simulation.air : [255, 255, 255, 0]
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: max(size.width, 1), height: max(size.height, 1), mipmapped: false)
+        descriptor.usage = .shaderRead
+        airTexture = device.makeTexture(descriptor: descriptor)
+        airTexture?.replace(region: MTLRegionMake2D(0, 0, descriptor.width, descriptor.height), mipmapLevel: 0, withBytes: cells, bytesPerRow: descriptor.width * 4)
+        return airTexture
     }
 
     private func drawPiles(_ piles: [PileLayer], with encoder: MTLRenderCommandEncoder, uniforms: Uniforms, heights: MTLBuffer) {

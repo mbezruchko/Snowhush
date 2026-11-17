@@ -18,6 +18,7 @@
 "surface.dock" = "Dock";
 "surface.widgets" = "Виджеты";
 "surface.windows" = "Окна";
+"surface.wallpaper" = "Обои";
 "surface.panel" = "Панель";
 "all" = "Все";
 "melt.snow" = "Таяние снега";
@@ -58,6 +59,8 @@
 "setup.update" = "Обновить";
 "setup.same" = "Snowhush {old} уже установлен. Повторная установка {version} его восстановит.";
 "setup.reinstall" = "Переустановить";
+"setup.older" = "Заменяет Snowhush {old} более старой версией {version}.";
+"setup.downgrade" = "Откатить";
 "setup.installing" = "Установка…";
 "setup.settle" = "Пусть уляжется.";
 "setup.done" = "Snowhush установлен. Он есть в меню «Пуск».";

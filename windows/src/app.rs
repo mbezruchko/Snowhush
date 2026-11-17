@@ -1,6 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 use std::mem::size_of;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::thread::{self, JoinHandle};
@@ -26,6 +27,7 @@ use crate::log;
 use crate::menu::{self, Entry, Icon, Tile};
 use crate::prefs::{self, Settings};
 use crate::snow::{self, Command, Links};
+use crate::store;
 use crate::update::{self, Release};
 use crate::welcome::{self, Handlers};
 use snowhush_core::simulation::Mode;
@@ -77,6 +79,9 @@ const NIN_BALLOONUSERCLICK: u32 = WM_USER + 5;
 const DAY: u32 = 24 * 60 * 60 * 1000;
 
 static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
+type Checked = std::result::Result<Option<Release>, String>;
+/// Finished update checks and whether someone asked for them, waiting for `WM_UPDATE` to pick them up.
+static UPDATES: Mutex<Vec<(Checked, bool)>> = Mutex::new(Vec::new());
 
 /// A glyph drawn like the Mac's menu bar ones, at the sizes the tray draws it at.
 macro_rules! glyph {
@@ -121,7 +126,7 @@ impl Emblem {
         if halloween::shows(settings) {
             Emblem::Pumpkin
         } else {
-            match settings.mode {
+            match settings.picked.mode {
                 Mode::Snow => Emblem::Snowflake,
                 Mode::Autumn => Emblem::Leaf,
                 Mode::Rain => Emblem::Rain,
@@ -176,7 +181,7 @@ struct App {
     locked: bool,
     display_off: bool,
     away: bool,
-    /// The download of the update the tray last announced.
+    /// The version the tray last announced.
     update: Option<String>,
 }
 
@@ -219,7 +224,10 @@ pub fn run() -> Result<()> {
         if !settings.welcomed {
             SetTimer(Some(window), TIMER_WELCOME, 1200, None);
         }
-        SetTimer(Some(window), TIMER_UPDATES, 30_000, None);
+        // The Store keeps its own copy up to date.
+        if !store::packaged() {
+            SetTimer(Some(window), TIMER_UPDATES, 30_000, None);
+        }
         SetTimer(Some(window), TIMER_HALLOWEEN, 60_000, None);
         APP.set(Some(App { settings, commands, wake, snow, icon, emblem, light, locked: false, display_off: false, away: false, update: None }));
 
@@ -240,10 +248,8 @@ unsafe extern "system" fn procedure(window: HWND, message: u32, wparam: WPARAM, 
                 let x = (wparam.0 & 0xffff) as i16 as i32;
                 let y = ((wparam.0 >> 16) & 0xffff) as i16 as i32;
                 show_menu(window, x, y);
-            } else if event == NIN_BALLOONUSERCLICK
-                && let Some(url) = APP.with_borrow(|app| app.as_ref().and_then(|app| app.update.clone()))
-            {
-                update::open(&url);
+            } else if event == NIN_BALLOONUSERCLICK && APP.with_borrow(|app| app.as_ref().is_some_and(|app| app.update.is_some())) {
+                update::open(update::STORE);
             }
             LRESULT(0)
         }
@@ -283,8 +289,10 @@ unsafe extern "system" fn procedure(window: HWND, message: u32, wparam: WPARAM, 
             unsafe { DefWindowProcW(window, message, wparam, lparam) }
         }
         WM_UPDATE => {
-            let result = unsafe { Box::from_raw(lparam.0 as *mut std::result::Result<Option<Release>, String>) };
-            updated(window, *result, wparam.0 != 0);
+            let finished = UPDATES.lock().map(|mut updates| std::mem::take(&mut *updates)).unwrap_or_default();
+            for (result, asked) in finished {
+                updated(window, result, asked);
+            }
             LRESULT(0)
         }
         WM_TIMER if wparam.0 == TIMER_WELCOME => {
@@ -367,14 +375,18 @@ fn show_menu(window: HWND, x: i32, y: i32) {
 
 /// What the tray menu lists, with what is on or off: sliders in the drawn menu, submenus in the system's.
 fn entries(settings: &Settings, login: bool, sliders: bool) -> Vec<Entry> {
-    let picked = settings.modes();
+    let picked = settings.picked.modes();
     let falling: Vec<Mode> = Mode::ALL.iter().copied().filter(|mode| picked.contains(mode)).collect();
     // Mixed, the kinds are checkboxes and picking one leaves the menu open for the other; alone, one of a set.
     let kind = |id: u32, label: &str, mode: Mode| {
-        if settings.mixed { Entry::toggle(id, label, picked.contains(&mode), true) } else { Entry::choice(id, label, settings.mode == mode) }
+        if settings.picked.mixed {
+            Entry::toggle(id, label, picked.contains(&mode), true)
+        } else {
+            Entry::choice(id, label, settings.picked.mode == mode)
+        }
     };
     let modes = vec![
-        Entry::toggle(ID_MIXED, tr("mixed"), settings.mixed, true),
+        Entry::toggle(ID_MIXED, tr("mixed"), settings.picked.mixed, true),
         Entry::Separator,
         kind(ID_SNOW, tr("snow"), Mode::Snow),
         kind(ID_AUTUMN, tr("autumn"), Mode::Autumn),
@@ -409,8 +421,10 @@ fn entries(settings: &Settings, login: bool, sliders: bool) -> Vec<Entry> {
         Entry::Separator,
         Entry::header(tr("general")),
         Entry::toggle(ID_LOGIN, tr("login"), login, true),
-        Entry::item(ID_UPDATES, tr("updates"), false, true),
     ]);
+    if !store::packaged() {
+        options.push(Entry::item(ID_UPDATES, tr("updates"), false, true));
+    }
     let mut entries = if sliders {
         vec![
             Entry::header(tr("intensity")),
@@ -557,7 +571,7 @@ fn choose(window: HWND, chosen: u32, login: bool) {
         ID_MIXED => {
             APP.with_borrow_mut(|app| {
                 let Some(app) = app else { return };
-                app.settings.toggle_mixed();
+                app.settings.picked.toggle_mixed();
                 switch_modes(app);
             });
             refresh_icon(window);
@@ -571,7 +585,7 @@ fn choose(window: HWND, chosen: u32, login: bool) {
             };
             APP.with_borrow_mut(|app| {
                 let Some(app) = app else { return };
-                if app.settings.pick(mode) {
+                if app.settings.picked.pick(mode) {
                     switch_modes(app);
                 }
             });
@@ -635,17 +649,19 @@ fn choose(window: HWND, chosen: u32, login: bool) {
 
 fn switch_modes(app: &App) {
     app.settings.save();
-    let settings = &app.settings;
-    send(app, Command::SwitchMode { mode: settings.mode, mixed: settings.mixed, mix: settings.mix, calm: !prefs::animations_enabled() });
+    send(app, Command::SwitchMode { picked: app.settings.picked, calm: !prefs::animations_enabled() });
 }
 
 /// Checks on another thread and reports back to the window with `WM_UPDATE`.
 fn check_for_updates(window: HWND, asked: bool) {
     let target = window.0 as isize;
     thread::spawn(move || {
-        let result = Box::new(update::check());
+        let result = update::check();
+        if let Ok(mut updates) = UPDATES.lock() {
+            updates.push((result, asked));
+        }
         unsafe {
-            let _ = PostMessageW(Some(HWND(target as _)), WM_UPDATE, WPARAM(asked as usize), LPARAM(Box::into_raw(result) as isize));
+            let _ = PostMessageW(Some(HWND(target as _)), WM_UPDATE, WPARAM(0), LPARAM(0));
         }
     });
 }
@@ -657,13 +673,13 @@ fn updated(window: HWND, result: std::result::Result<Option<Release>, String>, a
         Ok(Some(release)) if asked => {
             let text = text::fill("update.ask", &[("version", &release.version), ("current", current)]);
             if message(window, &text, MB_YESNO | MB_ICONINFORMATION) == IDYES {
-                update::open(&release.url);
+                update::open(update::STORE);
             }
         }
         Ok(Some(release)) => {
             let fresh = APP.with_borrow_mut(|app| {
                 let app = app.as_mut()?;
-                (app.update.as_deref() != Some(&release.url)).then(|| app.update = Some(release.url.clone()))
+                (app.update.as_deref() != Some(&release.version)).then(|| app.update = Some(release.version.clone()))
             });
             if fresh.is_some() {
                 notify(window, &text::fill("update.available", &[("version", &release.version)]), tr("update.click"));
