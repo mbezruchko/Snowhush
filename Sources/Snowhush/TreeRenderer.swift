@@ -174,7 +174,8 @@ final class TreeRenderer {
     }
 
     /// The fireworks' sparks, each a glowing streak along its flight.
-    func encode(_ fireworks: Fireworks, with encoder: MTLRenderCommandEncoder, uniforms: TreeUniforms) {
+    func encode(_ fireworks: Fireworks, with encoder: MTLRenderCommandEncoder, uniforms: TreeUniforms, air: MTLTexture?,
+                inPicture: (SIMD2<Float>) -> Bool) {
         let sparks = fireworks.sparks
         guard !sparks.isEmpty else { return }
         let length = sparks.count * MemoryLayout<TreePiece>.stride
@@ -186,12 +187,18 @@ final class TreeRenderer {
         sparkSlot += 1
         let pieces = buffer.contents().bindMemory(to: TreePiece.self, capacity: sparks.count)
         for (k, spark) in sparks.enumerated() {
-            pieces[k] = TreePiece(a: SIMD4(spark.position, spark.velocity), b: SIMD4(spark.color, spark.brightness), c: SIMD4(spark.size, spark.flash ? 1 : 0, 0, 5))
+            // One far off in the picture hides behind what is nearer there; over a window it is in front of it.
+            let near = spark.near >= 0 && inPicture(spark.position) ? spark.near : -1
+            let dim: Float = spark.near >= 0 ? 0.6 + 0.4 * spark.scale : 1
+            pieces[k] = TreePiece(a: SIMD4(spark.position, spark.velocity), b: SIMD4(spark.color, spark.brightness * dim),
+                                  c: SIMD4(spark.size, spark.flash ? 1 : 0, near, 5))
         }
         var uniforms = uniforms
         encoder.setRenderPipelineState(sparkPipeline)
         encoder.setVertexBuffer(buffer, offset: 0, index: 0)
         encoder.setVertexBytes(&uniforms, length: MemoryLayout<TreeUniforms>.stride, index: 1)
+        encoder.setFragmentBytes(&uniforms, length: MemoryLayout<TreeUniforms>.stride, index: 1)
+        if let air { encoder.setFragmentTexture(air, index: 0) }
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: sparks.count)
     }
 

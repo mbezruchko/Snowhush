@@ -1149,11 +1149,35 @@ final class SnowSimulation {
         if tree.touched { lastCursorPush = clock }
     }
 
+    /// How high, from the screen's bottom, the topmost thing in the picture at least as near as `near` reaches at `x`;
+    /// nil where there is none.
+    private func ridge(at x: Float, nearerThan near: Float) -> Float? {
+        let cells = terrainCells
+        guard terrain != nil, cells.width > 0 else { return nil }
+        let column = min(max(Int(x) / cells.size, 0), cells.width - 1)
+        let level = UInt8(min(max(near, 0), 1) * 255)
+        for row in 0..<cells.height where terrainNear[row * cells.width + column] >= level {
+            return height - Float(row * cells.size)
+        }
+        return nil
+    }
+
+    /// Whether the wallpaper's picture shows at a point, with nothing in front of it there.
+    func showsPicture(at point: SIMD2<Float>) -> Bool {
+        guard terrain != nil, point.x >= 0, point.x < width, point.y >= 0, point.y < height else { return false }
+        return !frontCover[min(Int(height - point.y) / Self.frontCell, frontSize.height - 1) * frontSize.width
+                           + min(Int(point.x) / Self.frontCell, frontSize.width - 1)]
+    }
+
     /// Midnight: fireworks over the screen, and sparklers in the hands come out of the presents.
     private func celebrate(around tree: ChristmasTree, dt: Float) {
         if let t = celebration, t >= 0, t < 75, fireworks == nil {
-            fireworks = Fireworks(width: width, height: height, left: treeX + 150)
+            let fireworks = Fireworks(width: width, height: height, left: treeX + 150)
+            fireworks.behind = { [unowned self] x, near in ridge(at: x, nearerThan: near) }
+            self.fireworks = fireworks
         }
+        // Let off far away in the wallpaper too, while its depth is known.
+        fireworks?.span = terrain != nil ? (terrainSpan.far, terrainSpan.close) : nil
         guard let fireworks else { return }
         fireworks.step(dt: dt, time: Float(celebration ?? 1000))
         for point in tree.sparklers { fireworks.sparkle(at: point, dt: dt) }

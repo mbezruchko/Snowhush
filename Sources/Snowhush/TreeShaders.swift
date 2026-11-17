@@ -563,6 +563,8 @@ struct SparkOut {
     float trail;
     float size;
     float flash;
+    float2 world;
+    float near;
 };
 
 /// A quad along the spark's flight, reaching back over the streak it leaves.
@@ -586,13 +588,23 @@ vertex SparkOut sparkVertex(uint vid [[vertex_id]], uint iid [[instance_id]], co
     out.trail = trail;
     out.size = size;
     out.flash = flash;
+    out.world = world;
+    out.near = p.c.z;
     return out;
 }
 
-fragment float4 sparkFragment(SparkOut in [[stage_in]]) {
+fragment float4 sparkFragment(SparkOut in [[stage_in]], constant TreeUniforms &u [[buffer(1)]], texture2d<float> air [[texture(0)]]) {
+    // Far off in the wallpaper's picture, hidden behind whatever is nearer: it comes up from behind a ridge.
+    float hidden = 1.0;
+    if (in.near >= 0.0) {
+        constexpr sampler smooth(filter::linear, address::clamp_to_edge);
+        float ahead = air.sample(smooth, float2(in.world.x / u.size.x, 1.0 - in.world.y / u.size.y), level(0.0)).a;
+        hidden = smoothstep(-0.02, 0.02, in.near - ahead);
+        if (hidden <= 0.0) discard_fragment();
+    }
     if (in.flash > 0.5) {
         float d = length(in.local) / in.size;
-        float glow = exp(-d * d * 2.5) * 0.22 * max(in.bright, 0.0);
+        float glow = exp(-d * d * 2.5) * 0.22 * max(in.bright, 0.0) * hidden;
         return float4(in.color * glow, glow * 0.25);
     }
     float t = clamp(in.local.x, -in.trail, 0.0);
@@ -601,7 +613,7 @@ fragment float4 sparkFragment(SparkOut in [[stage_in]]) {
     float core = exp(-d * d / (in.size * in.size * 0.3)) * fade;
     float halo = exp(-d * d / (in.size * in.size * 4.0)) * 0.6 * fade;
     float shine = max(in.bright, 0.0);
-    float3 color = (in.color * (core + halo) + float3(1.0) * core * 0.45) * shine;
-    return float4(color, saturate((core * 0.6 + halo * 0.15) * shine));
+    float3 color = (in.color * (core + halo) + float3(1.0) * core * 0.45) * shine * hidden;
+    return float4(color, saturate((core * 0.6 + halo * 0.15) * shine * hidden));
 }
 """

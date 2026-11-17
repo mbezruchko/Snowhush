@@ -1,7 +1,9 @@
 import simd
 
 /// The New Year's midnight over the screen: rockets rise from behind the drifts and burst into sparks that droop
-/// and fade, a big volley near the end. Each burst flashes, lighting the snow in its colour.
+/// and fade, a big volley near the end. Each burst flashes, lighting the snow in its colour. With a wallpaper whose
+/// depth is known, most are let off far away in it, from behind whatever in the picture is nearer: the farther, the
+/// smaller and lower, and hidden behind what stands in front.
 final class Fireworks {
     struct Spark {
         var position: SIMD2<Float>
@@ -18,6 +20,10 @@ final class Fireworks {
         var shell: Shell?
         /// The sky lit up round a burst for a moment: drawn as a wide glow only.
         var flash = false
+        /// How near in the wallpaper's picture it is, hidden behind anything nearer; below zero in front of it all.
+        var near: Float = -1
+        /// How big it looks for being that far off: 1 right in front.
+        var scale: Float = 1
 
         var brightness: Float {
             let share = min(age / life, 1)
@@ -39,6 +45,11 @@ final class Fireworks {
 
     private(set) var sparks: [Spark] = []
     private(set) var flashes: [Flash] = []
+    /// How near the farthest and the nearest of the wallpaper are, when its depth is known.
+    var span: (far: Float, close: Float)?
+    /// Where, from the screen's bottom, the nearest thing in front of a rocket as near as the second value comes up to
+    /// at the first, across: it rises from behind that. Nil where nothing is in front.
+    var behind: (Float, Float) -> Float? = { _, _ in nil }
     private let width: Float
     private let height: Float
     /// Where rockets may rise: clear of the tree on the left.
@@ -81,7 +92,7 @@ final class Fireworks {
         }
         if rate == 0 { nextLaunch = time }
 
-        var bursts: [(SIMD2<Float>, Shell)] = []
+        var bursts: [(SIMD2<Float>, Shell, Float, Float)] = []
         var i = sparks.count - 1
         while i >= 0 {
             var spark = sparks[i]
@@ -92,11 +103,13 @@ final class Fireworks {
             if let shell = spark.shell {
                 // A rocket leaves a short trail of embers as it climbs, and bursts as it slows.
                 if sparks.count < Self.maxSparks, Float.random(in: 0...1) < dt * 50 {
-                    sparks.append(Spark(position: spark.position, velocity: SIMD2(Float.random(in: -12...12), -20), color: SIMD3(1, 0.7, 0.35),
-                                        life: Float.random(in: 0.25...0.45), size: 1.1, drag: 3, gravity: 60))
+                    let s = spark.scale
+                    sparks.append(Spark(position: spark.position, velocity: SIMD2(Float.random(in: -12...12), -20) * s, color: SIMD3(1, 0.7, 0.35),
+                                        life: Float.random(in: 0.25...0.45), size: 1.1 * (0.55 + 0.45 * s), drag: 3, gravity: 60 * s,
+                                        near: spark.near, scale: s))
                 }
-                if spark.velocity.y < 40 || spark.age > 3 {
-                    bursts.append((spark.position, shell))
+                if spark.velocity.y < 40 * spark.scale || spark.age > 3 {
+                    bursts.append((spark.position, shell, spark.near, spark.scale))
                     sparks.swapAt(i, sparks.count - 1)
                     sparks.removeLast()
                     i -= 1
@@ -111,7 +124,7 @@ final class Fireworks {
             sparks[i] = spark
             i -= 1
         }
-        for (position, shell) in bursts { burst(shell, at: position) }
+        for (position, shell, near, scale) in bursts { burst(shell, at: position, near: near, scale: scale) }
         for k in flashes.indices.reversed() {
             flashes[k].strength *= exp(-dt / 0.35)
             if flashes[k].strength < 0.02 { flashes.remove(at: k) }
@@ -119,6 +132,24 @@ final class Fireworks {
     }
 
     private func launch() {
+        // A third go up right in front, from behind the drifts; the rest somewhere in the picture's depth.
+        if let span, Float.random(in: 0...1) > 0.33 {
+            let along = Float.random(in: 0...0.85)
+            let near = span.far + (span.close - span.far) * along
+            let scale = 0.32 + 0.68 * along
+            let x = Float.random(in: width * 0.04...width * 0.96)
+            // From just below the ridge in front of it, so that it comes up from behind it.
+            let base = (behind(x, near) ?? 0) - 24 * scale
+            let top = min(base + 24 * scale + Float.random(in: 0.18...0.42) * height * scale, height * 0.92)
+            let rise = 240 * scale
+            sparks.append(Spark(
+                position: SIMD2(x, base),
+                velocity: SIMD2(Float.random(in: -35...35) * scale, (2 * rise * max(top - base, 20)).squareRoot() * 1.05),
+                color: SIMD3(1, 0.85, 0.6), life: 4, size: 1.6 * (0.55 + 0.45 * scale), drag: 0, gravity: rise,
+                shell: Shell.allCases.randomElement(), near: near, scale: scale
+            ))
+            return
+        }
         let top = Float.random(in: 0.45...0.85) * height
         let rise: Float = 240
         sparks.append(Spark(
@@ -129,7 +160,8 @@ final class Fireworks {
         ))
     }
 
-    private func burst(_ shell: Shell, at position: SIMD2<Float>) {
+    private func burst(_ shell: Shell, at position: SIMD2<Float>, near: Float, scale: Float) {
+        let first = sparks.count
         let color = Self.colors.randomElement()!
         let second = Bool.random() ? Self.colors.randomElement()! : color
         let room = Self.maxSparks - sparks.count
@@ -167,9 +199,17 @@ final class Fireworks {
             }
         }
         let tone = shell == .willow ? SIMD3<Float>(1, 0.72, 0.32) : color
-        flashes.append(Flash(position: position, color: tone, strength: 1))
+        flashes.append(Flash(position: position, color: tone, strength: scale))
         if sparks.count < Self.maxSparks {
             sparks.append(Spark(position: position, velocity: .zero, color: tone, life: 0.45, size: 70, drag: 0, gravity: 0, flash: true))
+        }
+        // Far off, the same burst is smaller all through: slower, falling less, its sparks finer.
+        guard scale != 1 || near >= 0 else { return }
+        for k in first..<sparks.count {
+            let spark = sparks[k]
+            sparks[k] = Spark(position: spark.position, velocity: spark.velocity * scale, color: spark.color, life: spark.life,
+                              size: spark.size * (spark.flash ? scale : 0.55 + 0.45 * scale), drag: spark.drag, gravity: spark.gravity * scale,
+                              crackles: spark.crackles, flash: spark.flash, near: near, scale: scale)
         }
     }
 
