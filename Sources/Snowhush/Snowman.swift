@@ -325,12 +325,12 @@ enum SnowmanArt {
         return context.makeImage()
     }
 
-    private static func color(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat, _ a: CGFloat = 1) -> CGColor {
+    static func color(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat, _ a: CGFloat = 1) -> CGColor {
         CGColor(srgbRed: r, green: g, blue: b, alpha: a)
     }
 
     /// A ball of packed snow, lit from the upper left, bluer in its shade, its surface a little rough.
-    private static func snowball(_ context: CGContext, center: CGPoint, radius: CGFloat, seed: UInt64) {
+    static func snowball(_ context: CGContext, center: CGPoint, radius: CGFloat, seed: UInt64) {
         let circle = CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2)
         context.saveGState()
         context.addEllipse(in: circle)
@@ -407,14 +407,14 @@ enum SnowmanArt {
         carrot(context, from: CGPoint(x: head.x + 0.005, y: head.y + 0.005))
     }
 
-    private static func coal(_ context: CGContext, at point: CGPoint, radius: CGFloat) {
+    static func coal(_ context: CGContext, at point: CGPoint, radius: CGFloat) {
         context.setFillColor(color(0.07, 0.07, 0.08))
         context.fillEllipse(in: CGRect(x: point.x - radius, y: point.y - radius * 0.9, width: radius * 2, height: radius * 1.8))
         context.setFillColor(color(0.6, 0.62, 0.7, 0.55))
         context.fillEllipse(in: CGRect(x: point.x - radius * 0.45, y: point.y + radius * 0.2, width: radius * 0.5, height: radius * 0.4))
     }
 
-    private static func carrot(_ context: CGContext, from base: CGPoint) {
+    static func carrot(_ context: CGContext, from base: CGPoint) {
         let tip = CGPoint(x: base.x + 0.115, y: base.y - 0.022)
         let path = CGMutablePath()
         path.move(to: CGPoint(x: base.x - 0.004, y: base.y + 0.017))
@@ -480,7 +480,7 @@ enum SnowmanArt {
     }
 
     /// A bare twig with a fork or two.
-    private static func twig(_ context: CGContext, from start: CGPoint, to end: CGPoint, width: CGFloat) {
+    static func twig(_ context: CGContext, from start: CGPoint, to end: CGPoint, width: CGFloat) {
         context.saveGState()
         context.setStrokeColor(color(0.33, 0.21, 0.12))
         context.setLineCap(.round)
@@ -506,7 +506,7 @@ enum SnowmanArt {
         twig(context, from: .zero, to: CGPoint(x: CGFloat(reach.x), y: CGFloat(reach.y)), width: 0.013)
     }
 
-    private static func drawHat(_ context: CGContext) {
+    static func drawHat(_ context: CGContext) {
         // The red cone flops over to his right, the pompom at its tip.
         let cone = CGMutablePath()
         cone.move(to: CGPoint(x: -0.1, y: 0.015))
@@ -526,7 +526,7 @@ enum SnowmanArt {
         fur(context, in: CGRect(x: -0.185, y: 0.165, width: 0.07, height: 0.07), seed: 17)
     }
 
-    private static func fur(_ context: CGContext, in rect: CGRect, seed: UInt64) {
+    static func fur(_ context: CGContext, in rect: CGRect, seed: UInt64) {
         context.setFillColor(color(0.93, 0.93, 0.95))
         context.fillEllipse(in: rect)
         var state = seed
