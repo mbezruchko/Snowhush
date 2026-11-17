@@ -55,6 +55,9 @@ final class Renderer: NSObject, MTKViewDelegate {
     var borrowedSnow: () -> [BorrowedSnow] = { [] }
     /// Called after each step, for what the step sent on to other displays.
     var stepped: () -> Void = {}
+    /// Draws the fireworks, nil once there are none, at the desktop's level behind every window, and says whether it
+    /// did; if not, they are drawn here, kept off the windows by their frames.
+    var fireworksOnDesktop: (Fireworks?, Float) -> Bool = { _, _ in false }
     /// Frames per second while the snow is being disturbed: the display's highest rate, up to 120 on ProMotion screens.
     var interactiveFrameRate = 60
     var budget = PowerBudget.full
@@ -336,7 +339,8 @@ final class Renderer: NSObject, MTKViewDelegate {
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return }
         drawPumpkins(pumpkins, with: encoder, uniforms: uniforms)
         // Far off in the sky: behind the snow.
-        if let fireworks = simulation.fireworks, !fireworks.isEmpty, let treeRenderer = treeRenderer ?? makeTreeRenderer() {
+        if !fireworksOnDesktop(simulation.fireworks, uniforms.time), let fireworks = simulation.fireworks, !fireworks.isEmpty,
+           let treeRenderer = treeRenderer ?? makeTreeRenderer() {
             treeRenderer.encode(fireworks, with: encoder, uniforms: TreeUniforms(origin: .zero, size: uniforms.viewSize, time: uniforms.time, shake: SIMD2(uniforms.shake.x, uniforms.shake.y)),
                                 air: pictureAir(), covers: simulation.desktopCovers)
         }

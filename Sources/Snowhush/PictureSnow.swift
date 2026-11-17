@@ -123,6 +123,7 @@ final class PictureSnow {
     /// the new one that long.
     private var storeWatch: DispatchSourceFileSystemObject?
     private var fight: SnowballFight?
+    private var fireworks: FireworksLayer?
     /// Hit by a friend while no snowman can stand in the wallpaper shown: the snowball comes all the same.
     private var hitObserver: NSObjectProtocol?
 
@@ -335,6 +336,23 @@ final class PictureSnow {
         let size = screen.frame.size
         fight.step(now: now, relief: relief, screen: SIMD2(Float(size.width), Float(size.height)), scale: desktop.window.backingScaleFactor,
                    covers: simulation.windowFrames, visible: desktop.window.occlusionState.contains(.visible))
+    }
+
+    /// The fireworks drawn into the desktop shown, behind every window; false where there is no desktop of ours to
+    /// draw them in.
+    func drawFireworks(_ sparks: Fireworks?, time: Float) -> Bool {
+        guard wanted, active, let desktop = current else { return false }
+        guard sparks != nil || fireworks != nil else { return true }
+        guard let fireworks = fireworks ?? FireworksLayer(device: device) else { return false }
+        self.fireworks = fireworks
+        let host = desktop.window.contentView?.layer
+        if fireworks.layer.superlayer !== host, let host {
+            fireworks.layer.removeFromSuperlayer()
+            host.insertSublayer(fireworks.layer, above: desktop.window.snow)
+            fireworks.layer.frame = host.bounds
+        }
+        fireworks.draw(sparks, size: screen.frame.size, relief: renderer.reliefTexture, time: time)
+        return true
     }
 
     private func makeFight() -> SnowballFight {

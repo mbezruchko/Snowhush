@@ -177,6 +177,7 @@ final class ScreenSnow {
             renderer.releaseFrames(of: view)
         }
         simulation.stirred = { [unowned self] in wake() }
+        renderer.fireworksOnDesktop = { [unowned self] fireworks, time in picture?.drawFireworks(fireworks, time: time) ?? false }
         simulation.pictureCleared = { [unowned self] in picture?.cleared() }
         simulation.pictureChanged = { [unowned self] in picture?.refresh() }
         picture?.frost = settled.contains(.wallpaper)
