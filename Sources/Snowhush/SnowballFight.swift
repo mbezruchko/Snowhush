@@ -53,6 +53,7 @@ final class SnowballFight {
     private var steppedAt: Double = 0
     private var monitor: Any?
     private var observer: NSObjectProtocol?
+    private var roomObserver: NSObjectProtocol?
     private weak var simulation: SnowSimulation?
     /// What is left of the bot, and when he comes back once it is gone.
     private var botLives = SnowballFight.botHits
@@ -75,6 +76,13 @@ final class SnowballFight {
             guard event.modifierFlags.contains(.command) else { return }
             self?.clicked(NSEvent.mouseLocation)
         }
+        // The round shows as it changes, whether or not anything is moving.
+        roomObserver = NotificationCenter.default.addObserver(forName: SnowballRoom.changed, object: nil, queue: .main) { [weak self] _ in
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            self?.showBoard()
+            CATransaction.commit()
+        }
         observer = NotificationCenter.default.addObserver(forName: SnowballRoom.thrown, object: nil, queue: .main) { [weak self] note in
             guard let from = note.userInfo?["from"] as? String, let at = note.userInfo?["at"] as? String else { return }
             self?.thrown(from: from, at: at)
@@ -84,6 +92,7 @@ final class SnowballFight {
     deinit {
         if let monitor { NSEvent.removeMonitor(monitor) }
         if let observer { NotificationCenter.default.removeObserver(observer) }
+        if let roomObserver { NotificationCenter.default.removeObserver(roomObserver) }
         for figure in figures.values { remove(figure) }
         board.removeFromSuperlayer()
     }
@@ -91,6 +100,22 @@ final class SnowballFight {
     private func remove(_ figure: Figure) {
         figure.renderer.layer.removeFromSuperlayer()
         figure.label?.removeFromSuperlayer()
+    }
+
+    /// In a wallpaper with no ground to stand on: no snowmen, only the round at the top of `window`.
+    func showRound(in window: PictureWindow) {
+        if window !== self.window || ground != nil {
+            for figure in figures.values { remove(figure) }
+            figures = [:]
+            ground = nil
+            self.window = window
+            board.removeFromSuperlayer()
+            boardShown = ""
+        }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        showBoard()
+        CATransaction.commit()
     }
 
     /// Puts the snowmen in `window`'s picture, on `ground`: the friends in the room, or the bot when there are none.
@@ -132,7 +157,6 @@ final class SnowballFight {
         CATransaction.setDisableActions(true)
         for (id, figure) in figures where id != Self.botID {
             if room.isOut(id) {
-                if !figure.bot.knockedOut, let simulation { simulation.puff(at: figure.bot.middle, near: figure.bot.near, size: figure.bot.height * 0.3) }
                 figure.bot.knockOut()
             } else {
                 figure.bot.comeBack()
@@ -255,6 +279,9 @@ final class SnowballFight {
                     return true
                 }
             }
+            for (point, size) in figure.bot.takeBursts() {
+                simulation.crumble(at: point, floor: figure.bot.foot.y, near: figure.bot.near, size: size)
+            }
             if moved || !figure.drawn {
                 figure.renderer.draw(figure.bot, relief: relief, screen: screen, scale: scale)
                 if let label = figure.label {
@@ -297,7 +324,6 @@ final class SnowballFight {
             if id == Self.botID {
                 botLives -= 1
                 if botLives <= 0 {
-                    simulation.puff(at: figure.bot.middle, near: figure.bot.near, size: figure.bot.height * 0.3)
                     figure.bot.knockOut()
                     botBackAt = CACurrentMediaTime() + 5
                 }

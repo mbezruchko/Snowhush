@@ -29,6 +29,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var newYearItem: NSMenuItem!
     private var fightItem: NSMenuItem?
     private var shimmerTimer: Timer?
+    /// Max Performance as it was before this player came into a snowball fight's room, to go back to on leaving it.
+    private var performanceBeforeFight: Bool?
     private var fightStatusItem: NSMenuItem?
     private var fightInviteItem: NSMenuItem?
     private var fightJoinItem: NSMenuItem?
@@ -83,6 +85,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         // What the room comes to shows in the open menu at once.
         observers.append(NotificationCenter.default.addObserver(forName: SnowballRoom.changed, object: nil, queue: .main) { [weak self] _ in
             guard let self else { return }
+            boostForFight()
             updateFightItems()
             fightStatusItem?.menu?.items.forEach { $0.view?.needsDisplay = true }
         })
@@ -452,8 +455,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     }
 
     @objc private func toggleMaxPerformance() {
-        Preferences.maxPerformance.toggle()
-        for snow in screens { snow.maxFrameRate = Preferences.maxPerformance }
+        setMaxPerformance(!Preferences.maxPerformance)
+    }
+
+    private func setMaxPerformance(_ on: Bool) {
+        Preferences.maxPerformance = on
+        for snow in screens { snow.maxFrameRate = on }
+    }
+
+    /// In a snowball fight's room the snow runs at full frame rate, snowballs flying smooth; leaving it, Max Performance
+    /// goes back to what it was.
+    private func boostForFight() {
+        let inRoom = SnowballRoom.shared.me != nil
+        if inRoom, performanceBeforeFight == nil {
+            performanceBeforeFight = Preferences.maxPerformance
+            setMaxPerformance(true)
+        } else if !inRoom, let before = performanceBeforeFight {
+            performanceBeforeFight = nil
+            setMaxPerformance(before)
+        }
     }
 
     @objc private func toggleHalloween() {
@@ -536,6 +556,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
 
     func applicationWillTerminate(_ notification: Notification) {
         SnowballRoom.shared.leaveNow()
+        if let before = performanceBeforeFight { Preferences.maxPerformance = before }
     }
 
     /// An invite link clicked anywhere opens the app and brings it into the room.

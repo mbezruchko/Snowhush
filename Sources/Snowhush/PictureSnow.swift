@@ -311,17 +311,23 @@ final class PictureSnow {
 
     /// Moves the snowball fight on a frame, while there is one to have in the wallpaper shown.
     func stepFight() {
-        guard SnowballFight.wanted, wanted, depth, active, let desktop = current, let ground = desktop.ground, loaded == desktop.picture,
-              let relief = renderer.reliefTexture else {
+        guard SnowballFight.wanted, wanted, depth, active, let desktop = current else {
             endFight()
             return
         }
-        if fight == nil {
-            let fight = SnowballFight(device: device, simulation: simulation)
-            fight.clicked = { [weak self] in self?.clicked(at: $0) }
-            self.fight = fight
+        guard let ground = desktop.ground, loaded == desktop.picture, let relief = renderer.reliefTexture else {
+            // No ground in this wallpaper for a snowman to stand on: in a room, the round still shows on the desktop.
+            if SnowballRoom.shared.me != nil {
+                let fight = makeFight()
+                fight.main = displayID == CGMainDisplayID()
+                fight.showRound(in: desktop.window)
+                simulation.keepsAwake = false
+            } else {
+                endFight()
+            }
+            return
         }
-        guard let fight else { return }
+        let fight = makeFight()
         let now = CACurrentMediaTime()
         fight.main = displayID == CGMainDisplayID()
         fight.place(in: desktop.window, ground: ground, now: now)
@@ -329,6 +335,14 @@ final class PictureSnow {
         let size = screen.frame.size
         fight.step(now: now, relief: relief, screen: SIMD2(Float(size.width), Float(size.height)), scale: desktop.window.backingScaleFactor,
                    covers: simulation.windowFrames, visible: desktop.window.occlusionState.contains(.visible))
+    }
+
+    private func makeFight() -> SnowballFight {
+        if let fight { return fight }
+        let fight = SnowballFight(device: device, simulation: simulation)
+        fight.clicked = { [weak self] in self?.clicked(at: $0) }
+        self.fight = fight
+        return fight
     }
 
     private func endFight() {
@@ -511,8 +525,10 @@ final class PictureSnow {
     /// snow that has changed, which is drawn. With nothing falling, lying or melting it rests until woken.
     private func look() {
         guard wanted, active, let desktop = desktopShowing() else { return }
-        // A snowman walking in the picture keeps the snow's frames coming, which may have come to rest before.
+        // A snowman walking in the picture keeps the snow's frames coming, which may have come to rest before; with no
+        // ground for one, a room's round is shown all the same.
         if SnowballFight.wanted, desktop.ground != nil, !simulation.keepsAwake { simulation.stirred() }
+        if SnowballFight.wanted, desktop.ground == nil, SnowballRoom.shared.me != nil { stepFight() }
         if desktop !== current {
             // Each desktop has snow of its own: the one left keeps what lay in it, and the one come to has been
             // snowed on for as long as it was away. One never shown before starts with what lies in this one.

@@ -23,6 +23,10 @@ final class SnowmanRenderer {
         var offset: SIMD2<Float>
         var alpha: Float
         var unused: Float = 0
+        /// What the whole picture covers, for a part that is only some of it.
+        var picture: SIMD4<Float>
+        /// A circle outside which nothing shows: middle and radius, and whether there is one.
+        var cut: SIMD4<Float> = .zero
     }
 
     private let device: MTLDevice
@@ -133,14 +137,22 @@ final class SnowmanRenderer {
         let placements = bot.placements
         // The throwing arm goes behind him while he winds up, in front of him as it comes over.
         let armBehind = bot.armBehind
-        var order: [(SnowmanBot.Placement, SIMD4<Float>, MTLTexture)] = []
-        if armBehind { order.append((placements.arm, SnowmanArt.armRect, textures.arm)) }
-        order.append((placements.body, SnowmanArt.bodyRect, textures.body))
-        if !armBehind { order.append((placements.arm, SnowmanArt.armRect, textures.arm)) }
-        order.append((placements.hat, SnowmanArt.hatRect, textures.hat))
-        for (placement, rect, texture) in order where placement.alpha > 0.001 {
+        var order: [(SnowmanBot.Placement, SIMD4<Float>, SIMD4<Float>, MTLTexture, SIMD4<Float>)] = []
+        if bot.knockedOut {
+            // Broken apart: each ball cut out of the body's picture, the arm, the hat flying off.
+            for piece in bot.debris {
+                order.append((piece.placement, piece.rect, piece.arm ? SnowmanArt.armRect : SnowmanArt.bodyRect, piece.arm ? textures.arm : textures.body, piece.cut))
+            }
+        } else {
+            if armBehind { order.append((placements.arm, SnowmanArt.armRect, SnowmanArt.armRect, textures.arm, .zero)) }
+            order.append((placements.body, SnowmanArt.bodyRect, SnowmanArt.bodyRect, textures.body, .zero))
+            if !armBehind { order.append((placements.arm, SnowmanArt.armRect, SnowmanArt.armRect, textures.arm, .zero)) }
+        }
+        order.append((placements.hat, SnowmanArt.hatRect, SnowmanArt.hatRect, textures.hat, .zero))
+        for (placement, rect, whole, texture, cut) in order where placement.alpha > 0.001 {
             let m = placement.matrix
-            var part = Part(rect: rect, matrix: SIMD4<Float>(lowHalf: m.columns.0, highHalf: m.columns.1), offset: placement.offset, alpha: placement.alpha)
+            var part = Part(rect: rect, matrix: SIMD4<Float>(lowHalf: m.columns.0, highHalf: m.columns.1), offset: placement.offset, alpha: placement.alpha,
+                            picture: whole, cut: cut)
             encoder.setVertexBytes(&part, length: MemoryLayout<Part>.stride, index: 0)
             encoder.setFragmentBytes(&part, length: MemoryLayout<Part>.stride, index: 0)
             encoder.setFragmentTexture(texture, index: 0)
@@ -176,12 +188,15 @@ struct Part {
     float2 offset;
     float alpha;
     float unused;
+    float4 picture;
+    float4 cut;
 };
 
 struct Out {
     float4 position [[position]];
     float2 uv;
     float2 world;
+    float2 local;
 };
 
 vertex Out snowmanVertex(uint vid [[vertex_id]], constant Part &part [[buffer(0)]], constant Uniforms &u [[buffer(1)]]) {
@@ -190,8 +205,9 @@ vertex Out snowmanVertex(uint vid [[vertex_id]], constant Part &part [[buffer(0)
     float2 world = part.offset + float2x2(part.matrix.xy, part.matrix.zw) * local;
     Out out;
     out.position = float4((world - u.origin) / u.size * 2.0 - 1.0, 0.0, 1.0);
-    out.uv = float2(corner.x, 1.0 - corner.y);
+    out.uv = float2((local.x - part.picture.x) / (part.picture.z - part.picture.x), 1.0 - (local.y - part.picture.y) / (part.picture.w - part.picture.y));
     out.world = world;
+    out.local = local;
     return out;
 }
 
@@ -199,6 +215,8 @@ fragment float4 snowmanFragment(Out in [[stage_in]], constant Part &part [[buffe
                                 texture2d<float> picture [[texture(0)]], texture2d<float> relief [[texture(1)]]) {
     constexpr sampler smooth(filter::linear, mip_filter::linear, address::clamp_to_edge);
     float4 color = picture.sample(smooth, in.uv);
+    // A ball cut out of the body: nothing of the others round it.
+    if (part.cut.w > 0.0) color *= 1.0 - smoothstep(part.cut.z * 0.96, part.cut.z, distance(in.local, part.cut.xy));
     if (color.a < 0.003) discard_fragment();
     // Hidden behind whatever in the picture is nearer than he is: a rock, a tree, the brow of a hill.
     float2 at = float2(in.world.x / u.screen.x, 1.0 - in.world.y / u.screen.y);

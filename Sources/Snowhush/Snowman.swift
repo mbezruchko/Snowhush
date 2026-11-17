@@ -555,10 +555,69 @@ final class SnowmanBot {
     }
     private var hat = Hat.worn(grow: 1)
     private var hatFade: Float = 1
-    /// Out of the round: he slumps into the snow and is gone until he comes back.
+    /// Out of the round: he breaks apart and is gone until he comes back.
     private(set) var knockedOut = false
-    /// How far he has slumped away, 0 standing to 1 gone.
+    /// How far he still is from standing as he comes back, 1 under the snow to 0 up.
     private var melt: Float = 0
+
+    /// A piece of him flying apart: one of his balls, or his arm.
+    private struct Piece {
+        /// 0 to 2 for his balls from the bottom up, 3 for his arm.
+        let kind: Int
+        var center: SIMD2<Float>
+        var velocity: SIMD2<Float>
+        var angle: Float
+        var spin: Float
+        var resting = false
+    }
+    private var pieces: [Piece] = []
+    private var brokenFor: Float = 0
+    /// Where snow bursts as he breaks or a piece of him strikes the ground, and how big a burst: for the scene to
+    /// throw up, taken as it is drawn.
+    private var bursts: [(SIMD2<Float>, Float)] = []
+
+    func takeBursts() -> [(SIMD2<Float>, Float)] {
+        defer { bursts = [] }
+        return bursts
+    }
+
+    /// Each piece of him as he breaks apart, and what of the pictures it is: the body's, cut to one ball, or the
+    /// arm's.
+    struct Debris {
+        var placement: Placement
+        var arm: Bool
+        /// What of the body's picture the piece is, in parts of his height: left, bottom, right, top.
+        var rect: SIMD4<Float>
+        /// The ball's middle and radius, outside which nothing of the body's picture shows; none for the arm.
+        var cut: SIMD4<Float>
+    }
+
+    var debris: [Debris] {
+        let h = height
+        let mirror = simd_float2x2(SIMD2(facing, 0), SIMD2(0, 1))
+        return pieces.map { piece in
+            let fade = piece.kind == 0 ? 1 - smoothstep(0.35, 1.2, brokenFor) : 1 - smoothstep(1.0, 1.6, brokenFor)
+            let matrix = rotation(piece.angle) * mirror * h
+            if piece.kind == 3 {
+                let middle = SnowmanArt.reach / 2
+                return Debris(placement: Placement(matrix: matrix, offset: piece.center - matrix * middle, alpha: fade), arm: true,
+                              rect: SnowmanArt.armRect, cut: .zero)
+            }
+            let (middle, radius) = SnowmanArt.balls[piece.kind]
+            // The bottom ball cracks and sinks into the snow where it stood.
+            let squat = piece.kind == 0 ? simd_float2x2(SIMD2(1 + 0.2 * min(brokenFor, 1), 0), SIMD2(0, 1 - 0.45 * min(brokenFor, 1))) : simd_float2x2(1)
+            let m = matrix * squat
+            let reach = radius * 1.25
+            return Debris(placement: Placement(matrix: m, offset: piece.center - m * middle, alpha: fade), arm: false,
+                          rect: SIMD4(middle.x - reach, middle.y - reach, middle.x + reach, middle.y + reach),
+                          cut: SIMD4(middle.x, middle.y, radius * 1.06, 1))
+        }
+    }
+
+    private func smoothstep(_ a: Float, _ b: Float, _ x: Float) -> Float {
+        let t = min(max((x - a) / (b - a), 0), 1)
+        return t * t * (3 - 2 * t)
+    }
 
     /// One standing at `foot`.
     init(ground: SnowmanGround, foot: SIMD2<Float>, now: Double, throwsOnHisOwn: Bool = true) {
@@ -677,10 +736,12 @@ final class SnowmanBot {
     /// anything of him moved.
     func step(dt: Float, now: Double, canThrow: Bool, throwBall: (SIMD2<Float>, Float, String?) -> Void) -> Bool {
         var moved = stepHat(dt: dt)
-        if knockedOut || melt > 0 {
-            melt = knockedOut ? min(1, melt + dt / 0.9) : max(0, melt - dt / 0.5)
+        if knockedOut {
+            return breakApart(dt: dt) || moved
+        }
+        if melt > 0 {
+            melt = max(0, melt - dt / 0.5)
             moved = true
-            if knockedOut { return moved }
         }
         switch act {
         case .idle:
@@ -788,12 +849,71 @@ final class SnowmanBot {
         owed = 0
         target = nil
         act = .idle
+        // He comes apart where he stands: his head pops up and off, his middle topples, his arm flies, his bottom
+        // cracks where it is; all to the side the last snowball didn't come from.
+        let h = height
+        let body = placements.body, arm = placements.arm
+        let side: Float = Bool.random(using: &random) ? 1 : -1
+        func spread() -> Float { Float.random(in: 0.8...1.2, using: &random) }
+        pieces = [
+            Piece(kind: 0, center: body.offset + body.matrix * SnowmanArt.balls[0].0, velocity: .zero, angle: lean * facing, spin: 0, resting: true),
+            Piece(kind: 1, center: body.offset + body.matrix * SnowmanArt.balls[1].0, velocity: SIMD2(side * 0.45 * spread(), 0.55 * spread()) * h,
+                  angle: lean * facing, spin: -side * 3.2 * spread()),
+            Piece(kind: 2, center: body.offset + body.matrix * SnowmanArt.balls[2].0, velocity: SIMD2(-side * 0.35 * spread(), 1.35 * spread()) * h,
+                  angle: lean * facing, spin: side * 7 * spread()),
+            Piece(kind: 3, center: arm.offset + arm.matrix * (SnowmanArt.reach / 2), velocity: SIMD2(side * 0.9 * spread(), 1.05 * spread()) * h,
+                  angle: armAngle + lean * facing, spin: -side * 11 * spread()),
+        ]
+        brokenFor = 0
+        bursts.append((body.offset + body.matrix * SnowmanArt.balls[1].0, 0.5 * h))
+        if case .worn = hat {
+            let place = placements.hat
+            hat = .flying(position: place.offset, velocity: SIMD2(side * 0.4, 1.7) * h, turn: 0.08 * facing, spin: side * -6)
+        }
     }
 
-    /// Back for the next round: he rises out of the snow, his hat on.
+    /// The pieces fly, strike the ground and bounce, then roll to a stop and melt away. Returns whether any moved.
+    private func breakApart(dt: Float) -> Bool {
+        guard brokenFor < 1.7 else { return false }
+        brokenFor += dt
+        let h = height
+        for k in pieces.indices where !pieces[k].resting || pieces[k].kind != 0 {
+            var piece = pieces[k]
+            let radius = piece.kind == 3 ? 0.02 : SnowmanArt.balls[piece.kind].1
+            let floor = foot.y + radius * h * 0.85
+            if !piece.resting {
+                piece.velocity.y -= 5 * h * dt
+                piece.center += piece.velocity * dt
+                piece.angle += piece.spin * dt
+                if piece.center.y < floor, piece.velocity.y < 0 {
+                    piece.center.y = floor
+                    if -piece.velocity.y > 0.5 * h {
+                        // A good thump: it bounces, and snow flies where it struck.
+                        bursts.append((SIMD2(piece.center.x, foot.y), (piece.kind == 3 ? 0.12 : radius * 1.6) * h))
+                        piece.velocity.y *= -0.3
+                        piece.velocity.x *= 0.7
+                    } else {
+                        piece.velocity.y = 0
+                        piece.resting = true
+                    }
+                }
+            } else if piece.kind != 3 {
+                // Rolling to a stop along the ground.
+                piece.velocity.x *= max(0, 1 - 2.2 * dt)
+                piece.center.x += piece.velocity.x * dt
+                piece.angle -= piece.velocity.x / max(radius * h, 1) * dt
+            }
+            pieces[k] = piece
+        }
+        return true
+    }
+
+    /// Back for the next round: he rises out of the snow, whole, his hat on.
     func comeBack() {
         guard knockedOut else { return }
         knockedOut = false
+        pieces = []
+        melt = 1
         hatFade = 1
         hat = .worn(grow: 0)
     }

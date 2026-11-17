@@ -234,6 +234,9 @@ private struct Mote {
     var still = false
     var scene: Float = -1
     var sceneLight: Float = 0
+    /// A chunk of packed snow rather than powder: it falls hard, stops on `floor` and keeps its size.
+    var chunk = false
+    var floor: Float = -.infinity
 }
 
 /// A snowball thrown into the wallpaper's picture: it flies off from in front of the screen in an arc, shrinking as
@@ -1005,8 +1008,9 @@ final class SnowSimulation {
                 buffer[count].scene = mote.scene
                 buffer[count].sceneLight = mote.sceneLight + (1 - mote.sceneLight) * settled
             } else {
-                let fade = min(1, mote.age / 0.06) * pow(1 - t, 1.5)
-                buffer[count] = Sprite(position: mote.position, size: mote.size * (1 + t), alpha: mote.alpha * fade * fallingOpacity, soft: 1)
+                let fade = mote.chunk ? 1 - pow(t, 3) : min(1, mote.age / 0.06) * pow(1 - t, 1.5)
+                buffer[count] = Sprite(position: mote.position, size: mote.chunk ? mote.size : mote.size * (1 + t), alpha: mote.alpha * fade * fallingOpacity,
+                                       soft: mote.chunk ? 0.3 : 1)
                 if mote.scene >= 0 {
                     buffer[count].scene = mote.scene
                     buffer[count].sceneLight = mote.sceneLight
@@ -2624,7 +2628,17 @@ final class SnowSimulation {
                 motes.swapAt(i, motes.count - 1)
                 motes.removeLast()
             } else {
-                if !mote.still {
+                if mote.chunk {
+                    if mote.position.y > mote.floor || mote.velocity.y > 0 {
+                        mote.velocity.y -= 900 * dt
+                        mote.velocity.x *= exp(-0.6 * dt)
+                        mote.position += mote.velocity * dt
+                        if mote.position.y <= mote.floor, mote.velocity.y < 0 {
+                            mote.position.y = mote.floor
+                            mote.velocity = .zero
+                        }
+                    }
+                } else if !mote.still {
                     mote.velocity.y -= 35 * dt
                     mote.velocity *= damping
                     mote.position += (mote.velocity + SIMD2(drift, 0)) * dt
@@ -2969,6 +2983,20 @@ final class SnowSimulation {
             hasDabs = true
         }
         puff(at: ball.to, near: ball.near, size: ball.end)
+    }
+
+    /// A snowman breaking apart, or a piece of him striking the ground: chunks of snow fly up out of `point` and drop
+    /// to `floor`, powder with them, all at its nearness in the picture.
+    func crumble(at point: SIMD2<Float>, floor: Float, near: Float, size: Float) {
+        for _ in 0..<Int(10 + size * 0.5) where motes.count < maxMotes {
+            let angle = random.range(0.2, .pi - 0.2)
+            let speed = random.range(0.6, 1.6) * size * 3
+            motes.append(Mote(position: point + SIMD2(random.range(-0.4, 0.4), random.range(-0.2, 0.3)) * size,
+                              velocity: SIMD2(cos(angle), sin(angle)) * speed,
+                              size: random.range(0.06, 0.16) * size, alpha: random.range(0.8, 1), life: random.range(1.0, 1.8),
+                              soft: 0.3, scene: near, sceneLight: 1, chunk: true, floor: floor + random.range(-0.05, 0.05) * size))
+        }
+        puff(at: point, near: near, size: size * 0.5)
     }
 
     /// Powder thrown up where a snowball burst in the picture, at its nearness there.
