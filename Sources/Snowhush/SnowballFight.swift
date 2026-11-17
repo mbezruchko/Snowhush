@@ -322,17 +322,27 @@ final class SnowballFight {
         return nil
     }
 
+    /// How hot this player's arm is from throwing: each throw adds one, and it cools to a fifth in about 2.5 seconds.
+    private var heat: Float = 0
+    private var heatAt: Double = 0
+
     /// Throws a snowball from in front of the screen at `point` in the picture, where it is `near`; it hits a
-    /// snowman still there when it comes down, and a friend's tells the friend. No throw goes quite where it is
-    /// aimed: it strays by about a third of a snowman's height there, so that one aimed at a snowman's middle hits him
-    /// about every other time.
+    /// snowman still there when it comes down, and a friend's tells the friend. The first throw after a rest goes
+    /// where it is aimed; the faster they follow, the farther they stray: one a second, about a third of a snowman's
+    /// height there, so that one aimed at his middle hits him about every other time; one every half second or
+    /// faster, near three times that.
     func throwBall(at point: SIMD2<Float>, near: Float, size: Float, screenWidth: Float) {
         guard let simulation else { return }
         let start = SIMD2(screenWidth * 0.5 + (point.x - screenWidth * 0.5) * 0.35, -30)
         Self.throwsMade += 1
+        let now = CACurrentMediaTime()
+        heat *= exp(-Float(now - heatAt) / 1.5)
+        heatAt = now
+        let stray = min(heat, 3)
+        heat += 1
         let height = size * 10
         let u = Float.random(in: Float.ulpOfOne..<1), v = Float.random(in: 0..<1)
-        let spread = (-2 * log(u)).squareRoot()
+        let spread = (-2 * log(u)).squareRoot() * stray
         let landing = point + SIMD2(cos(2 * .pi * v) * 0.3, sin(2 * .pi * v) * 0.25) * spread * height
         simulation.throwIntoPicture(from: start, to: landing, near: near, size: size) { [weak self, unowned simulation] landed in
             guard let self, let (id, figure) = figures.first(where: { $0.value.bot.contains(landed) && abs($0.value.bot.near - near) < 0.08 }) else { return false }
