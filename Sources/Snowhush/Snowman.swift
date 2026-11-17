@@ -514,8 +514,8 @@ enum SnowmanArt {
     }
 }
 
-/// A snowman who lives in the wallpaper's picture: he wanders over its ground, the farther off the smaller, now and then
-/// throws a snowball out of the picture at the screen, and reels when one thrown at him hits him.
+/// A snowman who lives in the wallpaper's picture: he wanders over its ground, the farther off the smaller, reels when a
+/// snowball thrown at him hits him, and throws one back out of the picture at the screen.
 final class SnowmanBot {
     private(set) var ground: SnowmanGround
     /// Where his feet are, in the screen's points from its bottom left.
@@ -526,8 +526,10 @@ final class SnowmanBot {
     private var restUntil: Double = 0
     private var nextThrow: Double
     private var random = SystemRandomNumberGenerator()
-    /// Throws of his own every so often, as a bot does; a friend's throws only when the friend does.
+    /// Throws back of his own when hit, as a bot does, never first; a friend's throws only when the friend does.
     let throwsOnHisOwn: Bool
+    /// Snowballs he owes for hits, to throw back one after another; three at most.
+    private var owed = 0
     /// Whom the snowball being wound up is for: a player in the picture, or nil for the screen.
     private var target: String?
     /// Throws asked for while one is under way, each to follow in turn: every hit a friend scores is thrown.
@@ -669,7 +671,7 @@ final class SnowmanBot {
         var moved = stepHat(dt: dt)
         switch act {
         case .idle:
-            if throwsOnHisOwn, canThrow, now >= nextThrow, path.isEmpty || now >= nextThrow + 4 {
+            if throwsOnHisOwn, owed > 0, canThrow, now >= nextThrow {
                 windUp = 0.5
                 act = .windingUp(0)
                 path = []
@@ -701,7 +703,8 @@ final class SnowmanBot {
             if t == 0 {
                 throwBall(hand, height * 0.1, target)
                 target = nil
-                nextThrow = now + Double.random(in: 7...14, using: &random)
+                owed = max(owed - 1, 0)
+                nextThrow = now + Double.random(in: 0.6...1.2, using: &random)
             }
             let t = t + dt / 0.16
             armAngle = 2.35 - (2.35 + 1.0) * min(t, 1)
@@ -767,7 +770,10 @@ final class SnowmanBot {
     func hit(at point: SIMD2<Float>, now: Double) {
         act = .reeling(0)
         path = []
-        nextThrow = min(nextThrow, now + Double.random(in: 1.4...2.4, using: &random))
+        if throwsOnHisOwn {
+            if owed == 0 { nextThrow = now + Double.random(in: 1.4...2.4, using: &random) }
+            owed = min(owed + 1, 3)
+        }
         if case .worn = hat {
             let place = placements.hat
             let h = height

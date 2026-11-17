@@ -2,9 +2,9 @@ import AppKit
 import simd
 
 /// A snowball fight with snowmen living in the wallpaper's picture: the friends in this player's room, or a bot while
-/// there is no one to play with. They walk about; the bot throws snowballs out of the picture at the screen on its
-/// own, a friend when the friend hits this player. Option-click the wallpaper to throw one back into it: hitting a
-/// friend's snowman sends the friend a snowball.
+/// there is no one to play with. They walk about and throw snowballs out of the picture at the screen: the bot only
+/// back at whoever hits it, never first; a friend when the friend hits this player. Option-click the wallpaper to
+/// throw one into it: hitting a friend's snowman sends the friend a snowball.
 final class SnowballFight {
     /// Lets it be tried out: defaults write com.mbezruchko.Snowhush previewSnowballFight -bool true, or a build handed
     /// to friends with SnowballFight set in its Info.plist.
