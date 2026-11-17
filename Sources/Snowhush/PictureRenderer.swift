@@ -121,6 +121,10 @@ final class PictureRenderer {
     /// Whether a wallpaper's snow can be drawn.
     var loaded: Bool { relief != nil && light != nil }
 
+    /// The relief of the wallpaper taken in, its nearness in the alpha: for what stands in the picture to hide behind
+    /// what is nearer.
+    var reliefTexture: MTLTexture? { relief }
+
     private func texture(_ format: MTLPixelFormat, width: Int, height: Int, bytes: Data, perPixel: Int, mipmapped: Bool = false) -> MTLTexture? {
         guard width > 0, height > 0, bytes.count >= width * height * perPixel else { return nil }
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: format, width: width, height: height, mipmapped: mipmapped)

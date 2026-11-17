@@ -236,6 +236,35 @@ private struct Mote {
     var sceneLight: Float = 0
 }
 
+/// A snowball thrown into the wallpaper's picture: it flies off from in front of the screen in an arc, shrinking as
+/// it goes, to come down at `to`, where the picture is `near`.
+private struct PictureBall {
+    let from: SIMD2<Float>
+    let to: SIMD2<Float>
+    let near: Float
+    let start: Float
+    let end: Float
+    let duration: Float
+    let landed: (SIMD2<Float>) -> Bool
+    var age: Float = 0
+
+    /// How far along it is, 0 to 1.
+    var flown: Float { min(age / duration, 1) }
+
+    /// Where it is, how big, and how near in the picture.
+    var placement: (SIMD2<Float>, Float, Float) {
+        let t = flown
+        // Seen in perspective it covers most of the way across the screen early on, and slows into the distance.
+        let along = 1 - pow(1 - t, 1.7)
+        let rise = simd_distance(from, to) * 0.22 + 40
+        let position = from + (to - from) * along + SIMD2(0, sin(along * .pi) * rise * (1 - 0.4 * t))
+        let size = 1 / (1 / start + (1 / end - 1 / start) * along)
+        // In front of the whole picture while it is near the screen, at its own depth by the time it comes down.
+        let scene = 1 - (1 - near) * smoothstep(0.35, 1, along)
+        return (position, size, scene)
+    }
+}
+
 /// Snow, leaves and petals gathered from here and there, to come off as one.
 private struct Gathered {
     var area: Float = 0
@@ -622,7 +651,12 @@ final class SnowSimulation {
     private var revengeDue = false
     /// Where the third scared ghost crumbled: the avenger comes up out of its snow.
     private var revengeAt: (layer: SnowLayer, x: Float)?
-    private var snowballs: [(from: SIMD2<Float>, to: SIMD2<Float>, age: Float)] = []
+    private var snowballs: [(from: SIMD2<Float>, to: SIMD2<Float>, age: Float, start: Float)] = []
+    /// Snowballs thrown into the wallpaper's picture, away from the screen: each shrinks as it goes off, and is hidden
+    /// behind what in the picture is nearer than it.
+    private var pictureBalls: [PictureBall] = []
+    /// Something in the picture wants the snow going, as a figure walking in it: the simulation does not rest.
+    var keepsAwake = false
     private var hitAt: Double = -10
 
     /// How far the whole scene is jolted, as if the screen it is on had been hit by a snowball.
@@ -708,7 +742,8 @@ final class SnowSimulation {
     /// Nothing falls, lies, waits for its window or haunts, and nothing will until the snow is stirred.
     var isEmpty: Bool {
         intensity <= 0 && !halloween && tree == nil && flakes.isEmpty && grains.isEmpty && motes.isEmpty && ghosts.isEmpty
-            && fallingSigns.isEmpty && snowballs.isEmpty && gust == nil && !dormant.values.contains { $0.ledge.top > 0 } && parking.isEmpty && lying.isEmpty && nextMode == nil
+            && fallingSigns.isEmpty && snowballs.isEmpty && pictureBalls.isEmpty && !keepsAwake && gust == nil && !dormant.values.contains { $0.ledge.top > 0 }
+            && parking.isEmpty && lying.isEmpty && nextMode == nil
             && splashes.isEmpty && glassDrops.isEmpty && !wet
             && !layers.contains { $0.top > 0 } && !pictureThaws
     }
@@ -718,7 +753,7 @@ final class SnowSimulation {
     /// reaches as far as the sprite shader draws it. Nil when none was written.
     private(set) var glassReach: SIMD4<Float>?
     var spriteCount: Int {
-        lying.count + flakes.count + grains.count + motes.count + ghosts.count * 2 + snowballs.count + splashes.count + glassDrops.count
+        lying.count + flakes.count + grains.count + motes.count + ghosts.count * 2 + snowballs.count + pictureBalls.count + splashes.count + glassDrops.count
             + ledgeList.reduce(0) { $0 + $1.spray.count + $1.film.count }
     }
     /// Floats the renderer needs per frame: each layer's surface, bed and what it is made of.
@@ -735,7 +770,7 @@ final class SnowSimulation {
     /// Returns whether anything visible changed.
     func step(dt: Float, cursor point: SIMD2<Float>) -> Bool {
         clock += Double(dt)
-        let wasMoving = !flakes.isEmpty || !grains.isEmpty || !motes.isEmpty || !ghosts.isEmpty || !fallingSigns.isEmpty || !snowballs.isEmpty
+        let wasMoving = !flakes.isEmpty || !grains.isEmpty || !motes.isEmpty || !ghosts.isEmpty || !fallingSigns.isEmpty || !snowballs.isEmpty || !pictureBalls.isEmpty
             || !splashes.isEmpty || !glassDrops.isEmpty || wet
         heightsChanged = false
         leafBudget = nil
@@ -787,6 +822,7 @@ final class SnowSimulation {
             pace = .calm
         }
         let changed = wasMoving || !flakes.isEmpty || !grains.isEmpty || !motes.isEmpty || !ghosts.isEmpty || !fallingSigns.isEmpty || !snowballs.isEmpty
+            || !pictureBalls.isEmpty
             || !splashes.isEmpty || !glassDrops.isEmpty || wet || heightsChanged || windowsChanged || pumpkinsMoved || restyled || borrowedChanged
             || tree != nil
         restyled = false
@@ -968,6 +1004,10 @@ final class SnowSimulation {
             } else {
                 let fade = min(1, mote.age / 0.06) * pow(1 - t, 1.5)
                 buffer[count] = Sprite(position: mote.position, size: mote.size * (1 + t), alpha: mote.alpha * fade * fallingOpacity, soft: 1)
+                if mote.scene >= 0 {
+                    buffer[count].scene = mote.scene
+                    buffer[count].sceneLight = mote.sceneLight
+                }
             }
             count += 1
         }
@@ -998,7 +1038,14 @@ final class SnowSimulation {
         for ball in snowballs where count < capacity {
             let t = min(ball.age / 0.5, 1)
             let position = ball.from + (ball.to - ball.from) * (1 - pow(1 - t, 2)) + SIMD2(0, sin(t * .pi) * 60)
-            buffer[count] = Sprite(position: position, size: 7 + 145 * t * t, alpha: 1, soft: 0.12)
+            buffer[count] = Sprite(position: position, size: ball.start + (152 - ball.start) * t * t, alpha: 1, soft: 0.12)
+            count += 1
+        }
+        for ball in pictureBalls where count < capacity {
+            let (position, size, scene) = ball.placement
+            buffer[count] = Sprite(position: position, size: size, alpha: 1, soft: 0.14)
+            buffer[count].scene = scene
+            buffer[count].sceneLight = 1 - ball.flown
             count += 1
         }
         return count
@@ -2819,12 +2866,12 @@ final class SnowSimulation {
         if !ghost.threw, since >= 1.06 {
             ghost.threw = true
             let target = SIMD2(random.range(0.15, 0.85) * width, random.range(0.35, 0.85) * height)
-            snowballs.append((paw(of: ghost, at: 0.6), target, 0))
+            snowballs.append((paw(of: ghost, at: 0.6), target, 0, 7))
         }
         if ghost.threw, ghost.booAt < ghost.standAt, since >= 2 { ghost.booAt = ghost.age }
     }
 
-    /// Snowballs fly at the screen and burst against it.
+    /// Snowballs fly at the screen and burst against it; those thrown into the picture fly off into it.
     private func throwSnowballs(dt: Float) {
         var i = snowballs.count - 1
         while i >= 0 {
@@ -2835,6 +2882,70 @@ final class SnowSimulation {
             }
             i -= 1
         }
+        i = pictureBalls.count - 1
+        while i >= 0 {
+            pictureBalls[i].age += dt
+            if pictureBalls[i].age >= pictureBalls[i].duration {
+                let ball = pictureBalls.remove(at: i)
+                if !ball.landed(ball.to), ball.near > Wallpaper.ground { splat(ball) }
+            }
+            i -= 1
+        }
+    }
+
+    /// Throws a snowball out of the picture at the screen, from `point` where it is `size` across, to burst against
+    /// the glass about the middle of the screen.
+    func throwAtScreen(from point: SIMD2<Float>, size: Float) {
+        let target = SIMD2(random.range(0.25, 0.75) * width, random.range(0.3, 0.75) * height)
+        snowballs.append((point, target, 0, size))
+        stirred()
+    }
+
+    /// Throws a snowball from in front of the screen into the picture, at `point` where the picture is `near`, where
+    /// it is `size` across when it gets there. `landed` is told where it came down and says whether it hit something;
+    /// if not, it bursts on whatever is there.
+    func throwIntoPicture(from start: SIMD2<Float>, to point: SIMD2<Float>, near: Float, size: Float, landed: @escaping (SIMD2<Float>) -> Bool) {
+        let far = 1 - min(max((near - terrainSpan.far) / max(terrainSpan.close - terrainSpan.far, 0.01), 0), 1)
+        pictureBalls.append(PictureBall(from: start, to: point, near: near, start: 46, end: size, duration: 0.5 + 0.45 * far, landed: landed))
+        stirred()
+    }
+
+    /// A snowball come down in the picture without hitting anything: snow lies where it burst, and a puff goes up.
+    private func splat(_ ball: PictureBall) {
+        if terrain != nil {
+            let x = ball.to.x, y = height - ball.to.y
+            let cells = terrainCells
+            let reach = max(ball.end * 0.9 / Float(cells.size), 1)
+            let cx = Int(x) / cells.size, cy = Int(y) / cells.size
+            let r = Int(reach.rounded(.up))
+            for dy in -r...r {
+                for dx in -r...r {
+                    let nx = cx + dx, ny = cy + dy
+                    guard nx >= 0, nx < cells.width, ny >= 0, ny < cells.height else { continue }
+                    let d = (Float(dx * dx + dy * dy)).squareRoot() / reach
+                    guard d < 1 else { continue }
+                    let k = ny * cells.width + nx
+                    let share = 1 - d * d
+                    speckAmount[k] = min(speckAmount[k] + share, 1)
+                    dabAmount[k] = min(dabAmount[k] + share * 0.6, 1)
+                }
+            }
+            dabsTouched = true
+            hasDabs = true
+        }
+        puff(at: ball.to, near: ball.near, size: ball.end)
+    }
+
+    /// Powder thrown up where a snowball burst in the picture, at its nearness there.
+    func puff(at point: SIMD2<Float>, near: Float, size: Float) {
+        for _ in 0..<14 where motes.count < maxMotes {
+            let angle = random.range(0.15, .pi - 0.15)
+            let speed = random.range(0.6, 1.6) * size * 2.2
+            motes.append(Mote(position: point + SIMD2(random.range(-0.3, 0.3), random.range(0, 0.3)) * size,
+                              velocity: SIMD2(cos(angle), sin(angle)) * speed,
+                              size: random.range(0.25, 0.5) * size, alpha: random.range(0.5, 0.8), life: random.range(0.5, 0.9), scene: near, sceneLight: 1))
+        }
+        stirred()
     }
 
     /// A snowball smacking into the screen: the scene jolts, the snowfall around is blown back, and the snow

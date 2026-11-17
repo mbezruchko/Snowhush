@@ -77,6 +77,8 @@ final class PictureSnow {
         var read = false
         var terrain: WallpaperTerrain?
         var light: WallpaperLight?
+        /// Where a snowman can walk in its picture, for a snowball fight.
+        var ground: SnowmanGround?
         var front: Surface?
         /// The picture shown before `front`, kept to draw the next one into.
         var back: Surface?
@@ -120,6 +122,7 @@ final class PictureSnow {
     /// Tells the moment that store is rewritten: a look a second apart would leave the old wallpaper's snow lying on
     /// the new one that long.
     private var storeWatch: DispatchSourceFileSystemObject?
+    private var fight: SnowballFight?
 
     /// One wallpaper at a time is looked at, for all the displays: each look holds a few screens' worth of pixels.
     private static let lookout = DispatchQueue(label: "com.mbezruchko.Snowhush.wallpaper", qos: .utility)
@@ -277,6 +280,52 @@ final class PictureSnow {
         draw(desktop, level: level, veil: veil, now: now)
     }
 
+    /// Moves the snowball fight on a frame, while there is one to have in the wallpaper shown.
+    func stepFight() {
+        guard SnowballFight.wanted, wanted, active, let desktop = current, let ground = desktop.ground, loaded == desktop.picture,
+              let relief = renderer.reliefTexture else {
+            endFight()
+            return
+        }
+        if fight == nil {
+            fight = SnowballFight(device: device)
+            fight?.clicked = { [weak self] in self?.clicked(at: $0) }
+        }
+        guard let fight else { return }
+        let now = CACurrentMediaTime()
+        fight.place(in: desktop.window, ground: ground, now: now)
+        simulation.keepsAwake = true
+        let size = screen.frame.size
+        fight.step(now: now, relief: relief, screen: SIMD2(Float(size.width), Float(size.height)), scale: desktop.window.backingScaleFactor,
+                   covers: simulation.windowFrames, visible: desktop.window.occlusionState.contains(.visible), simulation: simulation)
+    }
+
+    private func endFight() {
+        guard fight != nil || simulation.keepsAwake else { return }
+        fight = nil
+        simulation.keepsAwake = false
+    }
+
+    /// An Option-click: over the wallpaper shown, where nothing is in front of it, a snowball goes into the picture.
+    private func clicked(at mouse: NSPoint) {
+        guard let desktop = current, let ground = desktop.ground, let fight, let bot = fight.bot,
+              screen.visibleFrame.contains(mouse) else { return }
+        let frame = screen.frame
+        let point = SIMD2(Float(mouse.x - frame.minX), Float(mouse.y - frame.minY))
+        guard !simulation.windowFrames.contains(where: { point.x >= $0.x && point.x <= $0.z && point.y >= $0.y && point.y <= $0.w }) else { return }
+        let near: Float
+        if bot.contains(point) {
+            near = bot.near
+        } else if let terrain = desktop.terrain, terrain.cell > 0 {
+            let x = min(max(Int(point.x) / terrain.cell, 0), terrain.width - 1)
+            let y = min(max(Int(Float(frame.height) - point.y) / terrain.cell, 0), terrain.height - 1)
+            near = Float(terrain.near[terrain.near.startIndex + y * terrain.width + x]) / 255
+        } else {
+            return
+        }
+        fight.throwBall(at: point, near: near, size: ground.height(near: max(near, ground.far)) * 0.1, screenWidth: Float(frame.width), simulation: simulation)
+    }
+
     func cleared() {
         kept = 0
         Preferences.pictureLevel = 0
@@ -413,6 +462,7 @@ final class PictureSnow {
         desktop.read = false
         desktop.terrain = nil
         desktop.light = nil
+        desktop.ground = nil
         fade(desktop.window.snow, over: 0.3)
         clear(desktop)
         if desktop === current {
@@ -431,6 +481,8 @@ final class PictureSnow {
     /// snow that has changed, which is drawn. With nothing falling, lying or melting it rests until woken.
     private func look() {
         guard wanted, active, let desktop = desktopShowing() else { return }
+        // A snowman walking in the picture keeps the snow's frames coming, which may have come to rest before.
+        if SnowballFight.wanted, desktop.ground != nil, !simulation.keepsAwake { simulation.stirred() }
         if desktop !== current {
             // Each desktop has snow of its own: the one left keeps what lay in it, and the one come to has been
             // snowed on for as long as it was away. One never shown before starts with what lies in this one.
@@ -464,8 +516,10 @@ final class PictureSnow {
         if let picture = desktop.picture, !reading, !desktop.read || (desktop.terrain != nil && loaded != picture) {
             reading = true
             let columnWidth = simulation.columnWidth
+            let size = screen.frame.size, fighting = SnowballFight.wanted
             Self.lookout.async { [weak self, weak desktop] in
                 let scene = Wallpaper.sceneReadApart(in: picture, columnWidth: columnWidth)
+                let ground = fighting ? scene.flatMap { SnowmanGround(scene: $0, screen: size) } : nil
                 DispatchQueue.main.async {
                     guard let self else { return }
                     self.reading = false
@@ -474,6 +528,7 @@ final class PictureSnow {
                         desktop.read = true
                         desktop.terrain = scene?.terrain
                         desktop.light = scene?.light
+                        desktop.ground = ground
                         if desktop === self.current {
                             self.renderer.load(scene, columnWidth: columnWidth)
                             self.loaded = scene == nil ? nil : picture

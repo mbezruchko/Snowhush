@@ -164,7 +164,10 @@ final class ScreenSnow {
         renderer.borrowedSnow = { [unowned self] in
             surfaces().contains(.windows) ? displays.borrowed(by: self) : []
         }
-        renderer.stepped = { [unowned self] in displays.pass(from: self) }
+        renderer.stepped = { [unowned self] in
+            displays.pass(from: self)
+            picture?.stepFight()
+        }
         renderer.sceneLight = { [unowned self] now in
             light.update(screen: self.screen, now: now)
             return (light.light, light.shadowTint, light.rim, light.lantern)
