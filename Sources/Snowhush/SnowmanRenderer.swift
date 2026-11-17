@@ -31,9 +31,33 @@ final class SnowmanRenderer {
     private let textures: (body: MTLTexture, arm: MTLTexture, hat: MTLTexture)
     let layer = CAMetalLayer()
 
+    /// What every snowman is drawn with, made once for each GPU.
+    private static var made: [UInt64: (pipeline: MTLRenderPipelineState, textures: (MTLTexture, MTLTexture, MTLTexture))] = [:]
+
     init?(device: MTLDevice) {
-        guard let queue = device.makeCommandQueue(),
-              let library = try? device.makeLibrary(source: snowmanShaderSource, options: nil),
+        guard let queue = device.makeCommandQueue() else { return nil }
+        self.device = device
+        self.queue = queue
+        if let made = Self.made[device.registryID] {
+            pipeline = made.pipeline
+            textures = (made.textures.0, made.textures.1, made.textures.2)
+        } else {
+            guard let made = Self.make(device: device, queue: queue) else { return nil }
+            Self.made[device.registryID] = made
+            pipeline = made.pipeline
+            textures = (made.textures.0, made.textures.1, made.textures.2)
+        }
+        layer.device = device
+        layer.pixelFormat = .bgra8Unorm
+        layer.isOpaque = false
+        layer.framebufferOnly = true
+        // The layer moves with him: what it shows and where it is change in one go.
+        layer.presentsWithTransaction = true
+        layer.actions = ["position": NSNull(), "bounds": NSNull(), "frame": NSNull(), "contents": NSNull(), "hidden": NSNull()]
+    }
+
+    private static func make(device: MTLDevice, queue: MTLCommandQueue) -> (pipeline: MTLRenderPipelineState, textures: (MTLTexture, MTLTexture, MTLTexture))? {
+        guard let library = try? device.makeLibrary(source: snowmanShaderSource, options: nil),
               let parts = SnowmanArt.parts() else { return nil }
         let descriptor = MTLRenderPipelineDescriptor()
         descriptor.vertexFunction = library.makeFunction(name: "snowmanVertex")
@@ -46,9 +70,6 @@ final class SnowmanRenderer {
         attachment.destinationRGBBlendFactor = .oneMinusSourceAlpha
         attachment.destinationAlphaBlendFactor = .oneMinusSourceAlpha
         guard let pipeline = try? device.makeRenderPipelineState(descriptor: descriptor) else { return nil }
-        self.device = device
-        self.queue = queue
-        self.pipeline = pipeline
         func texture(_ image: CGImage) -> MTLTexture? {
             let width = image.width, height = image.height
             var pixels = [UInt8](repeating: 0, count: width * height * 4)
@@ -67,14 +88,7 @@ final class SnowmanRenderer {
             blit.endEncoding()
             commandBuffer.commit()
         }
-        textures = (body, arm, hat)
-        layer.device = device
-        layer.pixelFormat = .bgra8Unorm
-        layer.isOpaque = false
-        layer.framebufferOnly = true
-        // The layer moves with him: what it shows and where it is change in one go.
-        layer.presentsWithTransaction = true
-        layer.actions = ["position": NSNull(), "bounds": NSNull(), "frame": NSNull(), "contents": NSNull(), "hidden": NSNull()]
+        return (pipeline, (body, arm, hat))
     }
 
     /// Draws `bot` over the picture whose relief is `relief`, on a screen `screen` points across, at `scale` pixels a

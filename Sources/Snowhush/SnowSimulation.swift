@@ -2934,9 +2934,9 @@ final class SnowSimulation {
     /// Throws a snowball from in front of the screen into the picture, at `point` where the picture is `near`, where
     /// it is `size` across when it gets there. `landed` is told where it came down and says whether it hit something;
     /// if not, it bursts on whatever is there.
-    func throwIntoPicture(from start: SIMD2<Float>, to point: SIMD2<Float>, near: Float, size: Float, landed: @escaping (SIMD2<Float>) -> Bool) {
+    func throwIntoPicture(from start: SIMD2<Float>, to point: SIMD2<Float>, near: Float, size: Float, startSize: Float = 46, landed: @escaping (SIMD2<Float>) -> Bool) {
         let far = 1 - min(max((near - terrainSpan.far) / max(terrainSpan.close - terrainSpan.far, 0.01), 0), 1)
-        pictureBalls.append(PictureBall(from: start, to: point, near: near, start: 46, end: size, duration: 0.5 + 0.45 * far, landed: landed))
+        pictureBalls.append(PictureBall(from: start, to: point, near: near, start: startSize, end: size, duration: 0.5 + 0.45 * far, landed: landed))
         stirred()
     }
 

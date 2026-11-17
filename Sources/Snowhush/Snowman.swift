@@ -526,6 +526,10 @@ final class SnowmanBot {
     private var restUntil: Double = 0
     private var nextThrow: Double
     private var random = SystemRandomNumberGenerator()
+    /// Throws of his own every so often, as a bot does; a friend's throws only when the friend does.
+    let throwsOnHisOwn: Bool
+    /// Whom the snowball being wound up is for: a player in the picture, or nil for the screen.
+    private var target: String?
 
     private enum Act {
         case idle
@@ -547,21 +551,33 @@ final class SnowmanBot {
     private var hatFade: Float = 1
 
     /// One standing at `foot`.
-    init(ground: SnowmanGround, foot: SIMD2<Float>, now: Double) {
+    init(ground: SnowmanGround, foot: SIMD2<Float>, now: Double, throwsOnHisOwn: Bool = true) {
         self.ground = ground
         self.foot = foot
+        self.throwsOnHisOwn = throwsOnHisOwn
         nextThrow = now + Double.random(in: 4...8)
         restUntil = now + 1.5
     }
 
-    init?(ground: SnowmanGround, now: Double) {
+    init?(ground: SnowmanGround, now: Double, throwsOnHisOwn: Bool = true) {
         var random = SystemRandomNumberGenerator()
         guard let start = ground.anywhere(using: &random, middling: true) else { return nil }
         self.ground = ground
+        self.throwsOnHisOwn = throwsOnHisOwn
         foot = ground.point(of: start)
         nextThrow = now + Double.random(in: 4...8)
         restUntil = now + 1.5
     }
+
+    /// Winds up and throws at once: at the screen, or at the player `target` in the picture.
+    func throwNow(at target: String?) {
+        self.target = target
+        path = []
+        act = .windingUp(0)
+    }
+
+    /// The middle of him, where a snowball thrown at him goes.
+    var middle: SIMD2<Float> { foot + SIMD2(0, height * 0.4) }
 
     /// His height where he stands, in points.
     var height: Float { ground.height(near: near) }
@@ -632,12 +648,13 @@ final class SnowmanBot {
     }
 
     /// Moves him on by `dt`. `canThrow` says whether he can be seen to throw now; `throwBall` sends a snowball from
-    /// his hand, as big across as it is there. Returns whether anything of him moved.
-    func step(dt: Float, now: Double, canThrow: Bool, throwBall: (SIMD2<Float>, Float) -> Void) -> Bool {
+    /// his hand, as big across as it is there, at the player it is for, or at the screen for nil. Returns whether
+    /// anything of him moved.
+    func step(dt: Float, now: Double, canThrow: Bool, throwBall: (SIMD2<Float>, Float, String?) -> Void) -> Bool {
         var moved = stepHat(dt: dt)
         switch act {
         case .idle:
-            if canThrow, now >= nextThrow, path.isEmpty || now >= nextThrow + 4 {
+            if throwsOnHisOwn, canThrow, now >= nextThrow, path.isEmpty || now >= nextThrow + 4 {
                 act = .windingUp(0)
                 path = []
                 return true
@@ -666,7 +683,8 @@ final class SnowmanBot {
             moved = true
         case let .throwing(t):
             if t == 0 {
-                throwBall(hand, height * 0.1)
+                throwBall(hand, height * 0.1, target)
+                target = nil
                 nextThrow = now + Double.random(in: 7...14, using: &random)
             }
             let t = t + dt / 0.16

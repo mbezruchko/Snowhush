@@ -123,6 +123,8 @@ final class PictureSnow {
     /// the new one that long.
     private var storeWatch: DispatchSourceFileSystemObject?
     private var fight: SnowballFight?
+    /// Hit by a friend while no snowman can stand in the wallpaper shown: the snowball comes all the same.
+    private var hitObserver: NSObjectProtocol?
 
     /// One wallpaper at a time is looked at, for all the displays: each look holds a few screens' worth of pixels.
     private static let lookout = DispatchQueue(label: "com.mbezruchko.Snowhush.wallpaper", qos: .utility)
@@ -162,6 +164,16 @@ final class PictureSnow {
         self.simulation = simulation
         kept = Preferences.pictureLevel
         simulation.restorePicture(level: kept)
+        hitObserver = NotificationCenter.default.addObserver(forName: SnowballRoom.thrown, object: nil, queue: .main) { [weak self] note in
+            guard let self, fight == nil, self.displayID == CGMainDisplayID(), let me = SnowballRoom.shared.me,
+                  note.userInfo?["at"] as? String == me, note.userInfo?["from"] as? String != me else { return }
+            let width = Float(screen.frame.width), height = Float(screen.frame.height)
+            self.simulation.throwAtScreen(from: SIMD2(width * Float.random(in: 0.3...0.7), height * Float.random(in: 0.35...0.6)), size: 5)
+        }
+    }
+
+    deinit {
+        if let hitObserver { NotificationCenter.default.removeObserver(hitObserver) }
     }
 
     func fit(to screen: NSScreen) {
@@ -288,16 +300,18 @@ final class PictureSnow {
             return
         }
         if fight == nil {
-            fight = SnowballFight(device: device)
-            fight?.clicked = { [weak self] in self?.clicked(at: $0) }
+            let fight = SnowballFight(device: device, simulation: simulation)
+            fight.clicked = { [weak self] in self?.clicked(at: $0) }
+            self.fight = fight
         }
         guard let fight else { return }
         let now = CACurrentMediaTime()
+        fight.main = displayID == CGMainDisplayID()
         fight.place(in: desktop.window, ground: ground, now: now)
         simulation.keepsAwake = true
         let size = screen.frame.size
         fight.step(now: now, relief: relief, screen: SIMD2(Float(size.width), Float(size.height)), scale: desktop.window.backingScaleFactor,
-                   covers: simulation.windowFrames, visible: desktop.window.occlusionState.contains(.visible), simulation: simulation)
+                   covers: simulation.windowFrames, visible: desktop.window.occlusionState.contains(.visible))
     }
 
     private func endFight() {
@@ -308,14 +322,13 @@ final class PictureSnow {
 
     /// An Option-click: over the wallpaper shown, where nothing is in front of it, a snowball goes into the picture.
     private func clicked(at mouse: NSPoint) {
-        guard let desktop = current, let ground = desktop.ground, let fight, let bot = fight.bot,
-              screen.visibleFrame.contains(mouse) else { return }
+        guard let desktop = current, let ground = desktop.ground, let fight, screen.visibleFrame.contains(mouse) else { return }
         let frame = screen.frame
         let point = SIMD2(Float(mouse.x - frame.minX), Float(mouse.y - frame.minY))
         guard !simulation.windowFrames.contains(where: { point.x >= $0.x && point.x <= $0.z && point.y >= $0.y && point.y <= $0.w }) else { return }
         let near: Float
-        if bot.contains(point) {
-            near = bot.near
+        if let figure = fight.figure(at: point) {
+            near = figure.near
         } else if let terrain = desktop.terrain, terrain.cell > 0 {
             let x = min(max(Int(point.x) / terrain.cell, 0), terrain.width - 1)
             let y = min(max(Int(Float(frame.height) - point.y) / terrain.cell, 0), terrain.height - 1)
@@ -323,7 +336,7 @@ final class PictureSnow {
         } else {
             return
         }
-        fight.throwBall(at: point, near: near, size: ground.height(near: max(near, ground.far)) * 0.1, screenWidth: Float(frame.width), simulation: simulation)
+        fight.throwBall(at: point, near: near, size: ground.height(near: max(near, ground.far)) * 0.1, screenWidth: Float(frame.width))
     }
 
     func cleared() {

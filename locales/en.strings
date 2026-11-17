@@ -75,3 +75,15 @@
 "setup.open" = "Open Snowhush";
 "setup.failed" = "Couldn't install: {error}.";
 "setup.retry" = "Try Again";
+"fight" = "Snowball Fight";
+"fight.invite" = "Invite a Friend";
+"fight.copy" = "Copy Invite Link";
+"fight.join" = "Join from Clipboard";
+"fight.leave" = "Leave Room";
+"fight.opening" = "Opening a room…";
+"fight.joining" = "Joining…";
+"fight.waiting" = "Link copied — waiting for friends";
+"fight.with" = "With %@";
+"fight.full" = "The room is full";
+"fight.closed" = "The room was closed";
+"fight.failed" = "Couldn’t connect";

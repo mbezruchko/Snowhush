@@ -67,3 +67,15 @@
 "setup.open" = "Snowhushを開く";
 "setup.failed" = "インストールできませんでした：{error}。";
 "setup.retry" = "再試行";
+"fight" = "雪合戦";
+"fight.invite" = "友だちを招待";
+"fight.copy" = "招待リンクをコピー";
+"fight.join" = "コピーしたリンクで参加";
+"fight.leave" = "ルームを退出";
+"fight.opening" = "ルームを開いています…";
+"fight.joining" = "接続中…";
+"fight.waiting" = "リンクをコピーしました — 友だちを待っています";
+"fight.with" = "%@ と一緒";
+"fight.full" = "ルームは満員です";
+"fight.closed" = "ルームが閉じられました";
+"fight.failed" = "接続できませんでした";

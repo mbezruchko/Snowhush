@@ -1,79 +1,192 @@
 import AppKit
 import simd
 
-/// A snowball fight with a snowman living in the wallpaper's picture: for now a bot, before there is anyone to play
-/// with. He walks about and throws snowballs out of the picture at the screen; Option-click the wallpaper to throw
-/// one back into it.
+/// A snowball fight with snowmen living in the wallpaper's picture: the friends in this player's room, or a bot while
+/// there is no one to play with. They walk about; the bot throws snowballs out of the picture at the screen on its
+/// own, a friend when the friend hits this player. Option-click the wallpaper to throw one back into it: hitting a
+/// friend's snowman sends the friend a snowball.
 final class SnowballFight {
     /// Lets it be tried out: defaults write com.mbezruchko.Snowhush previewSnowballFight -bool true
     static var wanted: Bool { UserDefaults.standard.bool(forKey: "previewSnowballFight") }
 
-    private let renderer: SnowmanRenderer
-    private(set) var bot: SnowmanBot?
+    private final class Figure {
+        let bot: SnowmanBot
+        let renderer: SnowmanRenderer
+        /// A friend's name over the snowman; none over the bot.
+        let label: CATextLayer?
+        var drawn = false
+
+        init(bot: SnowmanBot, renderer: SnowmanRenderer, name: String?) {
+            self.bot = bot
+            self.renderer = renderer
+            label = name.map { name in
+                let label = CATextLayer()
+                label.string = name
+                label.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
+                label.fontSize = 11
+                label.foregroundColor = NSColor(white: 1, alpha: 0.92).cgColor
+                label.alignmentMode = .center
+                label.shadowColor = NSColor.black.cgColor
+                label.shadowOpacity = 0.6
+                label.shadowRadius = 2
+                label.shadowOffset = .zero
+                label.actions = ["position": NSNull(), "bounds": NSNull(), "hidden": NSNull(), "contents": NSNull()]
+                label.bounds = CGRect(x: 0, y: 0, width: 160, height: 15)
+                return label
+            }
+        }
+    }
+
+    private let device: MTLDevice
+    /// Players' figures by their ids; the bot's under `botID`.
+    private var figures: [String: Figure] = [:]
+    private static let botID = "bot"
     private weak var window: PictureWindow?
-    private var groundID: Int?
+    private var ground: SnowmanGround?
     private var steppedAt: Double = 0
-    private var drawn = false
     private var monitor: Any?
+    private var observer: NSObjectProtocol?
+    private weak var simulation: SnowSimulation?
     /// Told of each Option-click anywhere, where it was on the screens.
     var clicked: (NSPoint) -> Void = { _ in }
+    /// The fight on the main display: it alone answers what happens in the room, so that a friend throws once.
+    var main = true
 
-    init?(device: MTLDevice) {
-        guard let renderer = SnowmanRenderer(device: device) else { return nil }
-        self.renderer = renderer
+    init(device: MTLDevice, simulation: SnowSimulation) {
+        self.device = device
+        self.simulation = simulation
         // Clicks go on to whatever they were for; one with Option held over the wallpaper also throws.
         monitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
             guard event.modifierFlags.contains(.option) else { return }
             self?.clicked(NSEvent.mouseLocation)
         }
+        observer = NotificationCenter.default.addObserver(forName: SnowballRoom.thrown, object: nil, queue: .main) { [weak self] note in
+            guard let from = note.userInfo?["from"] as? String, let at = note.userInfo?["at"] as? String else { return }
+            self?.thrown(from: from, at: at)
+        }
     }
 
     deinit {
         if let monitor { NSEvent.removeMonitor(monitor) }
-        renderer.layer.removeFromSuperlayer()
+        if let observer { NotificationCenter.default.removeObserver(observer) }
+        for figure in figures.values { remove(figure) }
     }
 
-    /// Puts the snowman in `window`'s picture, on `ground`; a new one when either changed.
+    private func remove(_ figure: Figure) {
+        figure.renderer.layer.removeFromSuperlayer()
+        figure.label?.removeFromSuperlayer()
+    }
+
+    /// Puts the snowmen in `window`'s picture, on `ground`: the friends in the room, or the bot when there are none.
     func place(in window: PictureWindow, ground: SnowmanGround, now: Double) {
-        if window !== self.window {
-            renderer.layer.removeFromSuperlayer()
-            window.contentView?.layer?.addSublayer(renderer.layer)
-            self.window = window
-            drawn = false
+        if ground.id != self.ground?.id {
+            for figure in figures.values { remove(figure) }
+            figures = [:]
+            self.ground = ground
         }
-        if ground.id != groundID {
-            groundID = ground.id
-            bot = SnowmanBot(ground: ground, now: now)
-            drawn = false
+        if window !== self.window {
+            self.window = window
+            for figure in figures.values {
+                remove(figure)
+                attach(figure)
+            }
+        }
+        let room = SnowballRoom.shared
+        var wanted: [String: String?] = [:]
+        if room.me != nil {
+            if main { for player in room.players { wanted[player.id] = player.name } }
+        } else {
+            wanted[Self.botID] = .some(nil)
+        }
+        for (id, figure) in figures where wanted[id] == nil {
+            remove(figure)
+            figures[id] = nil
+        }
+        for (id, name) in wanted where figures[id] == nil {
+            guard let renderer = SnowmanRenderer(device: device),
+                  let bot = SnowmanBot(ground: ground, now: now, throwsOnHisOwn: id == Self.botID) else { continue }
+            let figure = Figure(bot: bot, renderer: renderer, name: name)
+            figures[id] = figure
+            attach(figure)
         }
     }
 
-    /// Moves the snowman on and draws him. `covers` are the windows in front of the picture; he throws only where he
-    /// can be seen.
-    func step(now: Double, relief: MTLTexture, screen: SIMD2<Float>, scale: CGFloat, covers: [SIMD4<Float>], visible: Bool, simulation: SnowSimulation) {
+    private func attach(_ figure: Figure) {
+        guard let host = window?.contentView?.layer else { return }
+        host.addSublayer(figure.renderer.layer)
+        if let label = figure.label {
+            label.contentsScale = window?.backingScaleFactor ?? 2
+            host.addSublayer(label)
+        }
+        figure.drawn = false
+    }
+
+    /// Moves the snowmen on and draws them. `covers` are the windows in front of the picture; the bot throws only
+    /// where it can be seen.
+    func step(now: Double, relief: MTLTexture, screen: SIMD2<Float>, scale: CGFloat, covers: [SIMD4<Float>], visible: Bool) {
         let dt = steppedAt > 0 ? Float(min(now - steppedAt, 0.05)) : 1.0 / 60
         steppedAt = now
-        guard let bot else { return }
-        let reach = bot.reach
-        let covered = covers.contains { $0.x < reach.z && $0.z > reach.x && $0.y < reach.w && $0.w > reach.y }
-        let moved = bot.step(dt: dt, now: now, canThrow: visible && !covered) { hand, size in
-            simulation.throwAtScreen(from: hand, size: size)
-        }
-        if moved || !drawn {
-            renderer.draw(bot, relief: relief, screen: screen, scale: scale)
-            drawn = true
+        guard let simulation else { return }
+        for figure in figures.values {
+            let reach = figure.bot.reach
+            let covered = covers.contains { $0.x < reach.z && $0.z > reach.x && $0.y < reach.w && $0.w > reach.y }
+            let moved = figure.bot.step(dt: dt, now: now, canThrow: visible && !covered) { [weak self] hand, size, target in
+                guard let target else {
+                    simulation.throwAtScreen(from: hand, size: size)
+                    return
+                }
+                // At a friend's snowman, across the picture.
+                guard let other = self?.figures[target]?.bot else { return }
+                simulation.throwIntoPicture(from: hand, to: other.middle, near: other.near, size: other.height * 0.1, startSize: size) { landed in
+                    other.hit(at: landed, now: CACurrentMediaTime())
+                    simulation.puff(at: landed, near: other.near, size: other.height * 0.14)
+                    return true
+                }
+            }
+            if moved || !figure.drawn {
+                figure.renderer.draw(figure.bot, relief: relief, screen: screen, scale: scale)
+                if let label = figure.label {
+                    CATransaction.begin()
+                    CATransaction.setDisableActions(true)
+                    let top = figure.bot.foot.y + figure.bot.height * 1.02 + 9
+                    label.position = CGPoint(x: CGFloat(figure.bot.foot.x), y: CGFloat(top))
+                    CATransaction.commit()
+                }
+                figure.drawn = true
+            }
         }
     }
 
-    /// Throws a snowball from in front of the screen at `point` in the picture, where it is `near`; it hits the
-    /// snowman if he is still there when it comes down.
-    func throwBall(at point: SIMD2<Float>, near: Float, size: Float, screenWidth: Float, simulation: SnowSimulation) {
+    /// The snowman at a point, if any, and how near he is.
+    func figure(at point: SIMD2<Float>) -> (id: String, near: Float)? {
+        for (id, figure) in figures where figure.bot.contains(point) {
+            return (id, figure.bot.near)
+        }
+        return nil
+    }
+
+    /// Throws a snowball from in front of the screen at `point` in the picture, where it is `near`; it hits a
+    /// snowman still there when it comes down, and a friend's tells the friend.
+    func throwBall(at point: SIMD2<Float>, near: Float, size: Float, screenWidth: Float) {
+        guard let simulation else { return }
         let start = SIMD2(screenWidth * 0.5 + (point.x - screenWidth * 0.5) * 0.35, -30)
         simulation.throwIntoPicture(from: start, to: point, near: near, size: size) { [weak self, unowned simulation] landed in
-            guard let bot = self?.bot, bot.contains(landed), abs(bot.near - near) < 0.08 else { return false }
-            bot.hit(at: landed, now: CACurrentMediaTime())
-            simulation.puff(at: landed, near: bot.near, size: size * 1.4)
+            guard let self, let (id, figure) = figures.first(where: { $0.value.bot.contains(landed) && abs($0.value.bot.near - near) < 0.08 }) else { return false }
+            figure.bot.hit(at: landed, now: CACurrentMediaTime())
+            simulation.puff(at: landed, near: figure.bot.near, size: size * 1.4)
+            if id != Self.botID { SnowballRoom.shared.hit(id) }
             return true
+        }
+    }
+
+    /// Someone in the room hit someone. Hit by a friend, the friend's snowman throws at the screen; one friend hitting
+    /// another, the one throws at the other across the picture. This player's own throws were seen as they went.
+    private func thrown(from: String, at: String) {
+        guard main, let me = SnowballRoom.shared.me, from != me else { return }
+        if let figure = figures[from] {
+            figure.bot.throwNow(at: at == me ? nil : at)
+        } else if at == me, let simulation {
+            simulation.throwAtScreen(from: SIMD2(simulation.width * Float.random(in: 0.3...0.7), simulation.height * 0.4), size: 6)
         }
     }
 }

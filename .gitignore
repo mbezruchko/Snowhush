@@ -5,6 +5,7 @@ dist/
 .playwright-mcp/
 windows/target/
 core/target/
+net/target/
 linux/target/
 linux/packaging/pkg/
 linux/packaging/src/

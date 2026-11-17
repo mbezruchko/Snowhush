@@ -67,3 +67,15 @@
 "setup.open" = "Открыть Snowhush";
 "setup.failed" = "Не удалось установить: {error}.";
 "setup.retry" = "Повторить";
+"fight" = "Игра в снежки";
+"fight.invite" = "Пригласить друга";
+"fight.copy" = "Скопировать ссылку-приглашение";
+"fight.join" = "Войти по ссылке из буфера";
+"fight.leave" = "Выйти из комнаты";
+"fight.opening" = "Открываю комнату…";
+"fight.joining" = "Подключаюсь…";
+"fight.waiting" = "Ссылка скопирована — ждём друзей";
+"fight.with" = "С вами: %@";
+"fight.full" = "Комната заполнена";
+"fight.closed" = "Комната закрыта";
+"fight.failed" = "Не удалось подключиться";

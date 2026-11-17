@@ -67,3 +67,15 @@
 "setup.open" = "Snowhush öffnen";
 "setup.failed" = "Installation fehlgeschlagen: {error}.";
 "setup.retry" = "Erneut versuchen";
+"fight" = "Schneeballschlacht";
+"fight.invite" = "Freund einladen";
+"fight.copy" = "Einladungslink kopieren";
+"fight.join" = "Mit kopiertem Link beitreten";
+"fight.leave" = "Raum verlassen";
+"fight.opening" = "Raum wird geöffnet …";
+"fight.joining" = "Verbinde …";
+"fight.waiting" = "Link kopiert – warte auf Freunde";
+"fight.with" = "Mit %@";
+"fight.full" = "Der Raum ist voll";
+"fight.closed" = "Der Raum wurde geschlossen";
+"fight.failed" = "Verbindung fehlgeschlagen";

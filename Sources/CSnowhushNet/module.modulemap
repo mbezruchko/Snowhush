@@ -1,0 +1,5 @@
+module CSnowhushNet [system] {
+    header "snowhush_net.h"
+    link "snowhush_net"
+    export *
+}

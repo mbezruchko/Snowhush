@@ -4,6 +4,15 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+minimum=$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' Resources/Info.plist)
+
+# The rooms for snowball fights between friends: iroh, from net/, for both architectures in one library.
+for target in aarch64-apple-darwin x86_64-apple-darwin; do
+    MACOSX_DEPLOYMENT_TARGET="$minimum" cargo build --quiet --release --manifest-path net/Cargo.toml --target "$target"
+done
+mkdir -p build/net
+lipo -create net/target/{aarch64,x86_64}-apple-darwin/release/libsnowhush_net.a -output build/net/libsnowhush_net.a
+
 flags=(-c release --arch arm64 --arch x86_64)
 swift build "${flags[@]}"
 products="$(swift build "${flags[@]}" --show-bin-path)"
@@ -13,7 +22,6 @@ rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$app/Contents/Frameworks"
 # Swift Build stamps the binary with the deployment target as its SDK, and macOS then draws the app in its old
 # look, without Liquid Glass.
-minimum=$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' Resources/Info.plist)
 vtool -set-build-version macos "$minimum" "$(xcrun --sdk macosx --show-sdk-version)" -replace \
     -output "$app/Contents/MacOS/Snowhush" "$products/Snowhush"
 ditto "$products/Sparkle.framework" "$app/Contents/Frameworks/Sparkle.framework"

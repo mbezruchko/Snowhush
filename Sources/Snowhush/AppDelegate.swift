@@ -27,6 +27,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var clearItem: NSMenuItem!
     private var halloweenItem: NSMenuItem!
     private var newYearItem: NSMenuItem!
+    private var fightStatusItem: NSMenuItem?
+    private var fightInviteItem: NSMenuItem?
+    private var fightJoinItem: NSMenuItem?
+    private var fightLeaveItem: NSMenuItem?
     private var mixedItem: NSMenuItem!
     private var modeItems: [(item: NSMenuItem, mode: Mode)] = []
     private var maxPerformanceItem: NSMenuItem!
@@ -196,6 +200,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         halloweenItem = add(tr("halloween"), #selector(toggleHalloween), to: modes)
         newYearItem = add(tr("newyear"), #selector(toggleNewYear), to: modes)
         menu.addItem(withTitle: tr("mode"), action: nil, keyEquivalent: "").submenu = modes
+        if SnowballFight.wanted {
+            let fight = NSMenu()
+            fight.autoenablesItems = false
+            let status = fight.addItem(withTitle: "", action: nil, keyEquivalent: "")
+            status.isEnabled = false
+            fightStatusItem = status
+            fightInviteItem = add(tr("fight.invite"), #selector(inviteToFight), to: fight)
+            fightJoinItem = add(tr("fight.join"), #selector(joinFight), to: fight)
+            fightLeaveItem = add(tr("fight.leave"), #selector(leaveFight), to: fight)
+            menu.addItem(withTitle: tr("fight"), action: nil, keyEquivalent: "").submenu = fight
+        }
         clearItem = add(tr("clear.snow"), #selector(clearSnow), to: menu)
         menu.addItem(.separator())
         let settings = NSMenu()
@@ -289,6 +304,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         halloweenItem.isEnabled = modes == [.snow]
         newYearItem.state = NewYear.isWanted ? .on : .off
         newYearItem.isEnabled = modes == [.snow]
+        updateFightItems()
         maxPerformanceItem.state = Preferences.maxPerformance ? .on : .off
         behindWindowsItem.state = behindWindows ? .on : .off
         fullScreenItem.state = Preferences.showOverFullScreen ? .on : .off
@@ -414,6 +430,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     @objc private func toggleHalloween() {
         Halloween.toggle()
         refreshHalloween()
+    }
+
+    /// The snowball fight's room as it is now: what is going on, and what can be done.
+    private func updateFightItems() {
+        guard let status = fightStatusItem else { return }
+        let room = SnowballRoom.shared
+        let clipboard = NSPasteboard.general.string(forType: .string) ?? ""
+        fightJoinItem?.isEnabled = SnowballRoom.holdsInvite(clipboard)
+        fightInviteItem?.title = room.invite != nil ? tr("fight.copy") : tr("fight.invite")
+        fightLeaveItem?.isHidden = room.state == .none
+        switch room.state {
+        case .none:
+            status.isHidden = true
+        case .opening:
+            status.isHidden = false
+            status.title = tr("fight.opening")
+        case .joining:
+            status.isHidden = false
+            status.title = tr("fight.joining")
+        case .open:
+            status.isHidden = false
+            let names = room.players.map(\.name)
+            status.title = names.isEmpty ? tr("fight.waiting") : String(format: tr("fight.with"), names.joined(separator: ", "))
+        case let .failed(reason):
+            status.isHidden = false
+            status.title = reason
+        }
+    }
+
+    /// Opens a room, its invite link going to the clipboard; in one already, copies its link again.
+    @objc private func inviteToFight() {
+        let room = SnowballRoom.shared
+        if let invite = room.invite {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(SnowballRoom.link(for: invite), forType: .string)
+        } else {
+            room.host()
+        }
+    }
+
+    @objc private func joinFight() {
+        guard let text = NSPasteboard.general.string(forType: .string), SnowballRoom.holdsInvite(text) else { return }
+        SnowballRoom.shared.join(text)
+    }
+
+    @objc private func leaveFight() {
+        SnowballRoom.shared.leave()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        SnowballRoom.shared.leaveNow()
+    }
+
+    /// An invite link clicked anywhere opens the app and brings it into the room.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        guard SnowballFight.wanted, let url = urls.first(where: { $0.scheme == "snowhush" && $0.host == "join" }) else { return }
+        SnowballRoom.shared.join(url.absoluteString)
     }
 
     @objc private func toggleNewYear() {

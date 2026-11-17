@@ -67,3 +67,15 @@
 "setup.open" = "Ouvrir Snowhush";
 "setup.failed" = "Installation impossible : {error}.";
 "setup.retry" = "Réessayer";
+"fight" = "Bataille de boules de neige";
+"fight.invite" = "Inviter un ami";
+"fight.copy" = "Copier le lien d’invitation";
+"fight.join" = "Rejoindre avec le lien copié";
+"fight.leave" = "Quitter la salle";
+"fight.opening" = "Ouverture d’une salle…";
+"fight.joining" = "Connexion…";
+"fight.waiting" = "Lien copié — en attente d’amis";
+"fight.with" = "Avec %@";
+"fight.full" = "La salle est pleine";
+"fight.closed" = "La salle a été fermée";
+"fight.failed" = "Connexion impossible";
