@@ -83,6 +83,8 @@ final class PictureSnow {
         var dabs = -1
         var drawing = false
         var drawnAt: CFTimeInterval = 0
+        /// Until when the picture last drawn is still fading in over the one before.
+        var fadingUntil: CFTimeInterval = 0
         /// Shown at half its size while its Space is away, to take a quarter of the memory.
         var shrunk = false
         var observer: NSObjectProtocol?
@@ -269,7 +271,7 @@ final class PictureSnow {
     /// Flakes have come down in the picture: the frost they leave shows there now, not at the next look.
     func landed() {
         guard wanted, active, let desktop = current, desktop.terrain != nil, loaded == desktop.picture, renderer.loaded, !desktop.drawing,
-              desktop.dabs != simulation.dabsVersion, desktop.window.occlusionState.contains(.visible) else { return }
+              desktop.dabs != simulation.dabsVersion, CACurrentMediaTime() >= desktop.fadingUntil, desktop.window.occlusionState.contains(.visible) else { return }
         draw(desktop, level: simulation.pictureLevel, veil: simulation.pictureVeil, now: CACurrentMediaTime())
     }
 
@@ -493,7 +495,7 @@ final class PictureSnow {
         let changed = abs(level - desktop.level) >= Self.step || abs(veil - desktop.veil) >= 0.01 || desktop.shrunk
             || (desktop.dabs != simulation.dabsVersion && now - desktop.drawnAt >= 1)
         // Behind other windows it is drawn now and then all the same, so that uncovered it is never far behind.
-        guard changed, desktop.window.occlusionState.contains(.visible) || now - desktop.drawnAt > 15 else { return }
+        guard changed, now >= desktop.fadingUntil, desktop.window.occlusionState.contains(.visible) || now - desktop.drawnAt > 15 else { return }
         draw(desktop, level: level, veil: veil, now: now)
     }
 
@@ -503,15 +505,20 @@ final class PictureSnow {
         let size = screen.frame.size
         guard let target = makeSurface(width: Int(size.width), height: Int(size.height)) else { return }
         let dabs = simulation.dabsVersion
-        let first = desktop.front == nil
+        let first = desktop.front == nil, returned = desktop.shrunk
         desktop.drawing = true
         let drawn = renderer.draw(level: level, veil: veil, dabs: simulation.dabs, specks: simulation.specks, dabsSize: simulation.dabsSize, dabsVersion: dabs, into: target.texture,
                                   screen: SIMD2(Float(size.width), Float(size.height))) { [weak self, weak desktop] in
             guard let self, let desktop else { return }
             desktop.drawing = false
-            // The first snow on a wallpaper comes in softly; after that each picture differs from the last by less
-            // than the eye can tell, and just takes its place.
-            if first { fade(desktop.window.snow, over: 0.6) }
+            // The snow comes in softly, and each picture fades in over the one before for about as long as passed
+            // between them, so that the frost grows on without a step anyone could catch. The next is drawn only once
+            // this one is in: one taking its place midway would jump. Back at full size after its Space was away it
+            // is the same picture, and just takes its place.
+            let start = CACurrentMediaTime()
+            let duration = first ? 2.5 : returned ? 0 : min(max(start - desktop.drawnAt, 0.3), 2) * 0.9
+            if duration > 0 { fade(desktop.window.snow, over: duration) }
+            desktop.fadingUntil = start + duration
             desktop.window.snow.contents = target.surface
             desktop.front = target
             desktop.shrunk = false

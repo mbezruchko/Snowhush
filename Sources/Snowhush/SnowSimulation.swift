@@ -1181,7 +1181,7 @@ final class SnowSimulation {
         if near <= own + sceneTolerance {
             layDab(size: flake.size, near: near, cx: cx, cy: cy, x: x, y: y)
             if motes.count < maxMotes {
-                motes.append(Mote(position: flake.position, velocity: .zero, size: flake.size, alpha: flake.alpha, life: 0.7, soft: flake.soft, still: true, scene: own,
+                motes.append(Mote(position: flake.position, velocity: .zero, size: flake.size, alpha: flake.alpha, life: 1.6, soft: flake.soft, still: true, scene: own,
                                   sceneLight: 1 - min(max((flake.depth - 0.45) / 0.45, 0), 1)))
             }
         }
