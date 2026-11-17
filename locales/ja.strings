@@ -86,3 +86,4 @@
 "fight.youwon" = "あなたの勝ち！";
 "fight.out" = "脱落しました";
 "fight.wins" = "勝利";
+"fight.hint" = "壁紙を⌘クリックで雪玉を投げる";

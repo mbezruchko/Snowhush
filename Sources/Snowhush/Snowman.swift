@@ -17,8 +17,41 @@ struct SnowmanGround {
     let far: Float
     let close: Float
     let light: WallpaperLight
+    /// A strip along the bottom of the screen for a wallpaper with no ground of its own: what stands on it is in front
+    /// of the whole picture, neither hidden by it nor paled by its distance.
+    let inFront: Bool
 
     private static let cellPoints = 8
+
+    /// For a wallpaper with no ground to walk: a strip along the bottom of the screen, above the Dock (`bottom` points
+    /// up), as if on the snow drift there, as deep as the middle of a picture.
+    init(stripOn scene: WallpaperScene, screen size: CGSize, bottom: Float) {
+        let cell = Float(Self.cellPoints)
+        let screen = SIMD2(Float(size.width), Float(size.height))
+        let width = max(Int(screen.x / cell), 1), height = max(Int(screen.y / cell), 1)
+        var near = [Float](repeating: -1, count: width * height)
+        let low = bottom + 12, high = bottom + 60
+        for cy in 0..<height {
+            let up = screen.y - (Float(cy) + 0.5) * cell
+            guard up >= low, up <= high else { continue }
+            for cx in 0..<width {
+                let across = (Float(cx) + 0.5) * cell
+                // Clear of the New Year's tree in the corner.
+                guard across > screen.x * 0.18, across < screen.x * 0.94 else { continue }
+                near[cy * width + cx] = 0.96 - 0.06 * (up - low) / (high - low)
+            }
+        }
+        self.width = width
+        self.height = height
+        self.cell = cell
+        self.screen = screen
+        self.near = near
+        group = near.map { $0 >= 0 ? 0 : -1 }
+        far = 0.6
+        close = 1.2
+        light = scene.light
+        inFront = true
+    }
 
     init?(scene: WallpaperScene, screen size: CGSize) {
         let relief = scene.relief
@@ -86,6 +119,7 @@ struct SnowmanGround {
             group[i] = -1
         }
         self.group = group
+        inFront = false
         self.width = width
         self.height = height
         self.cell = cell

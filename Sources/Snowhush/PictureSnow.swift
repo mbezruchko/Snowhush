@@ -581,9 +581,11 @@ final class PictureSnow {
             reading = true
             let columnWidth = simulation.columnWidth
             let size = screen.frame.size, fighting = SnowballFight.wanted
+            let bottom = Float(screen.visibleFrame.minY - screen.frame.minY)
             Self.lookout.async { [weak self, weak desktop] in
                 let scene = Wallpaper.sceneReadApart(in: picture, columnWidth: columnWidth)
-                let ground = fighting ? scene.flatMap { SnowmanGround(scene: $0, screen: size) } : nil
+                // With no ground in the picture, snowmen walk a strip along the bottom of the screen.
+                let ground = fighting ? scene.map { SnowmanGround(scene: $0, screen: size) ?? SnowmanGround(stripOn: $0, screen: size, bottom: bottom) } : nil
                 DispatchQueue.main.async {
                     guard let self else { return }
                     self.reading = false

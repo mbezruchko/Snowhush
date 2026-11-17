@@ -86,3 +86,4 @@
 "fight.youwon" = "你赢了！";
 "fight.out" = "你出局了";
 "fight.wins" = "胜场";
+"fight.hint" = "⌘+点按墙纸来扔雪球";

@@ -86,3 +86,4 @@
 "fight.youwon" = "¡Ganaste!";
 "fight.out" = "Estás fuera";
 "fight.wins" = "Victorias";
+"fight.hint" = "⌘+clic en el fondo para lanzar una bola de nieve";

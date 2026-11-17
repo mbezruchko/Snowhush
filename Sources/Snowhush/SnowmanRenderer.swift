@@ -128,7 +128,9 @@ final class SnowmanRenderer {
     /// Encodes `bot` into a pass over the region at `origin`, `size` points across.
     func encode(_ bot: SnowmanBot, relief: MTLTexture, screen: SIMD2<Float>, origin: SIMD2<Float>, size: SIMD2<Float>, into encoder: MTLRenderCommandEncoder) {
         let tint = bot.tint
-        var uniforms = Uniforms(origin: origin, size: size, screen: screen, near: bot.near, nearness: bot.ground.nearness(bot.near),
+        // On the strip along the screen's bottom he is in front of the whole picture: never behind it, never paled.
+        let inFront = bot.ground.inFront
+        var uniforms = Uniforms(origin: origin, size: size, screen: screen, near: inFront ? 10 : bot.near, nearness: inFront ? 1 : bot.ground.nearness(bot.near),
                                 tint: SIMD4(tint, 1))
         encoder.setRenderPipelineState(pipeline)
         encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)

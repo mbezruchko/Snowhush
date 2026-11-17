@@ -94,3 +94,4 @@
 "fight.youwon" = "You win!";
 "fight.out" = "You’re out";
 "fight.wins" = "Wins";
+"fight.hint" = "⌘-click the wallpaper to throw a snowball";

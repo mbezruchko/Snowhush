@@ -191,14 +191,26 @@ final class SnowballFight {
         return text
     }
 
-    /// The round at the top of the desktop: who won it, or this player's hearts or that he is out, and everyone's wins.
+    /// Snowballs this player has thrown, kept to tell how to throw until he has a few times.
+    private static var throwsMade: Int {
+        get { UserDefaults.standard.integer(forKey: "fightThrows") }
+        set { UserDefaults.standard.set(newValue, forKey: "fightThrows") }
+    }
+
+    /// The round at the top of the desktop: who won it, or this player's hearts or that he is out, and everyone's wins;
+    /// and how to throw, until he has thrown a few.
     private func showBoard() {
         let room = SnowballRoom.shared
-        guard main, let me = room.me, let window else {
+        let hint = Self.throwsMade < 3 ? tr("fight.hint") : ""
+        guard main, let window, room.me != nil || !hint.isEmpty else {
             if boardShown != "" {
                 boardShown = ""
                 board.removeFromSuperlayer()
             }
+            return
+        }
+        guard let me = room.me else {
+            showLines(nil, wins: "", hint: hint, in: window)
             return
         }
         let headline: String
@@ -212,7 +224,17 @@ final class SnowballFight {
         let everyone = [me] + room.players.map(\.id)
         let wins = everyone.contains { room.wins(of: $0) > 0 }
             ? "\(tr("fight.wins")): " + everyone.map { "\(room.name(of: $0)) \(room.wins(of: $0))" }.joined(separator: " · ") : ""
-        let key = headline + "|" + wins
+        let big = room.winner != nil
+        let font = NSFont.systemFont(ofSize: big ? 26 : 18, weight: .bold)
+        let pink = NSColor(srgbRed: 1, green: 0.45, blue: 0.5, alpha: 1)
+        let line = room.winner == nil && !room.isOut(me)
+            ? NSMutableAttributedString(attributedString: Self.hearts(room.lives(of: me), color: pink, font: font))
+            : NSMutableAttributedString(string: headline, attributes: [.font: font, .foregroundColor: big ? NSColor.white : pink])
+        showLines(line, wins: wins, hint: hint, in: window, key: headline + "|" + String(room.lives(of: me)))
+    }
+
+    private func showLines(_ headline: NSAttributedString?, wins: String, hint: String, in window: PictureWindow, key: String = "") {
+        let key = key + "|" + wins + "|" + hint
         if board.superlayer == nil, let host = window.contentView?.layer {
             board.contentsScale = window.backingScaleFactor
             board.alignmentMode = .center
@@ -226,15 +248,11 @@ final class SnowballFight {
         }
         guard key != boardShown else { return }
         boardShown = key
-        let big = room.winner != nil
-        let font = NSFont.systemFont(ofSize: big ? 26 : 18, weight: .bold)
-        let pink = NSColor(srgbRed: 1, green: 0.45, blue: 0.5, alpha: 1)
-        let text = room.winner == nil && !room.isOut(me)
-            ? NSMutableAttributedString(attributedString: Self.hearts(room.lives(of: me), color: pink, font: font))
-            : NSMutableAttributedString(string: headline, attributes: [.font: font, .foregroundColor: big ? NSColor.white : pink])
-        if !wins.isEmpty {
-            text.append(NSAttributedString(string: "\n" + wins, attributes: [
-                .font: NSFont.systemFont(ofSize: 12, weight: .semibold), .foregroundColor: NSColor(white: 1, alpha: 0.9),
+        let text = NSMutableAttributedString()
+        if let headline { text.append(headline) }
+        for (line, size) in [(wins, CGFloat(12)), (hint, CGFloat(13))] where !line.isEmpty {
+            text.append(NSAttributedString(string: (text.length > 0 ? "\n" : "") + line, attributes: [
+                .font: NSFont.systemFont(ofSize: size, weight: .semibold), .foregroundColor: NSColor(white: 1, alpha: 0.9),
             ]))
         }
         board.string = text
@@ -311,6 +329,7 @@ final class SnowballFight {
     func throwBall(at point: SIMD2<Float>, near: Float, size: Float, screenWidth: Float) {
         guard let simulation else { return }
         let start = SIMD2(screenWidth * 0.5 + (point.x - screenWidth * 0.5) * 0.35, -30)
+        Self.throwsMade += 1
         let height = size * 10
         let u = Float.random(in: Float.ulpOfOne..<1), v = Float.random(in: 0..<1)
         let spread = (-2 * log(u)).squareRoot()
