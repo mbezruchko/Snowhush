@@ -7,12 +7,18 @@ final class MenuToggle: NSView {
     private weak var target: AnyObject?
     /// Whether a click leaves the menu open; false closes it like a plain item.
     var staysOpen: () -> Bool = { true }
+    /// A row that does something rather than switch it: no checkmark, its title where a menu with none has them.
+    var plain = false {
+        didSet { setAccessibilityRole(plain ? .button : .checkBox) }
+    }
 
     // Measured from a macOS 26 menu at 2x: rows 24 pt, titles and separators at 30 pt, checkmarks centred at 18 pt
     // and matching a 10.5 pt bold SF checkmark, not the older, thinner menuOnStateTemplate; lit in the accent colour.
     static let modern = ProcessInfo.processInfo.isOperatingSystemAtLeast(OperatingSystemVersion(majorVersion: 26, minorVersion: 0, patchVersion: 0))
     static let rowHeight: CGFloat = modern ? 24 : 22
     static let titleX: CGFloat = modern ? 30 : 22
+    /// Where a title starts in a menu with no checkmarks.
+    static let plainTitleX: CGFloat = modern ? 15 : 14
     private static let checkX: CGFloat = modern ? 18 : 12
     static let highlightRadius: CGFloat = modern ? 7 : 4
     private static let check = NSImage(systemSymbolName: "checkmark", accessibilityDescription: nil)
@@ -33,7 +39,7 @@ final class MenuToggle: NSView {
     /// Widens the row to fit `title`: a menu sizes itself to its rows' views, not to their items' titles.
     func fit(_ title: String) {
         let text = NSAttributedString(string: title, attributes: [.font: NSFont.menuFont(ofSize: 0)])
-        setFrameSize(NSSize(width: max(200, ceil(Self.titleX + text.size().width + 24)), height: frame.height))
+        setFrameSize(NSSize(width: max(200, ceil(left + text.size().width + 24)), height: frame.height))
     }
 
     override func updateTrackingAreas() {
@@ -91,6 +97,8 @@ final class MenuToggle: NSView {
             check.draw(in: NSRect(x: Self.checkX - check.size.width / 2, y: (bounds.height - check.size.height) / 2, width: check.size.width, height: check.size.height))
         }
         let title = NSAttributedString(string: item.title, attributes: [.font: NSFont.menuFont(ofSize: 0), .foregroundColor: color])
-        title.draw(at: NSPoint(x: Self.titleX, y: (bounds.height - title.size().height) / 2))
+        title.draw(at: NSPoint(x: left, y: (bounds.height - title.size().height) / 2))
     }
+
+    private var left: CGFloat { plain ? Self.plainTitleX : Self.titleX }
 }

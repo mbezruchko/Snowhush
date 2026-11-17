@@ -80,6 +80,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         halloweenTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in self?.refreshHalloween() }
         observeSystem()
         Marquee.enabled = Preferences.surfaces.contains(.selection)
+        // What the room comes to shows in the open menu at once.
+        observers.append(NotificationCenter.default.addObserver(forName: SnowballRoom.changed, object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            updateFightItems()
+            fightStatusItem?.menu?.items.forEach { $0.view?.needsDisplay = true }
+        })
         screenshots.stepAside = { [weak self] aside in self?.screens.forEach { $0.stepAside(aside) } }
         screenshots.start()
         if snowfallHeld {
@@ -211,9 +217,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
             let status = fight.addItem(withTitle: "", action: nil, keyEquivalent: "")
             status.isEnabled = false
             fightStatusItem = status
-            fightInviteItem = add(tr("fight.invite"), #selector(inviteToFight), to: fight)
-            fightJoinItem = add(tr("fight.join"), #selector(joinFight), to: fight)
-            fightLeaveItem = add(tr("fight.leave"), #selector(leaveFight), to: fight)
+            // They leave the menu open, to see the room open and who comes into it.
+            fightInviteItem = action(tr("fight.invite"), #selector(inviteToFight), to: fight)
+            fightJoinItem = action(tr("fight.join"), #selector(joinFight), to: fight)
+            fightLeaveItem = action(tr("fight.leave"), #selector(leaveFight), to: fight)
             let item = menu.addItem(withTitle: tr("fight"), action: nil, keyEquivalent: "")
             item.submenu = fight
             item.attributedTitle = Shimmer.title(tr("fight"), phase: 0)
@@ -266,6 +273,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private func add(_ title: String, _ action: Selector, to menu: NSMenu) -> NSMenuItem {
         let item = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
         item.target = self
+        return item
+    }
+
+    /// A row that does something and keeps the menu open.
+    private func action(_ title: String, _ action: Selector, to menu: NSMenu) -> NSMenuItem {
+        let item = menu.addItem(withTitle: title, action: nil, keyEquivalent: "")
+        let row = MenuToggle(action: action, target: self)
+        row.plain = true
+        row.fit(title)
+        item.view = row
         return item
     }
 
@@ -467,7 +484,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         let room = SnowballRoom.shared
         let clipboard = NSPasteboard.general.string(forType: .string) ?? ""
         fightJoinItem?.isEnabled = SnowballRoom.holdsInvite(clipboard)
-        fightInviteItem?.title = room.invite != nil ? tr("fight.copy") : tr("fight.invite")
+        let invite = room.invite != nil ? tr("fight.copy") : tr("fight.invite")
+        fightInviteItem?.title = invite
+        (fightInviteItem?.view as? MenuToggle)?.fit(invite)
         fightLeaveItem?.isHidden = room.state == .none
         switch room.state {
         case .none:
