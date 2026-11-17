@@ -27,6 +27,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var clearItem: NSMenuItem!
     private var halloweenItem: NSMenuItem!
     private var newYearItem: NSMenuItem!
+    private var fightItem: NSMenuItem?
+    private var shimmerTimer: Timer?
     private var fightStatusItem: NSMenuItem?
     private var fightInviteItem: NSMenuItem?
     private var fightJoinItem: NSMenuItem?
@@ -212,7 +214,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
             fightInviteItem = add(tr("fight.invite"), #selector(inviteToFight), to: fight)
             fightJoinItem = add(tr("fight.join"), #selector(joinFight), to: fight)
             fightLeaveItem = add(tr("fight.leave"), #selector(leaveFight), to: fight)
-            menu.addItem(withTitle: tr("fight"), action: nil, keyEquivalent: "").submenu = fight
+            let item = menu.addItem(withTitle: tr("fight"), action: nil, keyEquivalent: "")
+            item.submenu = fight
+            item.attributedTitle = Shimmer.title(tr("fight"), phase: 0)
+            fightItem = item
         }
         clearItem = add(tr("clear.snow"), #selector(clearSnow), to: menu)
         menu.addItem(.separator())
@@ -437,6 +442,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     @objc private func toggleHalloween() {
         Halloween.toggle()
         refreshHalloween()
+    }
+
+    /// The snowball fight's name shimmers while the menu is open, and only then.
+    func menuWillOpen(_ menu: NSMenu) {
+        guard menu === statusItem.menu, let item = fightItem, shimmerTimer == nil else { return }
+        let start = CACurrentMediaTime()
+        let timer = Timer(timeInterval: 1.0 / 30, repeats: true) { _ in
+            item.attributedTitle = Shimmer.title(tr("fight"), phase: CGFloat((CACurrentMediaTime() - start) / 2.5))
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        shimmerTimer = timer
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        guard menu === statusItem.menu else { return }
+        shimmerTimer?.invalidate()
+        shimmerTimer = nil
     }
 
     /// The snowball fight's room as it is now: what is going on, and what can be done.
