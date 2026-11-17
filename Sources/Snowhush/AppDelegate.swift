@@ -506,7 +506,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
             } else if room.players.isEmpty {
                 status.title = tr("fight.waiting")
             } else {
-                status.title = everyone.map { "\(room.name(of: $0)) ♥\(room.lives(of: $0))" }.joined(separator: " · ")
+                status.title = everyone.map { "\(room.name(of: $0)) ♥\(room.hearts(of: $0))" }.joined(separator: " · ")
             }
         case let .failed(reason):
             status.isHidden = false

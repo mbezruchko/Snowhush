@@ -25,8 +25,10 @@ final class SnowballRoom {
     private(set) var players: [Player] = []
     /// The invite to the room, when hosting it.
     private(set) var invite: String?
-    /// How many snowballs a snowman takes before he falls apart.
-    static let startingLives = 5
+    /// A snowman's hearts, and the hits each of them takes: fifteen hits before he falls apart.
+    static let hearts = 5
+    static let hitsPerHeart = 3
+    static let startingLives = hearts * hitsPerHeart
     /// What is left of each player's snowman this round, by id, this player's among them. Every player hears of every
     /// hit, so all count the same.
     private(set) var lives: [String: Int] = [:]
@@ -35,6 +37,9 @@ final class SnowballRoom {
     /// The one left standing, until the next round starts.
     private(set) var winner: String?
     private var nextRound: Timer?
+
+    /// The hearts a player has left, a heart that has taken a hit or two still counting.
+    func hearts(of player: String) -> Int { (max(lives(of: player), 0) + Self.hitsPerHeart - 1) / Self.hitsPerHeart }
 
     func lives(of player: String) -> Int { lives[player] ?? Self.startingLives }
     func wins(of player: String) -> Int { wins[player] ?? 0 }

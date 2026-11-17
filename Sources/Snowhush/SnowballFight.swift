@@ -55,7 +55,9 @@ final class SnowballFight {
     private var observer: NSObjectProtocol?
     private weak var simulation: SnowSimulation?
     /// What is left of the bot, and when he comes back once it is gone.
-    private var botLives = SnowballRoom.startingLives
+    private var botLives = SnowballFight.botHits
+    /// Hits the bot takes before he slumps away: he has no hearts to show, and alone fifteen would drag.
+    private static let botHits = 5
     private var botBackAt: Double?
     /// The round as this player sees it, at the top of the desktop while in a room: own hearts, wins, who won.
     private let board = CATextLayer()
@@ -136,9 +138,13 @@ final class SnowballFight {
                 figure.bot.comeBack()
             }
             guard let label = figure.label, let name = figure.name else { continue }
-            let text = "\(name) \(Self.hearts(room.lives(of: id)))"
-            if text != figure.shown {
-                figure.shown = text
+            let lives = room.lives(of: id)
+            let key = "\(name)|\(lives)"
+            if key != figure.shown {
+                figure.shown = key
+                let font = NSFont.systemFont(ofSize: 11, weight: .semibold)
+                let text = NSMutableAttributedString(string: name + " ", attributes: [.font: font, .foregroundColor: NSColor(white: 1, alpha: 0.92)])
+                text.append(Self.hearts(lives, color: .white, font: font))
                 label.string = text
             }
             label.isHidden = room.isOut(id)
@@ -147,10 +153,18 @@ final class SnowballFight {
         CATransaction.commit()
     }
 
-    /// Five hearts, full for what is left.
-    private static func hearts(_ lives: Int) -> String {
-        let left = min(max(lives, 0), SnowballRoom.startingLives)
-        return String(repeating: "♥", count: left) + String(repeating: "♡", count: SnowballRoom.startingLives - left)
+    /// Five hearts: full for each whole one left, fainter for one that has taken a hit or two, an outline for each
+    /// one gone.
+    private static func hearts(_ lives: Int, color: NSColor, font: NSFont) -> NSAttributedString {
+        let text = NSMutableAttributedString()
+        let per = SnowballRoom.hitsPerHeart
+        for k in 0..<SnowballRoom.hearts {
+            let left = min(max(lives - k * per, 0), per)
+            let glyph = left > 0 ? "♥" : "♡"
+            let alpha = left == per || left == 0 ? 1 : 0.3 + 0.4 * CGFloat(left) / CGFloat(per)
+            text.append(NSAttributedString(string: glyph, attributes: [.font: font, .foregroundColor: color.withAlphaComponent(alpha)]))
+        }
+        return text
     }
 
     /// The round at the top of the desktop: who won it, or this player's hearts or that he is out, and everyone's wins.
@@ -169,7 +183,7 @@ final class SnowballFight {
         } else if room.isOut(me) {
             headline = tr("fight.out")
         } else {
-            headline = Self.hearts(room.lives(of: me))
+            headline = "♥\(room.lives(of: me))"
         }
         let everyone = [me] + room.players.map(\.id)
         let wins = everyone.contains { room.wins(of: $0) > 0 }
@@ -189,10 +203,11 @@ final class SnowballFight {
         guard key != boardShown else { return }
         boardShown = key
         let big = room.winner != nil
-        let text = NSMutableAttributedString(string: headline, attributes: [
-            .font: NSFont.systemFont(ofSize: big ? 26 : 18, weight: .bold),
-            .foregroundColor: room.winner != nil ? NSColor.white : NSColor(srgbRed: 1, green: 0.45, blue: 0.5, alpha: 1),
-        ])
+        let font = NSFont.systemFont(ofSize: big ? 26 : 18, weight: .bold)
+        let pink = NSColor(srgbRed: 1, green: 0.45, blue: 0.5, alpha: 1)
+        let text = room.winner == nil && !room.isOut(me)
+            ? NSMutableAttributedString(attributedString: Self.hearts(room.lives(of: me), color: pink, font: font))
+            : NSMutableAttributedString(string: headline, attributes: [.font: font, .foregroundColor: big ? NSColor.white : pink])
         if !wins.isEmpty {
             text.append(NSAttributedString(string: "\n" + wins, attributes: [
                 .font: NSFont.systemFont(ofSize: 12, weight: .semibold), .foregroundColor: NSColor(white: 1, alpha: 0.9),
@@ -221,7 +236,7 @@ final class SnowballFight {
         guard let simulation else { return }
         if let back = botBackAt, now >= back, let bot = figures[Self.botID]?.bot {
             botBackAt = nil
-            botLives = SnowballRoom.startingLives
+            botLives = Self.botHits
             bot.comeBack()
         }
         for figure in figures.values {
