@@ -447,11 +447,16 @@ final class SnowballFight {
 
     /// The bot's revenge, a moment after he has fallen apart, once his pieces are still.
     private func scream(near x: Float) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { [weak self] in
-            guard let self, let window, self.screamer == nil else { return }
-            guard let screamer = Screamer(size: window.frame.size, x: CGFloat(x)) else { return }
+        guard let window, screamer == nil else { return }
+        let frame = window.frame, sharing = window.sharingType
+        let due = CACurrentMediaTime() + 1.4
+        Screamer.draw(for: frame.size) { [weak self] pictures in
+            guard let self, let pictures, self.screamer == nil else { return }
+            let screamer = Screamer(size: frame.size, x: CGFloat(x), pictures: pictures)
             self.screamer = screamer
-            screamer.show(over: window.frame, sharing: window.sharingType) { [weak self] in self?.screamer = nil }
+            DispatchQueue.main.asyncAfter(deadline: .now() + max(due - CACurrentMediaTime(), 0)) { [weak self] in
+                screamer.show(over: frame, sharing: sharing) { self?.screamer = nil }
+            }
         }
     }
 
