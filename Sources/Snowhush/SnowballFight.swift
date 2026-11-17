@@ -21,6 +21,10 @@ final class SnowballFight {
         let name: String?
         var shown = ""
         var drawn = false
+        /// Hearts he had as last seen; and since when he owes a move elsewhere for one lost, until the snowball that
+        /// cost it is seen to land.
+        var hearts = SnowballRoom.hearts
+        var moveOwed: Double?
 
         init(bot: SnowmanBot, renderer: SnowmanRenderer, name: String?) {
             self.bot = bot
@@ -156,6 +160,7 @@ final class SnowballFight {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         for (id, figure) in figures where id != Self.botID {
+            noteHearts(of: figure, id: id, now: now)
             if room.isOut(id) {
                 figure.bot.knockOut()
             } else {
@@ -175,6 +180,26 @@ final class SnowballFight {
         }
         showBoard()
         CATransaction.commit()
+    }
+
+    /// A friend's snowman that has lost a heart is owed a move elsewhere; one out of the round, or whole again in a new
+    /// one, none.
+    private func noteHearts(of figure: Figure, id: String, now: Double) {
+        let room = SnowballRoom.shared
+        let hearts = room.hearts(of: id)
+        if room.isOut(id) || hearts > figure.hearts {
+            figure.moveOwed = nil
+        } else if hearts < figure.hearts, figure.moveOwed == nil {
+            figure.moveOwed = now
+        }
+        figure.hearts = hearts
+    }
+
+    /// He took the snowball that cost him a heart, seen to land: he moves elsewhere.
+    private func moveIfOwed(_ figure: Figure) {
+        guard figure.moveOwed != nil else { return }
+        figure.moveOwed = nil
+        figure.bot.moveAway()
     }
 
     /// Five hearts: full for each whole one left, fainter for one that has taken a hit or two, an outline for each
@@ -282,6 +307,8 @@ final class SnowballFight {
             bot.comeBack()
         }
         for figure in figures.values {
+            // The snowball that cost him a heart may never be seen to land, its thrower gone: he moves all the same.
+            if let owed = figure.moveOwed, now - owed > 3 { moveIfOwed(figure) }
             let reach = figure.bot.reach
             let covered = covers.contains { $0.x < reach.z && $0.z > reach.x && $0.y < reach.w && $0.w > reach.y }
             let moved = figure.bot.step(dt: dt, now: now, canThrow: visible && !covered) { [weak self] hand, size, target in
@@ -290,10 +317,12 @@ final class SnowballFight {
                     return
                 }
                 // At a friend's snowman, across the picture.
-                guard let other = self?.figures[target]?.bot else { return }
-                simulation.throwIntoPicture(from: hand, to: other.middle, near: other.near, size: other.height * 0.1, startSize: size, from: figure.bot.near) { landed in
+                guard let struck = self?.figures[target] else { return }
+                let other = struck.bot
+                simulation.throwIntoPicture(from: hand, to: other.middle, near: other.near, size: other.height * 0.1, startSize: size, from: figure.bot.near) { [weak self] landed in
                     other.hit(at: landed, now: CACurrentMediaTime())
                     simulation.puff(at: landed, near: other.near, size: other.height * 0.14)
+                    self?.moveIfOwed(struck)
                     return true
                 }
             }
@@ -348,14 +377,21 @@ final class SnowballFight {
             guard let self, let (id, figure) = figures.first(where: { $0.value.bot.contains(landed) && abs($0.value.bot.near - near) < 0.08 }) else { return false }
             // A hit on a friend counts only in a round still going, both standing; one that doesn't bursts on by.
             if id != Self.botID, !SnowballRoom.shared.hit(id) { return false }
-            figure.bot.hit(at: landed, now: CACurrentMediaTime())
+            let now = CACurrentMediaTime()
+            figure.bot.hit(at: landed, now: now)
             simulation.puff(at: landed, near: figure.bot.near, size: size * 1.4)
             if id == Self.botID {
+                // He has no hearts: every hit moves him, until the last breaks him apart.
                 botLives -= 1
                 if botLives <= 0 {
                     figure.bot.knockOut()
-                    botBackAt = CACurrentMediaTime() + 5
+                    botBackAt = now + 5
+                } else {
+                    figure.bot.moveAway()
                 }
+            } else {
+                noteHearts(of: figure, id: id, now: now)
+                moveIfOwed(figure)
             }
             return true
         }

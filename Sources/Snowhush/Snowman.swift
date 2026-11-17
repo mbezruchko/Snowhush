@@ -593,6 +593,8 @@ final class SnowmanBot {
     private(set) var knockedOut = false
     /// How far he still is from standing as he comes back, 1 under the snow to 0 up.
     private var melt: Float = 0
+    /// Since when he has been about to sink into the snow, to rise out of it somewhere else.
+    private var sinkingFor: Float?
 
     /// A piece of him flying apart: one of his balls, or his arm.
     private struct Piece {
@@ -756,7 +758,7 @@ final class SnowmanBot {
 
     /// Whether a point is on him.
     func contains(_ point: SIMD2<Float>) -> Bool {
-        guard !knockedOut else { return false }
+        guard !knockedOut, sinkingFor == nil else { return false }
         let body = placements.body
         let inverse = body.matrix.inverse
         let local = inverse * (point - body.offset)
@@ -773,12 +775,27 @@ final class SnowmanBot {
         if knockedOut {
             return breakApart(dt: dt) || moved
         }
+        if let before = sinkingFor {
+            // The hit's reel shows for a moment; then he sinks, snow flying, and rises elsewhere.
+            let since = before + dt
+            sinkingFor = since
+            if since >= 0.35 {
+                if before < 0.35 { bursts.append((foot, 0.3 * height)) }
+                melt = max(melt, min(1, (since - 0.35) / 0.3))
+                if since >= 0.65 { riseElsewhere(now: now) }
+                return true
+            }
+        }
         if melt > 0 {
             melt = max(0, melt - dt / 0.5)
             moved = true
         }
         switch act {
         case .idle:
+            if !queued.isEmpty, melt == 0 {
+                start(queued.removeFirst(), quickly: true)
+                return true
+            }
             if throwsOnHisOwn, owed > 0, canThrow, now >= nextThrow {
                 windUp = 0.5
                 act = .windingUp(0)
@@ -878,6 +895,8 @@ final class SnowmanBot {
     func knockOut() {
         guard !knockedOut else { return }
         knockedOut = true
+        sinkingFor = nil
+        melt = 0
         path = []
         queued = []
         owed = 0
@@ -954,8 +973,42 @@ final class SnowmanBot {
         hat = .worn(grow: 0)
     }
 
+    /// A heart less: once the hit's reel has shown, he sinks into the snow where he stands and rises out of it
+    /// somewhere else, well away, harder to hit again. Nothing hits him until he is up there.
+    func moveAway() {
+        guard !knockedOut, sinkingFor == nil else { return }
+        sinkingFor = 0
+        path = []
+    }
+
+    private func riseElsewhere(now: Double) {
+        sinkingFor = nil
+        let from = foot
+        var farthest: (point: SIMD2<Float>, distance: Float)?
+        for _ in 0..<10 {
+            guard let cell = ground.anywhere(using: &random, middling: true) else { break }
+            let point = ground.point(of: cell)
+            let distance = simd_distance(point, from)
+            if distance > farthest?.distance ?? -1 { farthest = (point, distance) }
+            if distance > ground.screen.x * 0.3 { break }
+        }
+        if let farthest { foot = farthest.point }
+        // A throw he was winding up for a friend is still owed.
+        if case .windingUp = act, !throwsOnHisOwn { queued.insert(target, at: 0) }
+        act = .idle
+        path = []
+        armAngle = -0.45
+        lean = 0
+        bounce = 0
+        melt = 1
+        restUntil = now + 1.2
+        bursts.append((foot, 0.25 * height))
+    }
+
     /// Hit by a snowball: he reels, and his hat flies off.
     func hit(at point: SIMD2<Float>, now: Double) {
+        // A throw he was winding up for a friend is still owed: every hit the friend scores is thrown.
+        if case .windingUp = act, !throwsOnHisOwn, queued.count < 8 { queued.insert(target, at: 0) }
         act = .reeling(0)
         path = []
         if throwsOnHisOwn {
