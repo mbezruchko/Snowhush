@@ -81,3 +81,8 @@
 "fight.failed" = "无法连接";
 "fight.unavailable" = "在线游戏暂时不可用";
 "surface.selection" = "选择框";
+"fight.you" = "你";
+"fight.won" = "%@ 获胜！";
+"fight.youwon" = "你赢了！";
+"fight.out" = "你出局了";
+"fight.wins" = "胜场";

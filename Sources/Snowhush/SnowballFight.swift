@@ -3,8 +3,9 @@ import simd
 
 /// A snowball fight with snowmen living in the wallpaper's picture: the friends in this player's room, or a bot while
 /// there is no one to play with. They walk about and throw snowballs out of the picture at the screen: the bot only
-/// back at whoever hits it, never first; a friend when the friend hits this player. Option-click the wallpaper to
-/// throw one into it: hitting a friend's snowman sends the friend a snowball.
+/// back at whoever hits it, never first; a friend when the friend hits this player. Command-click the wallpaper to
+/// throw one into it: hitting a friend's snowman sends the friend a snowball. Each snowman takes five hits before he
+/// slumps away; in a room the last one standing wins the round.
 final class SnowballFight {
     /// Lets it be tried out: defaults write com.mbezruchko.Snowhush previewSnowballFight -bool true, or a build handed
     /// to friends with SnowballFight set in its Info.plist.
@@ -15,13 +16,16 @@ final class SnowballFight {
     private final class Figure {
         let bot: SnowmanBot
         let renderer: SnowmanRenderer
-        /// A friend's name over the snowman; none over the bot.
+        /// A friend's name and what is left of his snowman; none over the bot.
         let label: CATextLayer?
+        let name: String?
+        var shown = ""
         var drawn = false
 
         init(bot: SnowmanBot, renderer: SnowmanRenderer, name: String?) {
             self.bot = bot
             self.renderer = renderer
+            self.name = name
             label = name.map { name in
                 let label = CATextLayer()
                 label.string = name
@@ -50,7 +54,13 @@ final class SnowballFight {
     private var monitor: Any?
     private var observer: NSObjectProtocol?
     private weak var simulation: SnowSimulation?
-    /// Told of each Option-click anywhere, where it was on the screens.
+    /// What is left of the bot, and when he comes back once it is gone.
+    private var botLives = SnowballRoom.startingLives
+    private var botBackAt: Double?
+    /// The round as this player sees it, at the top of the desktop while in a room: own hearts, wins, who won.
+    private let board = CATextLayer()
+    private var boardShown = ""
+    /// Told of each Command-click anywhere, where it was on the screens.
     var clicked: (NSPoint) -> Void = { _ in }
     /// The fight on the main display: it alone answers what happens in the room, so that a friend throws once.
     var main = true
@@ -58,9 +68,9 @@ final class SnowballFight {
     init(device: MTLDevice, simulation: SnowSimulation) {
         self.device = device
         self.simulation = simulation
-        // Clicks go on to whatever they were for; one with Option held over the wallpaper also throws.
+        // Clicks go on to whatever they were for; one with Command held over the wallpaper also throws.
         monitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
-            guard event.modifierFlags.contains(.option) else { return }
+            guard event.modifierFlags.contains(.command) else { return }
             self?.clicked(NSEvent.mouseLocation)
         }
         observer = NotificationCenter.default.addObserver(forName: SnowballRoom.thrown, object: nil, queue: .main) { [weak self] note in
@@ -73,6 +83,7 @@ final class SnowballFight {
         if let monitor { NSEvent.removeMonitor(monitor) }
         if let observer { NotificationCenter.default.removeObserver(observer) }
         for figure in figures.values { remove(figure) }
+        board.removeFromSuperlayer()
     }
 
     private func remove(_ figure: Figure) {
@@ -89,6 +100,8 @@ final class SnowballFight {
         }
         if window !== self.window {
             self.window = window
+            board.removeFromSuperlayer()
+            boardShown = ""
             for figure in figures.values {
                 remove(figure)
                 attach(figure)
@@ -112,6 +125,82 @@ final class SnowballFight {
             figures[id] = figure
             attach(figure)
         }
+        // Each friend's snowman as the round has him: what is left of him beside his name, gone once he is out.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for (id, figure) in figures where id != Self.botID {
+            if room.isOut(id) {
+                if !figure.bot.knockedOut, let simulation { simulation.puff(at: figure.bot.middle, near: figure.bot.near, size: figure.bot.height * 0.3) }
+                figure.bot.knockOut()
+            } else {
+                figure.bot.comeBack()
+            }
+            guard let label = figure.label, let name = figure.name else { continue }
+            let text = "\(name) \(Self.hearts(room.lives(of: id)))"
+            if text != figure.shown {
+                figure.shown = text
+                label.string = text
+            }
+            label.isHidden = room.isOut(id)
+        }
+        showBoard()
+        CATransaction.commit()
+    }
+
+    /// Five hearts, full for what is left.
+    private static func hearts(_ lives: Int) -> String {
+        let left = min(max(lives, 0), SnowballRoom.startingLives)
+        return String(repeating: "♥", count: left) + String(repeating: "♡", count: SnowballRoom.startingLives - left)
+    }
+
+    /// The round at the top of the desktop: who won it, or this player's hearts or that he is out, and everyone's wins.
+    private func showBoard() {
+        let room = SnowballRoom.shared
+        guard main, let me = room.me, let window else {
+            if boardShown != "" {
+                boardShown = ""
+                board.removeFromSuperlayer()
+            }
+            return
+        }
+        let headline: String
+        if let winner = room.winner {
+            headline = winner == me ? tr("fight.youwon") : String(format: tr("fight.won"), room.name(of: winner))
+        } else if room.isOut(me) {
+            headline = tr("fight.out")
+        } else {
+            headline = Self.hearts(room.lives(of: me))
+        }
+        let everyone = [me] + room.players.map(\.id)
+        let wins = everyone.contains { room.wins(of: $0) > 0 }
+            ? "\(tr("fight.wins")): " + everyone.map { "\(room.name(of: $0)) \(room.wins(of: $0))" }.joined(separator: " · ") : ""
+        let key = headline + "|" + wins
+        if board.superlayer == nil, let host = window.contentView?.layer {
+            board.contentsScale = window.backingScaleFactor
+            board.alignmentMode = .center
+            board.shadowColor = NSColor.black.cgColor
+            board.shadowOpacity = 0.6
+            board.shadowRadius = 3
+            board.shadowOffset = .zero
+            board.actions = ["position": NSNull(), "bounds": NSNull(), "contents": NSNull(), "hidden": NSNull()]
+            host.addSublayer(board)
+            boardShown = ""
+        }
+        guard key != boardShown else { return }
+        boardShown = key
+        let big = room.winner != nil
+        let text = NSMutableAttributedString(string: headline, attributes: [
+            .font: NSFont.systemFont(ofSize: big ? 26 : 18, weight: .bold),
+            .foregroundColor: room.winner != nil ? NSColor.white : NSColor(srgbRed: 1, green: 0.45, blue: 0.5, alpha: 1),
+        ])
+        if !wins.isEmpty {
+            text.append(NSAttributedString(string: "\n" + wins, attributes: [
+                .font: NSFont.systemFont(ofSize: 12, weight: .semibold), .foregroundColor: NSColor(white: 1, alpha: 0.9),
+            ]))
+        }
+        board.string = text
+        let size = window.frame.size
+        board.frame = CGRect(x: 0, y: size.height - 120, width: size.width, height: 80)
     }
 
     private func attach(_ figure: Figure) {
@@ -130,6 +219,11 @@ final class SnowballFight {
         let dt = steppedAt > 0 ? Float(min(now - steppedAt, 0.05)) : 1.0 / 60
         steppedAt = now
         guard let simulation else { return }
+        if let back = botBackAt, now >= back, let bot = figures[Self.botID]?.bot {
+            botBackAt = nil
+            botLives = SnowballRoom.startingLives
+            bot.comeBack()
+        }
         for figure in figures.values {
             let reach = figure.bot.reach
             let covered = covers.contains { $0.x < reach.z && $0.z > reach.x && $0.y < reach.w && $0.w > reach.y }
@@ -181,9 +275,18 @@ final class SnowballFight {
         let landing = point + SIMD2(cos(2 * .pi * v) * 0.3, sin(2 * .pi * v) * 0.25) * spread * height
         simulation.throwIntoPicture(from: start, to: landing, near: near, size: size) { [weak self, unowned simulation] landed in
             guard let self, let (id, figure) = figures.first(where: { $0.value.bot.contains(landed) && abs($0.value.bot.near - near) < 0.08 }) else { return false }
+            // A hit on a friend counts only in a round still going, both standing; one that doesn't bursts on by.
+            if id != Self.botID, !SnowballRoom.shared.hit(id) { return false }
             figure.bot.hit(at: landed, now: CACurrentMediaTime())
             simulation.puff(at: landed, near: figure.bot.near, size: size * 1.4)
-            if id != Self.botID { SnowballRoom.shared.hit(id) }
+            if id == Self.botID {
+                botLives -= 1
+                if botLives <= 0 {
+                    simulation.puff(at: figure.bot.middle, near: figure.bot.near, size: figure.bot.height * 0.3)
+                    figure.bot.knockOut()
+                    botBackAt = CACurrentMediaTime() + 5
+                }
+            }
             return true
         }
     }

@@ -81,3 +81,8 @@
 "fight.failed" = "No se pudo conectar";
 "fight.unavailable" = "El juego en línea no está disponible ahora";
 "surface.selection" = "Selección";
+"fight.you" = "Tú";
+"fight.won" = "¡Gana %@!";
+"fight.youwon" = "¡Ganaste!";
+"fight.out" = "Estás fuera";
+"fight.wins" = "Victorias";

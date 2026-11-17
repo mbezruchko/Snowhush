@@ -555,6 +555,10 @@ final class SnowmanBot {
     }
     private var hat = Hat.worn(grow: 1)
     private var hatFade: Float = 1
+    /// Out of the round: he slumps into the snow and is gone until he comes back.
+    private(set) var knockedOut = false
+    /// How far he has slumped away, 0 standing to 1 gone.
+    private var melt: Float = 0
 
     /// One standing at `foot`.
     init(ground: SnowmanGround, foot: SIMD2<Float>, now: Double, throwsOnHisOwn: Bool = true) {
@@ -625,21 +629,24 @@ final class SnowmanBot {
     var placements: (body: Placement, arm: Placement, hat: Placement) {
         let h = height
         let mirror = simd_float2x2(SIMD2(facing, 0), SIMD2(0, 1))
-        let body = rotation(lean * facing) * mirror * h
-        let base = foot + SIMD2(0, bounce * h)
+        // Slumping, he sinks into the snow and squats down as he fades.
+        let squat = simd_float2x2(SIMD2(1 + 0.15 * melt, 0), SIMD2(0, 1 - 0.45 * melt))
+        let body = rotation(lean * facing) * mirror * squat * h
+        let base = foot + SIMD2(0, bounce * h - 0.35 * melt * h)
+        let shown = 1 - melt
         let shoulder = base + body * SnowmanArt.shoulder
         let arm = rotation(lean * facing) * mirror * rotation(armAngle) * h
         let hatPlacement: Placement
         switch hat {
         case let .worn(grow):
             let m = rotation(lean * facing) * mirror * rotation(0.08) * (h * grow)
-            hatPlacement = Placement(matrix: m, offset: base + body * SnowmanArt.crown, alpha: 1)
+            hatPlacement = Placement(matrix: m, offset: base + body * SnowmanArt.crown, alpha: shown)
         case let .flying(position, _, turn, _):
-            hatPlacement = Placement(matrix: rotation(turn) * mirror * h, offset: position, alpha: 1)
+            hatPlacement = Placement(matrix: rotation(turn) * mirror * h, offset: position, alpha: shown)
         case let .lying(position, turn, _):
-            hatPlacement = Placement(matrix: rotation(turn) * mirror * h, offset: position, alpha: hatFade)
+            hatPlacement = Placement(matrix: rotation(turn) * mirror * h, offset: position, alpha: hatFade * shown)
         }
-        return (Placement(matrix: body, offset: base, alpha: 1), Placement(matrix: arm, offset: shoulder, alpha: 1), hatPlacement)
+        return (Placement(matrix: body, offset: base, alpha: shown), Placement(matrix: arm, offset: shoulder, alpha: shown), hatPlacement)
     }
 
     /// His throwing arm is raised behind him, winding up.
@@ -656,6 +663,7 @@ final class SnowmanBot {
 
     /// Whether a point is on him.
     func contains(_ point: SIMD2<Float>) -> Bool {
+        guard !knockedOut else { return false }
         let body = placements.body
         let inverse = body.matrix.inverse
         let local = inverse * (point - body.offset)
@@ -669,6 +677,11 @@ final class SnowmanBot {
     /// anything of him moved.
     func step(dt: Float, now: Double, canThrow: Bool, throwBall: (SIMD2<Float>, Float, String?) -> Void) -> Bool {
         var moved = stepHat(dt: dt)
+        if knockedOut || melt > 0 {
+            melt = knockedOut ? min(1, melt + dt / 0.9) : max(0, melt - dt / 0.5)
+            moved = true
+            if knockedOut { return moved }
+        }
         switch act {
         case .idle:
             if throwsOnHisOwn, owed > 0, canThrow, now >= nextThrow {
@@ -764,6 +777,25 @@ final class SnowmanBot {
         stride += dt * 9
         lean = sin(stride) * 0.06
         bounce = abs(sin(stride)) * 0.022
+    }
+
+    /// Out of the round: he slumps into the snow and fades away, and does nothing more until he comes back.
+    func knockOut() {
+        guard !knockedOut else { return }
+        knockedOut = true
+        path = []
+        queued = []
+        owed = 0
+        target = nil
+        act = .idle
+    }
+
+    /// Back for the next round: he rises out of the snow, his hat on.
+    func comeBack() {
+        guard knockedOut else { return }
+        knockedOut = false
+        hatFade = 1
+        hat = .worn(grow: 0)
     }
 
     /// Hit by a snowball: he reels, and his hat flies off.

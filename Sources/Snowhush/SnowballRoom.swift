@@ -25,6 +25,25 @@ final class SnowballRoom {
     private(set) var players: [Player] = []
     /// The invite to the room, when hosting it.
     private(set) var invite: String?
+    /// How many snowballs a snowman takes before he falls apart.
+    static let startingLives = 5
+    /// What is left of each player's snowman this round, by id, this player's among them. Every player hears of every
+    /// hit, so all count the same.
+    private(set) var lives: [String: Int] = [:]
+    /// Rounds each player has won, by id.
+    private(set) var wins: [String: Int] = [:]
+    /// The one left standing, until the next round starts.
+    private(set) var winner: String?
+    private var nextRound: Timer?
+
+    func lives(of player: String) -> Int { lives[player] ?? Self.startingLives }
+    func wins(of player: String) -> Int { wins[player] ?? 0 }
+    func isOut(_ player: String) -> Bool { lives(of: player) <= 0 }
+
+    /// A player's name, this player's as "You".
+    func name(of player: String) -> String {
+        player == me ? tr("fight.you") : players.first { $0.id == player }?.name ?? ""
+    }
 
     /// Who is in the room changed, or the room opened, closed or failed.
     static let changed = Notification.Name("SnowballRoomChanged")
@@ -113,9 +132,51 @@ final class SnowballRoom {
     }
 
     /// Says this player hit `player`.
-    func hit(_ player: String) {
-        guard me != nil else { return }
+    /// Says this player hit `player`; it counts only while both are in the round. Returns whether it counted.
+    @discardableResult
+    func hit(_ player: String) -> Bool {
+        guard let me, counts(from: me, at: player) else { return false }
         sn_throw(player)
+        // The room doesn't tell a player of its own throws.
+        land(at: player)
+        return true
+    }
+
+    /// Whether a hit from one player at another counts: in a round still going, both still standing.
+    func counts(from: String, at: String) -> Bool {
+        winner == nil && !isOut(from) && !isOut(at)
+    }
+
+    private func land(at player: String) {
+        lives[player] = lives(of: player) - 1
+        settleRound()
+        post()
+    }
+
+    /// Everyone's snowman whole again.
+    private func startRound() {
+        nextRound?.invalidate()
+        nextRound = nil
+        lives = [:]
+        winner = nil
+    }
+
+    /// With one left standing of two or more, he wins the round, and another starts a few seconds later.
+    private func settleRound() {
+        guard winner == nil, let me else { return }
+        let everyone = [me] + players.map(\.id)
+        guard everyone.count >= 2 else { return }
+        let standing = everyone.filter { !isOut($0) }
+        if standing.isEmpty { return startRound() }
+        guard standing.count == 1 else { return }
+        winner = standing[0]
+        wins[standing[0], default: 0] += 1
+        let timer = Timer(timeInterval: 8, repeats: false) { [weak self] _ in
+            self?.startRound()
+            self?.post()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        nextRound = timer
     }
 
     func leave() {
@@ -143,6 +204,8 @@ final class SnowballRoom {
         state = .none
         players = []
         invite = nil
+        startRound()
+        wins = [:]
     }
 
     private func listen() {
@@ -176,13 +239,21 @@ final class SnowballRoom {
         case "player":
             guard let id = event["id"], let name = event["name"], !players.contains(where: { $0.id == id }) else { return }
             players.append(Player(id: id, name: name))
+            // Someone new comes into a fresh round, everyone whole: all start it as they hear of him.
+            startRound()
             post()
         case "left":
             players.removeAll { $0.id == event["id"] }
+            if let id = event["id"] {
+                lives[id] = nil
+                wins[id] = nil
+            }
+            settleRound()
             post()
         case "throw":
-            guard let from = event["from"], let at = event["at"] else { return }
+            guard let from = event["from"], let at = event["at"], from != me, counts(from: from, at: at) else { return }
             NotificationCenter.default.post(name: Self.thrown, object: self, userInfo: ["from": from, "at": at])
+            land(at: at)
         case "closed":
             sn_leave()
             reset()

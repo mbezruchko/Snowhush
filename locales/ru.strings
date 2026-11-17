@@ -81,3 +81,8 @@
 "fight.failed" = "Не удалось подключиться";
 "fight.unavailable" = "Игра по сети сейчас недоступна";
 "surface.selection" = "Выделение";
+"fight.you" = "Вы";
+"fight.won" = "%@ побеждает!";
+"fight.youwon" = "Вы победили!";
+"fight.out" = "Вы выбыли";
+"fight.wins" = "Победы";

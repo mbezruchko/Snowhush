@@ -337,7 +337,7 @@ final class PictureSnow {
         simulation.keepsAwake = false
     }
 
-    /// An Option-click: over the wallpaper shown, where nothing is in front of it, a snowball goes into the picture.
+    /// A Command-click: over the wallpaper shown, where nothing is in front of it, a snowball goes into the picture.
     private func clicked(at mouse: NSPoint) {
         guard let desktop = current, let ground = desktop.ground, let fight, screen.visibleFrame.contains(mouse) else { return }
         let frame = screen.frame

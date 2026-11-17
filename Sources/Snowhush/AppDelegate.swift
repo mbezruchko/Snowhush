@@ -499,8 +499,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
             status.title = tr("fight.joining")
         case .open:
             status.isHidden = false
-            let names = room.players.map(\.name)
-            status.title = names.isEmpty ? tr("fight.waiting") : String(format: tr("fight.with"), names.joined(separator: ", "))
+            // The round: what is left of each snowman, this player's first; once it is won, who won it.
+            let everyone = (room.me.map { [$0] } ?? []) + room.players.map(\.id)
+            if let winner = room.winner {
+                status.title = winner == room.me ? tr("fight.youwon") : String(format: tr("fight.won"), room.name(of: winner))
+            } else if room.players.isEmpty {
+                status.title = tr("fight.waiting")
+            } else {
+                status.title = everyone.map { "\(room.name(of: $0)) ♥\(room.lives(of: $0))" }.joined(separator: " · ")
+            }
         case let .failed(reason):
             status.isHidden = false
             status.title = reason
