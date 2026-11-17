@@ -43,8 +43,39 @@ final class SnowballRoom {
         NSFullUserName().split(separator: " ").first.map(String.init) ?? "Snowman"
     }
 
-    /// A relay of one's own, if set; else iroh's public ones, which are meant for trying things out.
-    private static var relay: String? { UserDefaults.standard.string(forKey: "fightRelay") }
+    /// What snowhush.app/relay.json says about playing online: the relay to go through, "default" for iroh's public
+    /// ones, and whether to play online at all. The relay can so be changed for everyone, or play stopped, without a
+    /// new release.
+    private struct Settings: Decodable {
+        let relay: String?
+        let online: Bool?
+    }
+
+    private static let settings = URL(string: "https://snowhush.app/relay.json")!
+
+    /// The relay to go through and whether playing online is on: a relay of one's own if set, else what the site
+    /// says, else what it last said, else iroh's public relays. Asked only on opening or joining a room, three seconds
+    /// at most.
+    private static func withSettings(_ then: @escaping (_ relay: String?, _ online: Bool) -> Void) {
+        if let own = UserDefaults.standard.string(forKey: "fightRelay"), !own.isEmpty {
+            then(own, true)
+            return
+        }
+        let request = URLRequest(url: settings, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 3)
+        let session = URLSession(configuration: .ephemeral)
+        session.dataTask(with: request) { data, response, _ in
+            let known = UserDefaults.standard
+            if let data, (response as? HTTPURLResponse)?.statusCode == 200, let said = try? JSONDecoder().decode(Settings.self, from: data) {
+                let relay = said.relay.flatMap { URL(string: $0)?.scheme == "https" ? $0 : nil }
+                known.set(relay, forKey: "fightRelayKnown")
+                known.set(said.online ?? true, forKey: "fightOnlineKnown")
+            }
+            let relay = known.string(forKey: "fightRelayKnown")
+            let online = known.object(forKey: "fightOnlineKnown") as? Bool ?? true
+            DispatchQueue.main.async { then(relay, online) }
+        }.resume()
+        session.finishTasksAndInvalidate()
+    }
 
     /// The link that brings a friend into the room.
     static func link(for invite: String) -> String { "snowhush://join/\(invite)" }
@@ -53,17 +84,31 @@ final class SnowballRoom {
     func host() {
         reset()
         state = .opening
-        sn_host(Self.name, Self.relay)
-        listen()
         post()
+        Self.withSettings { [weak self] relay, online in
+            guard let self, state == .opening else { return }
+            guard online else { return unavailable() }
+            sn_host(Self.name, relay)
+            listen()
+        }
     }
 
     /// Joins the room of an invite, given as a link or as it is.
     func join(_ invite: String) {
         reset()
         state = .joining
-        sn_join(invite.trimmingCharacters(in: .whitespacesAndNewlines), Self.name, Self.relay)
-        listen()
+        post()
+        let invite = invite.trimmingCharacters(in: .whitespacesAndNewlines)
+        Self.withSettings { [weak self] relay, online in
+            guard let self, state == .joining else { return }
+            guard online else { return unavailable() }
+            sn_join(invite, Self.name, relay)
+            listen()
+        }
+    }
+
+    private func unavailable() {
+        state = .failed(tr("fight.unavailable"))
         post()
     }
 

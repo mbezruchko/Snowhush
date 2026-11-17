@@ -79,3 +79,4 @@
 "fight.full" = "La sala está llena";
 "fight.closed" = "La sala se cerró";
 "fight.failed" = "No se pudo conectar";
+"fight.unavailable" = "El juego en línea no está disponible ahora";
