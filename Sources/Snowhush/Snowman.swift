@@ -530,6 +530,10 @@ final class SnowmanBot {
     let throwsOnHisOwn: Bool
     /// Whom the snowball being wound up is for: a player in the picture, or nil for the screen.
     private var target: String?
+    /// Throws asked for while one is under way, each to follow in turn: every hit a friend scores is thrown.
+    private var queued: [String?] = []
+    /// Seconds the wind-up takes: shorter for throws following one after another.
+    private var windUp: Float = 0.5
 
     private enum Act {
         case idle
@@ -569,10 +573,21 @@ final class SnowmanBot {
         restUntil = now + 1.5
     }
 
-    /// Winds up and throws at once: at the screen, or at the player `target` in the picture.
+    /// Winds up and throws at once, even reeling: at the screen, or at the player `target` in the picture. While a
+    /// throw is under way, this one follows it, up to eight waiting.
     func throwNow(at target: String?) {
+        switch act {
+        case .idle, .reeling:
+            start(target, quickly: false)
+        case .windingUp, .throwing:
+            if queued.count < 8 { queued.append(target) }
+        }
+    }
+
+    private func start(_ target: String?, quickly: Bool) {
         self.target = target
         path = []
+        windUp = quickly ? 0.25 : 0.5
         act = .windingUp(0)
     }
 
@@ -655,6 +670,7 @@ final class SnowmanBot {
         switch act {
         case .idle:
             if throwsOnHisOwn, canThrow, now >= nextThrow, path.isEmpty || now >= nextThrow + 4 {
+                windUp = 0.5
                 act = .windingUp(0)
                 path = []
                 return true
@@ -675,7 +691,7 @@ final class SnowmanBot {
                 if now >= restUntil { wander(now: now) }
             }
         case let .windingUp(t):
-            let t = t + dt / 0.5
+            let t = t + dt / windUp
             let ease = t * t * (3 - 2 * t)
             armAngle = -0.45 + (2.35 + 0.45) * min(ease, 1)
             lean = -0.07 * min(ease, 1)
@@ -691,7 +707,10 @@ final class SnowmanBot {
             armAngle = 2.35 - (2.35 + 1.0) * min(t, 1)
             lean = -0.07 + 0.17 * min(t, 1)
             act = t >= 1 ? .idle : .throwing(t)
-            if t >= 1 { restUntil = now + Double.random(in: 0.8...2, using: &random) }
+            if t >= 1 {
+                restUntil = now + Double.random(in: 0.8...2, using: &random)
+                if !queued.isEmpty { start(queued.removeFirst(), quickly: true) }
+            }
             moved = true
         case let .reeling(t):
             let t = t + dt

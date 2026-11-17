@@ -257,8 +257,8 @@ async fn welcome(room: Arc<Room>, connection: Connection) -> Result<()> {
     let mut last = tokio::time::Instant::now() - Duration::from_secs(1);
     while let Ok(wire) = read(&mut recv).await {
         if let Wire::Throw { at, .. } = wire {
-            // A snowball every half a second at most, from anyone.
-            if last.elapsed() < Duration::from_millis(500) {
+            // A snowball every 150 ms at most from anyone: as fast as one can click, not as fast as a script.
+            if last.elapsed() < Duration::from_millis(150) {
                 continue;
             }
             last = tokio::time::Instant::now();
