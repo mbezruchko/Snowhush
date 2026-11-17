@@ -24,6 +24,8 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$app/Contents/Framewor
 # look, without Liquid Glass.
 vtool -set-build-version macos "$minimum" "$(xcrun --sdk macosx --show-sdk-version)" -replace \
     -output "$app/Contents/MacOS/Snowhush" "$products/Snowhush"
+# Local symbols serve only a debugger; without them the app is several megabytes lighter.
+strip -x "$app/Contents/MacOS/Snowhush"
 ditto "$products/Sparkle.framework" "$app/Contents/Frameworks/Sparkle.framework"
 cp Resources/Info.plist "$app/Contents/"
 cp Resources/AppIcon.icns "$app/Contents/Resources/"
