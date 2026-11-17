@@ -353,15 +353,17 @@ final class SnowballFight {
         return nil
     }
 
-    /// How hot this player's arm is from throwing: each throw adds one, and it cools to a fifth in about 2.5 seconds.
+    /// How hot this player's arm is from throwing: each throw adds a half, and it cools to a fifth in about 2.5
+    /// seconds.
     private var heat: Float = 0
     private var heatAt: Double = 0
 
     /// Throws a snowball from in front of the screen at `point` in the picture, where it is `near`; it hits a
     /// snowman still there when it comes down, and a friend's tells the friend. The first throw after a rest goes
-    /// where it is aimed; the faster they follow, the farther they stray: one a second, about a third of a snowman's
-    /// height there, so that one aimed at his middle hits him about every other time; one every half second or
-    /// faster, near three times that.
+    /// where it is aimed; the faster they follow, the farther they stray, slowly: one a second, by about a sixth of a
+    /// snowman's height there, so that one aimed at his middle mostly hits him; one every half second, by twice that,
+    /// about every other one hitting; one every third of a second, near four times that, and as fast as one can
+    /// click, near six times.
     func throwBall(at point: SIMD2<Float>, near: Float, size: Float, screenWidth: Float) {
         guard let simulation else { return }
         let start = SIMD2(screenWidth * 0.5 + (point.x - screenWidth * 0.5) * 0.35, -30)
@@ -370,7 +372,7 @@ final class SnowballFight {
         heat *= exp(-Float(now - heatAt) / 1.5)
         heatAt = now
         let stray = min(heat, 3)
-        heat += 1
+        heat += 0.5
         let height = size * 10
         let u = Float.random(in: Float.ulpOfOne..<1), v = Float.random(in: 0..<1)
         let spread = (-2 * log(u)).squareRoot() * stray
