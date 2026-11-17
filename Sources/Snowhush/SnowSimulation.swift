@@ -249,16 +249,23 @@ private struct PictureBall {
     let end: Float
     let duration: Float
     let landed: (SIMD2<Float>) -> Bool
+    /// Thrown from in front of the screen, rather than by someone in the picture: on its way into the picture it
+    /// passes where the windows stand.
+    let fromScreen: Bool
     var age: Float = 0
+    /// Gone past where the windows stand, into the picture: behind them from then on.
+    var crossed = false
 
     /// How far along it is, 0 to 1.
     var flown: Float { min(age / duration, 1) }
+    /// How far along its way across the screen it is, slowing into the distance.
+    var along: Float { 1 - pow(1 - flown, 1.7) }
 
     /// Where it is, how big, and how near in the picture.
     var placement: (SIMD2<Float>, Float, Float) {
         let t = flown
         // Seen in perspective it covers most of the way across the screen early on, and slows into the distance.
-        let along = 1 - pow(1 - t, 1.7)
+        let along = self.along
         let rise = simd_distance(from, to) * 0.22 + 40
         let position = from + (to - from) * along + SIMD2(0, sin(along * .pi) * rise * (1 - 0.4 * t))
         let size = 1 / (1 / start + (1 / end - 1 / start) * along)
@@ -1051,6 +1058,8 @@ final class SnowSimulation {
         }
         for ball in pictureBalls where count < capacity {
             let (position, size, scene) = ball.placement
+            // Once in the picture, it is behind the windows.
+            if ball.crossed || !ball.fromScreen, covered(position) { continue }
             buffer[count] = Sprite(position: position, size: size, alpha: 1, soft: 0.14)
             buffer[count].scene = scene
             buffer[count].sceneLight = 1 - ball.flown
@@ -2935,6 +2944,18 @@ final class SnowSimulation {
         i = pictureBalls.count - 1
         while i >= 0 {
             pictureBalls[i].age += dt
+            // Thrown from the screen, it passes where the windows stand a third of the way: one there stops it, and it
+            // bursts on its glass.
+            if pictureBalls[i].fromScreen, !pictureBalls[i].crossed, pictureBalls[i].along >= 0.3 {
+                pictureBalls[i].crossed = true
+                let (position, size, _) = pictureBalls[i].placement
+                if covered(position) {
+                    pictureBalls.remove(at: i)
+                    shatter(at: position, scale: min(max(size / 70, 0.3), 0.6), jolts: false)
+                    i -= 1
+                    continue
+                }
+            }
             if pictureBalls[i].age >= pictureBalls[i].duration {
                 let ball = pictureBalls.remove(at: i)
                 if !ball.landed(ball.to), ball.near > Wallpaper.ground { splat(ball) }
@@ -2965,7 +2986,7 @@ final class SnowSimulation {
         // in the picture to another by how far apart in depth they are and across the screen.
         let far = farness(near)
         let flight = origin.map { 0.45 + 1.1 * abs(farness($0) - far) + 0.6 * far + simd_distance(start, point) / 2400 } ?? 0.45 + 1.4 * pow(far, 1.2)
-        pictureBalls.append(PictureBall(from: start, to: point, near: near, start: startSize, end: size, duration: flight, landed: landed))
+        pictureBalls.append(PictureBall(from: start, to: point, near: near, start: startSize, end: size, duration: flight, landed: landed, fromScreen: origin == nil))
         stirred()
     }
 
@@ -3023,15 +3044,24 @@ final class SnowSimulation {
 
     /// A snowball smacking into the screen: the scene jolts, the snowfall around is blown back, and the snow
     /// flattens against the glass and clings there a moment, crumbling from its edge, while the rest flies apart.
-    private func shatter(at point: SIMD2<Float>) {
-        hitAt = clock
+    /// Whether a window or the Dock stands in front of the desktop at a point.
+    private func covered(_ point: SIMD2<Float>) -> Bool {
+        desktopCovers.contains { point.x >= $0.x && point.x <= $0.z && point.y >= $0.y && point.y <= $0.w }
+    }
+
+    /// `scale` makes it smaller, as a snowball bursting on a window rather than on the screen; one that doesn't `jolt`
+    /// the scene leaves it still.
+    private func shatter(at point: SIMD2<Float>, scale: Float = 1, jolts: Bool = true) {
+        if jolts { hitAt = clock }
+        let push = 300 * scale
         for i in flakes.indices {
             let away = flakes[i].position - point
             let distance = simd_length(away)
-            if distance > 1, distance < 300 { flakes[i].velocity += away / distance * (1 - distance / 300) * 900 }
+            if distance > 1, distance < push { flakes[i].velocity += away / distance * (1 - distance / push) * 900 * scale }
         }
-        let reach: Float = 65
-        for _ in 0..<360 where grains.count < maxGrains {
+        let reach: Float = 65 * scale
+        let many = scale * scale
+        for _ in 0..<Int(360 * many) where grains.count < maxGrains {
             let angle = random.range(0, 2 * .pi)
             let out = sqrt(random.next())
             let ragged = 1 + 0.18 * sin(angle * 5 + 1.3) + 0.1 * sin(angle * 9)
@@ -3043,27 +3073,27 @@ final class SnowSimulation {
                 stuck: 0.5 + (1 - out) * 1.6 + random.range(0, 0.4)
             ))
         }
-        for _ in 0..<90 where grains.count < maxGrains {
+        for _ in 0..<Int(90 * many) where grains.count < maxGrains {
             let angle = random.range(0, 2 * .pi)
             let direction = SIMD2(cos(angle), sin(angle))
             grains.append(Grain(
                 position: point + direction * random.range(reach * 0.6, reach),
-                velocity: direction * random.range(150, 600) + SIMD2(0, 120),
+                velocity: direction * random.range(150, 600) * max(scale, 0.5) + SIMD2(0, 120),
                 area: random.range(0.6, 1.4),
                 size: random.range(1.4, 3.2)
             ))
         }
-        for _ in 0..<5 {
+        for _ in 0..<max(Int(5 * scale), 1) {
             let angle = random.range(0, 2 * .pi)
-            throwLump(random.range(6, 12), at: point + SIMD2(cos(angle), sin(angle)) * reach * 0.8, velocity: SIMD2(cos(angle), sin(angle)) * random.range(150, 350) + SIMD2(0, 150))
+            throwLump(random.range(6, 12) * scale, at: point + SIMD2(cos(angle), sin(angle)) * reach * 0.8, velocity: SIMD2(cos(angle), sin(angle)) * random.range(150, 350) * scale + SIMD2(0, 150))
         }
-        for _ in 0..<24 where motes.count < maxMotes {
+        for _ in 0..<Int(24 * scale) where motes.count < maxMotes {
             let angle = random.range(0, 2 * .pi)
             let direction = SIMD2(cos(angle), sin(angle))
             motes.append(Mote(
                 position: point + direction * random.range(0, reach),
-                velocity: direction * random.range(60, 220),
-                size: random.range(20, 45),
+                velocity: direction * random.range(60, 220) * scale,
+                size: random.range(20, 45) * scale,
                 alpha: random.range(0.12, 0.22),
                 life: random.range(0.8, 1.6)
             ))
