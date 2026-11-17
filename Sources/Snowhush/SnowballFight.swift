@@ -6,8 +6,11 @@ import simd
 /// own, a friend when the friend hits this player. Option-click the wallpaper to throw one back into it: hitting a
 /// friend's snowman sends the friend a snowball.
 final class SnowballFight {
-    /// Lets it be tried out: defaults write com.mbezruchko.Snowhush previewSnowballFight -bool true
-    static var wanted: Bool { UserDefaults.standard.bool(forKey: "previewSnowballFight") }
+    /// Lets it be tried out: defaults write com.mbezruchko.Snowhush previewSnowballFight -bool true, or a build handed
+    /// to friends with SnowballFight set in its Info.plist.
+    static var wanted: Bool {
+        UserDefaults.standard.bool(forKey: "previewSnowballFight") || Bundle.main.object(forInfoDictionaryKey: "SnowballFight") as? Bool == true
+    }
 
     private final class Figure {
         let bot: SnowmanBot
