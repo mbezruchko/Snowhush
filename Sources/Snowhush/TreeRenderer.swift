@@ -174,8 +174,8 @@ final class TreeRenderer {
     }
 
     /// The fireworks' sparks, each a glowing streak along its flight.
-    func encode(_ fireworks: Fireworks, with encoder: MTLRenderCommandEncoder, uniforms: TreeUniforms, air: MTLTexture?,
-                inPicture: (SIMD2<Float>) -> Bool) {
+    /// They are on the desktop: `covers`, the windows and the Dock in front of it, hide them.
+    func encode(_ fireworks: Fireworks, with encoder: MTLRenderCommandEncoder, uniforms: TreeUniforms, air: MTLTexture?, covers: [SIMD4<Float>]) {
         let sparks = fireworks.sparks
         guard !sparks.isEmpty else { return }
         let length = sparks.count * MemoryLayout<TreePiece>.stride
@@ -187,11 +187,9 @@ final class TreeRenderer {
         sparkSlot += 1
         let pieces = buffer.contents().bindMemory(to: TreePiece.self, capacity: sparks.count)
         for (k, spark) in sparks.enumerated() {
-            // One far off in the picture hides behind what is nearer there; over a window it is in front of it.
-            let near = spark.near >= 0 && inPicture(spark.position) ? spark.near : -1
             let dim: Float = spark.near >= 0 ? 0.6 + 0.4 * spark.scale : 1
             pieces[k] = TreePiece(a: SIMD4(spark.position, spark.velocity), b: SIMD4(spark.color, spark.brightness * dim),
-                                  c: SIMD4(spark.size, spark.flash ? 1 : 0, near, 5))
+                                  c: SIMD4(spark.size, spark.flash ? 1 : 0, spark.near, 5))
         }
         var uniforms = uniforms
         encoder.setRenderPipelineState(sparkPipeline)
@@ -199,6 +197,11 @@ final class TreeRenderer {
         encoder.setVertexBytes(&uniforms, length: MemoryLayout<TreeUniforms>.stride, index: 1)
         encoder.setFragmentBytes(&uniforms, length: MemoryLayout<TreeUniforms>.stride, index: 1)
         if let air { encoder.setFragmentTexture(air, index: 0) }
+        var hiding = Array(covers.prefix(32))
+        var count = UInt32(hiding.count)
+        if hiding.isEmpty { hiding = [SIMD4(repeating: 0)] }
+        encoder.setFragmentBytes(&hiding, length: MemoryLayout<SIMD4<Float>>.stride * hiding.count, index: 2)
+        encoder.setFragmentBytes(&count, length: MemoryLayout<UInt32>.stride, index: 3)
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: sparks.count)
     }
 

@@ -1,9 +1,10 @@
 import simd
 
-/// The New Year's midnight over the screen: rockets rise from behind the drifts and burst into sparks that droop
-/// and fade, a big volley near the end. Each burst flashes, lighting the snow in its colour. With a wallpaper whose
-/// depth is known, most are let off far away in it, from behind whatever in the picture is nearer: the farther, the
-/// smaller and lower, and hidden behind what stands in front.
+/// The New Year's midnight on the desktop: a rocket rises now and then, three a minute at most, and bursts into
+/// sparks that droop and fade, the burst flashing and lighting the snow in its colour. They are seen only where the
+/// desktop is, behind the windows. With a wallpaper whose depth is known, most are let off far away in it, from
+/// behind whatever in the picture is nearer: the farther, the smaller and lower, and hidden behind what stands in
+/// front.
 final class Fireworks {
     struct Spark {
         var position: SIMD2<Float>
@@ -70,27 +71,17 @@ final class Fireworks {
 
     var isEmpty: Bool { sparks.isEmpty }
 
-    /// Launches per second at `time` seconds past midnight: a steady start, a lull, the finale, then a few stragglers.
-    private static func rate(at time: Float) -> Float {
-        switch time {
-        case ..<0: 0
-        case ..<12: 2.4
-        case ..<38: 1.1
-        case ..<44: 6
-        case ..<58: 0.5
-        default: 0
-        }
-    }
+    /// Seconds past midnight that rockets go up in.
+    private static let show: Range<Float> = 0..<58
 
     func step(dt: Float, time: Float) {
-        if shown < 0 { nextLaunch = time }
+        if shown < 0 { nextLaunch = max(time, 0) }
         shown = time
-        let rate = Self.rate(at: time)
-        while rate > 0, time >= nextLaunch, sparks.count < Self.maxSparks {
+        // The first right at midnight, then one every twenty to thirty seconds: three a minute at most.
+        if Self.show.contains(time), time >= nextLaunch, sparks.count < Self.maxSparks {
             launch()
-            nextLaunch += 1 / rate * Float.random(in: 0.6...1.4)
+            nextLaunch = time + Float.random(in: 20...30)
         }
-        if rate == 0 { nextLaunch = time }
 
         var bursts: [(SIMD2<Float>, Shell, Float, Float)] = []
         var i = sparks.count - 1

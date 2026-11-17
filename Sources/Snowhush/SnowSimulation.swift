@@ -1162,11 +1162,11 @@ final class SnowSimulation {
         return nil
     }
 
-    /// Whether the wallpaper's picture shows at a point, with nothing in front of it there.
-    func showsPicture(at point: SIMD2<Float>) -> Bool {
-        guard terrain != nil, point.x >= 0, point.x < width, point.y >= 0, point.y < height else { return false }
-        return !frontCover[min(Int(height - point.y) / Self.frontCell, frontSize.height - 1) * frontSize.width
-                           + min(Int(point.x) / Self.frontCell, frontSize.width - 1)]
+    /// What stands in front of the desktop: the windows and the Dock, left, bottom, right and top.
+    var desktopCovers: [SIMD4<Float>] {
+        var frames = windowFrames
+        if let dock = layers.first(where: \.isDock) { frames.append(SIMD4(dock.origin.x, 0, dock.origin.x + dock.width, dock.origin.y)) }
+        return frames
     }
 
     /// Midnight: fireworks over the screen, and sparklers in the hands come out of the presents.

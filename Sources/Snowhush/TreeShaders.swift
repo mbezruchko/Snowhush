@@ -593,7 +593,13 @@ vertex SparkOut sparkVertex(uint vid [[vertex_id]], uint iid [[instance_id]], co
     return out;
 }
 
-fragment float4 sparkFragment(SparkOut in [[stage_in]], constant TreeUniforms &u [[buffer(1)]], texture2d<float> air [[texture(0)]]) {
+fragment float4 sparkFragment(SparkOut in [[stage_in]], constant TreeUniforms &u [[buffer(1)]], texture2d<float> air [[texture(0)]],
+                              constant float4 *covers [[buffer(2)]], constant uint &coverCount [[buffer(3)]]) {
+    // On the desktop: behind the windows and the Dock.
+    for (uint k = 0; k < coverCount; k++) {
+        float4 c = covers[k];
+        if (in.world.x >= c.x && in.world.x <= c.z && in.world.y >= c.y && in.world.y <= c.w) discard_fragment();
+    }
     // Far off in the wallpaper's picture, hidden behind whatever is nearer: it comes up from behind a ridge.
     float hidden = 1.0;
     if (in.near >= 0.0) {
