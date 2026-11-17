@@ -145,7 +145,7 @@ final class SnowmanRenderer {
         // The throwing arm goes behind him while he winds up, in front of him as it comes over.
         let armBehind = bot.armBehind
         var order: [(SnowmanBot.Placement, SIMD4<Float>, SIMD4<Float>, MTLTexture, SIMD4<Float>)] = []
-        if bot.knockedOut {
+        if bot.inPieces {
             // Broken apart: each ball cut out of the body's picture, the arm, the hat flying off.
             for piece in bot.debris {
                 order.append((piece.placement, piece.rect, piece.arm ? SnowmanArt.armRect : SnowmanArt.bodyRect, piece.arm ? textures.arm : textures.body, piece.cut))

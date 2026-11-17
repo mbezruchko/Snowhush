@@ -593,8 +593,9 @@ final class SnowmanBot {
     private(set) var knockedOut = false
     /// How far he still is from standing as he comes back, 1 under the snow to 0 up.
     private var melt: Float = 0
-    /// Since when he has been about to sink into the snow, to rise out of it somewhere else.
-    private var sinkingFor: Float?
+    /// Since when he has been on his way elsewhere for a heart lost: reeling from the hit, then in pieces, then
+    /// whole again somewhere else.
+    private var movingFor: Float?
 
     /// A piece of him flying apart: one of his balls, or his arm.
     private struct Piece {
@@ -758,7 +759,7 @@ final class SnowmanBot {
 
     /// Whether a point is on him.
     func contains(_ point: SIMD2<Float>) -> Bool {
-        guard !knockedOut, sinkingFor == nil else { return false }
+        guard !knockedOut, movingFor == nil else { return false }
         let body = placements.body
         let inverse = body.matrix.inverse
         let local = inverse * (point - body.offset)
@@ -775,14 +776,14 @@ final class SnowmanBot {
         if knockedOut {
             return breakApart(dt: dt) || moved
         }
-        if let before = sinkingFor {
-            // The hit's reel shows for a moment; then he sinks, snow flying, and rises elsewhere.
+        if let before = movingFor {
+            // The hit's reel shows for a moment; then he breaks apart, and once his pieces are gone he rises whole
+            // elsewhere.
             let since = before + dt
-            sinkingFor = since
+            movingFor = since
             if since >= 0.35 {
-                if before < 0.35 { bursts.append((foot, 0.3 * height)) }
-                melt = max(melt, min(1, (since - 0.35) / 0.3))
-                if since >= 0.65 { riseElsewhere(now: now) }
+                if before < 0.35 { breakUp() }
+                if !breakApart(dt: dt) { riseElsewhere(now: now) }
                 return true
             }
         }
@@ -891,17 +892,25 @@ final class SnowmanBot {
         bounce = abs(sin(stride)) * 0.022
     }
 
-    /// Out of the round: he slumps into the snow and fades away, and does nothing more until he comes back.
+    /// Whether he is in pieces: out of the round, or on his way elsewhere.
+    var inPieces: Bool { !pieces.isEmpty }
+
+    /// Out of the round: he breaks apart, and does nothing more until he comes back.
     func knockOut() {
         guard !knockedOut else { return }
         knockedOut = true
-        sinkingFor = nil
+        let broken = movingFor != nil && inPieces
+        movingFor = nil
         melt = 0
         path = []
         queued = []
         owed = 0
         target = nil
         act = .idle
+        if !broken { breakUp() }
+    }
+
+    private func breakUp() {
         // He comes apart where he stands: his head pops up and off, his middle topples, his arm flies, his bottom
         // cracks where it is; all to the side the last snowball didn't come from.
         let h = height
@@ -965,6 +974,7 @@ final class SnowmanBot {
     func comeBack() {
         guard knockedOut else { return }
         knockedOut = false
+        movingFor = nil
         pieces = []
         if let cell = ground.anywhere(using: &random, middling: true) { foot = ground.point(of: cell) }
         path = []
@@ -973,16 +983,17 @@ final class SnowmanBot {
         hat = .worn(grow: 0)
     }
 
-    /// A heart less: once the hit's reel has shown, he sinks into the snow where he stands and rises out of it
-    /// somewhere else, well away, harder to hit again. Nothing hits him until he is up there.
+    /// A heart less: once the hit's reel has shown, he breaks apart as when he is out, and once his pieces are gone
+    /// he rises out of the snow somewhere else, well away, harder to hit again. Nothing hits him until he is up there.
     func moveAway() {
-        guard !knockedOut, sinkingFor == nil else { return }
-        sinkingFor = 0
+        guard !knockedOut, movingFor == nil else { return }
+        movingFor = 0
         path = []
     }
 
     private func riseElsewhere(now: Double) {
-        sinkingFor = nil
+        movingFor = nil
+        pieces = []
         let from = foot
         var farthest: (point: SIMD2<Float>, distance: Float)?
         for _ in 0..<10 {
