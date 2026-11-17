@@ -68,7 +68,7 @@
 "setup.failed" = "Installation fehlgeschlagen: {error}.";
 "setup.retry" = "Erneut versuchen";
 "fight" = "Schneeballschlacht";
-"fight.invite" = "Freund einladen";
+"fight.invite" = "Freunde einladen";
 "fight.copy" = "Einladungslink kopieren";
 "fight.join" = "Mit kopiertem Link beitreten";
 "fight.leave" = "Raum verlassen";

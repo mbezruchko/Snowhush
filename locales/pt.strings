@@ -68,7 +68,7 @@
 "setup.failed" = "Não foi possível instalar: {error}.";
 "setup.retry" = "Tentar de novo";
 "fight" = "Guerra de bolas de neve";
-"fight.invite" = "Convidar um amigo";
+"fight.invite" = "Convidar amigos";
 "fight.copy" = "Copiar link de convite";
 "fight.join" = "Entrar com o link copiado";
 "fight.leave" = "Sair da sala";

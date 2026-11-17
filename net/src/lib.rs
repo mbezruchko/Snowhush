@@ -28,8 +28,8 @@ use tokio::{runtime::Runtime, sync::mpsc};
 const ALPN: &[u8] = b"snowhush/room/1";
 /// The most a single message may be, in bytes: names and ids are short.
 const MAX_MESSAGE: usize = 2048;
-/// The most players a room holds, the host among them.
-const MAX_PLAYERS: usize = 8;
+/// The most players a room holds, the host among them: one invite brings in as many friends as that.
+const MAX_PLAYERS: usize = 12;
 /// The longest a name may be, in characters.
 const MAX_NAME: usize = 24;
 

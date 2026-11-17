@@ -76,7 +76,7 @@
 "setup.failed" = "Couldn't install: {error}.";
 "setup.retry" = "Try Again";
 "fight" = "Snowball Fight";
-"fight.invite" = "Invite a Friend";
+"fight.invite" = "Invite Friends";
 "fight.copy" = "Copy Invite Link";
 "fight.join" = "Join from Clipboard";
 "fight.leave" = "Leave Room";
