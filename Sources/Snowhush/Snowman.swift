@@ -908,11 +908,13 @@ final class SnowmanBot {
         return true
     }
 
-    /// Back for the next round: he rises out of the snow, whole, his hat on.
+    /// Back for the next round: he rises out of the snow somewhere else, whole, his hat on.
     func comeBack() {
         guard knockedOut else { return }
         knockedOut = false
         pieces = []
+        if let cell = ground.anywhere(using: &random, middling: true) { foot = ground.point(of: cell) }
+        path = []
         melt = 1
         hatFade = 1
         hat = .worn(grow: 0)
