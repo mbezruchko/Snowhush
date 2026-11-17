@@ -43,6 +43,7 @@ final class PictureRenderer {
     private var relief: MTLTexture?
     private var light: MTLTexture?
     private var dabs: MTLTexture?
+    private var specks: MTLTexture?
     private var dabsVersion = -1
     private var columns: MTLBuffer?
     private var caps: [Cap] = []
@@ -90,6 +91,7 @@ final class PictureRenderer {
     func load(_ scene: WallpaperScene?, columnWidth: Float) {
         self.columnWidth = columnWidth
         dabs = nil
+        specks = nil
         dabsVersion = -1
         guard let scene else {
             relief = nil
@@ -183,20 +185,22 @@ final class PictureRenderer {
     /// it is there. `level` is how much has fallen everywhere, `dabs` what the flakes seen landing have left, `veil` how
     /// much the snow now falling hides the farthest things.
     @discardableResult
-    func draw(level: Float, veil: Float, dabs bytes: [UInt8], dabsSize: (width: Int, height: Int), dabsVersion version: Int,
+    func draw(level: Float, veil: Float, dabs bytes: [UInt8], specks speckBytes: [UInt8], dabsSize: (width: Int, height: Int), dabsVersion version: Int,
               into target: MTLTexture, screen: SIMD2<Float>, then done: @escaping () -> Void) -> Bool {
-        guard let relief, let light, dabsSize.width > 0, bytes.count >= dabsSize.width * dabsSize.height,
+        guard let relief, let light, dabsSize.width > 0, bytes.count >= dabsSize.width * dabsSize.height, speckBytes.count >= dabsSize.width * dabsSize.height,
               let commandBuffer = queue.makeCommandBuffer() else { return false }
         if dabs == nil || dabs?.width != dabsSize.width || dabs?.height != dabsSize.height {
             let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r8Unorm, width: dabsSize.width, height: dabsSize.height, mipmapped: false)
             descriptor.usage = .shaderRead
             dabs = device.makeTexture(descriptor: descriptor)
+            specks = device.makeTexture(descriptor: descriptor)
             dabsVersion = -1
         }
-        guard let dabs else { return false }
+        guard let dabs, let specks else { return false }
         if dabsVersion != version {
             dabsVersion = version
             dabs.replace(region: MTLRegionMake2D(0, 0, dabsSize.width, dabsSize.height), mipmapLevel: 0, withBytes: bytes, bytesPerRow: dabsSize.width)
+            specks.replace(region: MTLRegionMake2D(0, 0, dabsSize.width, dabsSize.height), mipmapLevel: 0, withBytes: speckBytes, bytesPerRow: dabsSize.width)
         }
         let half = (width: max(target.width / 2, 1), height: max(target.height / 2, 1))
         if lie == nil || lie?.width != half.width || lie?.height != half.height {
@@ -226,6 +230,7 @@ final class PictureRenderer {
         lying.setFragmentBytes(&uniforms, length: length, index: 0)
         lying.setFragmentTexture(dabs, index: 0)
         lying.setFragmentTexture(relief, index: 1)
+        lying.setFragmentTexture(specks, index: 2)
         lying.setFragmentTexture(noise, index: 3)
         lying.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         lying.endEncoding()

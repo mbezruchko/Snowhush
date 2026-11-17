@@ -266,6 +266,13 @@ final class PictureSnow {
     }
 
     /// A gust has cleared the snow: the picture's goes with it.
+    /// Flakes have come down in the picture: the frost they leave shows there now, not at the next look.
+    func landed() {
+        guard wanted, active, let desktop = current, desktop.terrain != nil, loaded == desktop.picture, renderer.loaded, !desktop.drawing,
+              desktop.dabs != simulation.dabsVersion, desktop.window.occlusionState.contains(.visible) else { return }
+        draw(desktop, level: simulation.pictureLevel, veil: simulation.pictureVeil, now: CACurrentMediaTime())
+    }
+
     func cleared() {
         kept = 0
         Preferences.pictureLevel = 0
@@ -484,7 +491,7 @@ final class PictureSnow {
         let now = CACurrentMediaTime()
         // What the flakes seen landing add in a second can't be told; in a few it can.
         let changed = abs(level - desktop.level) >= Self.step || abs(veil - desktop.veil) >= 0.01 || desktop.shrunk
-            || (desktop.dabs != simulation.dabsVersion && now - desktop.drawnAt >= 3)
+            || (desktop.dabs != simulation.dabsVersion && now - desktop.drawnAt >= 1)
         // Behind other windows it is drawn now and then all the same, so that uncovered it is never far behind.
         guard changed, desktop.window.occlusionState.contains(.visible) || now - desktop.drawnAt > 15 else { return }
         draw(desktop, level: level, veil: veil, now: now)
@@ -498,7 +505,7 @@ final class PictureSnow {
         let dabs = simulation.dabsVersion
         let first = desktop.front == nil
         desktop.drawing = true
-        let drawn = renderer.draw(level: level, veil: veil, dabs: simulation.dabs, dabsSize: simulation.dabsSize, dabsVersion: dabs, into: target.texture,
+        let drawn = renderer.draw(level: level, veil: veil, dabs: simulation.dabs, specks: simulation.specks, dabsSize: simulation.dabsSize, dabsVersion: dabs, into: target.texture,
                                   screen: SIMD2(Float(size.width), Float(size.height))) { [weak self, weak desktop] in
             guard let self, let desktop else { return }
             desktop.drawing = false

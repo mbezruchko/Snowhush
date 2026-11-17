@@ -228,6 +228,12 @@ private struct Mote {
     var alpha: Float
     var age: Float = 0
     var life: Float
+    var soft: Float = 1
+    /// A flake come to rest in the picture, fading into the frost it leaves: it neither moves nor spreads, and is lit
+    /// and hidden as the picture is at its nearness.
+    var still = false
+    var scene: Float = -1
+    var sceneLight: Float = 0
 }
 
 /// Snow, leaves and petals gathered from here and there, to come off as one.
@@ -930,8 +936,14 @@ final class SnowSimulation {
         }
         for mote in motes where count < capacity {
             let t = mote.age / mote.life
-            let fade = min(1, mote.age / 0.06) * pow(1 - t, 1.5)
-            buffer[count] = Sprite(position: mote.position, size: mote.size * (1 + t), alpha: mote.alpha * fade * fallingOpacity, soft: 1)
+            if mote.still {
+                buffer[count] = Sprite(position: mote.position, size: mote.size, alpha: mote.alpha * (1 - t * t) * fallingOpacity, soft: mote.soft)
+                buffer[count].scene = mote.scene
+                buffer[count].sceneLight = mote.sceneLight
+            } else {
+                let fade = min(1, mote.age / 0.06) * pow(1 - t, 1.5)
+                buffer[count] = Sprite(position: mote.position, size: mote.size * (1 + t), alpha: mote.alpha * fade * fallingOpacity, soft: 1)
+            }
             count += 1
         }
         for ghost in ghosts where count < capacity {
@@ -1051,6 +1063,12 @@ final class SnowSimulation {
     /// up each time.
     private(set) var dabs: [UInt8] = []
     private(set) var dabsVersion = 0
+    /// The frost each flake seen landing leaves right where it came down, 0 to 1 a cell; and as drawn, 0 to 255,
+    /// written out with `dabs`.
+    private var speckAmount: [Float] = []
+    private(set) var specks: [UInt8] = []
+    /// `dabs` and `specks` have been written out afresh.
+    var dabsLaid: () -> Void = {}
     var dabsSize: (width: Int, height: Int) { (terrain?.width ?? 0, terrain?.height ?? 0) }
     /// How much snow has fallen over the whole picture, as it grows step by step with the snowfall and melts: the same
     /// everywhere, so it comes as smoothly as time passes. Up to 1 it comes to cover what holds it; from there to
@@ -1128,6 +1146,8 @@ final class SnowSimulation {
         terrainNear = fresh.map { [UInt8]($0.near) } ?? []
         dabAmount = Array(repeating: 0, count: terrainNear.count)
         dabs = Array(repeating: 0, count: terrainNear.count)
+        speckAmount = dabAmount
+        specks = dabs
         dabsVersion += 1
         hasDabs = false
         pictureTop = 0
@@ -1158,13 +1178,19 @@ final class SnowSimulation {
         let own = flakeNearness[min(Int(flake.depth * 255), 255)]
         let near = Float(level) / 255
         guard level > groundLevel, near >= own - sceneTolerance else { return false }
-        if near <= own + sceneTolerance { layDab(size: flake.size, near: near, cx: cx, cy: cy) }
+        if near <= own + sceneTolerance {
+            layDab(size: flake.size, near: near, cx: cx, cy: cy, x: x, y: y)
+            if motes.count < maxMotes {
+                motes.append(Mote(position: flake.position, velocity: .zero, size: flake.size, alpha: flake.alpha, life: 0.7, soft: flake.soft, still: true, scene: own,
+                                  sceneLight: 1 - min(max((flake.depth - 0.45) / 0.45, 0), 1)))
+            }
+        }
         return true
     }
 
     /// A flake has landed in the picture: a dab of snow around where it fell, bigger for a bigger flake, and the
     /// farther off the less of it shows, as everything there is smaller.
-    private func layDab(size: Float, near: Float, cx: Int, cy: Int) {
+    private func layDab(size: Float, near: Float, cx: Int, cy: Int, x: Float, y: Float) {
         let cells = terrainCells
         let nearness = min(max((near - terrainSpan.far) / max(terrainSpan.close - terrainSpan.far, 0.01), 0), 1)
         let dab = size * size * 0.004 * (0.3 + 0.7 * nearness)
@@ -1175,6 +1201,18 @@ final class SnowSimulation {
                 let k = ny * cells.width + nx
                 dabAmount[k] = min(dabAmount[k] + dab * Self.dabWeights[(dy + 2) * 5 + dx + 2], 1)
             }
+        }
+        // The frost lies where the flake touched, shared among the four cells round that point as the texture will
+        // blend them back, so that it shows there and not at a cell's middle.
+        let fx = x / Float(cells.size) - 0.5, fy = y / Float(cells.size) - 0.5
+        let x0 = Int(fx.rounded(.down)), y0 = Int(fy.rounded(.down))
+        let ax = fx - Float(x0), ay = fy - Float(y0)
+        let speck = min(size * 0.3, 0.9) * (0.6 + 0.4 * nearness) * 1.6
+        for (dx, dy, share) in [(0, 0, (1 - ax) * (1 - ay)), (1, 0, ax * (1 - ay)), (0, 1, (1 - ax) * ay), (1, 1, ax * ay)] {
+            let nx = x0 + dx, ny = y0 + dy
+            guard nx >= 0, nx < cells.width, ny >= 0, ny < cells.height else { continue }
+            let k = ny * cells.width + nx
+            speckAmount[k] = min(speckAmount[k] + speck * share, 1)
         }
         dabsTouched = true
         hasDabs = true
@@ -1247,6 +1285,7 @@ final class SnowSimulation {
             pictureLevel = 0
             if hasDabs {
                 for k in dabAmount.indices { dabAmount[k] = 0 }
+                for k in speckAmount.indices { speckAmount[k] = 0 }
                 hasDabs = false
                 dabsTouched = true
             }
@@ -1257,17 +1296,21 @@ final class SnowSimulation {
                 let elapsed = Float(min(clock - pictureTickedAt, 5))
                 pictureTickedAt = clock
                 if pictureMelting && hasDabs {
-                    var loss = -elapsed / 180, none: Float = 0, most: Float = 0
+                    var loss = -elapsed / 180, none: Float = 0, most: Float = 0, mostSpeck: Float = 0
                     let count = vDSP_Length(dabAmount.count)
                     vDSP_vsadd(dabAmount, 1, &loss, &dabAmount, 1, count)
                     vDSP_vthres(dabAmount, 1, &none, &dabAmount, 1, count)
                     vDSP_maxv(dabAmount, 1, &most, count)
-                    hasDabs = most > 0
+                    vDSP_vsadd(speckAmount, 1, &loss, &speckAmount, 1, count)
+                    vDSP_vthres(speckAmount, 1, &none, &speckAmount, 1, count)
+                    vDSP_maxv(speckAmount, 1, &mostSpeck, count)
+                    hasDabs = most > 0 || mostSpeck > 0
                     dabsTouched = true
                 }
             }
         }
-        guard dabsTouched, clock - dabsWrittenAt >= 1 else { return }
+        // Written out often enough for the frost to show where a flake came down as it fades there.
+        guard dabsTouched, clock - dabsWrittenAt >= 0.5 else { return }
         dabsTouched = false
         dabsWrittenAt = clock
         // A quarter of a million cells a second: in one vector pass, not one by one.
@@ -1281,7 +1324,17 @@ final class SnowSimulation {
                 vImageConvert_PlanarFtoPlanar8(&source, &target, 1, 0, vImage_Flags(kvImageNoFlags))
             }
         }
+        speckAmount.withUnsafeMutableBufferPointer { amounts in
+            specks.withUnsafeMutableBufferPointer { bytes in
+                var source = vImage_Buffer(data: amounts.baseAddress, height: vImagePixelCount(cells.height), width: vImagePixelCount(cells.width),
+                                           rowBytes: cells.width * MemoryLayout<Float>.stride)
+                var target = vImage_Buffer(data: bytes.baseAddress, height: vImagePixelCount(cells.height), width: vImagePixelCount(cells.width),
+                                           rowBytes: cells.width)
+                vImageConvert_PlanarFtoPlanar8(&source, &target, 1, 0, vImage_Flags(kvImageNoFlags))
+            }
+        }
         dabsVersion += 1
+        dabsLaid()
     }
 
     // MARK: - Windows
@@ -2356,9 +2409,11 @@ final class SnowSimulation {
                 motes.swapAt(i, motes.count - 1)
                 motes.removeLast()
             } else {
-                mote.velocity.y -= 35 * dt
-                mote.velocity *= damping
-                mote.position += (mote.velocity + SIMD2(drift, 0)) * dt
+                if !mote.still {
+                    mote.velocity.y -= 35 * dt
+                    mote.velocity *= damping
+                    mote.position += (mote.velocity + SIMD2(drift, 0)) * dt
+                }
                 motes[i] = mote
             }
             i -= 1

@@ -53,6 +53,7 @@ fragment float4 pictureLieFragment(CoverOut in [[stage_in]],
                                    constant PictureUniforms &u [[buffer(0)]],
                                    texture2d<float> dabs [[texture(0)]],
                                    texture2d<float> relief [[texture(1)]],
+                                   texture2d<float> specks [[texture(2)]],
                                    texture2d<float> noise [[texture(3)]]) {
     constexpr sampler smooth(filter::linear, mip_filter::linear, address::clamp_to_edge);
     constexpr sampler tiled(filter::linear, address::repeat);
@@ -79,7 +80,11 @@ fragment float4 pictureLieFragment(CoverOut in [[stage_in]],
     float under = relief.sample(smooth, uv + float2(0.0, 2.5) / u.viewSize, level(0.0)).r;
     // In what is nearly black the least grain is lighter than what is under it: there it takes a real step.
     float shelf = saturate((here.r - under) / (around + 0.1) * 5.0 - 0.4) * smoothstep(0.012, 0.04, here.r - under);
-    float frost = saturate(shelf * amount * 1.6 - 0.25) * 0.7;
+    // Frost forms first just where the flakes come down, on whatever they touch, best on those ledges; only once the
+    // snow has been falling a while does it grow on the ledges between.
+    float speck = specks.sample(smooth, uv).r;
+    float landed = saturate(max(shelf, max(holdNear.r, 0.45)) * speck * 1.6 - 0.1) * 0.75;
+    float frost = max(saturate(shelf * amount * 1.6 * smoothstep(0.2, 0.6, u.level) - 0.25) * 0.7, landed);
     if (snow < 0.005) return float4(0.0, frost, 0.0, 1.0);
     // Snow shows first where the picture is lighter than around it, on flat ground and old snow, and on the tops of
     // things; last on the dark of trees and rock, which still show through deep snow, and in a dark wood only as a
