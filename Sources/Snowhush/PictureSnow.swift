@@ -351,6 +351,8 @@ final class PictureSnow {
             host.insertSublayer(fireworks.layer, above: desktop.window.snow)
             fireworks.layer.frame = host.bounds
         }
+        // Covered by windows, the desktop shows none of it.
+        guard desktop.window.occlusionState.contains(.visible) else { return true }
         fireworks.draw(sparks, size: screen.frame.size, relief: renderer.reliefTexture, time: time)
         return true
     }

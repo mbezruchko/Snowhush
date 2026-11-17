@@ -7,19 +7,22 @@ import QuartzCore
 final class FireworksLayer {
     private let queue: MTLCommandQueue
     private let renderer: TreeRenderer
-    let layer = CAMetalLayer()
+    private let drawables: DrawableLayer
+    var layer: CAMetalLayer { drawables.layer }
     private var shown = false
 
     init?(device: MTLDevice) {
         guard let queue = device.makeCommandQueue(), let renderer = try? TreeRenderer(device: device, queue: queue, pixelFormat: .bgra8Unorm) else { return nil }
         self.queue = queue
         self.renderer = renderer
+        let layer = CAMetalLayer()
         layer.device = device
         layer.pixelFormat = .bgra8Unorm
         layer.isOpaque = false
         layer.framebufferOnly = true
         layer.contentsScale = 1
         layer.actions = ["position": NSNull(), "bounds": NSNull(), "frame": NSNull(), "contents": NSNull()]
+        drawables = DrawableLayer(layer)
     }
 
     /// Draws the sparks over `size` points, hidden behind whatever in the picture of `relief` is nearer than they are;
@@ -32,7 +35,7 @@ final class FireworksLayer {
         defer { CATransaction.commit() }
         let wanted = sparks ? size : CGSize(width: 1, height: 1)
         if layer.drawableSize != wanted { layer.drawableSize = wanted }
-        guard let drawable = layer.nextDrawable(), let commandBuffer = queue.makeCommandBuffer() else { return }
+        guard let drawable = drawables.nextDrawable(), let commandBuffer = queue.makeCommandBuffer() else { return }
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = drawable.texture
         pass.colorAttachments[0].loadAction = .clear

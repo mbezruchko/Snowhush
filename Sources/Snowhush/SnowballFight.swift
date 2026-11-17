@@ -329,16 +329,18 @@ final class SnowballFight {
             for (point, size) in figure.bot.takeBursts() {
                 simulation.crumble(at: point, floor: figure.bot.foot.y, near: figure.bot.near, size: size)
             }
-            if moved || !figure.drawn {
-                figure.renderer.draw(figure.bot, relief: relief, screen: screen, scale: scale)
-                if let label = figure.label {
+            // In a window not seen he is drawn once it is.
+            if !visible {
+                figure.drawn = false
+            } else if moved || !figure.drawn {
+                figure.drawn = figure.renderer.draw(figure.bot, relief: relief, screen: screen, scale: scale)
+                if figure.drawn, let label = figure.label {
                     CATransaction.begin()
                     CATransaction.setDisableActions(true)
                     let top = figure.bot.foot.y + figure.bot.height * 1.02 + 9
                     label.position = CGPoint(x: CGFloat(figure.bot.foot.x), y: CGFloat(top))
                     CATransaction.commit()
                 }
-                figure.drawn = true
             }
         }
     }

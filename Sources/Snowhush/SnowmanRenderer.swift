@@ -33,7 +33,8 @@ final class SnowmanRenderer {
     private let queue: MTLCommandQueue
     private let pipeline: MTLRenderPipelineState
     private let textures: (body: MTLTexture, arm: MTLTexture, hat: MTLTexture)
-    let layer = CAMetalLayer()
+    private let drawables: DrawableLayer
+    var layer: CAMetalLayer { drawables.layer }
 
     /// What every snowman is drawn with, made once for each GPU.
     private static var made: [UInt64: (pipeline: MTLRenderPipelineState, textures: (MTLTexture, MTLTexture, MTLTexture))] = [:]
@@ -51,6 +52,7 @@ final class SnowmanRenderer {
             pipeline = made.pipeline
             textures = (made.textures.0, made.textures.1, made.textures.2)
         }
+        let layer = CAMetalLayer()
         layer.device = device
         layer.pixelFormat = .bgra8Unorm
         layer.isOpaque = false
@@ -58,6 +60,7 @@ final class SnowmanRenderer {
         // The layer moves with him: what it shows and where it is change in one go.
         layer.presentsWithTransaction = true
         layer.actions = ["position": NSNull(), "bounds": NSNull(), "frame": NSNull(), "contents": NSNull(), "hidden": NSNull()]
+        drawables = DrawableLayer(layer)
     }
 
     private static func make(device: MTLDevice, queue: MTLCommandQueue) -> (pipeline: MTLRenderPipelineState, textures: (MTLTexture, MTLTexture, MTLTexture))? {
@@ -96,8 +99,9 @@ final class SnowmanRenderer {
     }
 
     /// Draws `bot` over the picture whose relief is `relief`, on a screen `screen` points across, at `scale` pixels a
-    /// point.
-    func draw(_ bot: SnowmanBot, relief: MTLTexture, screen: SIMD2<Float>, scale: CGFloat) {
+    /// point. Returns whether he was: not when no drawable is there yet, as while a Space slides.
+    @discardableResult
+    func draw(_ bot: SnowmanBot, relief: MTLTexture, screen: SIMD2<Float>, scale: CGFloat) -> Bool {
         let reach = bot.reach
         // Sized in steps, so that the layer's pictures need making again only now and then as he comes nearer.
         let step: Float = 24
@@ -111,18 +115,19 @@ final class SnowmanRenderer {
         if layer.contentsScale != scale { layer.contentsScale = scale }
         if layer.drawableSize != size { layer.drawableSize = size }
         layer.frame = frame
-        guard let drawable = layer.nextDrawable(), let commandBuffer = queue.makeCommandBuffer() else { return }
+        guard let drawable = drawables.nextDrawable(), let commandBuffer = queue.makeCommandBuffer() else { return false }
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = drawable.texture
         pass.colorAttachments[0].loadAction = .clear
         pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0)
         pass.colorAttachments[0].storeAction = .store
-        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return }
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return false }
         encode(bot, relief: relief, screen: screen, origin: origin, size: SIMD2(width, height), into: encoder)
         encoder.endEncoding()
         commandBuffer.commit()
         commandBuffer.waitUntilScheduled()
         drawable.present()
+        return true
     }
 
     /// Encodes `bot` into a pass over the region at `origin`, `size` points across.
