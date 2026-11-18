@@ -4,6 +4,7 @@
 
 use std::mem::size_of;
 
+use snowhush_core::snowman::{Drawing, Picture};
 use snowhush_core::wallpaper::drawing::{self, Cap};
 use snowhush_core::wallpaper::{GROUND, Scene};
 use windows::Win32::Graphics::Direct3D::{D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST, D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP};
@@ -13,9 +14,25 @@ use windows::Win32::Graphics::Dxgi::DXGI_PRESENT;
 use windows::core::{Error, PCSTR, Result, s};
 
 use super::{Gpu, Surface, compile_from, dynamic_buffer, pixel_shader, vertex_shader};
-use crate::log;
+use crate::{halloween, log};
 
 const SHADERS: &str = include_str!("../picture.hlsl");
+/// The snowman's body, throwing arm and hat, drawn once on the Mac 220 points tall at two pixels a point.
+const ART: [&[u8]; 3] =
+    [include_bytes!("../../assets/snowman/body.png"), include_bytes!("../../assets/snowman/arm.png"), include_bytes!("../../assets/snowman/hat.png")];
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct SnowmanUniforms {
+    rect: [f32; 4],
+    matrix: [f32; 4],
+    offset: [f32; 2],
+    alpha: f32,
+    near: f32,
+    picture: [f32; 4],
+    cut: [f32; 4],
+    tint: [f32; 4],
+}
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -51,6 +68,11 @@ pub(super) struct Programs {
     cap_constants: ID3D11Buffer,
     tiled: ID3D11SamplerState,
     noise: ID3D11ShaderResourceView,
+    copy_fragment: ID3D11PixelShader,
+    snowman_vertex: ID3D11VertexShader,
+    snowman_fragment: ID3D11PixelShader,
+    snowman_constants: ID3D11Buffer,
+    art: [ID3D11ShaderResourceView; 3],
 }
 
 /// What was found in one wallpaper, as the graphics card has it.
@@ -63,6 +85,9 @@ pub struct Painting {
     dabs_version: Option<u64>,
     /// Where the first pass leaves how the snow lies, half the surface's size, and the size it was made for.
     lie: Option<(ID3D11RenderTargetView, ID3D11ShaderResourceView, (u32, u32))>,
+    /// The snow as last drawn, the surface's size, for what moves over it to be drawn on; and whether it holds any.
+    cache: Option<(ID3D11RenderTargetView, ID3D11ShaderResourceView, (u32, u32))>,
+    cached: bool,
     /// Each ridge's columns, each twice, one for each corner of its strip.
     columns: Option<ID3D11Buffer>,
     caps: Vec<Cap>,
@@ -126,7 +151,40 @@ impl Gpu {
             cap_constants: dynamic_buffer(device, size_of::<CapUniforms>(), D3D11_BIND_CONSTANT_BUFFER)?,
             tiled: tiled.ok_or_else(Error::empty)?,
             noise: self.texture(DXGI_FORMAT_R8_UNORM, 256, 256, 1, &drawing::noise(), false)?.1,
+            copy_fragment: pixel_shader(device, &compile(s!("copyFragment"), s!("ps_4_0"))?)?,
+            snowman_vertex: vertex_shader(device, &compile(s!("snowmanVertex"), s!("vs_4_0"))?)?,
+            snowman_fragment: pixel_shader(device, &compile(s!("snowmanFragment"), s!("ps_4_0"))?)?,
+            snowman_constants: dynamic_buffer(device, size_of::<SnowmanUniforms>(), D3D11_BIND_CONSTANT_BUFFER)?,
+            art: [self.art(ART[0])?, self.art(ART[1])?, self.art(ART[2])?],
         })
+    }
+
+    fn art(&self, png: &[u8]) -> Result<ID3D11ShaderResourceView> {
+        let picture = halloween::decode(png)?;
+        Ok(self.texture(DXGI_FORMAT_R8G8B8A8_UNORM, picture.width as usize, picture.height as usize, 4, &picture.pixels, true)?.1)
+    }
+
+    /// A texture both drawn into and read, `size` across, with its target and view.
+    fn target(&self, size: (u32, u32)) -> Result<(ID3D11RenderTargetView, ID3D11ShaderResourceView, (u32, u32))> {
+        let desc = D3D11_TEXTURE2D_DESC {
+            Width: size.0,
+            Height: size.1,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            Usage: D3D11_USAGE_DEFAULT,
+            BindFlags: (D3D11_BIND_SHADER_RESOURCE.0 | D3D11_BIND_RENDER_TARGET.0) as u32,
+            ..Default::default()
+        };
+        let (mut texture, mut target, mut view) = (None, None, None);
+        unsafe {
+            self.device.CreateTexture2D(&desc, None, Some(&mut texture))?;
+            let texture = texture.ok_or_else(Error::empty)?;
+            self.device.CreateRenderTargetView(&texture, None, Some(&mut target))?;
+            self.device.CreateShaderResourceView(&texture, None, Some(&mut view))?;
+        }
+        Ok((target.ok_or_else(Error::empty)?, view.ok_or_else(Error::empty)?, size))
     }
 
     /// A texture of `pixels`, top row first, `bytes` each, and a view of it; with its smaller copies, `mipmapped`.
@@ -200,6 +258,8 @@ impl Gpu {
             dabs_size: (1, 1),
             dabs_version: None,
             lie: None,
+            cache: None,
+            cached: false,
             columns,
             caps,
             column_width,
@@ -211,7 +271,7 @@ impl Gpu {
 
 impl Surface {
     /// Draws the snow lying in the picture, the whole display `view` DIPs across, and shows it.
-    pub fn draw_picture(&mut self, gpu: &Gpu, painting: &mut Painting, lying: &Lying, view: [f32; 2]) -> Result<()> {
+    pub fn draw_picture(&mut self, gpu: &Gpu, painting: &mut Painting, lying: &Lying, view: [f32; 2], snowmen: &[Drawing]) -> Result<()> {
         let programs = gpu.picture_programs().ok_or_else(Error::empty)?;
         let context = &gpu.context;
         if painting.dabs_version != Some(lying.dabs_version) && lying.dabs_size.0 > 0 && lying.dabs.len() >= lying.dabs_size.0 * lying.dabs_size.1 {
@@ -230,27 +290,14 @@ impl Surface {
         }
         let half = ((self.width / 2).max(1), (self.height / 2).max(1));
         if painting.lie.as_ref().is_none_or(|(_, _, size)| *size != half) {
-            let desc = D3D11_TEXTURE2D_DESC {
-                Width: half.0,
-                Height: half.1,
-                MipLevels: 1,
-                ArraySize: 1,
-                Format: DXGI_FORMAT_R8G8B8A8_UNORM,
-                SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
-                Usage: D3D11_USAGE_DEFAULT,
-                BindFlags: (D3D11_BIND_SHADER_RESOURCE.0 | D3D11_BIND_RENDER_TARGET.0) as u32,
-                ..Default::default()
-            };
-            let (mut texture, mut target, mut view) = (None, None, None);
-            unsafe {
-                gpu.device.CreateTexture2D(&desc, None, Some(&mut texture))?;
-                let texture = texture.ok_or_else(Error::empty)?;
-                gpu.device.CreateRenderTargetView(&texture, None, Some(&mut target))?;
-                gpu.device.CreateShaderResourceView(&texture, None, Some(&mut view))?;
-            }
-            painting.lie = Some((target.ok_or_else(Error::empty)?, view.ok_or_else(Error::empty)?, half));
+            painting.lie = Some(gpu.target(half)?);
+        }
+        let whole = (self.width.max(1), self.height.max(1));
+        if painting.cache.as_ref().is_none_or(|(_, _, size)| *size != whole) {
+            painting.cache = Some(gpu.target(whole)?);
         }
         let (lie_target, lie_view, _) = painting.lie.clone().ok_or_else(Error::empty)?;
+        let (cache_target, _, _) = painting.cache.clone().ok_or_else(Error::empty)?;
         let level = lying.level;
         let uniforms = PictureUniforms {
             view_size: view,
@@ -292,9 +339,9 @@ impl Surface {
                 Some(&[Some(painting.dabs.1.clone()), Some(painting.relief.clone()), Some(painting.specks.1.clone()), Some(programs.noise.clone())]),
             );
             context.Draw(3, 0);
-            // The snow as it is seen, and the caps along the ridges.
-            context.OMSetRenderTargets(Some(&[Some(self.target_view.clone())]), None);
-            context.ClearRenderTargetView(&self.target_view, &[0.0; 4]);
+            // The snow as it is seen, and the caps along the ridges, kept for the snowmen to be drawn over.
+            context.OMSetRenderTargets(Some(&[Some(cache_target.clone())]), None);
+            context.ClearRenderTargetView(&cache_target, &[0.0; 4]);
             context.RSSetViewports(Some(&[viewport(self.width, self.height)]));
             context.OMSetBlendState(&gpu.blend, None, u32::MAX);
             context.PSSetShader(&programs.show_fragment, None);
@@ -320,7 +367,93 @@ impl Surface {
                 }
             }
             context.PSSetShaderResources(0, Some(&[None, None, None, None]));
+        }
+        painting.cached = true;
+        self.present_picture(gpu, painting, view, snowmen)
+    }
+
+    /// Shows the snow as last drawn with the snowmen over it, as they are now, each hidden behind what in the picture is
+    /// nearer than he is.
+    pub fn present_picture(&mut self, gpu: &Gpu, painting: &Painting, view: [f32; 2], snowmen: &[Drawing]) -> Result<()> {
+        let programs = gpu.picture_programs().ok_or_else(Error::empty)?;
+        let context = &gpu.context;
+        let uniforms = PictureUniforms {
+            view_size: view,
+            scale: self.width as f32 / view[0].max(1.0),
+            level: 0.0,
+            range: painting.range,
+            thickest: 0.0,
+            veil: 0.0,
+            unused: [0.0; 2],
+            haze: painting.haze,
+            dabs_area: [0.0; 4],
+        };
+        unsafe {
+            gpu.write(&programs.constants, &uniforms)?;
+            let constants = [Some(programs.constants.clone()), Some(programs.cap_constants.clone()), Some(programs.snowman_constants.clone())];
+            context.VSSetConstantBuffers(0, Some(&constants));
+            context.PSSetConstantBuffers(0, Some(&constants));
+            context.PSSetSamplers(0, Some(&[Some(gpu.sampler.clone())]));
+            context.RSSetState(&gpu.raster);
+            context.IASetInputLayout(None);
+            context.OMSetRenderTargets(Some(&[Some(self.target_view.clone())]), None);
+            context.ClearRenderTargetView(&self.target_view, &[0.0; 4]);
+            context.RSSetViewports(Some(&[D3D11_VIEWPORT {
+                TopLeftX: 0.0,
+                TopLeftY: 0.0,
+                Width: self.width as f32,
+                Height: self.height as f32,
+                MinDepth: 0.0,
+                MaxDepth: 1.0,
+            }]));
+            if painting.cached
+                && let Some((_, drawn, _)) = &painting.cache
+            {
+                context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+                context.OMSetBlendState(None, None, u32::MAX);
+                context.VSSetShader(&programs.cover_vertex, None);
+                context.PSSetShader(&programs.copy_fragment, None);
+                context.PSSetShaderResources(0, Some(&[Some(drawn.clone())]));
+                context.Draw(3, 0);
+            }
+            if !snowmen.is_empty() {
+                context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+                context.OMSetBlendState(&gpu.blend, None, u32::MAX);
+                context.VSSetShader(&programs.snowman_vertex, None);
+                context.PSSetShader(&programs.snowman_fragment, None);
+                context.PSSetShaderResources(1, Some(&[Some(painting.relief.clone())]));
+                for figure in snowmen {
+                    for part in &figure.parts {
+                        let art = match part.picture {
+                            Picture::Body => &programs.art[0],
+                            Picture::Arm => &programs.art[1],
+                            Picture::Hat => &programs.art[2],
+                        };
+                        let constants = SnowmanUniforms {
+                            rect: part.rect,
+                            matrix: part.matrix,
+                            offset: part.offset,
+                            alpha: part.alpha,
+                            near: figure.near,
+                            picture: part.whole,
+                            cut: part.cut,
+                            tint: [figure.tint[0], figure.tint[1], figure.tint[2], figure.nearness],
+                        };
+                        gpu.write(&programs.snowman_constants, &constants)?;
+                        context.PSSetShaderResources(0, Some(&[Some(art.clone())]));
+                        context.Draw(4, 0);
+                    }
+                }
+            }
+            context.PSSetShaderResources(0, Some(&[None, None]));
             self.swap_chain.Present(1, DXGI_PRESENT(0)).ok()
         }
+    }
+}
+
+impl Painting {
+    /// Forgets the snow drawn last, as when it is gone: only the snowmen show after.
+    pub fn uncache(&mut self) {
+        self.cached = false;
     }
 }

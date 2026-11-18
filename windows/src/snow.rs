@@ -19,6 +19,7 @@ use snowhush_core::halloween::Choice;
 use snowhush_core::modes::Picked;
 use snowhush_core::simulation::{Borrowed, Mapping, Mode, ScatterPiece, SnowSimulation, Stray};
 
+use crate::clicks;
 use crate::desktop::{self, DesktopLayer};
 use crate::halloween;
 use crate::light::{Sky, Wallpapers};
@@ -137,6 +138,8 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
     let mut picture_kept_at = 0;
     // The desktop's wallpaper layer the snow in the wallpapers goes into, found when it is first wanted.
     let mut picture_layer: Option<DesktopLayer> = None;
+    // The snowball fight's room, while this player is in one.
+    let mut room = snowhush_core::snowman::room::Room::default();
     let mut chores_at = 0;
     let mut light_at = 0;
     let mut displays_changed_at = None;
@@ -146,6 +149,7 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
     // The display each window's snow lies on, as of the last window list.
     let mut owners = HashMap::new();
     watch_taskbar(links.wake);
+    clicks::start(links.wake as isize);
 
     loop {
         screens.iter().filter(|screen| screen.under_taskbar()).for_each(Screen::raise);
@@ -493,9 +497,18 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
             }
             pass_snow(&mut screens, &tracker, now);
             let seconds = clock.seconds(now - started);
+            let fighting = settings.fights();
             for screen in &mut screens {
-                screen.tick_picture(&gpu, settings.wallpaper, seconds);
+                screen.tick_picture(&gpu, settings.wallpaper, fighting, &mut room, seconds);
             }
+            for point in clicks::take() {
+                for screen in &mut screens {
+                    if screen.click_picture(point, seconds) {
+                        break;
+                    }
+                }
+            }
+            clicks::set_fighting(screens.iter().any(Screen::fighting));
             // The first display the welcome window's snow reaches starts the snowfall on all of them.
             if released {
                 settings.welcomed = true;

@@ -590,10 +590,42 @@ impl Screen {
     }
 
     /// Looks after the snow in the wallpaper's picture: `frost` draws it.
-    pub fn tick_picture(&mut self, gpu: &mut Gpu, frost: bool, now: Instant) {
+    #[allow(clippy::too_many_arguments)]
+    pub fn tick_picture(
+        &mut self,
+        gpu: &mut Gpu,
+        compositor: &CompositorState,
+        frost: bool,
+        fighting: bool,
+        room: &mut snowhush_core::snowman::room::Room,
+        main: bool,
+        now: Instant,
+    ) {
         let area = self.area();
         if let Some(picture) = &mut self.picture {
-            picture.tick(gpu, &mut self.simulation, &self.bounds, &area, frost && !self.covered, now);
+            picture.tick(
+                gpu,
+                compositor,
+                &mut self.simulation,
+                &self.bounds,
+                &area,
+                frost && !self.covered,
+                fighting && !self.covered,
+                room,
+                main,
+                now,
+            );
+        }
+    }
+
+    /// A click on the wallpaper's layer, at `point` in its points: a snowball for the snowman there.
+    pub fn click_picture(&mut self, surface: &wayland_client::protocol::wl_surface::WlSurface, point: (f64, f64), now: Instant) -> bool {
+        match &mut self.picture {
+            Some(picture) if picture.owns(surface) => {
+                picture.click(point, &mut self.simulation, now);
+                true
+            }
+            _ => false,
         }
     }
 

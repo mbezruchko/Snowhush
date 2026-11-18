@@ -504,13 +504,36 @@ impl Screen {
         self.backdrop = backdrop;
     }
 
-    /// Looks after the snow in the wallpaper's picture, `now` in seconds: `frost` draws it.
-    pub fn tick_picture(&mut self, gpu: &Gpu, frost: bool, now: f64) {
+    /// Looks after the snow in the wallpaper's picture, `now` in seconds: `frost` draws it, and `fighting` has snowmen
+    /// walk it.
+    pub fn tick_picture(&mut self, gpu: &Gpu, frost: bool, fighting: bool, room: &mut snowhush_core::snowman::room::Room, now: f64) {
         let area = dip_rect(&self.monitor, &self.monitor.rect);
         let covered = self.covered;
+        // The friends show on the main display alone, so that each throws once.
+        let main = self.monitor.bounds.left == 0 && self.monitor.bounds.top == 0;
         if let Some(picture) = &mut self.picture {
-            picture.tick(gpu, &mut self.simulation, [area[0], area[1]], frost && !covered, now);
+            picture.tick(gpu, &mut self.simulation, [area[0], area[1]], frost && !covered, fighting && !covered, room, main, now);
         }
+    }
+
+    /// A Ctrl-click at `point` in physical pixels on the shared desktop: a snowball into the picture there, if it is on
+    /// this display and a fight is on. Returns whether it was taken.
+    pub fn click_picture(&mut self, point: (i32, i32), now: f64) -> bool {
+        let bounds = self.monitor.bounds;
+        if point.0 < bounds.left || point.0 >= bounds.right || point.1 < bounds.top || point.1 >= bounds.bottom {
+            return false;
+        }
+        let at = RECT { left: point.0, top: point.1, right: point.0, bottom: point.1 };
+        let place = dip_rect(&self.monitor, &at);
+        match &mut self.picture {
+            Some(picture) => picture.click([place[0], place[1]], &mut self.simulation, now),
+            None => false,
+        }
+    }
+
+    /// Whether snowmen walk this display's wallpaper.
+    pub fn fighting(&self) -> bool {
+        self.picture.as_ref().is_some_and(PictureSnow::fighting)
     }
 
     /// The overlay, when it is in the desktop's wallpaper layer too: the picture's snow goes under it.

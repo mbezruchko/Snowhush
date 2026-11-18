@@ -12,10 +12,12 @@ use calloop_wayland_source::WaylandSource;
 use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState};
 use smithay_client_toolkit::output::{OutputHandler, OutputState};
 use smithay_client_toolkit::registry::{ProvidesRegistryState, RegistryState};
+use smithay_client_toolkit::seat::pointer::{PointerEvent, PointerEventKind, PointerHandler};
+use smithay_client_toolkit::seat::{Capability, SeatHandler, SeatState};
 use smithay_client_toolkit::shell::wlr_layer::{LayerShell, LayerShellHandler, LayerSurface, LayerSurfaceConfigure};
 use smithay_client_toolkit::{delegate_dispatch2, delegate_registry, registry_handlers};
 use wayland_client::globals::registry_queue_init;
-use wayland_client::protocol::{wl_output, wl_surface};
+use wayland_client::protocol::{wl_output, wl_seat, wl_surface};
 use wayland_client::{Connection, QueueHandle};
 use zbus::blocking::Connection as Bus;
 
@@ -81,6 +83,11 @@ pub enum Command {
 pub struct App {
     registry: RegistryState,
     outputs: OutputState,
+    /// The snowball fight's room, while this player is in one.
+    room: snowhush_core::snowman::room::Room,
+    /// The seats' pointers, for clicks on the snowmen in the wallpaper.
+    seat: SeatState,
+    pointers: Vec<wayland_client::protocol::wl_pointer::WlPointer>,
     compositor: CompositorState,
     layer_shell: LayerShell,
     qh: QueueHandle<App>,
@@ -168,6 +175,9 @@ pub fn run() -> Result<(), String> {
     let mut app = App {
         registry: RegistryState::new(&globals),
         outputs: OutputState::new(&globals, &qh),
+        seat: SeatState::new(&globals, &qh),
+        room: Default::default(),
+        pointers: Vec::new(),
         compositor,
         layer_shell,
         qh: qh.clone(),
@@ -502,9 +512,9 @@ impl App {
                 Err(error) => gpu_lost |= screen.failing() || error.contains(&khronos_egl::Error::ContextLost.to_string()),
             }
         }
-        let frost = self.settings.wallpaper;
-        for screen in &mut self.screens {
-            screen.tick_picture(&mut self.gpu, frost, now);
+        let (frost, fighting) = (self.settings.wallpaper, self.settings.fights());
+        for (index, screen) in self.screens.iter_mut().enumerate() {
+            screen.tick_picture(&mut self.gpu, &self.compositor, frost, fighting, &mut self.room, index == 0, now);
         }
         self.keep_picture(now);
         if gpu_lost {
@@ -853,6 +863,49 @@ impl Stats {
     }
 }
 
+impl SeatHandler for App {
+    fn seat_state(&mut self) -> &mut SeatState {
+        &mut self.seat
+    }
+
+    fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+
+    fn new_capability(&mut self, _: &Connection, qh: &QueueHandle<Self>, seat: wl_seat::WlSeat, capability: Capability) {
+        if capability == Capability::Pointer
+            && let Ok(pointer) = self.seat.get_pointer(qh, &seat)
+        {
+            self.pointers.push(pointer);
+        }
+    }
+
+    fn remove_capability(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat, capability: Capability) {
+        if capability == Capability::Pointer {
+            for pointer in self.pointers.drain(..) {
+                pointer.release();
+            }
+        }
+    }
+
+    fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+}
+
+impl PointerHandler for App {
+    /// A click reaches us only over a snowman in the wallpaper: everywhere else the layers take none.
+    fn pointer_frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wayland_client::protocol::wl_pointer::WlPointer, events: &[PointerEvent]) {
+        const LEFT_BUTTON: u32 = 0x110;
+        for event in events {
+            if let PointerEventKind::Press { button: LEFT_BUTTON, .. } = event.kind {
+                let now = Instant::now();
+                for screen in &mut self.screens {
+                    if screen.click_picture(&event.surface, event.position, now) {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
 impl CompositorHandler for App {
     fn scale_factor_changed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: i32) {}
 
@@ -918,7 +971,7 @@ impl ProvidesRegistryState for App {
     fn registry(&mut self) -> &mut RegistryState {
         &mut self.registry
     }
-    registry_handlers![OutputState];
+    registry_handlers![OutputState, SeatState];
 }
 
 delegate_registry!(App);

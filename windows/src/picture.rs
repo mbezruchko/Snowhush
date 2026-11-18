@@ -4,7 +4,10 @@
 
 use std::sync::mpsc;
 
+use snowhush_core::geometry::V2;
 use snowhush_core::simulation::{COLUMN_WIDTH, SnowSimulation};
+use snowhush_core::snowman::room::Room;
+use snowhush_core::snowman::{Fight, Ground};
 use snowhush_core::wallpaper::Scene;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{DestroyWindow, IsWindow, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetWindowPos};
@@ -39,8 +42,11 @@ pub struct PictureSnow {
     given: Option<([f32; 4], [f32; 2])>,
     drawn_version: Option<u64>,
     drawn_at: f64,
-    /// Something of the snow shows on the surface.
+    /// Something shows on the surface.
     showing: bool,
+    /// The snowball fight in the picture, while there is one; and where the overlay's simulation starts on the display.
+    fight: Option<Fight>,
+    offset: V2,
 }
 
 impl PictureSnow {
@@ -78,6 +84,8 @@ impl PictureSnow {
             drawn_version: None,
             drawn_at: f64::NEG_INFINITY,
             showing: false,
+            fight: None,
+            offset: V2::ZERO,
         })
     }
 
@@ -92,7 +100,7 @@ impl PictureSnow {
             return;
         }
         log!("{}: wallpaper {:?}", self.name, wallpaper.as_ref().map(|wallpaper| &wallpaper.path));
-        let other = self.wallpaper.as_ref().map(|old| &old.path) != wallpaper.as_ref().map(|new| &new.path);
+        let other = matches!((&self.wallpaper, &wallpaper), (Some(old), Some(new)) if old.path != new.path);
         self.wallpaper = wallpaper;
         self.forget(gpu, simulation);
         // Another picture starts over, and snow forms on it from the first flake.
@@ -106,6 +114,8 @@ impl PictureSnow {
         self.scene = None;
         self.given = None;
         self.painting = None;
+        self.fight = None;
+        simulation.set_keeps_awake(false);
         simulation.set_picture(None, None);
         self.clear(gpu);
     }
@@ -122,7 +132,18 @@ impl PictureSnow {
     /// not read yet, gives the simulation the picture where the overlay `area` lies on the display, both in DIPs from
     /// its top left, and draws the snow if it changed. `frost` draws it at all; without, the picture is read only for
     /// its depth. `now` in seconds.
-    pub fn tick(&mut self, gpu: &Gpu, simulation: &mut SnowSimulation, area: [f32; 2], frost: bool, now: f64) {
+    #[allow(clippy::too_many_arguments)]
+    pub fn tick(
+        &mut self,
+        gpu: &Gpu,
+        simulation: &mut SnowSimulation,
+        area: [f32; 2],
+        frost: bool,
+        fighting: bool,
+        room: &mut Room,
+        main: bool,
+        now: f64,
+    ) {
         if let Some((wallpaper, found)) = &self.reading {
             match found.try_recv() {
                 Ok(scene) => {
@@ -156,44 +177,85 @@ impl PictureSnow {
         }
         let Some(scene) = &self.scene else { return };
         let cell = scene.terrain.cell as f32;
+        let view = [self.size.0 as f32, self.size.1 as f32];
         let place = [area[0], area[1], simulation.width(), simulation.height()];
         if self.given.map(|(given, _)| given) != Some(place) {
             let (terrain, light, origin) = scene.cropped(place);
             simulation.set_picture(Some(&terrain), Some(&light));
             self.given = Some((place, origin));
+            self.fight = None;
         }
-        if simulation.take_picture_cleared() {
-            self.clear(gpu);
+        self.offset = V2::new(place[0], view[1] - place[1] - place[3]);
+        let fighting = fighting && simulation.picture_depth;
+        if fighting && self.fight.is_none() {
+            let screen = V2::new(view[0], view[1]);
+            let ground = Ground::new(scene, screen).unwrap_or_else(|| Ground::strip(scene, screen, self.offset.y));
+            log!("{}: a snowball fight on {}", self.name, if ground.in_front { "the strip along the bottom" } else { "the picture's ground" });
+            self.fight = Fight::new(ground, now, now.to_bits() ^ 0xA5A5_5A5A);
+        } else if !fighting {
+            self.fight = None;
         }
+        simulation.set_keeps_awake(self.fight.is_some());
+        let mut moved = false;
+        let offset = self.offset;
+        if let Some(fight) = &mut self.fight {
+            fight.follow(room, main, now);
+            let covers: Vec<[f32; 4]> =
+                simulation.covers.iter().map(|c| [c[0] + offset.x, c[1] + offset.y, c[2] + offset.x, c[3] + offset.y]).collect();
+            moved = fight.step(now, simulation, offset, &covers, true, room);
+        }
+        let snowmen = self.fight.as_ref().map(|fight| fight.drawings(room)).unwrap_or_default();
+        let cleared = simulation.take_picture_cleared();
         let (level, veil) = (simulation.picture_level(), simulation.picture_veil());
-        if !frost || (level <= 0.0 && veil <= 0.0 && !simulation.has_picture_dabs()) {
-            self.clear(gpu);
+        let snow = frost && !cleared && (level > 0.0 || veil > 0.0 || simulation.has_picture_dabs());
+        let Some(painting) = &mut self.painting else { return };
+        if !snow {
+            painting.uncache();
+            self.drawn_version = None;
+            if snowmen.is_empty() {
+                if self.showing {
+                    let _ = self.surface.clear(gpu);
+                    self.showing = false;
+                }
+            } else if moved || !self.showing {
+                self.showing = self.surface.present_picture(gpu, painting, view, &snowmen).is_ok();
+            }
             return;
         }
         let version = simulation.picture_version();
-        if self.drawn_version == Some(version) || now - self.drawn_at < REDRAW {
-            return;
-        }
-        let Some(painting) = &mut self.painting else { return };
-        let (dabs, specks, dabs_size, dabs_version) = simulation.picture_dabs();
-        let origin = self.given.map_or([0.0; 2], |(_, origin)| origin);
-        let lying = Lying {
-            level,
-            veil,
-            dabs,
-            specks,
-            dabs_size,
-            dabs_version,
-            dabs_area: [origin[0], origin[1], dabs_size.0 as f32 * cell, dabs_size.1 as f32 * cell],
-        };
-        match self.surface.draw_picture(gpu, painting, &lying, [self.size.0 as f32, self.size.1 as f32]) {
-            Ok(()) => {
-                self.showing = true;
-                self.drawn_version = Some(version);
-                self.drawn_at = now;
+        if self.drawn_version != Some(version) && now - self.drawn_at >= REDRAW {
+            let (dabs, specks, dabs_size, dabs_version) = simulation.picture_dabs();
+            let origin = self.given.map_or([0.0; 2], |(_, origin)| origin);
+            let dabs_area = [origin[0], origin[1], dabs_size.0 as f32 * cell, dabs_size.1 as f32 * cell];
+            let lying = Lying { level, veil, dabs, specks, dabs_size, dabs_version, dabs_area };
+            match self.surface.draw_picture(gpu, painting, &lying, view, &snowmen) {
+                Ok(()) => {
+                    self.showing = true;
+                    self.drawn_version = Some(version);
+                    self.drawn_at = now;
+                }
+                Err(error) => log!("{}: wallpaper snow not drawn: {error}", self.name),
             }
-            Err(error) => log!("{}: wallpaper snow not drawn: {error}", self.name),
+        } else if moved {
+            let _ = self.surface.present_picture(gpu, painting, view, &snowmen);
         }
+    }
+
+    /// A click at `point` on the display, in DIPs from its top left: over a snowman, or anywhere on the wallpaper, a
+    /// snowball goes into the picture there. Returns whether it did.
+    pub fn click(&mut self, point: [f32; 2], simulation: &mut SnowSimulation, now: f64) -> bool {
+        let offset = self.offset;
+        let height = self.size.1 as f32;
+        let Some(fight) = &mut self.fight else { return false };
+        let at = V2::new(point[0], height - point[1]);
+        let near = fight.aim_near(at, fight.ground().near_at(at));
+        fight.throw_ball(at, near, now, simulation, offset);
+        true
+    }
+
+    /// Whether a snowball fight is on in this display's picture.
+    pub fn fighting(&self) -> bool {
+        self.fight.is_some()
     }
 
     fn take(&mut self, scene: Option<Scene>, gpu: &Gpu, simulation: &mut SnowSimulation) {

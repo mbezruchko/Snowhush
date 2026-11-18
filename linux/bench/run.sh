@@ -10,6 +10,7 @@
 #   linux/bench/run.sh stacked the same with one display under the other
 #   linux/bench/run.sh newyear the New Year's tree, countdown and midnight fireworks, in Sway
 #   linux/bench/run.sh wallpaper snow in swaybg's picture: SNOWHUSH_BENCH_MEDIA=folder with wallpaper.jpg and the network
+#   linux/bench/run.sh fight    the bot in that picture, clicked at: the same, with SNOWHUSH_FIGHT=1
 #
 # Settings for the app can follow the scene, as lines of its settings file: run.sh sway autumn=1
 # The holidays' previews pass through: SNOWHUSH_NEW_YEAR=1 SNOWHUSH_MIDNIGHT=1 run.sh sway
@@ -17,7 +18,7 @@ set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
-scene=${1:?usage: run.sh sway|niri|kwin|side|stacked|newyear|wallpaper [setting=value…]}
+scene=${1:?usage: run.sh sway|niri|kwin|side|stacked|newyear|wallpaper|fight [setting=value…]}
 shift
 out=$here/out/$scene
 rm -rf "$out"
@@ -33,6 +34,6 @@ echo "Running ${scene}…"
 media=${SNOWHUSH_BENCH_MEDIA:-$here}
 model=$(cd "$media" && ls *.snowdepth 2>/dev/null | head -1 || true)
 docker run --rm -v "$here:/bench:ro" -v "$out:/out" -v snowhush-bench-target:/target:ro -v "$media:/media:ro" --user tester \
-    -e SNOWHUSH_HALLOWEEN -e SNOWHUSH_HOUR -e SNOWHUSH_NEW_YEAR -e SNOWHUSH_MIDNIGHT ${model:+-e SNOWHUSH_DEPTH_MODEL=/media/$model} snowhush-bench \
+    -e SNOWHUSH_HALLOWEEN -e SNOWHUSH_HOUR -e SNOWHUSH_NEW_YEAR -e SNOWHUSH_MIDNIGHT -e SNOWHUSH_FIGHT -e SNOWHUSH_FIGHT_PRACTICE ${model:+-e SNOWHUSH_DEPTH_MODEL=/media/$model} snowhush-bench \
     dbus-run-session /bench/scene.sh "$scene" "$@"
 cat "$out/trace"

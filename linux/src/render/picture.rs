@@ -3,6 +3,7 @@
 //! what it draws the compositor then shows as it is, frame after frame, for nothing.
 
 use glow::HasContext;
+use snowhush_core::snowman::{Drawing, Picture};
 use snowhush_core::wallpaper::drawing::{self, Cap};
 use snowhush_core::wallpaper::{GROUND, Scene};
 
@@ -14,6 +15,15 @@ const SHOW_FRAGMENT: &str = include_str!("../shaders/show.frag");
 const CAP_VERTEX: &str = include_str!("../shaders/cap.vert");
 const CAP_FRAGMENT: &str = include_str!("../shaders/cap.frag");
 const PICTURE: &str = include_str!("../shaders/picture.glsl");
+const COPY_FRAGMENT: &str = include_str!("../shaders/copy.frag");
+const SNOWMAN_VERTEX: &str = include_str!("../shaders/snowman.vert");
+const SNOWMAN_FRAGMENT: &str = include_str!("../shaders/snowman.frag");
+/// The snowman's body, throwing arm and hat, drawn once on the Mac 220 points tall at two pixels a point.
+const ART: [&[u8]; 3] = [
+    include_bytes!("../../../windows/assets/snowman/body.png"),
+    include_bytes!("../../../windows/assets/snowman/arm.png"),
+    include_bytes!("../../../windows/assets/snowman/hat.png"),
+];
 const SHARED: [&str; 7] = ["viewSize", "scale", "level", "range", "thickest", "veil", "haze"];
 
 pub(super) struct Programs {
@@ -22,6 +32,10 @@ pub(super) struct Programs {
     cap: Program,
     cap_array: glow::VertexArray,
     noise: glow::Texture,
+    copy: Program,
+    snowman: Program,
+    /// The snowman's pictures, made the first time one is drawn.
+    art: Option<[glow::Texture; 3]>,
 }
 
 /// What was found in one wallpaper, as the graphics card has it.
@@ -34,6 +48,9 @@ pub struct Painting {
     dabs_size: (usize, usize),
     /// Where the first pass leaves how the snow lies, half the surface's size, and the size it was made for.
     lie: Option<(glow::Texture, glow::Framebuffer, (i32, i32))>,
+    /// The snow as last drawn, the surface's size, for what moves over it to be drawn on; and whether it holds any.
+    cache: Option<(glow::Texture, glow::Framebuffer, (i32, i32))>,
+    cached: bool,
     columns: glow::Buffer,
     caps: Vec<Cap>,
     column_width: f32,
@@ -70,7 +87,14 @@ impl Gpu {
                 )?;
                 let cap_array = gl.create_vertex_array()?;
                 let noise = texture(gl, glow::R8, glow::RED, 256, 256, &drawing::noise(), false, glow::REPEAT)?;
-                Programs { lie, show, cap, cap_array, noise }
+                let copy = program(gl, COVER_VERTEX, COPY_FRAGMENT, &["viewSize", "drawn"])?;
+                let snowman = program(
+                    gl,
+                    SNOWMAN_VERTEX,
+                    SNOWMAN_FRAGMENT,
+                    &["viewSize", "rect", "matrix", "offset", "picture", "alpha", "cut", "near", "nearness", "tint", "art", "relief"],
+                )?;
+                Programs { lie, show, cap, cap_array, noise, copy, snowman, art: None }
             };
             self.picture = Some(programs);
         }
@@ -103,6 +127,8 @@ impl Gpu {
                 dabs_version: None,
                 dabs_size: (1, 1),
                 lie: None,
+                cache: None,
+                cached: false,
                 columns,
                 caps,
                 column_width,
@@ -118,7 +144,7 @@ impl Gpu {
             for texture in [painting.relief, painting.light, painting.dabs, painting.specks] {
                 gl.delete_texture(texture);
             }
-            if let Some((texture, framebuffer, _)) = painting.lie {
+            for (texture, framebuffer, _) in painting.lie.into_iter().chain(painting.cache) {
                 gl.delete_framebuffer(framebuffer);
                 gl.delete_texture(texture);
             }
@@ -126,8 +152,16 @@ impl Gpu {
         }
     }
 
-    /// Draws the snow lying in the picture on `surface`, the whole display `view` points across, and shows it.
-    pub fn draw_picture(&mut self, surface: &Surface, painting: &mut Painting, lying: &Lying, view: [f32; 2]) -> Result<(), String> {
+    /// Draws the snow lying in the picture for `surface`, the whole display `view` points across, and shows it with the
+    /// snowmen standing in it.
+    pub fn draw_picture(
+        &mut self,
+        surface: &Surface,
+        painting: &mut Painting,
+        lying: &Lying,
+        view: [f32; 2],
+        snowmen: &[Drawing],
+    ) -> Result<(), String> {
         self.egl.make_current(self.display, Some(surface.surface), Some(surface.surface), Some(self.context)).map_err(|error| error.to_string())?;
         self.picture_programs()?;
         let programs = self.picture.as_ref().expect("made");
@@ -161,6 +195,19 @@ impl Gpu {
                 gl.framebuffer_texture_2d(glow::FRAMEBUFFER, glow::COLOR_ATTACHMENT0, glow::TEXTURE_2D, Some(texture), 0);
                 painting.lie = Some((texture, framebuffer, half));
             }
+            let size = (surface.width.max(1), surface.height.max(1));
+            if painting.cache.is_none_or(|(_, _, made)| made != size) {
+                if let Some((texture, framebuffer, _)) = painting.cache.take() {
+                    gl.delete_framebuffer(framebuffer);
+                    gl.delete_texture(texture);
+                }
+                let texture = texture(gl, glow::RGBA8, glow::RGBA, size.0 as usize, size.1 as usize, &[], false, glow::CLAMP_TO_EDGE)?;
+                let framebuffer = gl.create_framebuffer()?;
+                gl.bind_framebuffer(glow::FRAMEBUFFER, Some(framebuffer));
+                gl.framebuffer_texture_2d(glow::FRAMEBUFFER, glow::COLOR_ATTACHMENT0, glow::TEXTURE_2D, Some(texture), 0);
+                painting.cache = Some((texture, framebuffer, size));
+            }
+            let (_, cache, _) = painting.cache.expect("made");
             let (lie, framebuffer, _) = painting.lie.expect("made");
             let level = lying.level;
             let (amount, thickest) = (drawing::amount(level), drawing::thickest(level));
@@ -196,8 +243,8 @@ impl Gpu {
                 gl.uniform_1_i32(lie_program.location(name), unit as i32);
             }
             gl.draw_arrays(glow::TRIANGLES, 0, 3);
-            // The snow as it is seen, and the caps along the ridges.
-            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+            // The snow as it is seen, and the caps along the ridges, kept for the snowmen to be drawn over.
+            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(cache));
             gl.viewport(0, 0, surface.width, surface.height);
             gl.clear(glow::COLOR_BUFFER_BIT);
             gl.enable(glow::BLEND);
@@ -228,7 +275,82 @@ impl Gpu {
                 }
             }
             gl.bind_vertex_array(None);
+            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
             gl.active_texture(glow::TEXTURE0);
+        }
+        painting.cached = true;
+        self.present_picture(surface, painting, view, snowmen)
+    }
+
+    /// Forgets the snow drawn last, as when it is gone: only the snowmen show after.
+    pub fn uncache(&self, painting: &mut Painting) {
+        painting.cached = false;
+    }
+
+    /// Shows the snow as last drawn with the snowmen over it, as they are now, each hidden behind what in the picture is
+    /// nearer than he is.
+    pub fn present_picture(&mut self, surface: &Surface, painting: &Painting, view: [f32; 2], snowmen: &[Drawing]) -> Result<(), String> {
+        self.egl.make_current(self.display, Some(surface.surface), Some(surface.surface), Some(self.context)).map_err(|error| error.to_string())?;
+        self.picture_programs()?;
+        if !snowmen.is_empty() && self.picture.as_ref().is_some_and(|programs| programs.art.is_none()) {
+            let art = [self.picture(ART[0], true), self.picture(ART[1], true), self.picture(ART[2], true)];
+            if let [Some(body), Some(arm), Some(hat)] = art {
+                self.picture.as_mut().expect("made").art = Some([body.0, arm.0, hat.0]);
+            }
+        }
+        let programs = self.picture.as_ref().expect("made");
+        let gl = &self.gl;
+        unsafe {
+            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+            gl.viewport(0, 0, surface.width, surface.height);
+            gl.clear_color(0.0, 0.0, 0.0, 0.0);
+            gl.clear(glow::COLOR_BUFFER_BIT);
+            gl.bind_vertex_array(Some(self.empty_array));
+            if painting.cached
+                && let Some((drawn, _, _)) = painting.cache
+            {
+                gl.disable(glow::BLEND);
+                let copy = &programs.copy;
+                gl.use_program(Some(copy.program));
+                gl.uniform_2_f32_slice(copy.location("viewSize"), &view);
+                gl.active_texture(glow::TEXTURE0);
+                gl.bind_texture(glow::TEXTURE_2D, Some(drawn));
+                gl.uniform_1_i32(copy.location("drawn"), 0);
+                gl.draw_arrays(glow::TRIANGLES, 0, 3);
+            }
+            if let Some(art) = programs.art {
+                gl.enable(glow::BLEND);
+                gl.blend_func_separate(glow::ONE, glow::ONE_MINUS_SRC_ALPHA, glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
+                let snowman = &programs.snowman;
+                gl.use_program(Some(snowman.program));
+                gl.uniform_2_f32_slice(snowman.location("viewSize"), &view);
+                gl.active_texture(glow::TEXTURE1);
+                gl.bind_texture(glow::TEXTURE_2D, Some(painting.relief));
+                gl.uniform_1_i32(snowman.location("relief"), 1);
+                gl.uniform_1_i32(snowman.location("art"), 0);
+                gl.active_texture(glow::TEXTURE0);
+                for figure in snowmen {
+                    gl.uniform_1_f32(snowman.location("near"), figure.near);
+                    gl.uniform_1_f32(snowman.location("nearness"), figure.nearness);
+                    gl.uniform_3_f32_slice(snowman.location("tint"), &figure.tint);
+                    for part in &figure.parts {
+                        let texture = match part.picture {
+                            Picture::Body => art[0],
+                            Picture::Arm => art[1],
+                            Picture::Hat => art[2],
+                        };
+                        gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+                        gl.uniform_4_f32_slice(snowman.location("rect"), &part.rect);
+                        gl.uniform_4_f32_slice(snowman.location("matrix"), &part.matrix);
+                        gl.uniform_2_f32_slice(snowman.location("offset"), &part.offset);
+                        gl.uniform_4_f32_slice(snowman.location("picture"), &part.whole);
+                        gl.uniform_1_f32(snowman.location("alpha"), part.alpha);
+                        gl.uniform_4_f32_slice(snowman.location("cut"), &part.cut);
+                        gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
+                    }
+                }
+            }
+            gl.bind_vertex_array(None);
         }
         self.egl.swap_buffers(self.display, surface.surface).map_err(|error| error.to_string())
     }

@@ -199,3 +199,63 @@ float4 capFragment(CapOut input) : SV_Target {
     color = lerp(color, haze.rgb, veiled(capNear));
     return float4(color * coverage, coverage);
 }
+
+Texture2D drawnTexture : register(t0);
+
+// The snow lying in the picture as last drawn, shown again under what moves over it.
+float4 copyFragment(CoverOut input) : SV_Target {
+    return drawnTexture.SampleLevel(trilinear, float2(input.world.x / viewSize.x, 1.0 - input.world.y / viewSize.y), 0.0);
+}
+
+// One part of a snowman standing in the wallpaper's picture, as the Mac's SnowmanRenderer draws it.
+cbuffer SnowmanUniforms : register(b2) {
+    float4 partRect;
+    // The part's turning, by its columns, and where its origin goes, in the display's points.
+    float4 partMatrix;
+    float2 partOffset;
+    float partAlpha;
+    float figureNear;
+    // What the whole picture covers, for a part that is only some of it.
+    float4 partPicture;
+    // A circle outside which nothing shows: middle, radius and one, for a ball cut out of the body.
+    float4 partCut;
+    // The light he stands in, and how near between the picture's farthest and nearest he is.
+    float4 figureTint;
+};
+
+Texture2D artTexture : register(t0);
+
+struct SnowmanOut {
+    float4 position : SV_Position;
+    float2 uv : TEXCOORD0;
+    float2 world : WORLD;
+    float2 local : LOCAL;
+};
+
+SnowmanOut snowmanVertex(uint vid : SV_VertexID) {
+    float2 corner = float2(float(vid & 1), float(vid >> 1));
+    float2 local = lerp(partRect.xy, partRect.zw, corner);
+    float2 world = partOffset + partMatrix.xy * local.x + partMatrix.zw * local.y;
+    SnowmanOut output;
+    output.position = float4(world / viewSize * 2.0 - 1.0, 0.0, 1.0);
+    output.uv = float2((local.x - partPicture.x) / (partPicture.z - partPicture.x), 1.0 - (local.y - partPicture.y) / (partPicture.w - partPicture.y));
+    output.world = world;
+    output.local = local;
+    return output;
+}
+
+float4 snowmanFragment(SnowmanOut input) : SV_Target {
+    float4 color = artTexture.Sample(trilinear, input.uv);
+    // A ball cut out of the body: nothing of the others round it.
+    if (partCut.w > 0.0) color *= 1.0 - smoothstep(partCut.z * 0.96, partCut.z, distance(input.local, partCut.xy));
+    if (color.a < 0.003) discard;
+    // Hidden behind whatever in the picture is nearer than he is.
+    float ahead = reliefTexture.SampleLevel(trilinear, float2(input.world.x / viewSize.x, 1.0 - input.world.y / viewSize.y), 0.0).a;
+    float shown = 1.0 - smoothstep(figureNear + 0.012, figureNear + 0.035, ahead);
+    if (shown <= 0.0) discard;
+    // Lit as the snow is where he stands, and paler with the air between the farther off he is.
+    float3 rgb = color.rgb / color.a * figureTint.rgb;
+    rgb = lerp(rgb, figureTint.rgb * 0.92, pow(1.0 - figureTint.w, 1.5) * 0.45);
+    float a = color.a * shown * partAlpha;
+    return float4(rgb * a, a);
+}
