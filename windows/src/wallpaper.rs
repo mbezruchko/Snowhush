@@ -1,6 +1,6 @@
-//! The wallpaper the snow lies in, and the reading of it. A picture is read once, by another run of the app that
-//! downloads the depth network the first time, reads it, keeps what it found on disk and quits: running the network
-//! leaves a few hundred megabytes behind in a process, and the snow's own stays small.
+//! The wallpaper the snow lies in, and the reading of it. A picture is read once, by another run of the app that reads
+//! it, keeps what it found on disk and quits: running the network leaves a few hundred megabytes behind in a process,
+//! and the snow's own stays small.
 
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::process::CommandExt;
@@ -26,7 +26,7 @@ use crate::log;
 
 /// The argument that makes the app read a wallpaper and quit instead of starting up.
 pub const READ: &str = "--read-wallpaper";
-/// How long a reading may take, the download of the network the first time included.
+/// How long a reading may take.
 const READING: Duration = Duration::from_secs(180);
 /// The most readings kept, for a wallpaper that changes on its own every so often.
 const KEPT: usize = 16;
@@ -157,7 +157,7 @@ fn folder() -> Option<PathBuf> {
 }
 
 /// The other run's side of `read_apart`: reads the wallpaper the arguments name and keeps what it found. Returns the
-/// exit code: 1 when the picture couldn't be opened, 3 without the network, 4 when nothing was found.
+/// exit code: 1 when the picture couldn't be opened, 4 when nothing was found.
 pub fn read_for_another_run(arguments: &[String]) -> i32 {
     let [path, placement, fill, width, height, column_width, out] = arguments else { return 2 };
     let Some(placement) = Placement::from_name(placement) else { return 2 };
@@ -166,8 +166,7 @@ pub fn read_for_another_run(arguments: &[String]) -> i32 {
     let fill = [fill.first().copied().unwrap_or(0.0), fill.get(1).copied().unwrap_or(0.0), fill.get(2).copied().unwrap_or(0.0)];
     let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
     let Some(shown) = shown(Path::new(path), placement, fill, width, height) else { return 1 };
-    let Ok(model) = network() else { return 3 };
-    let Ok(scene) = snowhush_depth::read(&shown, &model, column_width) else { return 4 };
+    let Ok(scene) = snowhush_depth::read(&shown, column_width) else { return 4 };
     let out = PathBuf::from(out);
     if let Some(parent) = out.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -188,27 +187,6 @@ fn forget_old(folder: &Path) {
     for (file, _) in files.into_iter().skip(KEPT) {
         let _ = std::fs::remove_file(file);
     }
-}
-
-/// The depth network's weights, downloaded the first time and checked against what was published.
-fn network() -> Result<PathBuf, String> {
-    if let Some(path) = std::env::var_os("SNOWHUSH_DEPTH_MODEL") {
-        return Ok(PathBuf::from(path));
-    }
-    let path = folder().ok_or("no app data folder")?.join(snowhush_depth::FILE);
-    if path.is_file() {
-        return Ok(path);
-    }
-    let url = snowhush_depth::URL.strip_prefix("https://").ok_or("not https")?;
-    let (host, at) = url.split_once('/').ok_or("no path")?;
-    let bytes = download(host, &format!("/{at}"))?;
-    if !snowhush_depth::genuine(&bytes) {
-        return Err("downloaded weights don't match".into());
-    }
-    std::fs::create_dir_all(path.parent().ok_or("no folder")?).map_err(|error| error.to_string())?;
-    let partial = path.with_extension("partial");
-    std::fs::write(&partial, &bytes).and_then(|()| std::fs::rename(&partial, &path)).map_err(|error| error.to_string())?;
-    Ok(path)
 }
 
 struct Handle(*mut std::ffi::c_void);

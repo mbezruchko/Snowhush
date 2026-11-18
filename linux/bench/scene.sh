@@ -145,8 +145,8 @@ new_year() {
 }
 
 # Snow falling into the wallpaper and lying in it, the picture swaybg shows read for its depth: before the reading, as
-# the first flakes land, and with all the snow down. Run with SNOWHUSH_BENCH_MEDIA holding wallpaper.jpg and the
-# packed depth network, and settleWallpaper=1.
+# the first flakes land, and with all the snow down. Run with SNOWHUSH_BENCH_MEDIA holding wallpaper.jpg, and
+# settleWallpaper=1.
 wallpaper() {
     shot() { grim "/out/$1.png"; }
     "$app" > /out/app.out 2>&1 &

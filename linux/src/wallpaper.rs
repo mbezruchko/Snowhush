@@ -1,6 +1,6 @@
 //! The wallpaper the snow lies in: which picture each display shows and how it is laid out, where Plasma doesn't say
-//! so itself, and the reading of it. A picture is read once, by another run of the app that downloads the depth
-//! network the first time, reads it, keeps what it found on disk and quits: running the network leaves a few hundred
+//! so itself, and the reading of it. A picture is read once, by another run of the app that reads it, keeps what it
+//! found on disk and quits: running the network leaves a few hundred
 //! megabytes behind in a process, and the snow's own stays small.
 
 use std::path::{Path, PathBuf};
@@ -13,7 +13,7 @@ use crate::log;
 
 /// The argument that makes the app read a wallpaper and quit instead of starting up.
 pub const READ: &str = "--read-wallpaper";
-/// How long a reading may take, the download of the network the first time included.
+/// How long a reading may take.
 const READING: Duration = Duration::from_secs(180);
 /// The most readings kept, for a wallpaper that changes on its own every so often.
 const KEPT: usize = 16;
@@ -161,14 +161,7 @@ pub fn read_for_another_run(arguments: &[String]) -> i32 {
         log!("wallpaper: couldn't open {path}");
         return 1;
     };
-    let model = match network() {
-        Ok(model) => model,
-        Err(error) => {
-            log!("wallpaper: no depth network: {error}");
-            return 1;
-        }
-    };
-    let scene = match snowhush_depth::read(&shown, &model, column_width) {
+    let scene = match snowhush_depth::read(&shown, column_width) {
         Ok(scene) => scene,
         Err(error) => {
             log!("wallpaper: reading {path} failed: {error}");
@@ -203,39 +196,6 @@ fn forget_old(folder: &Path) {
     for (file, _) in files.into_iter().skip(KEPT) {
         let _ = std::fs::remove_file(file);
     }
-}
-
-/// The depth network's weights, downloaded the first time and checked against what was published.
-fn network() -> Result<PathBuf, String> {
-    if let Some(path) = std::env::var_os("SNOWHUSH_DEPTH_MODEL") {
-        return Ok(PathBuf::from(path));
-    }
-    let path = folder().ok_or("no cache folder")?.join(snowhush_depth::FILE);
-    if path.is_file() {
-        return Ok(path);
-    }
-    std::fs::create_dir_all(path.parent().ok_or("no cache folder")?).map_err(|error| error.to_string())?;
-    let partial = path.with_extension("partial");
-    let url = std::env::var("SNOWHUSH_DEPTH_URL").unwrap_or_else(|_| snowhush_depth::URL.to_string());
-    log!("wallpaper: downloading the depth network");
-    let status = Command::new("curl")
-        .args(["--fail", "--silent", "--show-error", "--location", "--retry", "2", "--max-time", "150", "--output"])
-        .arg(&partial)
-        .arg(&url)
-        .stdin(Stdio::null())
-        .status()
-        .map_err(|error| format!("curl: {error}"))?;
-    if !status.success() {
-        let _ = std::fs::remove_file(&partial);
-        return Err(format!("download failed: {status}"));
-    }
-    let bytes = std::fs::read(&partial).map_err(|error| error.to_string())?;
-    if !snowhush_depth::genuine(&bytes) {
-        let _ = std::fs::remove_file(&partial);
-        return Err("downloaded weights don't match".into());
-    }
-    std::fs::rename(&partial, &path).map_err(|error| error.to_string())?;
-    Ok(path)
 }
 
 /// The display as the wallpaper fills it, a pixel to a logical pixel.

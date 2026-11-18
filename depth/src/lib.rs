@@ -1,43 +1,28 @@
 //! The depth network that reads a wallpaper on Windows and Linux: Depth Anything V2 Small (Apache-2.0), run on the CPU
-//! by candle, looking at 518 by 392 pixels as the Mac's Core ML network does. Its weights are downloaded on first use,
-//! packed to a quarter of their size: each large tensor's rows at eight bits with a scale of their own, which leaves the
-//! depth as it was to within a twentieth of a percent.
+//! by candle, looking at 518 by 392 pixels as the Mac's Core ML network does. Its weights are built into the app, as the
+//! Mac's are, packed to a quarter of their size: see the build script.
 
 mod network;
+mod packing;
 
 use std::collections::HashMap;
-use std::path::Path;
 
 use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use half::f16;
-use sha2::{Digest, Sha256};
+use packing::{MAGIC, VERSION};
 use snowhush_core::wallpaper::{Network, Scene, Shown, scene};
 
-/// The packed weights' file, where it is downloaded from, and what it hashes to.
-pub const FILE: &str = "depth-anything-v2-small.snowdepth";
-pub const URL: &str = "https://snowhush.app/models/depth-anything-v2-small.snowdepth";
-pub const SHA256: &str = "5529647891ac4b3eff98ef376531f0e661f96f90c6e2944cf77fe48c6eee9227";
+/// The packed weights, about 25 MB: only the process reading a wallpaper touches them.
+static WEIGHTS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/weights.snowdepth"));
 
-const MAGIC: &[u8; 8] = b"SNOWDEPT";
-const VERSION: u32 = 1;
 /// What the network looks at and gives, as the Mac's does, 37 of its 14-pixel patches across and 28 down: the parts the
 /// depth is fitted from are laid out for this.
 const SIZE: (usize, usize) = (518, 392);
-/// Tensors smaller than this are kept at half precision whole.
-const SMALL: usize = 4096;
 
-/// Whether `bytes` are the weights as published.
-pub fn genuine(bytes: &[u8]) -> bool {
-    let digest = Sha256::digest(bytes);
-    let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
-    hex == SHA256
-}
-
-/// Everything found in a wallpaper, its depth read with the weights at `weights`. Slow: seconds of every core, and a few
-/// hundred megabytes, for a process of its own.
-pub fn read(shown: &Shown, weights: &Path, column_width: f32) -> Result<Scene, String> {
-    let mut model = Model::load(weights)?;
+/// Everything found in a wallpaper. Slow: seconds of every core, and a few hundred megabytes, for a process of its own.
+pub fn read(shown: &Shown, column_width: f32) -> Result<Scene, String> {
+    let mut model = Model::load()?;
     scene(shown, &mut model, column_width).ok_or_else(|| "nothing found".to_string())
 }
 
@@ -47,10 +32,9 @@ pub struct Model {
 }
 
 impl Model {
-    pub fn load(path: &Path) -> Result<Model, String> {
-        let bytes = std::fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    pub fn load() -> Result<Model, String> {
         let device = Device::Cpu;
-        let tensors = unpack(&bytes, &device)?;
+        let tensors = unpack(WEIGHTS, &device)?;
         let weights = VarBuilder::from_tensors(tensors, DType::F32, &device);
         let network = network::Network::new(weights).map_err(|error| error.to_string())?;
         Ok(Model { network, device })
@@ -146,45 +130,6 @@ fn normalized(pixels: &[[f32; 3]], count: usize) -> Vec<f32> {
         }
     }
     planes
-}
-
-/// Packs weights for download: each tensor by name, the large ones' rows at eight bits with a half-precision scale each.
-pub fn pack(tensors: &[(String, Vec<usize>, Vec<f32>)]) -> Vec<u8> {
-    let mut out = MAGIC.to_vec();
-    out.extend(VERSION.to_le_bytes());
-    out.extend((tensors.len() as u32).to_le_bytes());
-    for (name, dims, values) in tensors {
-        out.extend((name.len() as u16).to_le_bytes());
-        out.extend(name.as_bytes());
-        out.push(dims.len() as u8);
-        for dim in dims {
-            out.extend((*dim as u32).to_le_bytes());
-        }
-        if values.len() < SMALL || dims.is_empty() {
-            out.push(0);
-            for value in values {
-                out.extend(f16::from_f32(*value).to_le_bytes());
-            }
-            continue;
-        }
-        out.push(1);
-        let rows = dims[0];
-        let per = values.len() / rows;
-        let mut scales = Vec::with_capacity(rows);
-        let mut codes = Vec::with_capacity(values.len());
-        for row in values.chunks(per) {
-            let most = row.iter().fold(0f32, |most, value| most.max(value.abs())).max(1e-12);
-            let scale = f16::from_f32(most / 127.0);
-            let step = scale.to_f32().max(1e-12);
-            scales.push(scale);
-            codes.extend(row.iter().map(|value| (value / step).round().clamp(-127.0, 127.0) as i8 as u8));
-        }
-        for scale in scales {
-            out.extend(scale.to_le_bytes());
-        }
-        out.extend(codes);
-    }
-    out
 }
 
 fn unpack(bytes: &[u8], device: &Device) -> Result<HashMap<String, Tensor>, String> {

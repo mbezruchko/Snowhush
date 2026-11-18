@@ -1,6 +1,6 @@
 //! Reads a wallpaper as Windows and Linux will, and sets what it finds beside what the Mac found in the same picture.
 //!
-//! usage: read <weights.snowdepth> <picture> <width> <height> [mac-scene.json]
+//! usage: read <picture> <width> <height> [mac-scene.json]
 
 use std::time::Instant;
 
@@ -9,8 +9,8 @@ use snowhush_core::wallpaper::{Scene, Shown};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let (weights, picture) = (&args[1], &args[2]);
-    let (width, height): (u32, u32) = (args[3].parse().unwrap(), args[4].parse().unwrap());
+    let picture = &args[1];
+    let (width, height): (u32, u32) = (args[2].parse().unwrap(), args[3].parse().unwrap());
     let image = image::open(picture).expect("picture").to_rgb8();
     let scale = (width as f32 / image.width() as f32).max(height as f32 / image.height() as f32);
     let (drawn_w, drawn_h) = ((image.width() as f32 * scale).round() as u32, (image.height() as f32 * scale).round() as u32);
@@ -29,7 +29,7 @@ fn main() {
     let scene = if let Ok(tool) = std::env::var("COREML") {
         snowhush_core::wallpaper::scene(&shown, &mut CoreMl(tool), 2.0).expect("scene")
     } else {
-        snowhush_depth::read(&shown, std::path::Path::new(weights), 2.0).expect("scene")
+        snowhush_depth::read(&shown, 2.0).expect("scene")
     };
     println!("read in {:.1} s", started.elapsed().as_secs_f32());
     summary("rust", &scene.ridges.iter().map(|r| (r.left, r.tops.clone(), r.nearness)).collect::<Vec<_>>());
@@ -40,7 +40,7 @@ fn main() {
         scene.light.haze.map(|v| (v * 1000.0).round() / 1000.0)
     );
     println!("bytes kept {}", scene.to_bytes().len());
-    if let Some(mac) = args.get(5) {
+    if let Some(mac) = args.get(4) {
         compare(&scene, &std::fs::read_to_string(mac).expect("mac scene"));
     }
 }
