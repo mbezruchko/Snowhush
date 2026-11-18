@@ -1705,8 +1705,10 @@ final class SnowSimulation {
         // The window's own edges, not the snow's: rounded down to whole columns, the snow's right end would twitch
         // as the left edge is dragged, and shake the snow about.
         let oldRight = ledge.right > 0 ? ledge.right : oldLeft + ledge.width
-        // A resize keeps the edge that didn't move fixed; a plain move shifts both edges alike.
-        let shift = abs(left - oldLeft) <= abs(right - oldRight) ? left - oldLeft : right - oldRight
+        // A resize keeps the edge that didn't move fixed; a plain move shifts both edges alike. Edges going opposite ways,
+        // as a panel grows or shrinks about its middle, moved nothing: the snow stays, and what overhangs falls at once.
+        let movedLeft = left - oldLeft, movedRight = right - oldRight
+        let shift = movedLeft * movedRight < 0 ? 0 : abs(movedLeft) <= abs(movedRight) ? movedLeft : movedRight
         let displacement = SIMD2(shift, top - ledge.origin.y)
         let resized = columns != ledge.count || abs(left - oldLeft - shift) > 0.5
         guard displacement != .zero || resized else { return }

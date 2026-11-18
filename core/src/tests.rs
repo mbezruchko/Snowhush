@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use crate::geometry::{Rect, V2};
 use crate::layer::SnowLayer;
-use crate::simulation::{Mapping, Mode, Pace, ScatterPiece, SnowSimulation, Sprite, WindowSurface};
+use crate::simulation::{COLUMN_WIDTH, Mapping, Mode, Pace, ScatterPiece, SnowSimulation, Sprite, WindowSurface};
 
 const DT: f32 = 1.0 / 60.0;
 const AWAY: V2 = V2::new(-10_000.0, -10_000.0);
@@ -1132,6 +1132,49 @@ fn a_heap_jerked_off_its_window_comes_off_as_leaves() {
     let worth = piles(&simulation).iter().map(|pile| pile.1).sum::<f32>() / (5.5 * 11.0);
     let shown = leaf_sprites(&simulation);
     assert!(shown as f32 <= worth * 1.2 + 10.0, "the leaves multiplied: {shown} shown for {worth} worth of bulk");
+}
+
+#[test]
+fn snow_stays_where_it_lies_as_a_panel_grows_or_shrinks_about_its_middle() {
+    let mut simulation = SnowSimulation::new(1280.0, 800.0, 0.75);
+    simulation.thaws = false;
+    let none = HashSet::new();
+    simulation.update_windows(&[surface(3, 300.0, 600.0, 500.0)], 0.2, &none, &none, false);
+    run(&mut simulation, 60.0, AWAY);
+    simulation.set_intensity(0.0);
+    run(&mut simulation, 10.0, AWAY);
+    // The snow lying on the window between `from` and `to` along the screen: how much, and where its middle is.
+    let lying = |simulation: &SnowSimulation, from: f32, to: f32| -> (f32, f32) {
+        let mut buffer = vec![0.0; simulation.column_count()];
+        let piles = simulation.write_layers(&mut buffer);
+        let pile = piles.iter().find(|pile| pile.origin.y > 500.0).unwrap();
+        let (surface, bed) = buffer[pile.offset..pile.offset + 2 * pile.count].split_at(pile.count);
+        let (mut sum, mut bulk) = (0.0, 0.0);
+        for i in 0..pile.count {
+            let x = pile.origin.x + (i as f32 + 0.5) * COLUMN_WIDTH;
+            if x > from && x < to {
+                sum += x * (surface[i] - bed[i]);
+                bulk += surface[i] - bed[i];
+            }
+        }
+        (bulk, sum / bulk.max(1e-6))
+    };
+    let (bulk, middle) = lying(&simulation, 380.0, 720.0);
+    assert!(bulk > 50.0, "no snow on the window: {bulk}");
+
+    // Sixty points off each end at once, as a search bar folds its results away: the ends' snow falls, the rest stays.
+    simulation.update_windows(&[surface(3, 360.0, 600.0, 380.0)], DT, &none, &none, false);
+    simulation.step(DT, AWAY);
+    let (kept, shrunk) = lying(&simulation, 380.0, 720.0);
+    assert!((shrunk - middle).abs() < 3.0, "the snow slid {} points as the panel shrank", shrunk - middle);
+    assert!(kept > bulk * 0.9, "the snow in the middle fell as the panel shrank: {bulk} -> {kept}");
+
+    // Sixty points back on each end: the snow stays where it lies, the new ends bare.
+    simulation.update_windows(&[surface(3, 300.0, 600.0, 500.0)], DT, &none, &none, false);
+    simulation.step(DT, AWAY);
+    let (_, grown) = lying(&simulation, 380.0, 720.0);
+    assert!((grown - middle).abs() < 3.0, "the snow slid {} points as the panel grew", grown - middle);
+    assert_finite(&simulation);
 }
 
 #[test]

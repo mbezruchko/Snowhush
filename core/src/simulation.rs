@@ -2279,8 +2279,16 @@ impl Air {
         // The window's own edges, not the snow's: rounded down to whole columns, the snow's right end would twitch as
         // the left edge is dragged, and shake the snow about.
         let old_right = if ledge.right > 0.0 { ledge.right } else { old_left + ledge.width() };
-        // A resize keeps the edge that didn't move fixed; a plain move shifts both edges alike.
-        let shift = if (left - old_left).abs() <= (right - old_right).abs() { left - old_left } else { right - old_right };
+        // A resize keeps the edge that didn't move fixed; a plain move shifts both edges alike. Edges going opposite ways,
+        // as a panel grows or shrinks about its middle, moved nothing: the snow stays, and what overhangs falls at once.
+        let (moved_left, moved_right) = (left - old_left, right - old_right);
+        let shift = if moved_left * moved_right < 0.0 {
+            0.0
+        } else if moved_left.abs() <= moved_right.abs() {
+            moved_left
+        } else {
+            moved_right
+        };
         let displacement = V2::new(shift, top - ledge.origin.y);
         let resized = columns != ledge.count() || (left - old_left - shift).abs() > 0.5;
         if displacement == V2::ZERO && !resized {

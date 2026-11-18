@@ -168,8 +168,10 @@ final class WindowTracker {
         let bannerMoving = banner.update(now: now, screen: screen, menuBarHeight: menuBarHeight, pointer: pointer)
         // Panels like Spotlight vanish on a keystroke; once one has stayed a while it's more likely a long-lived floating window.
         let panelOpen = panelsShownAt.values.contains { now - $0 < 20 }
+        // A search bar grows and shrinks as it's typed in, whenever that is: its snow follows each keystroke at once.
+        let typedInPanel = !panelsShownAt.isEmpty && CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .keyDown) < 0.5
         // Even while windows move, 60 looks a second are plenty: the snow follows a smoothed path of the window anyway.
-        let closely = eager || now - lastChange < 0.6 || dockShownAt != nil || dockHides || dockMayCome || panelOpen || exposing || windowsMayChange(now: now)
+        let closely = eager || now - lastChange < 0.6 || dockShownAt != nil || dockHides || dockMayCome || panelOpen || typedInPanel || exposing || windowsMayChange(now: now)
         // A sliding Space is followed every frame, its snow riding on the windows with no smoothing.
         // Turned to hide by itself, a Dock that stayed out slides away at once: the slow polls would let its snow hang.
         let dockTurnedToHide = dockStays && Dock.autoHides
