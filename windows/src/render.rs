@@ -52,7 +52,9 @@ const _: () = assert!(
         && offset_of!(Sprite, rain) == 108
         && offset_of!(Sprite, drop) == 116
         && offset_of!(Sprite, petal) == 132
-        && size_of::<Sprite>() == 136
+        && offset_of!(Sprite, scene) == 136
+        && offset_of!(Sprite, scene_light) == 140
+        && size_of::<Sprite>() == 144
 );
 
 #[repr(C)]
