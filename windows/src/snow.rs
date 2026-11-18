@@ -156,7 +156,6 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
     // The display each window's snow lies on, as of the last window list.
     let mut owners = HashMap::new();
     watch_taskbar(links.wake);
-    clicks::start(links.wake as isize);
 
     loop {
         screens.iter().filter(|screen| screen.under_taskbar()).for_each(Screen::raise);
@@ -548,7 +547,7 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                     }
                 }
             }
-            clicks::set_fighting(screens.iter().any(Screen::fighting));
+            clicks::follow(screens.iter().filter(|screen| screen.fighting()).map(|screen| screen.monitor.bounds).collect(), links.wake as isize);
             // The first display the welcome window's snow reaches starts the snowfall on all of them.
             if released {
                 settings.welcomed = true;

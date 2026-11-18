@@ -87,3 +87,5 @@
 "fight.out" = "Du bist raus";
 "fight.wins" = "Siege";
 "fight.hint" = "⌘-Klick aufs Hintergrundbild wirft einen Schneeball";
+"fight.hint.ctrl" = "Strg-Klick aufs Hintergrundbild wirft einen Schneeball";
+"fight.hint.snowman" = "Klick auf einen Schneemann wirft einen Schneeball nach ihm";

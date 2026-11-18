@@ -323,9 +323,9 @@ impl ksni::Tray for Tray {
                 visible: settings.fights(),
                 submenu: vec![
                     StandardItem {
-                        label: self.fight.0.clone().unwrap_or_default(),
+                        // Out of a room, how to throw.
+                        label: self.fight.0.clone().unwrap_or_else(|| tr("fight.hint.snowman").to_string()),
                         enabled: false,
-                        visible: self.fight.0.is_some(),
                         ..Default::default()
                     }
                     .into(),

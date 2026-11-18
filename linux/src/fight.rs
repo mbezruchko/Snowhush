@@ -119,10 +119,9 @@ pub fn copy(text: &str) {
     let _ = child.wait();
 }
 
-/// What is on the clipboard, if it is text.
+/// What is on the clipboard, if it is text: a second at most, as the clipboard's owner may never answer.
 pub fn pasted() -> Option<String> {
-    let output = Command::new("wl-paste").args(["--no-newline", "--type", "text"]).stdin(Stdio::null()).output().ok()?;
-    output.status.success().then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+    crate::wallpaper::run("wl-paste", &["--no-newline", "--type", "text"])
 }
 
 /// The room as the menu shows it: what is going on, or none while there is no room.

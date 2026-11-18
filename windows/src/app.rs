@@ -471,9 +471,9 @@ fn entries(settings: &Settings, login: bool, sliders: bool) -> Vec<Entry> {
     if settings.fights() {
         let (status, hosting, inside) = crate::fight::shown();
         let mut fighting = Vec::new();
-        if let Some(status) = status {
-            fighting.push(Entry::item(0, &status, false, false));
-        }
+        // Out of a room, how to throw.
+        let status = status.unwrap_or_else(|| tr("fight.hint.ctrl").to_string());
+        fighting.push(Entry::item(0, &status, false, false));
         fighting.push(Entry::item(ID_FIGHT_INVITE, tr(if hosting { "fight.copy" } else { "fight.invite" }), false, true));
         fighting.push(Entry::item(ID_FIGHT_JOIN, tr("fight.join"), false, true));
         if inside {

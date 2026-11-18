@@ -512,7 +512,8 @@ impl Screen {
         // The friends show on the main display alone, so that each throws once.
         let main = self.monitor.bounds.left == 0 && self.monitor.bounds.top == 0;
         if let Some(picture) = &mut self.picture {
-            picture.tick(gpu, &mut self.simulation, [area[0], area[1]], frost && !covered, fighting && !covered, room, main, now);
+            picture.visible = !covered;
+            picture.tick(gpu, &mut self.simulation, [area[0], area[1]], frost && !covered, fighting, room, main, now);
         }
     }
 

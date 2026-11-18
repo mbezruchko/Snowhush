@@ -367,7 +367,7 @@ fn hyprpaper() -> Vec<(String, Wallpaper)> {
 }
 
 /// A command's output, or nothing if it isn't there or fails; never waiting more than a second for it.
-fn run(program: &str, arguments: &[&str]) -> Option<String> {
+pub fn run(program: &str, arguments: &[&str]) -> Option<String> {
     let mut child = Command::new(program).args(arguments).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
     let started = Instant::now();
     loop {

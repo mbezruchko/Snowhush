@@ -95,3 +95,5 @@
 "fight.out" = "You’re out";
 "fight.wins" = "Wins";
 "fight.hint" = "⌘-click the wallpaper to throw a snowball";
+"fight.hint.ctrl" = "Ctrl-click the wallpaper to throw a snowball";
+"fight.hint.snowman" = "Click a snowman to throw a snowball at him";

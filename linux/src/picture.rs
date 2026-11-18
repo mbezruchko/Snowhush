@@ -52,6 +52,8 @@ pub struct PictureSnow {
     /// The snowball fight in the picture, while there is one; and where the overlay's simulation starts on the display.
     fight: Option<Fight>,
     offset: V2,
+    /// Whether the display is seen, not covered by a full-screen window: the bot throws only then.
+    pub visible: bool,
     started: Instant,
     /// When the last practice throw went, with SNOWHUSH_FIGHT_PRACTICE=1: one at the first snowman every two seconds, for
     /// trying the fight out where nothing can click.
@@ -89,6 +91,7 @@ impl PictureSnow {
             showing: false,
             fight: None,
             offset: V2::ZERO,
+            visible: true,
             started: Instant::now(),
             taking: Vec::new(),
             practiced: Instant::now(),
@@ -191,7 +194,6 @@ impl PictureSnow {
             let (terrain, light, origin) = scene.cropped(place);
             simulation.set_picture(Some(&terrain), Some(&light));
             self.given = Some((place, origin));
-            self.fight = None;
         }
         self.offset = V2::new(place[0], view[1] - place[1] - place[3]);
         let fighting = fighting && simulation.picture_depth;
@@ -212,7 +214,7 @@ impl PictureSnow {
             fight.follow(room, main, seconds);
             let covers: Vec<[f32; 4]> =
                 simulation.covers.iter().map(|c| [c[0] + offset.x, c[1] + offset.y, c[2] + offset.x, c[3] + offset.y]).collect();
-            moved = fight.step(seconds, simulation, offset, &covers, true, room);
+            moved = fight.step(seconds, simulation, offset, &covers, self.visible, room);
         }
         let snowmen = self.fight.as_ref().map(|fight| fight.drawings(room)).unwrap_or_default();
         let cleared = simulation.take_picture_cleared();

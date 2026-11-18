@@ -87,3 +87,5 @@
 "fight.out" = "Estás fuera";
 "fight.wins" = "Victorias";
 "fight.hint" = "⌘+clic en el fondo para lanzar una bola de nieve";
+"fight.hint.ctrl" = "Ctrl+clic en el fondo para lanzar una bola de nieve";
+"fight.hint.snowman" = "Haz clic en un muñeco de nieve para lanzarle una bola de nieve";

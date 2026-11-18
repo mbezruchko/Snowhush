@@ -87,3 +87,5 @@
 "fight.out" = "脱落しました";
 "fight.wins" = "勝利";
 "fight.hint" = "壁紙を⌘クリックで雪玉を投げる";
+"fight.hint.ctrl" = "壁紙をCtrlクリックで雪玉を投げる";
+"fight.hint.snowman" = "雪だるまをクリックで雪玉を投げる";

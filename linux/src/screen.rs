@@ -603,18 +603,8 @@ impl Screen {
     ) {
         let area = self.area();
         if let Some(picture) = &mut self.picture {
-            picture.tick(
-                gpu,
-                compositor,
-                &mut self.simulation,
-                &self.bounds,
-                &area,
-                frost && !self.covered,
-                fighting && !self.covered,
-                room,
-                main,
-                now,
-            );
+            picture.visible = !self.covered;
+            picture.tick(gpu, compositor, &mut self.simulation, &self.bounds, &area, frost && !self.covered, fighting, room, main, now);
         }
     }
 

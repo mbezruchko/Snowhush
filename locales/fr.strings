@@ -87,3 +87,5 @@
 "fight.out" = "Tu es éliminé";
 "fight.wins" = "Victoires";
 "fight.hint" = "⌘-clic sur le fond d’écran pour lancer une boule de neige";
+"fight.hint.ctrl" = "Ctrl-clic sur le fond d’écran pour lancer une boule de neige";
+"fight.hint.snowman" = "Clic sur un bonhomme de neige pour lui lancer une boule de neige";
