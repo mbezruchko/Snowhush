@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 snowhush-core = { path = "../core" }
+snowhush-depth = { path = "../depth" }
 smithay-client-toolkit = { version = "0.21", default-features = false, features = ["calloop"] }
 wayland-client = "0.31"
 wayland-egl = "0.32"

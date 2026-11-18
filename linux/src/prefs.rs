@@ -32,12 +32,23 @@ pub struct Settings {
     pub max_performance: bool,
     /// How opaque what falls is drawn, in percent.
     pub opacity: u32,
+    /// Snow lies in the wallpaper's picture: Accumulate's Wallpaper.
+    pub wallpaper: bool,
+    /// Deep Interaction: the snow falls into the wallpaper's depth, behind what is nearer in it.
+    pub depth: bool,
+    /// How much snow lies in the wallpaper's picture, in thousandths, kept from one run to the next.
+    pub picture_level: u32,
 }
 
 impl Settings {
     /// Whether snow settles anywhere.
     pub fn accumulates(&self) -> bool {
-        self.ground || self.panel || self.snow_on_windows
+        self.ground || self.panel || self.snow_on_windows || self.wallpaper
+    }
+
+    /// Whether the wallpaper is read at all: for the snow lying in it, its depth or both.
+    pub fn reads_wallpaper(&self) -> bool {
+        self.wallpaper || self.depth
     }
 
     pub fn load() -> Settings {
@@ -65,6 +76,9 @@ impl Settings {
             new_year: Choice { on: read("newYearOn").is_some_and(|v| v != 0), skipped: read("newYearSkipped").unwrap_or(0) },
             max_performance: read("performance").is_some_and(|v| v == 1),
             opacity: read("fallingOpacity").map_or(100, |v| v.clamp(10, 100)),
+            wallpaper: read("settleWallpaper").is_some_and(|v| v != 0),
+            depth: read("wallpaperDepth").is_none_or(|v| v != 0),
+            picture_level: read("pictureLevel").map_or(0, |v| v.min(2000)),
             picked: Picked::load(read("mode"), read("autumn"), read("mixed"), [read("mix0"), read("mix1")]),
         };
         if stamped.is_none() {
@@ -76,7 +90,7 @@ impl Settings {
     pub fn save(&self) {
         let Some(folder) = config_dir() else { return };
         let text = format!(
-            "intensity={}\nsettleGround={}\nsettlePanel={}\nmeltSnow={}\nsnowOnWindows={}\nbehindWindows={}\nshowOverFullScreen={}\nshowInScreenshots={}\ninstalledAt={}\nhalloweenOn={}\nhalloweenSkipped={}\nnewYearOn={}\nnewYearSkipped={}\nmode={}\nmixed={}\nmix0={}\nmix1={}\nautumn={}\nperformance={}\nfallingOpacity={}\n",
+            "intensity={}\nsettleGround={}\nsettlePanel={}\nmeltSnow={}\nsnowOnWindows={}\nbehindWindows={}\nshowOverFullScreen={}\nshowInScreenshots={}\ninstalledAt={}\nhalloweenOn={}\nhalloweenSkipped={}\nnewYearOn={}\nnewYearSkipped={}\nmode={}\nmixed={}\nmix0={}\nmix1={}\nautumn={}\nperformance={}\nfallingOpacity={}\nsettleWallpaper={}\nwallpaperDepth={}\npictureLevel={}\n",
             self.intensity,
             self.ground as u32,
             self.panel as u32,
@@ -96,7 +110,10 @@ impl Settings {
             modes::number(self.picked.mix[1]),
             (self.picked.mode == Mode::Autumn) as u32,
             self.max_performance as u32,
-            self.opacity
+            self.opacity,
+            self.wallpaper as u32,
+            self.depth as u32,
+            self.picture_level
         );
         let _ = std::fs::create_dir_all(&folder);
         let _ = write_whole(&folder.join("settings"), text.as_bytes());

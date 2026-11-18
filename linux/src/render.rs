@@ -16,6 +16,10 @@ use snowhush_core::geometry::V2;
 use snowhush_core::halloween::{self, PUMPKIN_ASPECT, PUMPKIN_CANDLE, SIGN_CAPTIONS};
 use snowhush_core::simulation::{BOUGH_SEGMENTS, COLUMN_WIDTH, PumpkinSprite, SnowSimulation, Sprite, TREE_HEIGHT, TreePiece, spark_pieces};
 
+mod picture;
+
+pub use picture::{Lying, Painting};
+
 const SPRITE_VERTEX: &str = include_str!("shaders/sprite.vert");
 const SPRITE_FRAGMENT: &str = include_str!("shaders/sprite.frag");
 const PILE_VERTEX: &str = include_str!("shaders/pile.vert");
@@ -82,6 +86,8 @@ pub const LANTERN_REACH: f32 = 130.0;
 /// The height texture's width; the pile shader wraps its index at the same width.
 const ROW: usize = 4096;
 const OCCLUDERS: usize = 16;
+/// The texture unit the sprites read the wallpaper's air from, out of the way of every other pass's.
+const AIR_UNIT: u32 = 5;
 
 /// The light the snow is drawn in.
 #[derive(Clone, Copy)]
@@ -144,6 +150,8 @@ pub struct Gpu {
     signs: Vec<Option<(glow::Texture, [f32; 2])>>,
     /// The pumpkin's shell and face, made the first time one is drawn.
     pumpkin_pictures: [Option<glow::Texture>; 2],
+    /// What draws the snow lying in wallpapers, made the first time it is.
+    picture: Option<picture::Programs>,
     pub adapter: String,
 }
 
@@ -155,6 +163,8 @@ pub struct Surface {
     pub height: i32,
     /// The field its drops on the glass add up into, and the size it was made for, while it has any.
     field: Cell<Option<Field>>,
+    /// The wallpaper's air for the flakes falling in its picture, as the simulation last counted it.
+    air: Cell<Option<(glow::Texture, u64)>>,
 }
 
 /// A field's texture, its framebuffer and the size they were made for.
@@ -219,13 +229,14 @@ impl Gpu {
                     "blossom",
                     "wilt",
                     "glass",
+                    "air",
                 ],
             )?;
             let field = program(
                 &gl,
                 SPRITE_VERTEX,
                 &included(FIELD_FRAGMENT),
-                &["viewSize", "scale", "time", "lantern", "pumpkins", "shake", "panel", "field"],
+                &["viewSize", "scale", "time", "lantern", "pumpkins", "shake", "panel", "field", "air"],
             )?;
             let glass = program(&gl, GLASS_VERTEX, GLASS_FRAGMENT, &["field", "light", "scale"])?;
             let extensions = gl.supported_extensions();
@@ -283,8 +294,8 @@ impl Gpu {
             gl.bind_vertex_array(Some(sprite_array));
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(sprite_buffer));
             let stride = size_of::<Sprite>() as i32;
-            // Position, velocity, size, alpha, soft, tint amount, tint, lump, ghost, pose, mood, leaf, spin, rain, drop:
-            // see `Sprite`.
+            // Position, velocity, size, alpha, soft, tint amount, tint, lump, ghost, pose, mood, leaf, spin, rain, drop,
+            // and, together as the attributes run out, petal, nearness and light in the wallpaper's picture: see `Sprite`.
             for (location, components, offset) in [
                 (0, 2, 0),
                 (1, 2, 8),
@@ -301,7 +312,7 @@ impl Gpu {
                 (12, 2, 100),
                 (13, 2, 108),
                 (14, 4, 116),
-                (15, 1, 132),
+                (15, 3, 132),
             ] {
                 gl.enable_vertex_attrib_array(location);
                 gl.vertex_attrib_pointer_f32(location, components, glow::FLOAT, false, stride, offset);
@@ -360,6 +371,7 @@ impl Gpu {
                 columns: Vec::new(),
                 signs: vec![None; SIGNS.len()],
                 pumpkin_pictures: [None; 2],
+                picture: None,
                 adapter,
             })
         }
@@ -372,7 +384,7 @@ impl Gpu {
         self.egl.make_current(self.display, Some(surface), Some(surface), Some(self.context)).map_err(|error| error.to_string())?;
         // Frames are paced by the snow loop; a swap must never wait on a display that is off.
         let _ = self.egl.swap_interval(self.display, 0);
-        Ok(Surface { window, surface, width, height, field: Cell::new(None) })
+        Ok(Surface { window, surface, width, height, field: Cell::new(None), air: Cell::new(None) })
     }
 
     pub fn resize(&self, surface: &mut Surface, width: i32, height: i32) {
@@ -388,6 +400,9 @@ impl Gpu {
                 self.gl.delete_framebuffer(framebuffer);
                 self.gl.delete_texture(texture);
             }
+        }
+        if let Some((texture, _)) = surface.air.take() {
+            unsafe { self.gl.delete_texture(texture) };
         }
         let _ = self.egl.destroy_surface(self.display, surface.surface);
     }
@@ -654,6 +669,7 @@ impl Gpu {
                 surface.field.set(Some((texture, framebuffer, size)));
             }
             if sprites > 0 {
+                Self::bind_air(gl, surface, simulation);
                 gl.bind_vertex_array(Some(self.sprite_array));
                 gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.sprite_buffer));
                 gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes(&self.sprites[..sprites]), glow::STREAM_DRAW);
@@ -678,6 +694,7 @@ impl Gpu {
                     gl.uniform_2_f32_slice(program.location("shake"), &shake);
                     gl.uniform_4_f32_slice(program.location("panel"), &panel);
                     gl.uniform_1_f32(program.location("field"), 1.0);
+                    gl.uniform_1_i32(program.location("air"), AIR_UNIT as i32);
                     gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, 4, sprites as i32);
                     gl.disable(glow::SCISSOR_TEST);
                     gl.bind_framebuffer(glow::FRAMEBUFFER, None);
@@ -699,6 +716,7 @@ impl Gpu {
                 gl.uniform_1_f32(sprite.location("autumn"), autumn);
                 gl.uniform_1_f32(sprite.location("blossom"), blossom);
                 gl.uniform_1_f32(sprite.location("wilt"), wilt);
+                gl.uniform_1_i32(sprite.location("air"), AIR_UNIT as i32);
                 gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, 4, sprites as i32);
                 if let Some((texture, _, _)) = field {
                     let program = &self.glass;
@@ -730,6 +748,38 @@ impl Gpu {
     }
 
     /// Makes a caption's sign the first time a ghost holds it up.
+    /// The wallpaper's air for the flakes falling in its picture on the surface's texture unit for it, made again only when
+    /// the picture changes; one clear cell while there is none.
+    unsafe fn bind_air(gl: &glow::Context, surface: &Surface, simulation: &SnowSimulation) {
+        let (cells, size, version) = simulation.picture_air();
+        unsafe {
+            gl.active_texture(glow::TEXTURE0 + AIR_UNIT);
+            let texture = match surface.air.get() {
+                Some((texture, seen)) if seen == version => texture,
+                held => {
+                    let Some(texture) = held.map(|(texture, _)| texture).or_else(|| gl.create_texture().ok()) else { return };
+                    gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+                    gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
+                    let (pixels, width, height) = if size.0 > 0 { (cells, size.0, size.1) } else { (&[255u8, 255, 255, 0][..], 1, 1) };
+                    let data = glow::PixelUnpackData::Slice(Some(pixels));
+                    gl.tex_image_2d(glow::TEXTURE_2D, 0, glow::RGBA8 as i32, width as i32, height as i32, 0, glow::RGBA, glow::UNSIGNED_BYTE, data);
+                    for (parameter, value) in [
+                        (glow::TEXTURE_MIN_FILTER, glow::LINEAR),
+                        (glow::TEXTURE_MAG_FILTER, glow::LINEAR),
+                        (glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE),
+                        (glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE),
+                    ] {
+                        gl.tex_parameter_i32(glow::TEXTURE_2D, parameter, value as i32);
+                    }
+                    surface.air.set(Some((texture, version)));
+                    texture
+                }
+            };
+            gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+            gl.active_texture(glow::TEXTURE0);
+        }
+    }
+
     fn load_sign(&mut self, caption: usize) {
         if self.signs.get(caption).is_none_or(Option::is_some) {
             return;

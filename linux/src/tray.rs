@@ -259,6 +259,18 @@ impl ksni::Tray for Tray {
                 ..Default::default()
             }
             .into(),
+            CheckmarkItem {
+                label: tr("surface.wallpaper").into(),
+                checked: settings.wallpaper,
+                activate: Box::new(|tray: &mut Tray| {
+                    tray.change(|settings| {
+                        settings.wallpaper = !settings.wallpaper;
+                        Command::Wallpaper(settings.wallpaper)
+                    })
+                }),
+                ..Default::default()
+            }
+            .into(),
         ];
         vec![
             SubMenu {
@@ -327,6 +339,18 @@ impl ksni::Tray for Tray {
                             tray.change(|settings| {
                                 settings.melt = !settings.melt;
                                 Command::Melt(settings.melt)
+                            })
+                        }),
+                        ..Default::default()
+                    }
+                    .into(),
+                    CheckmarkItem {
+                        label: tr("deep").into(),
+                        checked: settings.depth,
+                        activate: Box::new(|tray: &mut Tray| {
+                            tray.change(|settings| {
+                                settings.depth = !settings.depth;
+                                Command::Depth(settings.depth)
                             })
                         }),
                         ..Default::default()

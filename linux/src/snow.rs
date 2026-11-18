@@ -29,6 +29,7 @@ use crate::chores;
 use crate::kwin;
 use crate::light::{self, Shade, daylight};
 use crate::log;
+use crate::picture::PictureSnow;
 use crate::prefs::Settings;
 use crate::render::{Ambient, Gpu};
 use crate::screen::{self, PowerBudget, Screen};
@@ -43,6 +44,10 @@ pub enum Command {
     FallingOpacity(f32),
     Ground(bool),
     Panel(bool),
+    /// Accumulate's Wallpaper, and Deep Interaction: the snow lying in the wallpaper's picture, and the flakes falling
+    /// into its depth.
+    Wallpaper(bool),
+    Depth(bool),
     Melt(bool),
     SnowOnWindows(bool),
     BehindWindows(bool),
@@ -109,6 +114,10 @@ pub struct App {
     light_at: Instant,
     /// Asks the chores for the desktop pictures again.
     backdrops_wanted: mpsc::Sender<()>,
+    /// The desktop pictures as the chores last found them.
+    shades: Vec<Shade>,
+    /// When the snow's level in the wallpaper was last kept for the next run.
+    picture_kept_at: Instant,
     stats: Stats,
 }
 
@@ -187,6 +196,8 @@ pub fn run() -> Result<(), String> {
         chores_at: now,
         light_at: now,
         backdrops_wanted: chores::start(bus.clone(), commands.clone()),
+        shades: Vec::new(),
+        picture_kept_at: Instant::now(),
         stats: Stats::new(now),
     };
     let result = 'run: {
@@ -297,6 +308,16 @@ impl App {
                     if windows { screen.rewatch() } else { screen.drop_window_snow() }
                 });
             }
+            Command::Wallpaper(on) => {
+                self.settings.wallpaper = on;
+                let accumulates = self.settings.accumulates();
+                self.screens.iter_mut().for_each(|screen| screen.simulation.accumulates = accumulates);
+                self.follow_pictures();
+            }
+            Command::Depth(on) => {
+                self.settings.depth = on;
+                self.follow_pictures();
+            }
             Command::Melt(on) => {
                 self.settings.melt = on;
                 self.screens.iter_mut().for_each(|screen| screen.simulation.thaws = on);
@@ -370,7 +391,12 @@ impl App {
                 log!("power: {budget:?}");
                 self.screens.iter_mut().for_each(|screen| screen.simulation.set_density(density(budget)));
             }
-            Command::Backdrops(shades) => self.screens.iter_mut().for_each(|screen| screen.update_backdrop(&shades)),
+            Command::Backdrops(shades) => {
+                for screen in &mut self.screens {
+                    screen.update_backdrop(&shades, &self.gpu);
+                }
+                self.shades = shades;
+            }
             Command::Light(light) => {
                 if let Some(tray) = &self.tray {
                     tray.update(|tray| tray.light = light);
@@ -476,6 +502,11 @@ impl App {
                 Err(error) => gpu_lost |= screen.failing() || error.contains(&khronos_egl::Error::ContextLost.to_string()),
             }
         }
+        let frost = self.settings.wallpaper;
+        for screen in &mut self.screens {
+            screen.tick_picture(&mut self.gpu, frost, now);
+        }
+        self.keep_picture(now);
         if gpu_lost {
             self.renew_gpu(now);
         }
@@ -586,6 +617,11 @@ impl App {
             );
             screen.max_rate = self.settings.max_performance;
             screen.panel = self.settings.panel;
+            if self.settings.reads_wallpaper() {
+                let picture = PictureSnow::new((&self.compositor, &self.layer_shell, &self.qh), &output, &screen.name);
+                screen.picture = Some(picture);
+                screen.update_backdrop(&self.shades, &self.gpu);
+            }
             self.screens.push(screen);
         }
         for screen in current {
@@ -726,11 +762,47 @@ fn window_list(report: &Report) -> String {
     report.windows.iter().map(window).collect::<Vec<_>>().join(", ")
 }
 
+impl App {
+    /// Keeps how much snow lies in the wallpaper for the next run, now and then while it changes.
+    fn keep_picture(&mut self, now: Instant) {
+        if now - self.picture_kept_at < Duration::from_secs(60) {
+            return;
+        }
+        self.picture_kept_at = now;
+        let Some(level) = self.screens.iter().find(|screen| screen.picture.is_some()).map(|screen| screen.simulation.picture_level()) else { return };
+        let kept = (level * 1000.0).round() as u32;
+        if kept.abs_diff(self.settings.picture_level) >= 20 {
+            self.settings.picture_level = kept;
+            self.settings.save();
+        }
+    }
+
+    /// Reads the wallpapers, or stops, as Accumulate's Wallpaper and Deep Interaction now want.
+    fn follow_pictures(&mut self) {
+        let wanted = self.settings.reads_wallpaper();
+        for screen in &mut self.screens {
+            screen.simulation.picture_frost = self.settings.wallpaper;
+            screen.simulation.picture_depth = self.settings.depth;
+            match (wanted, screen.picture.is_some()) {
+                (true, false) => {
+                    screen.picture = Some(PictureSnow::new((&self.compositor, &self.layer_shell, &self.qh), &screen.output, &screen.name));
+                    screen.update_backdrop(&self.shades, &self.gpu);
+                }
+                (false, true) => screen.drop_picture(&self.gpu),
+                _ => {}
+            }
+        }
+    }
+}
+
 fn new_simulation(bounds: &Area, settings: &Settings, budget: PowerBudget) -> SnowSimulation {
     let mut simulation = SnowSimulation::new(bounds.w as f32, bounds.h as f32, settings.intensity as f32 / 100.0);
     simulation.thaws = settings.melt;
     simulation.accumulates = settings.accumulates();
     simulation.ground_settles = settings.ground;
+    simulation.picture_frost = settings.wallpaper;
+    simulation.picture_depth = settings.depth;
+    simulation.restore_picture(settings.picture_level as f32 / 1000.0);
     simulation.falling_opacity = settings.opacity as f32 / 100.0;
     simulation.set_modes(&settings.picked.modes());
     simulation.set_density(density(budget));
@@ -818,6 +890,12 @@ impl OutputHandler for App {
 impl LayerShellHandler for App {
     /// The compositor took the surface away, as when its display goes: the display sync makes a new one if needed.
     fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, layer: &LayerSurface) {
+        if let Some(screen) = self.screens.iter_mut().find(|screen| screen.picture.as_ref().is_some_and(|picture| picture.is(layer))) {
+            log!("{}: wallpaper layer closed", screen.name);
+            screen.drop_picture(&self.gpu);
+            self.displays_changed_at = Some(Instant::now());
+            return;
+        }
         if let Some(index) = self.screens.iter().position(|screen| screen.is(layer)) {
             let screen = self.screens.swap_remove(index);
             log!("{}: overlay closed", screen.name);
@@ -827,9 +905,11 @@ impl LayerShellHandler for App {
     }
 
     fn configure(&mut self, _: &Connection, _: &QueueHandle<Self>, layer: &LayerSurface, configure: LayerSurfaceConfigure, _: u32) {
+        let (width, height) = configure.new_size;
         if let Some(screen) = self.screens.iter_mut().find(|screen| screen.is(layer)) {
-            let (width, height) = configure.new_size;
             screen.configure(&self.gpu, width, height);
+        } else if let Some(picture) = self.screens.iter_mut().find_map(|screen| screen.picture.as_mut().filter(|picture| picture.is(layer))) {
+            picture.configure(&self.gpu, width, height);
         }
     }
 }
