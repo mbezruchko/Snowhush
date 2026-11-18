@@ -1527,3 +1527,44 @@ fn snow_falls_into_the_wallpapers_picture_and_lies_there() {
     assert_eq!(simulation.picture_level(), 0.0);
     assert!(!simulation.has_picture_dabs());
 }
+
+#[test]
+fn a_snowman_wanders_reels_breaks_apart_and_rises_elsewhere() {
+    use crate::snowman::{Bot, Ground};
+    use crate::wallpaper::{Light, Relief, Scene, Terrain};
+    let light = Light { width: 1, height: 1, cell: 16, pixels: vec![240; 4], haze: [0.8; 3] };
+    let terrain = Terrain { width: 1, height: 1, cell: 4, near: vec![0], far: 0.1, close: 0.9 };
+    let relief = Relief { width: 1, height: 1, cell: 2, lightness: vec![0], tops: vec![0], hold: vec![0], near: vec![0] };
+    let scene = Scene { ridges: Vec::new(), light, terrain, relief };
+    let ground = Ground::strip(&scene, V2::new(1600.0, 1000.0), 60.0);
+    let mut bot = Bot::new(ground, 0.0, true, 7).expect("somewhere to stand");
+    let start = bot.foot;
+    assert!(bot.contains(bot.middle()), "a snowball at his middle misses him");
+    let mut thrown = 0;
+    let mut now = 0.0;
+    for _ in 0..600 {
+        now += DT as f64;
+        bot.step(DT, now, true, &mut |_, _, _| thrown += 1);
+    }
+    assert!((bot.foot - start).length() > 1.0, "he never walked");
+    assert_eq!(thrown, 0, "a bot threw first");
+    bot.hit(bot.middle(), now);
+    for _ in 0..300 {
+        now += DT as f64;
+        bot.step(DT, now, true, &mut |_, _, _| thrown += 1);
+    }
+    assert_eq!(thrown, 1, "a bot hit once threw back {thrown} times");
+    let before = bot.foot;
+    bot.move_away();
+    let mut broke = false;
+    for _ in 0..240 {
+        now += DT as f64;
+        bot.step(DT, now, true, &mut |_, _, _| {});
+        broke |= bot.in_pieces();
+    }
+    assert!(broke && !bot.in_pieces(), "he didn't break apart and rise again");
+    assert!((bot.foot - before).length() > 1.0, "he rose where he broke");
+    bot.knock_out();
+    assert!(bot.knocked_out && bot.in_pieces() && !bot.contains(bot.middle()));
+    assert!(!bot.take_bursts().is_empty());
+}
