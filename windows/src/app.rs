@@ -25,6 +25,7 @@ use windows::core::{PCWSTR, Result, w};
 use crate::halloween;
 use crate::log;
 use crate::menu::{self, Entry, Icon, Tile};
+use crate::new_year;
 use crate::prefs::{self, Settings};
 use crate::snow::{self, Command, Links};
 use crate::store;
@@ -51,6 +52,7 @@ const ID_QUIT: u32 = 299;
 const ID_UPDATES: u32 = 206;
 const ID_CLEAR: u32 = 207;
 const ID_HALLOWEEN: u32 = 208;
+const ID_NEW_YEAR: u32 = 222;
 const ID_TASKBAR: u32 = 209;
 const ID_SNOW: u32 = 210;
 const ID_AUTUMN: u32 = 211;
@@ -109,13 +111,16 @@ const RAIN_WHITE: Glyph = glyph!("rain-white");
 const RAIN_BLACK: Glyph = glyph!("rain-black");
 const BLOSSOM_WHITE: Glyph = glyph!("blossom-white");
 const BLOSSOM_BLACK: Glyph = glyph!("blossom-black");
+const FIR_WHITE: Glyph = glyph!("fir-white");
+const FIR_BLACK: Glyph = glyph!("fir-black");
 
-/// What the tray shows: a snowflake, a jack-o'-lantern while it is Halloween and wanted, a leaf while leaves fall, a
-/// rain cloud while it rains, or a cherry blossom while its petals fall.
+/// What the tray shows: a snowflake, a jack-o'-lantern while it is Halloween and wanted, a fir while it is the New Year
+/// and wanted, a leaf while leaves fall, a rain cloud while it rains, or a cherry blossom while its petals fall.
 #[derive(Clone, Copy, PartialEq)]
 enum Emblem {
     Snowflake,
     Pumpkin,
+    Fir,
     Leaf,
     Rain,
     Blossom,
@@ -125,6 +130,8 @@ impl Emblem {
     fn of(settings: &Settings) -> Emblem {
         if halloween::shows(settings) {
             Emblem::Pumpkin
+        } else if new_year::shows(settings) {
+            Emblem::Fir
         } else {
             match settings.picked.mode {
                 Mode::Snow => Emblem::Snowflake,
@@ -144,6 +151,8 @@ impl Emblem {
             (Emblem::Leaf, true) => &LEAF_BLACK,
             (Emblem::Pumpkin, false) => &PUMPKIN_WHITE,
             (Emblem::Pumpkin, true) => &PUMPKIN_BLACK,
+            (Emblem::Fir, false) => &FIR_WHITE,
+            (Emblem::Fir, true) => &FIR_BLACK,
             (Emblem::Rain, false) => &RAIN_WHITE,
             (Emblem::Rain, true) => &RAIN_BLACK,
             (Emblem::Blossom, false) => &BLOSSOM_WHITE,
@@ -394,6 +403,7 @@ fn entries(settings: &Settings, login: bool, sliders: bool) -> Vec<Entry> {
         kind(ID_BLOSSOM, tr("blossom"), Mode::Blossom),
         Entry::Separator,
         Entry::item(ID_HALLOWEEN, tr("halloween"), halloween::wanted(settings.halloween), falling == [Mode::Snow]),
+        Entry::item(ID_NEW_YEAR, tr("newyear"), new_year::wanted(settings.new_year), falling == [Mode::Snow]),
     ];
     let mut behavior = vec![Entry::header(tr("behavior"))];
     // Rain doesn't lie anywhere: nothing to keep, melt or clear.
@@ -559,12 +569,25 @@ fn choose(window: HWND, chosen: u32, login: bool) {
             let status = prefs::set_opens_at_login(!login);
             log!("open at login {}: {status:?}", !login);
         }
-        ID_HALLOWEEN => {
+        ID_HALLOWEEN | ID_NEW_YEAR => {
             APP.with_borrow_mut(|app| {
                 let Some(app) = app else { return };
-                app.settings.halloween = app.settings.halloween.toggled(halloween::today());
-                app.settings.save();
-                send(app, Command::Halloween(app.settings.halloween));
+                let settings = &mut app.settings;
+                let (today, new_year_today) = (halloween::today(), new_year::today());
+                // Turning one holiday on turns the other off.
+                if chosen == ID_HALLOWEEN {
+                    settings.halloween = settings.halloween.toggled(today);
+                    if settings.halloween.wanted(today) {
+                        settings.new_year = settings.new_year.turned_off(new_year_today);
+                    }
+                } else {
+                    settings.new_year = settings.new_year.toggled(new_year_today);
+                    if settings.new_year.wanted(new_year_today) {
+                        settings.halloween = settings.halloween.turned_off(today);
+                    }
+                }
+                settings.save();
+                send(app, Command::Holidays { halloween: app.settings.halloween, new_year: app.settings.new_year });
             });
             refresh_icon(window);
         }

@@ -6,6 +6,7 @@ mod halloween;
 mod light;
 mod log;
 mod menu;
+mod new_year;
 mod prefs;
 mod render;
 mod screen;

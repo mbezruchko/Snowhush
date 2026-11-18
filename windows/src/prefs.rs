@@ -37,6 +37,7 @@ pub struct Settings {
     /// Unix seconds of the first run, or 0 for an install older than the stamp.
     pub installed_at: u32,
     pub halloween: Choice,
+    pub new_year: Choice,
     /// What falls: the kind picked last, or two mixed.
     pub picked: Picked,
     /// Drawn at the display's highest rate all the time, instead of only while something is pushed around.
@@ -76,6 +77,7 @@ impl Settings {
             welcomed,
             installed_at,
             halloween: Choice { on: read(w!("halloweenOn")).is_some_and(|v| v != 0), skipped: read(w!("halloweenSkipped")).unwrap_or(0) },
+            new_year: Choice { on: read(w!("newYearOn")).is_some_and(|v| v != 0), skipped: read(w!("newYearSkipped")).unwrap_or(0) },
             max_performance: read(w!("performance")).is_some_and(|v| v == 1),
             opacity: read(w!("fallingOpacity")).map_or(100, |v| v.clamp(10, 100)),
             picked: Picked::load(read(w!("mode")), read(w!("autumn")), read(w!("mixed")), [read(w!("mix0")), read(w!("mix1"))]),
@@ -96,6 +98,8 @@ impl Settings {
         write(w!("installedAt"), self.installed_at);
         write(w!("halloweenOn"), self.halloween.on as u32);
         write(w!("halloweenSkipped"), self.halloween.skipped);
+        write(w!("newYearOn"), self.new_year.on as u32);
+        write(w!("newYearSkipped"), self.new_year.skipped);
         write(w!("mode"), modes::number(self.picked.mode));
         write(w!("mixed"), self.picked.mixed as u32);
         write(w!("mix0"), modes::number(self.picked.mix[0]));

@@ -23,10 +23,12 @@ use crate::desktop::{self, DesktopLayer};
 use crate::halloween;
 use crate::light::{Sky, Wallpapers};
 use crate::log;
+use crate::new_year;
 use crate::prefs::Settings;
 use crate::render::Gpu;
 use crate::screen::{BACKDROP_CHANGED, Clock, DISPLAYS_CHANGED, Monitor, PowerBudget, Screen, dip_size, listen, monitors, walls, watch_taskbar};
 use crate::tracker::{self, Tracker};
+use snowhush_core::new_year as core_new_year;
 
 /// A piece of the welcome window crumbling into snow, in physical screen pixels.
 pub struct Piece {
@@ -61,8 +63,11 @@ pub enum Command {
     ReleaseSnowfall,
     /// Blows all the snow away; when calm, for less motion, melts it where it lies instead.
     ClearSnow(bool),
-    /// Halloween turned on or off from the menu.
-    Halloween(Choice),
+    /// Halloween or the New Year turned on or off from the menu: turning one on turns the other off.
+    Holidays {
+        halloween: Choice,
+        new_year: Choice,
+    },
     /// Other kinds fall, once a gust has blown what is there away; when calm, for less motion, it melts where it
     /// lies instead. A kind only joining what falls starts at once.
     SwitchMode {
@@ -118,6 +123,7 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
     let mut active = true;
     let mut budget = PowerBudget::Full;
     let mut spooky = halloween::shows(&settings);
+    let mut festive = new_year::shows(&settings);
     let mut sky = Sky::now(spooky);
     let wallpapers = Wallpapers::new().inspect_err(|error| log!("wallpapers unavailable: {error}")).ok();
     let mut chores_at = 0;
@@ -226,8 +232,9 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                     let direction = screens.first().map_or(-1.0, |screen| screen.simulation.breeze_direction());
                     screens.iter_mut().for_each(|screen| screen.simulation.blow_away(direction, calm));
                 }
-                Command::Halloween(choice) => {
-                    settings.halloween = choice;
+                Command::Holidays { halloween, new_year } => {
+                    settings.halloween = halloween;
+                    settings.new_year = new_year;
                     chores_at = 0;
                     light_at = 0;
                 }
@@ -327,12 +334,14 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
             }
             if now >= light_at {
                 light_at = now + clock.frequency * 60;
-                let on = halloween::shows(&settings);
-                if on != spooky {
+                let (on, tree) = (halloween::shows(&settings), new_year::shows(&settings));
+                if on != spooky || tree != festive {
                     spooky = on;
-                    log!("halloween: {on}");
+                    festive = tree;
+                    log!("holiday: {:?}", new_year::holiday(&settings));
                     screens.iter_mut().for_each(|screen| {
                         screen.simulation.set_halloween(on);
+                        screen.simulation.set_new_year(tree);
                         screen.wake(now);
                     });
                 }
@@ -375,9 +384,18 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
             let mut drawn = false;
             let mut released = false;
             let mut reshaped = false;
+            // The New Year's countdown and midnight by the clock, and how often rockets go up.
+            let (celebration, rockets) = if festive {
+                let local = new_year::now();
+                (core_new_year::celebration(local, clock.seconds(now - started)), core_new_year::fireworks_per_minute(local))
+            } else {
+                (None, 0.0)
+            };
             for (index, screen) in
                 screens.iter_mut().enumerate().filter(|(_, screen)| recover_at.is_none() && screen.next_due <= now + clock.tolerance())
             {
+                screen.simulation.celebration = celebration;
+                screen.simulation.fireworks_per_minute = rockets;
                 let in_front = tracker.covering(&screen.monitor.bounds);
                 // Shown over a full-screen app, the snow reaches down to the bottom of the display while the app has put
                 // the taskbar away, so the drift lies along the bottom instead of over a taskbar no longer there; a
@@ -721,6 +739,7 @@ fn new_simulation(monitor: &Monitor, settings: &Settings) -> SnowSimulation {
     simulation.falling_opacity = settings.opacity as f32 / 100.0;
     simulation.set_snowfall_held(!settings.welcomed);
     simulation.set_halloween(halloween::shows(settings));
+    simulation.set_new_year(new_year::shows(settings));
     simulation.set_modes(&settings.picked.modes());
     simulation
 }

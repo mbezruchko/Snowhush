@@ -18,6 +18,10 @@ cbuffer Uniforms : register(b0) {
     float4 shake;
     // The pumpkins' candles: where each burns, how far its light reaches and how bright it is.
     float4 pumpkins[3];
+    // The New Year's garland round the tree's foot, or the fireworks' bursts: where each light is, how far it reaches and
+    // how bright it is; and its colour.
+    float4 garland[3];
+    float4 garlandColors[3];
     float4 occluders[16];
     // One while leaves fall instead of snow.
     float autumn;
@@ -403,6 +407,18 @@ float4 leafAt(float2 p, float seed, float turn, float flip, float alpha, float w
 
 float flicker(float seed) {
     return 0.86 + 0.08 * sin(time * 11.0 + seed * 2.1) + 0.06 * sin(time * 29.0 + 1.3 + seed * 4.3);
+}
+
+// The New Year's garland's light on the snow round the tree's foot.
+float3 garlandGlow(float2 at) {
+    float3 sum = float3(0.0, 0.0, 0.0);
+    for (int k = 0; k < 3; k++) {
+        float4 bulb = garland[k];
+        if (bulb.w <= 0.0) continue;
+        float2 d = at - bulb.xy;
+        sum += garlandColors[k].rgb * (bulb.w * exp(-dot(d, d) / (bulb.z * bulb.z)));
+    }
+    return sum;
 }
 
 // How much candlelight reaches a point: the cursor's, and the pumpkins' in the snow.
@@ -1150,6 +1166,7 @@ float4 pileFragment(PileOut i) : SV_Target {
     color *= lerp(light.rgb, lerp(float3(1.0, 1.0, 1.0), light.rgb, 0.4), leafy);
     color = lerp(color, rim.rgb, rim.a * exp(-depth / 2.5) * (1.0 - leafy));
     color = lerp(color, candle, candlelight(world) * (0.35 + 0.65 * exp(-depth / 14.0)) * 0.55);
+    color += garlandGlow(world) * (0.35 + 0.65 * exp(-depth / 14.0)) * (1.0 - leafy);
     return float4(color * coverage, coverage);
 }
 
