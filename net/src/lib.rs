@@ -396,34 +396,70 @@ fn leave_room() {
     }
 }
 
+/// The room as the Windows and Linux apps, which link this crate, play in it: what the C functions do for the Mac.
+pub mod play {
+    use super::*;
+
+    /// Opens a room as `name`, through `relay` if given; its invite comes as a `room` event.
+    pub fn host(name: &str, relay: Option<&str>) {
+        open(super::host(name.to_string(), relay.map(str::to_string)));
+    }
+
+    /// Joins the room of `ticket` as `name`; a `joined` event says it worked, an `error` event that it didn't.
+    pub fn join(ticket: &str, name: &str, relay: Option<&str>) {
+        open(super::join(ticket.to_string(), name.to_string(), relay.map(str::to_string)));
+    }
+
+    /// Says this player hit the player `at` with a snowball.
+    pub fn throw(at: &str) {
+        if let Some(room) = ROOM.lock().unwrap().as_ref() {
+            room.throw(at);
+        }
+    }
+
+    /// The next thing that happened; none when there is none.
+    pub fn next() -> Option<Event> {
+        LOOSE.lock().unwrap().pop_front().or_else(|| ROOM.lock().unwrap().as_ref().and_then(|room| room.next()))
+    }
+
+    pub fn leave() {
+        leave_room();
+    }
+
+    /// Leaves the room and waits, half a second at most, for the others to be told: for when the app quits.
+    pub fn leave_now() {
+        if let Some(room) = ROOM.lock().unwrap().take() {
+            runtime().block_on(async move {
+                let _ = tokio::time::timeout(Duration::from_millis(500), room.leave()).await;
+            });
+        }
+    }
+}
+
 /// Opens a room as `name`, through `relay` if given; its invite comes as a `room` event.
 #[unsafe(no_mangle)]
 pub extern "C" fn sn_host(name: *const c_char, relay: *const c_char) {
-    let (name, relay) = (string(name).unwrap_or_default(), string(relay));
-    open(host(name, relay));
+    play::host(&string(name).unwrap_or_default(), string(relay).as_deref());
 }
 
 /// Joins the room of `ticket` as `name`; a `joined` event says it worked, an `error` event that it didn't.
 #[unsafe(no_mangle)]
 pub extern "C" fn sn_join(ticket: *const c_char, name: *const c_char, relay: *const c_char) {
-    let (ticket, name, relay) = (string(ticket).unwrap_or_default(), string(name).unwrap_or_default(), string(relay));
-    open(join(ticket, name, relay));
+    play::join(&string(ticket).unwrap_or_default(), &string(name).unwrap_or_default(), string(relay).as_deref());
 }
 
 /// Says this player hit the player `at` with a snowball.
 #[unsafe(no_mangle)]
 pub extern "C" fn sn_throw(at: *const c_char) {
-    let Some(at) = string(at) else { return };
-    if let Some(room) = ROOM.lock().unwrap().as_ref() {
-        room.throw(&at);
+    if let Some(at) = string(at) {
+        play::throw(&at);
     }
 }
 
 /// The next thing that happened, as JSON, to be given back to `sn_free`; null when there is none.
 #[unsafe(no_mangle)]
 pub extern "C" fn sn_next() -> *mut c_char {
-    let event = LOOSE.lock().unwrap().pop_front().or_else(|| ROOM.lock().unwrap().as_ref().and_then(|room| room.next()));
-    match event {
+    match play::next() {
         Some(event) => give(serde_json::to_string(&event).unwrap_or_default()),
         None => std::ptr::null_mut(),
     }
@@ -431,17 +467,13 @@ pub extern "C" fn sn_next() -> *mut c_char {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn sn_leave() {
-    leave_room();
+    play::leave();
 }
 
 /// Leaves the room and waits, half a second at most, for the others to be told: for when the app quits.
 #[unsafe(no_mangle)]
 pub extern "C" fn sn_leave_now() {
-    if let Some(room) = ROOM.lock().unwrap().take() {
-        runtime().block_on(async move {
-            let _ = tokio::time::timeout(Duration::from_millis(500), room.leave()).await;
-        });
-    }
+    play::leave_now();
 }
 
 #[unsafe(no_mangle)]
