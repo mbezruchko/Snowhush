@@ -102,7 +102,7 @@ impl Fusion {
             Some(skip) => (xs + self.unit1.forward(skip)?)?,
             None => xs.clone(),
         };
-        let xs = self.unit2.forward(&xs)?.upsample_bilinear2d(size.0, size.1, true)?;
+        let xs = bilinear(&self.unit2.forward(&xs)?, size.0, size.1)?;
         self.out.forward(&xs)
     }
 }
@@ -201,10 +201,40 @@ impl Network {
         let path = self.fusions[1].forward(&path, Some(&layers[1]), size(&layers[0])?)?;
         let (h, w) = size(&layers[0])?;
         let path = self.fusions[0].forward(&path, Some(&layers[0]), (h * 2, w * 2))?;
-        let out = self.output1.forward(&path)?.upsample_bilinear2d(height, width, true)?;
+        let out = bilinear(&self.output1.forward(&path)?, height, width)?;
         let out = self.output2.1.forward(&self.output2.0.forward(&out)?.relu()?)?.relu()?;
         out.relu()
     }
+}
+
+/// Bilinear resizing of each plane to `height` by `width`, corners aligned, as PyTorch's: done on the CPU, which candle
+/// 0.9 can't, and later versions only with a tokenizer library built in.
+fn bilinear(xs: &Tensor, height: usize, width: usize) -> Result<Tensor> {
+    let (b, c, h, w) = xs.dims4()?;
+    let values: Vec<f32> = xs.flatten_all()?.to_vec1()?;
+    let along = |from: usize, to: usize| -> Vec<(usize, usize, f32)> {
+        let scale = if to > 1 { (from - 1) as f32 / (to - 1) as f32 } else { 0.0 };
+        (0..to)
+            .map(|k| {
+                let at = k as f32 * scale;
+                let first = (at as usize).min(from - 1);
+                (first, (first + 1).min(from - 1), at - first as f32)
+            })
+            .collect()
+    };
+    let (rows, columns) = (along(h, height), along(w, width));
+    let mut out = vec![0f32; b * c * height * width];
+    for (plane, target) in values.chunks_exact(h * w).zip(out.chunks_exact_mut(height * width)) {
+        for (y, &(y0, y1, ty)) in rows.iter().enumerate() {
+            let (top, bottom) = (&plane[y0 * w..(y0 + 1) * w], &plane[y1 * w..(y1 + 1) * w]);
+            for (x, &(x0, x1, tx)) in columns.iter().enumerate() {
+                let upper = top[x0] + (top[x1] - top[x0]) * tx;
+                let lower = bottom[x0] + (bottom[x1] - bottom[x0]) * tx;
+                target[y * width + x] = upper + (lower - upper) * ty;
+            }
+        }
+    }
+    Tensor::from_vec(out, (b, c, height, width), xs.device())
 }
 
 /// PyTorch's bicubic resampling of a `side` by `side` grid of `dim`-long values, row by row, by `scale_down` and
