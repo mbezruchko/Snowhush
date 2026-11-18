@@ -256,6 +256,37 @@ impl Picture {
         self.has_dabs = true;
     }
 
+    /// A snowball come down at `at` without hitting anything, `size` across: snow lies where it burst, frost thickest
+    /// at its middle.
+    pub fn splat(&mut self, at: V2, size: f32, height: f32) {
+        if !self.shown() {
+            return;
+        }
+        let cell = self.cell as f32;
+        let (x, y) = (at.x, height - at.y);
+        let reach = (size * 0.9 / cell).max(1.0);
+        let (cx, cy) = ((x / cell) as i32, (y / cell) as i32);
+        let r = reach.ceil() as i32;
+        for dy in -r..=r {
+            for dx in -r..=r {
+                let (nx, ny) = (cx + dx, cy + dy);
+                if nx < 0 || nx >= self.width as i32 || ny < 0 || ny >= self.height as i32 {
+                    continue;
+                }
+                let d = ((dx * dx + dy * dy) as f32).sqrt() / reach;
+                if d >= 1.0 {
+                    continue;
+                }
+                let k = ny as usize * self.width + nx as usize;
+                let share = 1.0 - d * d;
+                self.speck_amount[k] = (self.speck_amount[k] + share).min(1.0);
+                self.dab_amount[k] = (self.dab_amount[k] + share * 0.6).min(1.0);
+            }
+        }
+        self.dabs_touched = true;
+        self.has_dabs = true;
+    }
+
     /// The snow in a picture as it is `seconds` later, from its `level`, with `falling` how thick the snowfall is against
     /// the usual and `melting` whether nothing keeps it. At the usual snowfall it takes about eight minutes to cover all
     /// it can, and then most of an hour to lie as deep as it gets; melting, it never lies deeper than it covers, and goes

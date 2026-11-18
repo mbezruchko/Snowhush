@@ -179,6 +179,9 @@ struct Snowball {
     from: V2,
     to: V2,
     age: f32,
+    /// How big it is as it sets off, and how long it flies: a long flight from far off rises higher on its way.
+    start: f32,
+    flight: f32,
 }
 
 /// Halloween's ghosts, and what they leave about: signs falling, snowballs flying, snow clinging to the screen.
@@ -284,9 +287,11 @@ impl SnowSimulation {
             }
         }
         for ball in &self.haunting.snowballs {
-            let t = (ball.age / 0.5).min(1.0);
-            let position = ball.from + (ball.to - ball.from) * (1.0 - (1.0 - t).powi(2)) + V2::new(0.0, (t * PI).sin() * 60.0);
-            sprites.push(Sprite { position, size: 7.0 + 145.0 * t * t, alpha: 1.0, soft: 0.12, tint: [1.0; 3], ..Sprite::default() });
+            let t = (ball.age / ball.flight).min(1.0);
+            let rise = 60.0 + 90.0 * (ball.flight - 0.5);
+            let position = ball.from + (ball.to - ball.from) * (1.0 - (1.0 - t).powi(2)) + V2::new(0.0, (t * PI).sin() * rise);
+            let size = ball.start + (152.0 - ball.start) * t * t;
+            sprites.push(Sprite { position, size, alpha: 1.0, soft: 0.12, tint: [1.0; 3], ..Sprite::default() });
         }
         for (grain, _) in &self.haunting.clinging {
             sprites.push(Sprite { position: grain.position, size: grain.size, alpha: 0.95, soft: 0.3, tint: [1.0; 3], ..Sprite::default() });
@@ -708,7 +713,7 @@ impl SnowSimulation {
             ghost.threw = true;
             let to = V2::new(self.air.random.range(0.15, 0.85) * self.width, self.air.random.range(0.35, 0.85) * self.height);
             let from = self.paw(ghost, li, 0.6);
-            self.haunting.snowballs.push(Snowball { from, to, age: 0.0 });
+            self.haunting.snowballs.push(Snowball { from, to, age: 0.0, start: 7.0, flight: 0.5 });
         }
         if ghost.threw && ghost.boo_at < ghost.stand_at && since >= 2.0 {
             ghost.boo_at = ghost.age;
@@ -759,27 +764,38 @@ impl SnowSimulation {
         while i > 0 {
             i -= 1;
             self.haunting.snowballs[i].age += dt;
-            if self.haunting.snowballs[i].age >= 0.5 {
+            if self.haunting.snowballs[i].age >= self.haunting.snowballs[i].flight {
                 let to = self.haunting.snowballs.remove(i).to;
-                self.shatter(to);
+                self.shatter(to, 1.0, true);
             }
         }
     }
 
+    /// A snowball thrown at the screen from `from`, `start` across as it sets off, flying `flight` seconds to burst at `to`.
+    pub(super) fn throw_snowball(&mut self, from: V2, to: V2, start: f32, flight: f32) {
+        self.haunting.snowballs.push(Snowball { from, to, age: 0.0, start, flight });
+    }
+
     /// A snowball smacking into the screen: the scene jolts, the snowfall around is blown back, and the snow
     /// flattens against the glass and clings there a moment, crumbling from its edge, while the rest flies apart.
-    fn shatter(&mut self, point: V2) {
-        self.haunting.hit_at = self.air.clock;
+    /// `scale` makes it smaller, as a snowball bursting on a window rather than on the screen; one that doesn't `jolt`
+    /// the scene leaves it still.
+    pub(super) fn shatter(&mut self, point: V2, scale: f32, jolts: bool) {
+        if jolts {
+            self.haunting.hit_at = self.air.clock;
+        }
+        let push = 300.0 * scale;
         for flake in &mut self.air.flakes {
             let away = flake.position - point;
             let distance = away.length();
-            if distance > 1.0 && distance < 300.0 {
-                flake.velocity += away * ((1.0 - distance / 300.0) * 900.0 / distance);
+            if distance > 1.0 && distance < push {
+                flake.velocity += away * ((1.0 - distance / push) * 900.0 * scale / distance);
             }
         }
-        let reach = 65.0;
+        let reach = 65.0 * scale;
+        let many = scale * scale;
         let random = &mut self.air.random;
-        for _ in 0..360 {
+        for _ in 0..(360.0 * many) as usize {
             let angle = random.range(0.0, TAU);
             let out = random.next().sqrt();
             let ragged = 1.0 + 0.18 * (angle * 5.0 + 1.3).sin() + 0.1 * (angle * 9.0).sin();
@@ -796,7 +812,7 @@ impl SnowSimulation {
             };
             self.haunting.clinging.push((grain, 0.5 + (1.0 - out) * 1.6 + random.range(0.0, 0.4)));
         }
-        for _ in 0..90 {
+        for _ in 0..(90.0 * many) as usize {
             if self.air.grains.len() >= MAX_GRAINS {
                 break;
             }
@@ -805,7 +821,7 @@ impl SnowSimulation {
             let direction = V2::new(angle.cos(), angle.sin());
             let grain = Grain {
                 position: point + direction * random.range(reach * 0.6, reach),
-                velocity: direction * random.range(150.0, 600.0) + V2::new(0.0, 120.0),
+                velocity: direction * (random.range(150.0, 600.0) * scale.max(0.5)) + V2::new(0.0, 120.0),
                 area: random.range(0.6, 1.4),
                 size: random.range(1.4, 3.2),
                 lump: 0.0,
@@ -816,14 +832,14 @@ impl SnowSimulation {
             };
             self.air.grains.push(grain);
         }
-        for _ in 0..5 {
+        for _ in 0..((5.0 * scale) as usize).max(1) {
             let random = &mut self.air.random;
             let angle = random.range(0.0, TAU);
             let direction = V2::new(angle.cos(), angle.sin());
-            let (area, speed) = (random.range(6.0, 12.0), random.range(150.0, 350.0));
+            let (area, speed) = (random.range(6.0, 12.0) * scale, random.range(150.0, 350.0) * scale);
             self.air.throw_lump(area, point + direction * (reach * 0.8), direction * speed + V2::new(0.0, 150.0));
         }
-        for _ in 0..24 {
+        for _ in 0..(24.0 * scale) as usize {
             if self.air.motes.len() >= MAX_MOTES {
                 break;
             }
@@ -832,8 +848,8 @@ impl SnowSimulation {
             let direction = V2::new(angle.cos(), angle.sin());
             let mote = Mote {
                 position: point + direction * random.range(0.0, reach),
-                velocity: direction * random.range(60.0, 220.0),
-                size: random.range(20.0, 45.0),
+                velocity: direction * (random.range(60.0, 220.0) * scale),
+                size: random.range(20.0, 45.0) * scale,
                 alpha: random.range(0.12, 0.22),
                 age: 0.0,
                 life: random.range(0.8, 1.6),

@@ -1568,3 +1568,40 @@ fn a_snowman_wanders_reels_breaks_apart_and_rises_elsewhere() {
     assert!(bot.knocked_out && bot.in_pieces() && !bot.contains(bot.middle()));
     assert!(!bot.take_bursts().is_empty());
 }
+
+#[test]
+fn snowballs_fly_into_the_picture_and_out_of_it() {
+    use crate::wallpaper::{Light, Terrain};
+    let (width, height) = (800.0, 600.0);
+    let mut simulation = SnowSimulation::new(width, height, 0.0);
+    let (columns, rows) = (200, 150);
+    let near = (0..rows * columns).map(|i| if i / columns >= rows / 2 { 128 } else { 0 }).collect();
+    let terrain = Terrain { width: columns, height: rows, cell: 4, near, far: 0.2, close: 0.8 };
+    let light = Light { width: 50, height: 38, cell: 16, pixels: vec![230; 50 * 38 * 4], haze: [0.8, 0.82, 0.85] };
+    simulation.set_picture(Some(&terrain), Some(&light));
+    let target = V2::new(500.0, 150.0);
+    let token = simulation.throw_into_picture(V2::new(400.0, -20.0), target, 0.5, 12.0, 46.0, None);
+    let mut buffer = vec![Sprite::default(); 4000];
+    let mut seen = false;
+    let mut arrivals = Vec::new();
+    for _ in 0..240 {
+        simulation.step(DT, V2::new(-100.0, -100.0));
+        let count = simulation.write_sprites(&mut buffer);
+        seen |= buffer[..count].iter().any(|sprite| sprite.scene >= 0.0 && sprite.size > 10.0);
+        arrivals.extend(simulation.take_arrivals());
+    }
+    assert!(seen, "the snowball was never drawn in the picture");
+    assert_eq!(arrivals.len(), 1);
+    assert_eq!(arrivals[0].token, token);
+    assert!((arrivals[0].at - target).length() < 0.01);
+    simulation.splat(arrivals[0].at, arrivals[0].near, arrivals[0].size);
+    run(&mut simulation, 0.5, V2::new(-100.0, -100.0));
+    assert!(simulation.has_picture_dabs(), "a snowball that missed left no snow");
+    simulation.crumble_snowman(V2::new(300.0, 160.0), 150.0, 0.5, 40.0);
+    run(&mut simulation, 0.9, V2::new(-100.0, -100.0));
+    let count = simulation.write_sprites(&mut buffer);
+    assert!(buffer[..count].iter().any(|sprite| sprite.soft == 0.3 && (sprite.position.y - 150.0).abs() < 3.0), "no chunk came to rest on its floor");
+    simulation.throw_at_screen(V2::new(300.0, 200.0), 5.0, Some(0.4));
+    run(&mut simulation, 2.0, V2::new(-100.0, -100.0));
+    assert_finite(&simulation);
+}

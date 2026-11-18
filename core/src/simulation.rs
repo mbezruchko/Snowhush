@@ -7,6 +7,7 @@ use std::ops::Range;
 use crate::geometry::{Rect, V2, smoothstep};
 use crate::layer::{Blend, SnowLayer};
 
+mod fight;
 mod fireworks;
 mod ghosts;
 mod neighbours;
@@ -15,6 +16,7 @@ mod pumpkins;
 mod rain;
 mod tree;
 
+pub use fight::Arrival;
 pub use fireworks::{Fireworks, Flash, Shell, Spark};
 use ghosts::Haunting;
 pub use neighbours::{Borrowed, Carried, Caught, Mapping, Stray};
@@ -379,6 +381,8 @@ struct Mote {
     /// A flake come to rest in the picture, fading into the frost it leaves, and how soft it is: it neither moves nor
     /// spreads.
     still: Option<f32>,
+    /// A chunk of packed snow rather than powder, and the ground it stops on: it falls hard and keeps its size.
+    chunk: Option<f32>,
 }
 
 /// Snow, leaves and petals gathered from here and there, to come off as one.
@@ -533,6 +537,8 @@ pub struct SnowSimulation {
     pub picture_depth: bool,
     /// A gust has cleared the snow since this was last asked, the picture's too.
     picture_cleared: bool,
+    /// Snowballs thrown into the wallpaper's picture, and whether a snowman in it keeps the snow going.
+    fight: fight::Fight,
 }
 
 /// Where the New Year's tree stands, its trunk this far from the left edge of the screen.
@@ -587,6 +593,7 @@ impl SnowSimulation {
             picture_frost: true,
             picture_depth: true,
             picture_cleared: false,
+            fight: fight::Fight::default(),
             air: Air {
                 flakes: Vec::new(),
                 grains: Vec::new(),
@@ -766,6 +773,7 @@ impl SnowSimulation {
             && self.next_mode.is_none()
             && self.layers.iter().all(|layer| layer.top <= 0.0)
             && !self.picture_thaws()
+            && !self.fight.busy()
     }
 
     pub fn sprite_count(&self) -> usize {
@@ -775,6 +783,7 @@ impl SnowSimulation {
             + self.air.motes.len()
             + self.haunting.sprite_count()
             + self.rain.sprite_count()
+            + self.fight.sprite_count()
             + self.layers.iter().map(|layer| layer.spray.len() + layer.film.len()).sum::<usize>()
     }
 
@@ -877,6 +886,7 @@ impl SnowSimulation {
         self.run_glass_drops(dt);
         self.tend_glass(dt);
         self.haunt(dt);
+        self.fly_picture_balls(dt);
         self.settle(dt);
         self.tend_picture(dt);
         self.tend_leaves(dt);
@@ -911,6 +921,7 @@ impl SnowSimulation {
             || air.clock - air.last_cursor_push < 0.3
             || air.gust.is_some()
             || self.haunting.pushing(air.clock)
+            || self.fight.sprite_count() > 0
             || self.fireworks.as_ref().is_some_and(|fireworks| !fireworks.is_empty());
         // The steady trickle off window corners is a few tiny grains at a time; they read fine at the calm rate.
         let flying = air.grains.len() > 24 || air.clock < self.scattered_until || air.slide_wind.abs() > 20.0;
@@ -1060,13 +1071,14 @@ impl SnowSimulation {
                     ..Sprite::default()
                 };
             }
-            let fade = (mote.age / 0.06).min(1.0) * (1.0 - t).powf(1.5);
+            let chunk = mote.chunk.is_some();
+            let fade = if chunk { 1.0 - t * t * t } else { (mote.age / 0.06).min(1.0) * (1.0 - t).powf(1.5) };
             let (scene, scene_light) = mote.scene.unwrap_or((-1.0, 0.0));
             Sprite {
                 position: mote.position,
-                size: mote.size * (1.0 + t),
+                size: if chunk { mote.size } else { mote.size * (1.0 + t) },
                 alpha: mote.alpha * fade * self.falling_opacity,
-                soft: 1.0,
+                soft: if chunk { 0.3 } else { 1.0 },
                 tint: [1.0; 3],
                 scene,
                 scene_light,
@@ -1078,6 +1090,7 @@ impl SnowSimulation {
             *slot = sprite;
             count += 1;
         }
+        count += self.write_fight(&mut buffer[count..]);
         count + self.write_haunting(&mut buffer[count..])
     }
 
@@ -2867,6 +2880,16 @@ impl Air {
             mote.age += dt;
             if mote.age >= mote.life {
                 self.motes.swap_remove(i);
+            } else if let Some(floor) = mote.chunk {
+                if mote.position.y > floor || mote.velocity.y > 0.0 {
+                    mote.velocity.y -= 900.0 * dt;
+                    mote.velocity.x *= (-0.6 * dt).exp();
+                    mote.position += mote.velocity * dt;
+                    if mote.position.y <= floor && mote.velocity.y < 0.0 {
+                        mote.position.y = floor;
+                        mote.velocity = V2::ZERO;
+                    }
+                }
             } else if mote.still.is_none() {
                 mote.velocity.y -= 35.0 * dt;
                 mote.velocity *= damping;
