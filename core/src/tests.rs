@@ -1495,3 +1495,35 @@ fn the_new_year_tree_rises_catches_snow_and_fireworks_go_up() {
     simulation.set_new_year(false);
     assert!(simulation.tree().is_none() && simulation.fireworks().is_none());
 }
+
+#[test]
+fn snow_falls_into_the_wallpapers_picture_and_lies_there() {
+    use crate::wallpaper::{Light, Terrain};
+    let (width, height) = (800.0, 600.0);
+    let mut simulation = SnowSimulation::new(width, height, 1.0);
+    // A field halfway off over the lower half of the screen, under a sky.
+    let (columns, rows) = (200, 150);
+    let near = (0..rows * columns).map(|i| if i / columns >= rows / 2 { 128 } else { 0 }).collect();
+    let terrain = Terrain { width: columns, height: rows, cell: 4, near, far: 0.2, close: 0.8 };
+    let light = Light { width: 50, height: 38, cell: 16, pixels: vec![230; 50 * 38 * 4], haze: [0.8, 0.82, 0.85] };
+    simulation.set_picture(Some(&terrain), Some(&light));
+    let mut buffer = vec![Sprite::default(); 20000];
+    let mut seen_in_picture = false;
+    for _ in 0..(20.0 / DT) as usize {
+        simulation.step(DT, V2::new(-100.0, -100.0));
+        let count = simulation.write_sprites(&mut buffer);
+        seen_in_picture |= buffer[..count].iter().any(|sprite| sprite.scene >= 0.0);
+    }
+    assert!(seen_in_picture, "no flake fell in the picture");
+    assert!(simulation.has_picture_dabs(), "no flake landed in the picture");
+    let (dabs, specks, size, _) = simulation.picture_dabs();
+    assert_eq!(size, (columns, rows));
+    assert!(dabs[..columns * (rows / 2 - 3)].iter().all(|dab| *dab == 0), "snow lay in the sky");
+    assert!(dabs.iter().any(|dab| *dab > 0) && specks.iter().any(|speck| *speck > 0));
+    assert!(simulation.picture_level() > 0.0 && simulation.picture_veil() > 0.0);
+    simulation.blow_away(1.0, true);
+    run(&mut simulation, 1.0, V2::new(-100.0, -100.0));
+    assert!(simulation.take_picture_cleared());
+    assert_eq!(simulation.picture_level(), 0.0);
+    assert!(!simulation.has_picture_dabs());
+}

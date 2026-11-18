@@ -10,6 +10,7 @@ use crate::layer::{Blend, SnowLayer};
 mod fireworks;
 mod ghosts;
 mod neighbours;
+mod picture;
 mod pumpkins;
 mod rain;
 mod tree;
@@ -17,6 +18,8 @@ mod tree;
 pub use fireworks::{Fireworks, Flash, Shell, Spark};
 use ghosts::Haunting;
 pub use neighbours::{Borrowed, Carried, Caught, Mapping, Stray};
+pub use picture::DEEPEST as PICTURE_DEEPEST;
+use picture::Picture;
 use pumpkins::Pumpkins;
 use rain::Rain;
 pub use tree::{
@@ -161,7 +164,7 @@ pub enum Pace {
     Interactive,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub struct Sprite {
     pub position: V2,
@@ -199,6 +202,36 @@ pub struct Sprite {
     pub drop: [f32; 4],
     /// One for a cherry blossom petal or flower instead of a leaf.
     pub petal: f32,
+    /// For a flake falling in the wallpaper's picture, how near it is there: it shows only in front of what the picture
+    /// has at that spot. Below zero for anything else.
+    pub scene: f32,
+    /// How much of the picture's light at that spot the flake takes: all of it far off, none right in front.
+    pub scene_light: f32,
+}
+
+impl Default for Sprite {
+    fn default() -> Sprite {
+        Sprite {
+            position: V2::ZERO,
+            velocity: V2::ZERO,
+            size: 0.0,
+            alpha: 0.0,
+            soft: 0.0,
+            tint_amount: 0.0,
+            tint: [0.0; 3],
+            lump: 0.0,
+            ghost: [0.0; 4],
+            pose: [0.0; 4],
+            mood: [0.0; 2],
+            leaf: [0.0; 3],
+            spin: [0.0; 2],
+            rain: [0.0; 2],
+            drop: [0.0; 4],
+            petal: 0.0,
+            scene: -1.0,
+            scene_light: 0.0,
+        }
+    }
 }
 
 /// A Halloween sign a ghost holds up, or lets fall: the picture of `SIGN_CAPTIONS[caption]`, its stick's foot at
@@ -333,7 +366,7 @@ struct LyingLeaf {
 }
 
 /// Powder thrown up by a lump bursting: it billows, slows in the air and fades without settling.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct Mote {
     position: V2,
     velocity: V2,
@@ -341,6 +374,11 @@ struct Mote {
     alpha: f32,
     age: f32,
     life: f32,
+    /// In the wallpaper's picture: how near it is there, and how much of the picture's light it takes.
+    scene: Option<(f32, f32)>,
+    /// A flake come to rest in the picture, fading into the frost it leaves, and how soft it is: it neither moves nor
+    /// spreads.
+    still: Option<f32>,
 }
 
 /// Snow, leaves and petals gathered from here and there, to come off as one.
@@ -487,6 +525,14 @@ pub struct SnowSimulation {
     /// How many rockets go up a minute now, on average.
     pub fireworks_per_minute: f32,
     fireworks: Option<Fireworks>,
+    /// Snow in the wallpaper's picture, while one is shown.
+    picture: Picture,
+    /// Snow lies in the wallpaper's picture: Accumulate's Wallpaper.
+    pub picture_frost: bool,
+    /// The flakes fall into the wallpaper's depth, hidden behind what is nearer: Deep Interaction.
+    pub picture_depth: bool,
+    /// A gust has cleared the snow since this was last asked, the picture's too.
+    picture_cleared: bool,
 }
 
 /// Where the New Year's tree stands, its trunk this far from the left edge of the screen.
@@ -537,6 +583,10 @@ impl SnowSimulation {
             celebrated_at: None,
             fireworks_per_minute: 0.0,
             fireworks: None,
+            picture: Picture::new(),
+            picture_frost: true,
+            picture_depth: true,
+            picture_cleared: false,
             air: Air {
                 flakes: Vec::new(),
                 grains: Vec::new(),
@@ -715,6 +765,7 @@ impl SnowSimulation {
             && self.parking.is_empty()
             && self.next_mode.is_none()
             && self.layers.iter().all(|layer| layer.top <= 0.0)
+            && !self.picture_thaws()
     }
 
     pub fn sprite_count(&self) -> usize {
@@ -827,6 +878,7 @@ impl SnowSimulation {
         self.tend_glass(dt);
         self.haunt(dt);
         self.settle(dt);
+        self.tend_picture(dt);
         self.tend_leaves(dt);
         if self.next_mode.is_some()
             && self.air.gust.is_none()
@@ -912,6 +964,7 @@ impl SnowSimulation {
                 ..Sprite::default()
             })
         });
+        let in_picture = self.picture.top > 0.0 && self.picture_depth;
         let flakes = self.air.flakes.iter().map(|flake| {
             if flake.leaf > 0.0 {
                 let petal = flake.petal();
@@ -931,7 +984,7 @@ impl SnowSimulation {
                     ..Sprite::default()
                 };
             }
-            Sprite {
+            let mut sprite = Sprite {
                 position: flake.position,
                 velocity: flake.velocity,
                 size: flake.size,
@@ -941,7 +994,20 @@ impl SnowSimulation {
                 tint: flake.tint,
                 rain: if flake.rain() { [1.0, 0.0] } else { [0.0; 2] },
                 ..Sprite::default()
+            };
+            // A snowflake over the wallpaper is in its picture: lit as the picture is there, and hidden behind whatever in
+            // it is nearer. Over a window or a panel it is in front of them, and of the picture.
+            if in_picture
+                && flake.kind == Mode::Snow
+                && flake.blown == 0.0
+                && (0.0..self.width).contains(&flake.position.x)
+                && (0.0..self.height).contains(&flake.position.y)
+                && !self.picture.in_front(flake.position.x, self.height - flake.position.y)
+            {
+                sprite.scene = self.picture.nearness(flake.depth);
+                sprite.scene_light = 1.0 - ((flake.depth - 0.45) / 0.45).clamp(0.0, 1.0);
             }
+            sprite
         });
         let grains = self.air.grains.iter().filter(|grain| !grain.bulk).map(|grain| {
             if grain.kind.leafy() {
@@ -979,13 +1045,31 @@ impl SnowSimulation {
         });
         let motes = self.air.motes.iter().map(|mote| {
             let t = mote.age / mote.life;
+            if let (Some(soft), Some((scene, light))) = (mote.still, mote.scene) {
+                // Come down, it takes the frost's colour, the picture's light there, and dims to it at once, then goes
+                // into the frost it left.
+                let settled = smoothstep(0.0, 1.0, (mote.age / 0.3).min(1.0));
+                return Sprite {
+                    position: mote.position,
+                    size: mote.size,
+                    alpha: mote.alpha * (1.0 - 0.5 * settled) * (1.0 - t * t) * self.falling_opacity,
+                    soft,
+                    tint: [1.0; 3],
+                    scene,
+                    scene_light: light + (1.0 - light) * settled,
+                    ..Sprite::default()
+                };
+            }
             let fade = (mote.age / 0.06).min(1.0) * (1.0 - t).powf(1.5);
+            let (scene, scene_light) = mote.scene.unwrap_or((-1.0, 0.0));
             Sprite {
                 position: mote.position,
                 size: mote.size * (1.0 + t),
                 alpha: mote.alpha * fade * self.falling_opacity,
                 soft: 1.0,
                 tint: [1.0; 3],
+                scene,
+                scene_light,
                 ..Sprite::default()
             }
         });
@@ -1291,6 +1375,9 @@ impl SnowSimulation {
     // Particles
 
     fn advance_flakes(&mut self, dt: f32) {
+        if self.picture.top > 0.0 {
+            self.cover_picture();
+        }
         let wind = self.air.breeze() + self.air.slide_wind;
         // A desktop's wind is short: the flakes take it up faster than the slow breeze, or it would be gone first.
         let follow = (dt * (1.2 + self.air.slide_wind.abs() * 0.03)).min(1.0);
@@ -1352,6 +1439,18 @@ impl SnowSimulation {
                 && let Some((index, along)) = tree.catcher(flake.position.x, previous_y, flake.position.y, 0.75)
             {
                 tree.add(flake.size * flake.size * DEPOSITION * flake.mass, index, along, flake.velocity);
+                self.recycle(i);
+                continue;
+            }
+            // Each flake in the picture is looked at one step in four: it falls a few points meanwhile, far too little to
+            // miss the surface it is coming down to.
+            if (i.wrapping_add(self.picture.turn)) & 3 == 0
+                && flake.settles
+                && self.picture_depth
+                && flake.blown == 0.0
+                && flake.kind == Mode::Snow
+                && self.falls_in_picture(&flake)
+            {
                 self.recycle(i);
                 continue;
             }
@@ -1619,6 +1718,8 @@ impl SnowSimulation {
                 }
             }
         }
+        self.picture.blown_at = self.air.clock;
+        self.picture_cleared = true;
         // Snow kept for windows on other desktops goes too, out of sight.
         self.dormant.clear();
         for (_, ledge, _) in &mut self.parking {
@@ -2502,6 +2603,7 @@ impl Air {
                 alpha: random.range(0.1, 0.22),
                 age: 0.0,
                 life: random.range(0.45, 0.9),
+                ..Default::default()
             });
         }
     }
@@ -2765,7 +2867,7 @@ impl Air {
             mote.age += dt;
             if mote.age >= mote.life {
                 self.motes.swap_remove(i);
-            } else {
+            } else if mote.still.is_none() {
                 mote.velocity.y -= 35.0 * dt;
                 mote.velocity *= damping;
                 mote.position += (mote.velocity + V2::new(drift, 0.0)) * dt;
@@ -2937,6 +3039,7 @@ impl Air {
             alpha: random.range(0.06, 0.14),
             age: 0.0,
             life: random.range(0.6, 1.3),
+            ..Default::default()
         });
     }
 
@@ -2968,6 +3071,7 @@ impl Air {
             alpha: random.range(0.06, 0.12),
             age: 0.0,
             life: random.range(0.5, 1.0),
+            ..Default::default()
         });
     }
 }
@@ -3317,6 +3421,7 @@ impl Air {
                 alpha: random.range(0.1, 0.22),
                 age: 0.0,
                 life: random.range(0.45, 0.9),
+                ..Default::default()
             });
         }
     }

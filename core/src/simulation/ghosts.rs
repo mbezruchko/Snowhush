@@ -837,6 +837,7 @@ impl SnowSimulation {
                 alpha: random.range(0.12, 0.22),
                 age: 0.0,
                 life: random.range(0.8, 1.6),
+                ..Default::default()
             };
             self.air.motes.push(mote);
         }
@@ -875,6 +876,7 @@ impl SnowSimulation {
             alpha: random.range(0.08, 0.14),
             age: 0.0,
             life: random.range(0.6, 1.2),
+            ..Default::default()
         };
         self.air.motes.push(mote);
     }
@@ -923,6 +925,7 @@ impl SnowSimulation {
                 alpha: random.range(0.08, 0.15),
                 age: 0.0,
                 life: random.range(0.6, 1.3),
+                ..Default::default()
             };
             self.air.motes.push(mote);
         }
