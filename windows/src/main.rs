@@ -7,6 +7,7 @@ mod light;
 mod log;
 mod menu;
 mod new_year;
+mod picture;
 mod prefs;
 mod render;
 mod screen;
@@ -14,6 +15,7 @@ mod snow;
 mod store;
 mod tracker;
 mod update;
+mod wallpaper;
 mod welcome;
 
 use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError};
@@ -22,6 +24,10 @@ use windows::Win32::UI::HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetP
 use windows::core::w;
 
 fn main() {
+    let arguments: Vec<String> = std::env::args().collect();
+    if arguments.get(1).map(String::as_str) == Some(wallpaper::READ) {
+        std::process::exit(wallpaper::read_for_another_run(&arguments[2..]));
+    }
     // What "Uninstall" in Settings runs; it removes everything, even with Snowhush still running.
     if std::env::args().skip(1).any(|argument| argument == "--uninstall") {
         snowhush::install::uninstall();

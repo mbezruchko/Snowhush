@@ -448,7 +448,9 @@ struct SpriteIn {
     float2 spin : SPIN;
     float2 rain : RAIN;
     float4 drop : DROP;
-    float petal : PETAL;
+    // One for a cherry blossom petal; then, in the wallpaper's picture, how near it is there, below zero for anything
+    // else, and how much of the picture's light it takes.
+    float3 petal : PETAL;
     uint vid : SV_VertexID;
 };
 
@@ -481,6 +483,8 @@ struct SpriteOut {
     // A drop on the glass: its outline's seed, how it has turned as it ran, how far it bulges forward, held back, and
     // how far it is squashed or stretched.
     nointerpolation float4 drop : DROPSHAPE;
+    // The picture's light on a flake falling in it.
+    float3 sceneLight : SCENELIGHT;
 };
 
 // A drop hanging under an edge, in radii of the drop, from where it clings. Up to one along, it fills: a small one is
@@ -745,7 +749,7 @@ SpriteOut leafVertex(SpriteIn s, float2 corner) {
     o.warm = candlelight(s.position);
     o.tint = float4(0.0, 0.0, 0.0, s.body.w);
     o.pose = s.pose;
-    o.petal = s.petal;
+    o.petal = s.petal.x;
     return o;
 }
 
@@ -755,6 +759,11 @@ SpriteOut culled() {
     o.position = float4(2.0, 2.0, 0.0, 1.0);
     return o;
 }
+
+// The wallpaper's air for the flakes falling in its picture: its light, and how near what stands there is, by the
+// screen's points from its top left.
+Texture2D<float4> airTexture : register(t9);
+SamplerState airSampler : register(s2);
 
 SpriteOut spriteVertex(SpriteIn s) {
     float2 corner = float2(float(s.vid & 1), float(s.vid >> 1));
@@ -796,9 +805,17 @@ SpriteOut spriteVertex(SpriteIn s) {
     o.smear = float4(0.0, 0.0, 0.0, 0.0);
     o.rain = float4(0.0, 0.0, 0.0, 0.0);
     o.petal = 0.0;
+    o.sceneLight = float3(1.0, 1.0, 1.0);
     if (s.ghost.x > 0.0) {
         o.spin = time + s.ghost.x * 40.0;
         o.ghost.y = (s.ghost.y - s.position.y) / max(s.body.x, 0.001);
+    }
+    // A flake in the wallpaper's picture takes the picture's light where it falls, and fades out behind whatever stands
+    // nearer there than it is.
+    [branch] if (s.petal.y >= 0.0) {
+        float4 here = airTexture.SampleLevel(airSampler, float2(s.position.x / viewSize.x, 1.0 - s.position.y / viewSize.y), 0.0);
+        o.alpha *= smoothstep(-0.02, 0.02, s.petal.y - here.a);
+        o.sceneLight = lerp(float3(1.0, 1.0, 1.0), here.rgb, s.petal.z);
     }
     return o;
 }
@@ -989,7 +1006,7 @@ float4 spriteFragment(SpriteOut i) : SV_Target {
     float3 core = float3(0.965, 0.975, 0.995);
     float3 edge = float3(0.62, 0.67, 0.77);
     float3 color = lerp(core, edge, saturate(smoothstep(0.35, 1.0, r) * 0.65 + shading));
-    color = lerp(color, i.tint.rgb, i.tint.a) * light.rgb;
+    color = lerp(color, i.tint.rgb, i.tint.a) * light.rgb * i.sceneLight;
     color = lerp(color, candle, i.warm * 0.7);
     a = min(1.0, a * (1.0 + i.warm * 0.8));
     return float4(color * a, a);

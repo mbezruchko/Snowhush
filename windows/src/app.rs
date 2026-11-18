@@ -64,6 +64,8 @@ const ID_BLOSSOM: u32 = 217;
 const ID_SPONSOR: u32 = 218;
 const ID_MIXED: u32 = 219;
 const ID_GROUND: u32 = 220;
+const ID_WALLPAPER: u32 = 223;
+const ID_SELECTION: u32 = 224;
 const ID_OPACITY_FOLD: u32 = 221;
 /// Opacity from 10% up in steps of 5%: `ID_OPACITY` + the step.
 const ID_OPACITY: u32 = 400;
@@ -420,7 +422,7 @@ fn entries(settings: &Settings, login: bool, sliders: bool) -> Vec<Entry> {
     }
     let mut options = behavior;
     options.extend([
-        Entry::toggle(ID_DEEP, tr("deep"), settings.deep_interaction, settings.snow_on_windows),
+        Entry::toggle(ID_DEEP, tr("deep"), settings.depth, true),
         Entry::Separator,
         Entry::header(tr("display")),
         Entry::toggle(ID_BEHIND, tr("behind"), settings.behind_windows, true),
@@ -482,7 +484,9 @@ fn accumulate(settings: &Settings, heaps: bool, drawn: bool) -> Vec<Entry> {
     let mut surfaces = vec![(ID_WINDOWS, Icon::Windows, tr("surface.windows"), settings.snow_on_windows)];
     if heaps {
         surfaces.push((ID_GROUND, Icon::Ground, tr("surface.ground"), settings.ground));
+        surfaces.push((ID_WALLPAPER, Icon::Wallpaper, tr("surface.wallpaper"), settings.wallpaper));
     }
+    surfaces.push((ID_SELECTION, Icon::Selection, tr("surface.selection"), settings.selection));
     if !drawn {
         let entries = surfaces.iter().map(|&(id, _, label, on)| Entry::item(id, label, on, true)).collect();
         return vec![Entry::Submenu { label: tr("accumulate").to_string(), entries }];
@@ -647,8 +651,16 @@ fn choose(window: HWND, chosen: u32, login: bool) {
                     Command::ShowInScreenshots(settings.show_in_screenshots)
                 }
                 ID_DEEP => {
-                    settings.deep_interaction = !settings.deep_interaction;
-                    Command::DeepInteraction(settings.deep_interaction)
+                    settings.depth = !settings.depth;
+                    Command::Depth(settings.depth)
+                }
+                ID_WALLPAPER => {
+                    settings.wallpaper = !settings.wallpaper;
+                    Command::Wallpaper(settings.wallpaper)
+                }
+                ID_SELECTION => {
+                    settings.selection = !settings.selection;
+                    Command::Selection(settings.selection)
                 }
                 ID_MAX_PERFORMANCE => {
                     settings.max_performance = !settings.max_performance;

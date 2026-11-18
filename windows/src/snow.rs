@@ -24,6 +24,7 @@ use crate::halloween;
 use crate::light::{Sky, Wallpapers};
 use crate::log;
 use crate::new_year;
+use crate::picture::PictureSnow;
 use crate::prefs::Settings;
 use crate::render::Gpu;
 use crate::screen::{BACKDROP_CHANGED, Clock, DISPLAYS_CHANGED, Monitor, PowerBudget, Screen, dip_size, listen, monitors, walls, watch_taskbar};
@@ -55,7 +56,11 @@ pub enum Command {
     ShellRestarted,
     ShowInScreenshots(bool),
     /// The snow settles on a selection dragged across the desktop too.
-    DeepInteraction(bool),
+    Selection(bool),
+    /// Accumulate's Wallpaper, and Deep Interaction: the snow lying in the wallpaper's picture, and the flakes falling
+    /// into its depth.
+    Wallpaper(bool),
+    Depth(bool),
     /// Off while the screen is locked, asleep or the session is away.
     Active(bool),
     Scatter(Vec<Piece>),
@@ -126,6 +131,12 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
     let mut festive = new_year::shows(&settings);
     let mut sky = Sky::now(spooky);
     let wallpapers = Wallpapers::new().inspect_err(|error| log!("wallpapers unavailable: {error}")).ok();
+    // When the snow in the wallpapers was last looked after: each display's made or let go as wanted, and how much of it
+    // lies kept for the next run.
+    let mut pictures_at = 0;
+    let mut picture_kept_at = 0;
+    // The desktop's wallpaper layer the snow in the wallpapers goes into, found when it is first wanted.
+    let mut picture_layer: Option<DesktopLayer> = None;
     let mut chores_at = 0;
     let mut light_at = 0;
     let mut displays_changed_at = None;
@@ -187,8 +198,22 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                         light_at = 0;
                     }
                 }
-                Command::DeepInteraction(on) => {
-                    settings.deep_interaction = on;
+                Command::Wallpaper(on) => {
+                    settings.wallpaper = on;
+                    let accumulates = settings.accumulates();
+                    screens.iter_mut().for_each(|screen| {
+                        screen.simulation.accumulates = accumulates;
+                        screen.simulation.picture_frost = on;
+                    });
+                    pictures_at = 0;
+                }
+                Command::Depth(on) => {
+                    settings.depth = on;
+                    screens.iter_mut().for_each(|screen| screen.simulation.picture_depth = on);
+                    pictures_at = 0;
+                }
+                Command::Selection(on) => {
+                    settings.selection = on;
                     if !on {
                         tracker.drop_marquee();
                     }
@@ -347,7 +372,22 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                 }
                 sky = Sky::now(spooky);
                 if let Some(wallpapers) = &wallpapers {
-                    screens.iter_mut().for_each(|screen| screen.update_backdrop(wallpapers));
+                    screens.iter_mut().for_each(|screen| screen.update_backdrop(wallpapers, &gpu));
+                }
+            }
+        }
+
+        if now >= pictures_at {
+            pictures_at = now + clock.frequency;
+            follow_pictures(&gpu, &settings, &mut screens, &mut picture_layer, wallpapers.as_ref());
+            if now >= picture_kept_at {
+                picture_kept_at = now + clock.frequency * 60;
+                if let Some(level) = screens.iter().find(|screen| screen.picture.is_some()).map(|screen| screen.simulation.picture_level()) {
+                    let kept = (level * 1000.0).round() as u32;
+                    if kept.abs_diff(settings.picture_level) >= 20 {
+                        settings.picture_level = kept;
+                        settings.save();
+                    }
                 }
             }
         }
@@ -358,7 +398,7 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                 screens.iter_mut().for_each(|screen| screen.wake(now));
             }
             // The desktop's rubber band moves with the pointer, so it is drawn right away too.
-            if settings.snow_on_windows && settings.deep_interaction && tracker.follow_marquee() {
+            if settings.snow_on_windows && settings.selection && tracker.follow_marquee() {
                 screens.iter_mut().for_each(|screen| screen.wake(now));
             }
             tracker.set_displays(screens.iter().map(|screen| (screen.monitor.name.as_str(), screen.monitor.rect, screen.monitor.bounds)));
@@ -452,6 +492,10 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                 }
             }
             pass_snow(&mut screens, &tracker, now);
+            let seconds = clock.seconds(now - started);
+            for screen in &mut screens {
+                screen.tick_picture(&gpu, settings.wallpaper, seconds);
+            }
             // The first display the welcome window's snow reaches starts the snowfall on all of them.
             if released {
                 settings.welcomed = true;
@@ -730,12 +774,47 @@ fn find_layer() -> Option<DesktopLayer> {
     layer
 }
 
+/// Gives each display the snow in its wallpaper while the wallpaper is read, and lets it go when not; makes it again for
+/// one whose window went with Explorer.
+fn follow_pictures(gpu: &Gpu, settings: &Settings, screens: &mut [Screen], layer: &mut Option<DesktopLayer>, wallpapers: Option<&Wallpapers>) {
+    let wanted = settings.reads_wallpaper();
+    let mut lost = false;
+    for screen in screens.iter_mut() {
+        if screen.picture.as_ref().is_some_and(|picture| !wanted || !picture.alive()) {
+            lost |= wanted;
+            screen.picture = None;
+            screen.simulation.set_picture(None, None);
+        }
+    }
+    if !wanted || screens.iter().all(|screen| screen.picture.is_some()) {
+        return;
+    }
+    if layer.is_none() || lost {
+        *layer = find_layer();
+    }
+    let Some(desktop) = *layer else { return };
+    for screen in screens.iter_mut().filter(|screen| screen.picture.is_none()) {
+        match PictureSnow::new(gpu, &screen.monitor, &desktop, screen.overlay_behind()) {
+            Ok(picture) => {
+                screen.picture = Some(picture);
+                if let Some(wallpapers) = wallpapers {
+                    screen.update_backdrop(wallpapers, gpu);
+                }
+            }
+            Err(error) => log!("{}: no window for the wallpaper's snow: {error}", screen.monitor.name),
+        }
+    }
+}
+
 fn new_simulation(monitor: &Monitor, settings: &Settings) -> SnowSimulation {
     let (width, height) = dip_size(monitor);
     let mut simulation = SnowSimulation::new(width as f32, height as f32, settings.intensity as f32 / 100.0);
     simulation.thaws = settings.melt;
     simulation.accumulates = settings.accumulates();
     simulation.ground_settles = settings.ground;
+    simulation.picture_frost = settings.wallpaper;
+    simulation.picture_depth = settings.depth;
+    simulation.restore_picture(settings.picture_level as f32 / 1000.0);
     simulation.falling_opacity = settings.opacity as f32 / 100.0;
     simulation.set_snowfall_held(!settings.welcomed);
     simulation.set_halloween(halloween::shows(settings));

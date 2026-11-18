@@ -159,6 +159,8 @@ pub struct Tile {
 pub enum Icon {
     Ground,
     Windows,
+    Wallpaper,
+    Selection,
 }
 
 impl Entry {
@@ -1327,6 +1329,30 @@ impl Menu {
                     brush.SetOpacity(opacity);
                     target.DrawGeometry(&mound, brush, stroke, None);
                     target.DrawLine(Vector2 { X: x - half, Y: base }, Vector2 { X: x + half, Y: base }, brush, stroke, None);
+                }
+                Icon::Wallpaper => {
+                    let base = y + 16.0;
+                    let peaks = [(x - half, base), (x - 3.0, y + 5.0), (x + 1.5, y + 11.0), (x + 4.5, y + 7.5), (x + half, base)];
+                    for pair in peaks.windows(2) {
+                        target.DrawLine(Vector2 { X: pair[0].0, Y: pair[0].1 }, Vector2 { X: pair[1].0, Y: pair[1].1 }, brush, stroke, None);
+                    }
+                    target.DrawLine(Vector2 { X: x - half, Y: base }, Vector2 { X: x + half, Y: base }, brush, stroke, None);
+                }
+                Icon::Selection => {
+                    let (left, top, right, bottom) = (x - 9.0, y + 3.0, x + 9.0, y + 17.0);
+                    let dashes = |from: (f32, f32), to: (f32, f32)| {
+                        let length = ((to.0 - from.0).powi(2) + (to.1 - from.1).powi(2)).sqrt();
+                        let pieces = (length / 4.5).round().max(1.0) as usize;
+                        for k in 0..pieces {
+                            let (a, b) = (k as f32 / pieces as f32, (k as f32 + 0.55) / pieces as f32);
+                            let at = |t: f32| Vector2 { X: from.0 + (to.0 - from.0) * t, Y: from.1 + (to.1 - from.1) * t };
+                            target.DrawLine(at(a), at(b), brush, stroke, None);
+                        }
+                    };
+                    dashes((left, top), (right, top));
+                    dashes((right, top), (right, bottom));
+                    dashes((right, bottom), (left, bottom));
+                    dashes((left, bottom), (left, top));
                 }
             }
         }

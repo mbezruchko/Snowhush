@@ -14,6 +14,8 @@ use windows::core::{PCWSTR, PWSTR, Result};
 
 use snowhush_core::halloween;
 
+use crate::wallpaper::{Placement, Wallpaper};
+
 /// What the hour brings to the snow's light: daylight, and how far into Halloween night it is.
 #[derive(Clone, Copy)]
 pub struct Sky {
@@ -95,6 +97,17 @@ impl Wallpapers {
             }
         }
         None
+    }
+
+    /// The picture on the display with these bounds, in physical pixels, as it is laid out; none for a plain colour.
+    pub fn wallpaper(&self, bounds: &RECT) -> Option<Wallpaper> {
+        let Some(Backdrop::Picture(path, _)) = self.backdrop(bounds) else { return None };
+        unsafe {
+            let placement = self.desktop.GetPosition().map_or(Placement::Fill, |position| Placement::from_position(position.0));
+            let fill =
+                self.desktop.GetBackgroundColor().map_or([0.0; 3], |color| std::array::from_fn(|i| ((color.0 >> (8 * i)) & 0xff) as f32 / 255.0));
+            Wallpaper::new(path, placement, fill)
+        }
     }
 
     /// The backdrop's average colour along the bottom quarter, brought to the brightness of snow in shade.

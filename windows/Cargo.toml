@@ -20,6 +20,7 @@ required-features = ["setup"]
 
 [dependencies]
 snowhush-core = { path = "../core" }
+snowhush-depth = { path = "../depth" }
 
 [target.'cfg(windows)'.dependencies]
 windows-numerics = "0.3"

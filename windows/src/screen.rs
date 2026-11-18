@@ -27,6 +27,7 @@ use snowhush_core::simulation::{Pace, SnowSimulation, WindowId, WindowSurface};
 use crate::desktop::DesktopLayer;
 use crate::light::{Backdrop, Sky, Wallpapers};
 use crate::log;
+use crate::picture::PictureSnow;
 use crate::prefs::Settings;
 use crate::render::{Ambient, Gpu, LANTERN_REACH, Surface};
 use crate::tracker::{COVER_ONLY, Tracker, class_name, cloaked, local_frame, process_name};
@@ -248,6 +249,8 @@ pub struct Screen {
     behind_taskbar: bool,
     /// Where the cursor's candlelight was last drawn.
     lantern_at: V2,
+    /// The snow lying in the display's wallpaper, while it is read for that or for its depth.
+    pub picture: Option<PictureSnow>,
 }
 
 impl Screen {
@@ -289,6 +292,7 @@ impl Screen {
             layer,
             behind_taskbar: settings.behind_taskbar,
             lantern_at: V2::new(-10_000.0, -10_000.0),
+            picture: None,
         })
     }
 
@@ -486,8 +490,11 @@ impl Screen {
         true
     }
 
-    /// Picks up the shadow colour again if the desktop picture changed.
-    pub fn update_backdrop(&mut self, wallpapers: &Wallpapers) {
+    /// Picks up the shadow colour again if the desktop picture changed, and the picture's snow its wallpaper.
+    pub fn update_backdrop(&mut self, wallpapers: &Wallpapers, gpu: &Gpu) {
+        if let Some(picture) = &mut self.picture {
+            picture.show(wallpapers.wallpaper(&self.monitor.bounds), gpu, &mut self.simulation);
+        }
         let backdrop = wallpapers.backdrop(&self.monitor.bounds);
         if backdrop == self.backdrop {
             return;
@@ -495,6 +502,20 @@ impl Screen {
         self.shadow_tint = backdrop.as_ref().and_then(|backdrop| wallpapers.tint(backdrop)).unwrap_or([0.0; 4]);
         log!("backdrop of {}: {backdrop:?}, shadow {:?}", self.monitor.name, self.shadow_tint);
         self.backdrop = backdrop;
+    }
+
+    /// Looks after the snow in the wallpaper's picture, `now` in seconds: `frost` draws it.
+    pub fn tick_picture(&mut self, gpu: &Gpu, frost: bool, now: f64) {
+        let area = dip_rect(&self.monitor, &self.monitor.rect);
+        let covered = self.covered;
+        if let Some(picture) = &mut self.picture {
+            picture.tick(gpu, &mut self.simulation, [area[0], area[1]], frost && !covered, now);
+        }
+    }
+
+    /// The overlay, when it is in the desktop's wallpaper layer too: the picture's snow goes under it.
+    pub fn overlay_behind(&self) -> Option<HWND> {
+        self.layer.map(|_| self.overlay.0)
     }
 
     /// Reads the windows again at the next frame, as after another display handed over a window's snow.
@@ -610,6 +631,13 @@ impl Screen {
         let bounds = &self.monitor.bounds;
         x >= bounds.left as f32 && x < bounds.right as f32 && y >= bounds.top as f32 && y < bounds.bottom as f32
     }
+}
+
+/// Where `rect`, in physical pixels, lies on the display, in DIPs from its top left: left, top, right and bottom.
+pub fn dip_rect(monitor: &Monitor, rect: &RECT) -> [f32; 4] {
+    let scale = monitor.dpi.max(96) as f32 / 96.0;
+    let (x, y) = (monitor.bounds.left, monitor.bounds.top);
+    [(rect.left - x) as f32 / scale, (rect.top - y) as f32 / scale, (rect.right - x) as f32 / scale, (rect.bottom - y) as f32 / scale]
 }
 
 pub fn dip_size(monitor: &Monitor) -> (u32, u32) {
@@ -802,7 +830,7 @@ fn create_overlay(rect: &RECT, shown_in_screenshots: bool) -> Result<HWND> {
 
 /// A child of the wallpaper layer, under the icons, so it needs neither click-through nor a place above other windows.
 /// Screenshots can't leave it out: only top-level windows can be kept from capture.
-fn create_behind(rect: &RECT, layer: &DesktopLayer) -> Result<HWND> {
+pub fn create_behind(rect: &RECT, layer: &DesktopLayer) -> Result<HWND> {
     register_class()?;
     unsafe {
         let mut origin = POINT { x: rect.left, y: rect.top };

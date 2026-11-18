@@ -33,6 +33,10 @@ use crate::halloween::{self, SIGN_SCALE};
 use crate::log;
 use crate::new_year;
 
+mod picture;
+
+pub use picture::{Lying, Painting};
+
 // The digitized leaves' tables come first: the shaders draw the leaves from them.
 const SHADERS: &str = concat!(include_str!("leaves.hlsl"), "\n", include_str!("shaders.hlsl"));
 /// The New Year's fir and its fireworks, as on the Mac and on Linux.
@@ -190,6 +194,8 @@ pub struct Gpu {
     tree_constants: ID3D11Buffer,
     /// The fir's bough pictures, made the first time the tree is drawn; none if they couldn't be.
     needles: OnceCell<Option<ID3D11ShaderResourceView>>,
+    /// What draws the snow lying in wallpapers, made the first time it is; none if it couldn't be.
+    picture: OnceCell<Option<picture::Programs>>,
     adding: ID3D11BlendState,
     sampler: ID3D11SamplerState,
     /// Clear past the picture's edges, for the pumpkins' glow around them.
@@ -275,7 +281,7 @@ impl Gpu {
                 element(s!("SPIN"), DXGI_FORMAT_R32G32_FLOAT, 100),
                 element(s!("RAIN"), DXGI_FORMAT_R32G32_FLOAT, 108),
                 element(s!("DROP"), DXGI_FORMAT_R32G32B32A32_FLOAT, 116),
-                element(s!("PETAL"), DXGI_FORMAT_R32_FLOAT, 132),
+                element(s!("PETAL"), DXGI_FORMAT_R32G32B32_FLOAT, 132),
             ];
             let mut sprite_layout = None;
             device.CreateInputLayout(&elements, &code.sprite_vertex, Some(&mut sprite_layout))?;
@@ -371,6 +377,7 @@ impl Gpu {
                 tree_pieces,
                 tree_constants,
                 needles: OnceCell::new(),
+                picture: OnceCell::new(),
                 adding: adding.ok_or_else(Error::empty)?,
                 sampler: sampler.ok_or_else(Error::empty)?,
                 bordered: bordered.ok_or_else(Error::empty)?,
@@ -589,6 +596,8 @@ pub struct Surface {
     height_capacity: usize,
     /// The field drops on the glass add up into, as big as the swap chain; made while there are any.
     field: Option<(ID3D11RenderTargetView, ID3D11ShaderResourceView)>,
+    /// The wallpaper's air for the flakes falling in its picture, as the simulation last counted it.
+    air: Option<(ID3D11ShaderResourceView, u64)>,
 }
 
 impl Surface {
@@ -636,6 +645,7 @@ impl Surface {
                 heights: None,
                 height_capacity: 0,
                 field: None,
+                air: None,
             })
         }
     }
@@ -649,6 +659,7 @@ impl Surface {
 
     pub fn draw(&mut self, gpu: &Gpu, simulation: &SnowSimulation, ambient: Ambient, time: f32) -> Result<()> {
         self.reserve(gpu, simulation.sprite_count(), simulation.column_count())?;
+        let air = self.air(gpu, simulation)?;
         let glass = if simulation.has_glass_drops() {
             let field = self.field(gpu)?;
             simulation.glass_bounds().map(|drops| (field, drops))
@@ -773,6 +784,8 @@ impl Surface {
                 let stride = size_of::<Sprite>() as u32;
                 let offset = 0;
                 context.IASetInputLayout(&gpu.sprite_layout);
+                context.VSSetShaderResources(9, Some(&[Some(air.clone())]));
+                context.VSSetSamplers(2, Some(&[Some(gpu.sampler.clone())]));
                 context.IASetVertexBuffers(0, 1, Some(&Some(sprite_buffer.clone())), Some(&stride), Some(&offset));
                 // Drops on the glass first add up into their field.
                 if let Some(((field_target, _), _)) = &glass {
@@ -819,6 +832,47 @@ impl Surface {
     }
 
     /// The field drops on the glass add up into, made the first time it is needed.
+    /// Shows nothing, as when the snow it showed is gone.
+    pub fn clear(&mut self, gpu: &Gpu) -> Result<()> {
+        unsafe {
+            gpu.context.OMSetRenderTargets(Some(&[Some(self.target_view.clone())]), None);
+            gpu.context.ClearRenderTargetView(&self.target_view, &[0.0; 4]);
+            self.swap_chain.Present(0, DXGI_PRESENT(0)).ok()
+        }
+    }
+
+    /// The wallpaper's air for the flakes falling in its picture, made again only when the picture changes; one clear
+    /// cell while there is none.
+    fn air(&mut self, gpu: &Gpu, simulation: &SnowSimulation) -> Result<ID3D11ShaderResourceView> {
+        let (cells, size, version) = simulation.picture_air();
+        if let Some((view, seen)) = &self.air
+            && *seen == version
+        {
+            return Ok(view.clone());
+        }
+        let (pixels, width, height) = if size.0 > 0 { (cells, size.0, size.1) } else { (&[255u8, 255, 255, 0][..], 1, 1) };
+        let desc = D3D11_TEXTURE2D_DESC {
+            Width: width as u32,
+            Height: height as u32,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            Usage: D3D11_USAGE_IMMUTABLE,
+            BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+            ..Default::default()
+        };
+        let data = D3D11_SUBRESOURCE_DATA { pSysMem: pixels.as_ptr().cast(), SysMemPitch: (width * 4) as u32, SysMemSlicePitch: 0 };
+        let (mut texture, mut view) = (None, None);
+        unsafe {
+            gpu.device.CreateTexture2D(&desc, Some(&data), Some(&mut texture))?;
+            gpu.device.CreateShaderResourceView(&texture.ok_or_else(Error::empty)?, None, Some(&mut view))?;
+        }
+        let view = view.ok_or_else(Error::empty)?;
+        self.air = Some((view.clone(), version));
+        Ok(view)
+    }
+
     fn field(&mut self, gpu: &Gpu) -> Result<(ID3D11RenderTargetView, ID3D11ShaderResourceView)> {
         if let Some(field) = &self.field {
             return Ok(field.clone());
