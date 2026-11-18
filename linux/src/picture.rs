@@ -12,7 +12,7 @@ use wayland_client::QueueHandle;
 use wayland_client::protocol::wl_output::WlOutput;
 
 use snowhush_core::simulation::{COLUMN_WIDTH, SnowSimulation};
-use snowhush_core::wallpaper::{Light, Scene, Terrain};
+use snowhush_core::wallpaper::Scene;
 
 use crate::log;
 use crate::render::{Gpu, Lying, Painting, Surface};
@@ -36,8 +36,9 @@ pub struct PictureSnow {
     read: Option<Wallpaper>,
     scene: Option<Scene>,
     painting: Option<Painting>,
-    /// The overlay's place on the display the simulation was given the picture for: left and top in points, and size.
-    given: Option<[f32; 4]>,
+    /// The overlay's place on the display the simulation was given the picture for, left and top in points and size,
+    /// and where the part of the picture it was given starts.
+    given: Option<([f32; 4], [f32; 2])>,
     drawn_version: Option<u64>,
     drawn_at: Instant,
     /// Something of the snow shows on the surface.
@@ -178,10 +179,10 @@ impl PictureSnow {
         let Some(scene) = &self.scene else { return };
         let cell = scene.terrain.cell as f32;
         let place = [(area.x - bounds.x) as f32, (area.y - bounds.y) as f32, simulation.width(), simulation.height()];
-        if self.given != Some(place) {
-            let (terrain, light) = cropped(scene, place);
+        if self.given.map(|(given, _)| given) != Some(place) {
+            let (terrain, light, origin) = scene.cropped(place);
             simulation.set_picture(Some(&terrain), Some(&light));
-            self.given = Some(place);
+            self.given = Some((place, origin));
         }
         if simulation.take_picture_cleared() {
             self.clear(gpu);
@@ -201,8 +202,7 @@ impl PictureSnow {
         }
         let (Some(surface), Some(painting)) = (&self.surface, &mut self.painting) else { return };
         let (dabs, specks, dabs_size, dabs_version) = simulation.picture_dabs();
-        let given = self.given.unwrap_or_default();
-        let offset = [(given[0] / cell).round() * cell, (given[1] / cell).round() * cell];
+        let origin = self.given.map_or([0.0; 2], |(_, origin)| origin);
         let lying = Lying {
             level,
             veil,
@@ -210,7 +210,7 @@ impl PictureSnow {
             specks,
             dabs_size,
             dabs_version,
-            dabs_area: [offset[0], offset[1], dabs_size.0 as f32 * cell, dabs_size.1 as f32 * cell],
+            dabs_area: [origin[0], origin[1], dabs_size.0 as f32 * cell, dabs_size.1 as f32 * cell],
         };
         match gpu.draw_picture(surface, painting, &lying, [bounds.w as f32, bounds.h as f32]) {
             Ok(()) => {
@@ -241,30 +241,4 @@ impl PictureSnow {
             gpu.release(surface);
         }
     }
-}
-
-/// The part of what was found in the picture the overlay covers, `place` its left and top on the display and its size,
-/// in points: the simulation knows only its own part of the display. The light comes at the terrain's cells.
-fn cropped(scene: &Scene, place: [f32; 4]) -> (Terrain, Light) {
-    let whole = &scene.terrain;
-    let cell = whole.cell.max(1);
-    let x0 = ((place[0] / cell as f32).round() as usize).min(whole.width);
-    let y0 = ((place[1] / cell as f32).round() as usize).min(whole.height);
-    let width = ((place[2] / cell as f32).ceil() as usize).min(whole.width - x0).max(1);
-    let height = ((place[3] / cell as f32).ceil() as usize).min(whole.height - y0).max(1);
-    let mut near = Vec::with_capacity(width * height);
-    let mut pixels = Vec::with_capacity(width * height * 4);
-    let light = &scene.light;
-    for y in 0..height {
-        for x in 0..width {
-            let (wx, wy) = ((x0 + x).min(whole.width - 1), (y0 + y).min(whole.height - 1));
-            near.push(whole.near[wy * whole.width + wx]);
-            let (lx, ly) = ((wx * cell / light.cell).min(light.width - 1), (wy * cell / light.cell).min(light.height - 1));
-            let k = (ly * light.width + lx) * 4;
-            pixels.extend_from_slice(&light.pixels[k..k + 4]);
-        }
-    }
-    let terrain = Terrain { width, height, cell, near, far: whole.far, close: whole.close };
-    let light = Light { width, height, cell, pixels, haze: light.haze };
-    (terrain, light)
 }

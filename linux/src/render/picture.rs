@@ -3,7 +3,8 @@
 //! what it draws the compositor then shows as it is, frame after frame, for nothing.
 
 use glow::HasContext;
-use snowhush_core::wallpaper::{GROUND, Ridge, Scene};
+use snowhush_core::wallpaper::drawing::{self, Cap};
+use snowhush_core::wallpaper::{GROUND, Scene};
 
 use super::{Gpu, Program, Surface, bytes, program};
 
@@ -14,10 +15,6 @@ const CAP_VERTEX: &str = include_str!("../shaders/cap.vert");
 const CAP_FRAGMENT: &str = include_str!("../shaders/cap.frag");
 const PICTURE: &str = include_str!("../shaders/picture.glsl");
 const SHARED: [&str; 7] = ["viewSize", "scale", "level", "range", "thickest", "veil", "haze"];
-/// A cap's full thickness on the nearest ridge once all the snow has fallen, in points.
-const CAP_DEPTH: f32 = 9.0;
-/// How thick the snow lies on the nearest level ground once all of it has fallen, in points.
-const DEPTH: f32 = 5.0;
 
 pub(super) struct Programs {
     lie: Program,
@@ -25,14 +22,6 @@ pub(super) struct Programs {
     cap: Program,
     cap_array: glow::VertexArray,
     noise: glow::Texture,
-}
-
-/// One ridge's cap: where its columns start in the buffer of them all, as vertices.
-struct Cap {
-    first: usize,
-    count: usize,
-    left: f32,
-    near: f32,
 }
 
 /// What was found in one wallpaper, as the graphics card has it.
@@ -80,7 +69,7 @@ impl Gpu {
                     &[&SHARED[..], &["left", "columnWidth", "thickness", "near", "light"]].concat(),
                 )?;
                 let cap_array = gl.create_vertex_array()?;
-                let noise = texture(gl, glow::R8, glow::RED, 256, 256, &noise(), false, glow::REPEAT)?;
+                let noise = texture(gl, glow::R8, glow::RED, 256, 256, &drawing::noise(), false, glow::REPEAT)?;
                 Programs { lie, show, cap, cap_array, noise }
             };
             self.picture = Some(programs);
@@ -99,7 +88,9 @@ impl Gpu {
             let light_texture = texture(gl, glow::RGBA8, glow::RGBA, light.width, light.height, &light.pixels, false, glow::CLAMP_TO_EDGE)?;
             let dabs = texture(gl, glow::R8, glow::RED, 1, 1, &[0], false, glow::CLAMP_TO_EDGE)?;
             let specks = texture(gl, glow::R8, glow::RED, 1, 1, &[0], false, glow::CLAMP_TO_EDGE)?;
-            let (values, caps) = columns(&scene.ridges, column_width);
+            let (columns, caps) = drawing::caps(&scene.ridges, column_width);
+            // Each column twice, once for each corner of the strip.
+            let values: Vec<f32> = columns.iter().flat_map(|column| column.iter().chain(column).copied()).collect();
             let columns = gl.create_buffer()?;
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(columns));
             gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes(&values), glow::STATIC_DRAW);
@@ -172,9 +163,7 @@ impl Gpu {
             }
             let (lie, framebuffer, _) = painting.lie.expect("made");
             let level = lying.level;
-            // The first snow shows soon; past covering what holds it, it goes on getting deeper at half the pace.
-            let amount = if level <= 1.0 { level.max(0.0).powf(0.6) } else { 1.0 + (level - 1.0) * 0.5 };
-            let thickest = (DEPTH * level.max(0.0).powf(0.7)).max(0.01);
+            let (amount, thickest) = (drawing::amount(level), drawing::thickest(level));
             let scale = surface.width as f32 / view[0].max(1.0);
             let shared = |program: &Program| {
                 gl.use_program(Some(program.program));
@@ -230,13 +219,12 @@ impl Gpu {
                 gl.bind_buffer(glow::ARRAY_BUFFER, Some(painting.columns));
                 gl.enable_vertex_attrib_array(0);
                 for one in &painting.caps {
-                    // The farther off the ridge, the thinner the same snow looks on it.
-                    let thickness = CAP_DEPTH * level.max(0.0).powf(0.8) * (0.35 + 0.65 * one.near);
+                    let thickness = drawing::cap_thickness(level, one.near);
                     gl.uniform_1_f32(cap.location("left"), one.left);
                     gl.uniform_1_f32(cap.location("thickness"), thickness);
                     gl.uniform_1_f32(cap.location("near"), one.near);
-                    gl.vertex_attrib_pointer_f32(0, 4, glow::FLOAT, false, 16, (one.first * 16) as i32);
-                    gl.draw_arrays(glow::TRIANGLE_STRIP, 0, one.count as i32);
+                    gl.vertex_attrib_pointer_f32(0, 4, glow::FLOAT, false, 16, (one.first * 2 * 16) as i32);
+                    gl.draw_arrays(glow::TRIANGLE_STRIP, 0, (one.count * 2) as i32);
                 }
             }
             gl.bind_vertex_array(None);
@@ -244,88 +232,6 @@ impl Gpu {
         }
         self.egl.swap_buffers(self.display, surface.surface).map_err(|error| error.to_string())
     }
-}
-
-/// Each ridge's cap, worked out once: thinner where the ridge climbs steeply, uneven along it as drifted snow is, and
-/// tapering away to its ends. Each column twice, once for each corner of the strip.
-fn columns(ridges: &[Ridge], column_width: f32) -> (Vec<f32>, Vec<Cap>) {
-    let smoothstep = snowhush_core::geometry::smoothstep;
-    let fraction = |x: f32| x - x.floor();
-    let mut values = Vec::new();
-    let mut caps = Vec::new();
-    for ridge in ridges.iter().filter(|ridge| ridge.tops.len() > 4) {
-        let tops = &ridge.tops;
-        let count = tops.len();
-        // The same ridge always gets the same cap, however often its wallpaper is read again.
-        let seed = ridge.left * 12.9898 + count as f32 * 78.233;
-        let phases =
-            (2.0 * std::f32::consts::PI * fraction(seed.sin() * 43758.547), 2.0 * std::f32::consts::PI * fraction((seed + 1.7).sin() * 43758.547));
-        let near = ridge.nearness.clamp(0.0, 1.0);
-        caps.push(Cap { first: values.len() / 4, count: count * 2, left: ridge.left, near });
-        for k in 0..count {
-            let (a, b) = (k.saturating_sub(3), (k + 3).min(count - 1));
-            let slope = (tops[b] - tops[a]).abs() / ((b - a) as f32 * column_width);
-            let lie = (1.0 - slope / 2.2).clamp(0.3, 1.0);
-            let x = k as f32 * column_width;
-            let uneven = 0.85 + 0.2 * (x * 0.045 + phases.0).sin() + 0.1 * (x * 0.13 + phases.1).sin();
-            let end = ((k.min(count - 1 - k)) as f32 / 10.0).min(1.0);
-            let taper = end * end * (3.0 - 2.0 * end);
-            let (low, high) = (k.saturating_sub(5), (k + 5).min(count - 1));
-            let smooth = tops[low..=high].iter().sum::<f32>() / (high - low + 1) as f32;
-            let room = ridge.room.get(k).copied().unwrap_or(1.0);
-            // A cap sinks its foot three points into a mountain's top, and hardly at all into a branch's.
-            let foot = 1.0 + 2.0 * smoothstep(0.25, 0.9, room);
-            // On a branch the cap goes by the branch's own thickness, however near it is.
-            let slim = (room / (0.35 + 0.65 * near)).min(1.0);
-            let carried = slim + (1.0 - slim) * smoothstep(0.6, 0.95, room);
-            // A mountain far off is small on the screen, and a cap a few points thick on it would be a drift as deep
-            // as a house: there the snow shows on its faces, and its ridge is left without a line drawn round it.
-            let mountain = if ridge.mass.get(k).is_some_and(|mass| *mass >= 0.5) { 1.0 } else { 0.0 };
-            let far = 1.0 - mountain * (1.0 - smoothstep(0.3, 0.45, near));
-            let column = [tops[k], smooth, lie * uneven * taper * carried * far, foot + 8.0 * mountain];
-            values.extend(column);
-            values.extend(column);
-        }
-    }
-    (values, caps)
-}
-
-/// A gradient noise that tiles, 32 cells across 256 pixels: unlike noise of values at a grid's corners it has no square
-/// blobs for a threshold to cut out. Always the same, so the snow's edge doesn't move between drawings.
-fn noise() -> Vec<u8> {
-    let (size, cells) = (256usize, 32usize);
-    let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
-    let mut next = || {
-        state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-        (state >> 40) as f32 / (1u64 << 24) as f32
-    };
-    let slopes: Vec<(f32, f32)> = (0..cells * cells)
-        .map(|_| {
-            let angle = next() * 2.0 * std::f32::consts::PI;
-            (angle.cos(), angle.sin())
-        })
-        .collect();
-    let slope = |x: i32, y: i32| slopes[((y + cells as i32) as usize % cells) * cells + (x + cells as i32) as usize % cells];
-    let dot = |s: (f32, f32), x: f32, y: f32| s.0 * x + s.1 * y;
-    let step = cells as f32 / size as f32;
-    let mut pixels = vec![0u8; size * size];
-    for py in 0..size {
-        for px in 0..size {
-            let (x, y) = ((px as f32 + 0.5) * step, (py as f32 + 0.5) * step);
-            let (ix, iy) = (x.floor(), y.floor());
-            let (fx, fy) = (x - ix, y - iy);
-            let (cx, cy) = (ix as i32, iy as i32);
-            let fade = |t: f32| t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
-            let (sx, sy) = (fade(fx), fade(fy));
-            let a = dot(slope(cx, cy), fx, fy);
-            let b = dot(slope(cx + 1, cy), fx - 1.0, fy);
-            let c = dot(slope(cx, cy + 1), fx, fy - 1.0);
-            let d = dot(slope(cx + 1, cy + 1), fx - 1.0, fy - 1.0);
-            let (top, bottom) = (a + (b - a) * sx, c + (d - c) * sx);
-            pixels[py * size + px] = ((0.5 + 0.75 * (top + (bottom - top) * sy)).clamp(0.0, 1.0) * 255.0) as u8;
-        }
-    }
-    pixels
 }
 
 /// A texture of `pixels`, top row first, or with nothing in it yet when they are empty.

@@ -7,8 +7,8 @@ description = "Depth Anything V2 Small on the CPU, for reading a wallpaper's dep
 
 [dependencies]
 snowhush-core = { path = "../core" }
-candle-core = "0.11.1"
-candle-nn = "0.11.1"
+candle-core = "=0.10.2"
+candle-nn = "=0.10.2"
 half = "2"
 sha2 = { version = "0.10", default-features = false }
 

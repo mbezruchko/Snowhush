@@ -4,6 +4,7 @@
 //! from a network the platform runs, once per picture, and what is found is kept on disk.
 
 mod cache;
+pub mod drawing;
 pub mod geometry;
 mod ridges;
 #[cfg(test)]
