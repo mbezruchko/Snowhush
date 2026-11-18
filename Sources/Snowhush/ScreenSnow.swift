@@ -140,6 +140,8 @@ final class ScreenSnow {
         treeView = TreeView(device: device)
         renderer.treeView = treeView
 
+        // The closures below name the properties through self: init's own `renderer` and `simulation` would be captured
+        // instead, and the renderer would keep itself, and the simulation, alive after the display is gone.
         renderer.cursorLocation = { [unowned self] in
             // Notification Center is in front of the snow then, which the pointer over it can't reach.
             if window.notificationLevel != nil && tracker.notificationCoversPointer { return SIMD2(-10_000, -10_000) }
@@ -158,7 +160,7 @@ final class ScreenSnow {
             guard tracked else { return nil }
             forgetClosed(now: now)
             for (id, display) in update?.handed ?? [:] { displays.hand(id, from: self, to: display) }
-            simulation.windowFrames = tracker.covers.map { SIMD4(Float($0.minX), Float($0.minY), Float($0.maxX), Float($0.maxY)) }
+            self.simulation.windowFrames = tracker.covers.map { SIMD4(Float($0.minX), Float($0.minY), Float($0.maxX), Float($0.maxY)) }
             return update
         }
         renderer.borrowedSnow = { [unowned self] in
@@ -174,7 +176,7 @@ final class ScreenSnow {
         }
         renderer.rest = { [unowned self] in
             view.isPaused = true
-            renderer.releaseFrames(of: view)
+            self.renderer.releaseFrames(of: view)
         }
         simulation.stirred = { [unowned self] in wake() }
         renderer.fireworksOnDesktop = { [unowned self] fireworks, time in picture?.drawFireworks(fireworks, time: time) ?? false }
