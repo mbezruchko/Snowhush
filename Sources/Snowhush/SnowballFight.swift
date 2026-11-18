@@ -6,7 +6,7 @@ import simd
 /// back at whoever hits it, never first; a friend when the friend hits this player. Command-click the wallpaper to
 /// throw one into it: hitting a friend's snowman sends the friend a snowball. Each heart a snowman loses, he breaks
 /// apart and stands whole somewhere else; out of hearts, he is out, and in a room the last one standing wins the
-/// round. Teased past bearing, the bot takes his revenge.
+/// round.
 final class SnowballFight {
     /// Lets it be tried out: defaults write com.mbezruchko.Snowhush previewSnowballFight -bool true, or a build handed
     /// to friends with SnowballFight set in its Info.plist.
@@ -65,13 +65,6 @@ final class SnowballFight {
     /// Hits the bot takes before he is out: two hearts' worth, moving elsewhere after the first. Alone, five would drag.
     private static let botHits = 6
     private var botBackAt: Double?
-    /// How teased the bot is: each snowball thrown at or near him adds one, fading to a third in three minutes. Out
-    /// once it is past `teased`, something under the snow wakes, ten minutes apart at most.
-    private var botAnger: Float = 0
-    private var botAngerAt: Double = 0
-    private static let teased: Float = 16
-    private var wokenAt = -Double.infinity
-    private var awakening: Awakening?
     /// The round as this player sees it, at the top of the desktop while in a room: own hearts, wins, who won.
     private let board = CATextLayer()
     private var boardShown = ""
@@ -401,10 +394,6 @@ final class SnowballFight {
         let start = SIMD2(screenWidth * 0.5 + (point.x - screenWidth * 0.5) * 0.35, -30)
         Self.throwsMade += 1
         let now = CACurrentMediaTime()
-        if let bot = figures[Self.botID]?.bot, !bot.knockedOut, simd_distance(point, bot.middle) < bot.height * 2.5 {
-            botAnger = botAnger * exp(-Float(now - botAngerAt) / 180) + 1
-            botAngerAt = now
-        }
         heat *= exp(-Float(now - heatAt) / 1.5)
         heatAt = now
         let stray = min(heat, 3)
@@ -425,15 +414,6 @@ final class SnowballFight {
                 if botLives <= 0 {
                     figure.bot.knockOut()
                     botBackAt = now + 5
-                    let anger = botAnger * exp(-Float(now - botAngerAt) / 180)
-                    // To be seen at once: defaults write com.mbezruchko.Snowhush previewScreamer -bool true.
-                    let preview = UserDefaults.standard.bool(forKey: "previewScreamer")
-                    if preview || anger >= Self.teased && now - wokenAt > 600 {
-                        botAnger = 0
-                        wokenAt = now
-                        botBackAt = now + 5 + Awakening.duration
-                        awaken()
-                    }
                 } else if botLives % SnowballRoom.hitsPerHeart == 0 {
                     figure.bot.moveAway()
                 }
@@ -442,25 +422,6 @@ final class SnowballFight {
                 moveIfOwed(figure)
             }
             return true
-        }
-    }
-
-    /// The bot's revenge, a moment after he has fallen apart, once his pieces are still.
-    private func awaken() {
-        guard let window, awakening == nil else { return }
-        let frame = window.frame, sharing = window.sharingType
-        let due = CACurrentMediaTime() + 1.4
-        Awakening.draw(for: frame.size) { [weak self] pictures in
-            guard let self, let pictures, self.awakening == nil else { return }
-            let awakening = Awakening(size: frame.size, pictures: pictures)
-            self.awakening = awakening
-            DispatchQueue.main.asyncAfter(deadline: .now() + max(due - CACurrentMediaTime(), 0)) { [weak self] in
-                guard let picture = self?.window else {
-                    self?.awakening = nil
-                    return
-                }
-                awakening.show(in: picture, over: frame, sharing: sharing) { self?.awakening = nil }
-            }
         }
     }
 
