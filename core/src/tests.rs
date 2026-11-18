@@ -1464,3 +1464,34 @@ fn toggles_mixed() {
     picked.toggle_mixed();
     assert_eq!(picked.mix, [Mode::Autumn, Mode::Snow]);
 }
+
+#[test]
+fn the_new_year_tree_rises_catches_snow_and_fireworks_go_up() {
+    let mut simulation = SnowSimulation::new(1440.0, 900.0, 1.0);
+    simulation.set_new_year(true);
+    simulation.fireworks_per_minute = 20.0;
+    run(&mut simulation, 30.0, AWAY);
+    let tree = simulation.tree().expect("a tree");
+    assert!(tree.base.y > -1.0, "the tree came up to the ground, at {}", tree.base.y);
+    let held: f32 = tree.boughs.iter().map(|bough| bough.snow()).sum();
+    assert!(held > 50.0, "the boughs hold {held} of snow");
+    assert!(simulation.fireworks().is_some(), "fireworks through the season");
+    // At midnight every hand is out of its present with a sparkler, and the bursts light the snow.
+    simulation.celebration = Some(-1.0);
+    run(&mut simulation, 0.5, AWAY);
+    simulation.celebration = Some(0.5);
+    let mut lit = false;
+    for _ in 0..240 {
+        simulation.step(DT, AWAY);
+        lit |= simulation.tree_lights().iter().any(|(light, _)| light[2] == 420.0);
+    }
+    assert!(simulation.tree().is_some_and(|tree| !tree.sparklers.is_empty()), "sparklers at midnight");
+    assert!(lit, "a burst lit the snow");
+    assert_finite(&simulation);
+    // Covered by a window, it sinks out of sight; taken away, it is gone.
+    simulation.covers = vec![[0.0, 0.0, 600.0, 900.0]];
+    run(&mut simulation, 2.0, AWAY);
+    assert!(simulation.tree().is_some_and(|tree| tree.base.y < -150.0));
+    simulation.set_new_year(false);
+    assert!(simulation.tree().is_none() && simulation.fireworks().is_none());
+}

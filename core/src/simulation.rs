@@ -7,15 +7,19 @@ use std::ops::Range;
 use crate::geometry::{Rect, V2, smoothstep};
 use crate::layer::{Blend, SnowLayer};
 
+mod fireworks;
 mod ghosts;
 mod neighbours;
 mod pumpkins;
 mod rain;
+mod tree;
 
+pub use fireworks::{Fireworks, Flash, Shell, Spark};
 use ghosts::Haunting;
 pub use neighbours::{Borrowed, Carried, Caught, Mapping, Stray};
 use pumpkins::Pumpkins;
 use rain::Rain;
+pub use tree::{Bauble, Bough, Bulb, CELL_COUNT, HandPhase, Present, TREE_EXTENT, TREE_HEIGHT, Tree, cell_along, profile};
 
 pub type WindowId = isize;
 
@@ -472,7 +476,18 @@ pub struct SnowSimulation {
     switched_at: f64,
     restyled: bool,
     air: Air,
+    /// The New Year's fir, standing in the snow while it is the New Year.
+    tree: Option<Tree>,
+    /// Seconds past the New Year's midnight while it is celebrated, from the countdown on; none otherwise.
+    pub celebration: Option<f64>,
+    celebrated_at: Option<f64>,
+    /// How many rockets go up a minute now, on average.
+    pub fireworks_per_minute: f32,
+    fireworks: Option<Fireworks>,
 }
+
+/// Where the New Year's tree stands, its trunk this far from the left edge of the screen.
+pub const TREE_X: f32 = 124.0;
 
 impl SnowSimulation {
     pub fn new(width: f32, height: f32, intensity: f32) -> SnowSimulation {
@@ -514,6 +529,11 @@ impl SnowSimulation {
             rain: Rain::default(),
             switched_at: 0.0,
             restyled: false,
+            tree: None,
+            celebration: None,
+            celebrated_at: None,
+            fireworks_per_minute: 0.0,
+            fireworks: None,
             air: Air {
                 flakes: Vec::new(),
                 grains: Vec::new(),
@@ -683,6 +703,7 @@ impl SnowSimulation {
     pub fn is_empty(&self) -> bool {
         self.intensity <= 0.0
             && !self.haunting.on
+            && self.tree.is_none()
             && self.sprite_count() == 0
             && !self.haunting.moving()
             && self.air.gust.is_none()
@@ -815,6 +836,10 @@ impl SnowSimulation {
         if self.haunting.on {
             self.settle_pumpkins(dt);
         }
+        if self.tree.is_some() {
+            self.tend_tree(dt);
+            self.celebrate(dt);
+        }
         for (area, x, blend) in self.air.overflow.drain(..) {
             if self.ground_settles {
                 self.layers[0].deposit(area, x, true, blend);
@@ -830,7 +855,8 @@ impl SnowSimulation {
         let pushed = air.clock - air.last_window_motion < 0.6
             || air.clock - air.last_cursor_push < 0.3
             || air.gust.is_some()
-            || self.haunting.pushing(air.clock);
+            || self.haunting.pushing(air.clock)
+            || self.fireworks.as_ref().is_some_and(|fireworks| !fireworks.is_empty());
         // The steady trickle off window corners is a few tiny grains at a time; they read fine at the calm rate.
         let flying = air.grains.len() > 24 || air.clock < self.scattered_until || air.slide_wind.abs() > 20.0;
         self.pace = if pushed {
@@ -847,7 +873,8 @@ impl SnowSimulation {
             || self.air.windows_changed
             || self.lanterns.moved
             || self.restyled
-            || self.borrowed_changed;
+            || self.borrowed_changed
+            || self.tree.is_some();
         self.restyled = false;
         self.air.windows_changed = false;
         self.borrowed_changed = false;
@@ -1314,6 +1341,17 @@ impl SnowSimulation {
                 flake.position.x -= self.width + 60.0;
             }
 
+            if flake.settles
+                && self.accumulates
+                && flake.blown == 0.0
+                && flake.kind == Mode::Snow
+                && let Some(tree) = &mut self.tree
+                && let Some((index, along)) = tree.catcher(flake.position.x, previous_y, flake.position.y, 0.75)
+            {
+                tree.add(flake.size * flake.size * DEPOSITION * flake.mass, index, along, flake.velocity);
+                self.recycle(i);
+                continue;
+            }
             if flake.settles && (self.accumulates || flake.rain()) && flake.blown == 0.0 {
                 let ground = self.ground_settles || flake.rain();
                 let hit = landing(&self.layers, flake.position.x, previous_y, flake.position.y, !self.crossed(flake.position), ground);
@@ -1404,6 +1442,27 @@ impl SnowSimulation {
                 grain.velocity *= damping;
             }
             grain.position += grain.velocity * dt;
+            if self.accumulates
+                && !grain.blown
+                && !grain.kind.leafy()
+                && grain.velocity.y < 0.0
+                && let Some(tree) = &mut self.tree
+                && let Some((index, along)) = tree.catcher(grain.position.x, previous_y, grain.position.y, if grain.lump > 0.0 { 1.0 } else { 0.6 })
+            {
+                if grain.lump > 0.0 {
+                    // A lump crashing onto a bough: half of it stays there, the rest bursts through in powder and
+                    // knocks the bough down, which may shake its own snow off.
+                    tree.add(grain.area * 0.5, index, along, grain.velocity * 2.0);
+                    let below = grain.position + V2::new(0.0, -2.0);
+                    let velocity = V2::new(grain.velocity.x * 0.4, grain.velocity.y * 0.3);
+                    self.air.release(grain.area * 0.5, Blend::SNOW, 0.0, below, velocity, V2::new(grain.size * 0.5, 1.0), 0.6);
+                    self.air.powder(grain.position, grain.size, (-grain.velocity.y / 900.0).clamp(0.35, 1.0));
+                } else {
+                    tree.add(grain.area, index, along, grain.velocity);
+                }
+                self.air.grains.swap_remove(i);
+                continue;
+            }
             let hit = if grain.blown || grain.velocity.y > 0.0 {
                 None
             } else {
@@ -1547,6 +1606,16 @@ impl SnowSimulation {
     pub fn blow_away(&mut self, direction: f32, calm: bool) {
         let direction = if direction < 0.0 { -1.0 } else { 1.0 };
         self.air.gust = Some(Gust { start: self.air.clock, direction, calm });
+        if let Some(tree) = &mut self.tree {
+            let mut shed = Vec::new();
+            tree.clear_snow(&mut shed);
+            if !calm {
+                for piece in shed {
+                    let at = piece.position + V2::new(0.0, -3.0);
+                    self.air.release(piece.area, Blend::SNOW, 0.0, at, V2::new(direction * 500.0, 60.0), piece.spread, 0.4);
+                }
+            }
+        }
         // Snow kept for windows on other desktops goes too, out of sight.
         self.dormant.clear();
         for (_, ledge, _) in &mut self.parking {
@@ -3107,4 +3176,145 @@ fn jolt_scale(height: f32) -> f32 {
 
 fn column_count(width: f32) -> usize {
     (width / COLUMN_WIDTH).ceil() as usize + 1
+}
+
+// The New Year
+
+impl SnowSimulation {
+    /// Stands the New Year's fir in the snow, or takes it away. It comes up from below the screen's edge.
+    pub fn set_new_year(&mut self, on: bool) {
+        if on == self.tree.is_some() {
+            return;
+        }
+        self.tree = on.then(|| {
+            let mut tree = Tree::new();
+            tree.base = V2::new(TREE_X, -(TREE_HEIGHT + 40.0));
+            tree
+        });
+        if !on {
+            self.fireworks = None;
+            self.celebrated_at = None;
+        }
+    }
+
+    pub fn tree(&self) -> Option<&Tree> {
+        self.tree.as_ref()
+    }
+
+    pub fn fireworks(&self) -> Option<&Fireworks> {
+        self.fireworks.as_ref()
+    }
+
+    /// What lights the drift round the tree: the garland's lowest bulbs, in three bunches across it, or while rockets
+    /// burst, the brightest bursts. Each is where it is, how far its light reaches and how strong it is, and its colour;
+    /// all zero for none.
+    pub fn tree_lights(&self) -> [([f32; 4], [f32; 3]); 3] {
+        let mut lights = [([0.0; 4], [0.0; 3]); 3];
+        let Some(tree) = &self.tree else { return lights };
+        let mut sums = [(V2::ZERO, [0.0f32; 3], 0.0f32); 3];
+        for bulb in &tree.bulbs {
+            let place = tree.bulb_position(bulb);
+            if place.y >= tree.base.y + 80.0 {
+                continue;
+            }
+            let side = if place.x < tree.base.x - 18.0 {
+                0
+            } else if place.x > tree.base.x + 18.0 {
+                2
+            } else {
+                1
+            };
+            sums[side].0 += place;
+            for c in 0..3 {
+                sums[side].1[c] += bulb.color[c] * bulb.brightness;
+            }
+            sums[side].2 += 1.0;
+        }
+        for (light, (place, color, count)) in lights.iter_mut().zip(sums) {
+            if count > 0.0 {
+                let place = place / count;
+                *light = ([place.x, (place.y - 20.0).max(tree.base.y), 60.0, 0.32], color.map(|c| c / count));
+            }
+        }
+        let flashes = self.fireworks.as_ref().map(|fireworks| fireworks.lights()).unwrap_or_default();
+        if !flashes.is_empty() {
+            for (k, light) in lights.iter_mut().enumerate() {
+                *light = flashes
+                    .get(k)
+                    .map_or(([0.0; 4], [0.0; 3]), |flash| ([flash.position.x, flash.position.y, 420.0, flash.strength * 0.5], flash.color));
+            }
+        }
+        lights
+    }
+
+    /// The tree belongs to the desktop, as the pumpkins do: one a window covers sinks below the screen's edge until it
+    /// moves off it. Snow shaken off its boughs falls as loose snow and lumps.
+    fn tend_tree(&mut self, dt: f32) {
+        let Some(mut tree) = self.tree.take() else { return };
+        let (left, right) = (TREE_X - 70.0, TREE_X + 70.0);
+        let covered = self.covers.iter().any(|cover| cover[0] < right && cover[2] > left && cover[1] < TREE_HEIGHT + 20.0 && cover[3] > 0.0);
+        let target = if covered { -(TREE_HEIGHT + 40.0) } else { 0.0 };
+        tree.base = V2::new(TREE_X, tree.base.y + (target - tree.base.y) * (dt * 5.0).min(1.0));
+        let shown = tree.base.y > -TREE_HEIGHT;
+        tree.celebration = self.celebration.map(|t| t as f32);
+        let mut shed = Vec::new();
+        let cursor = if shown { self.air.cursor } else { None };
+        tree.step(dt, self.air.wind_speed(), cursor, self.air.cursor_velocity, self.thaws, &mut shed);
+        for piece in shed {
+            // As off a window: some of it holds together in lumps, the rest goes as loose snow. It starts just clear of
+            // the bough it came off, so that bough doesn't catch it straight back.
+            let at = piece.position + V2::new(0.0, if piece.velocity.y > 0.0 { 1.0 } else { -3.0 });
+            let cohesion = if piece.area > 14.0 { self.air.random.range(0.4, 0.7) } else { 0.0 };
+            self.air.release(piece.area * (1.0 - cohesion), Blend::SNOW, 0.0, at, piece.velocity, piece.spread, 0.25);
+            if cohesion > 0.0 {
+                self.air.throw_lump(piece.area * cohesion, at, piece.velocity);
+            }
+        }
+        let ground = &self.layers[0];
+        tree.settle_presents(|x| ground.surface(ground.clamped_index(x)), dt);
+        if tree.touched {
+            self.air.last_cursor_push = self.air.clock;
+        }
+        self.tree = Some(tree);
+    }
+
+    /// Fireworks now and then through the season, more and more toward the New Year; at midnight a rocket right away,
+    /// and sparklers in the hands come out of the presents.
+    fn celebrate(&mut self, dt: f32) {
+        let midnight = self.celebrated_at.unwrap_or(-1.0) < 0.0 && self.celebration.unwrap_or(-1.0) >= 0.0;
+        self.celebrated_at = self.celebration;
+        if self.fireworks.is_none() && (self.fireworks_per_minute > 0.0 || self.celebration.is_some()) {
+            self.fireworks = Some(Fireworks::new(self.width, self.height, TREE_X + 150.0));
+        }
+        let Some(fireworks) = &mut self.fireworks else { return };
+        fireworks.step(dt, self.fireworks_per_minute, midnight, |_, _| None);
+        if let Some(tree) = &self.tree {
+            for &point in &tree.sparklers {
+                fireworks.sparkle(point, dt);
+            }
+        }
+        if self.fireworks_per_minute == 0.0 && self.celebration.is_none() && fireworks.is_empty() {
+            self.fireworks = None;
+        }
+    }
+}
+
+impl Air {
+    /// A puff of powder where something hit the snow, rising `force` hard, as wide as `size`.
+    fn powder(&mut self, position: V2, size: f32, force: f32) {
+        let count = MAX_MOTES.saturating_sub(self.motes.len()).min((2.0 + size * 0.6 * force) as usize);
+        for _ in 0..count {
+            let random = &mut self.random;
+            let angle = random.range(0.15, PI - 0.15);
+            let speed = random.range(25.0, 110.0) * force;
+            self.motes.push(Mote {
+                position: position + V2::new(random.range(-0.5, 0.5) * size, random.range(0.0, size * 0.4)),
+                velocity: V2::new(angle.cos() * speed * 1.4, angle.sin() * speed * 0.6),
+                size: random.range(0.3, 0.6) * size + 1.0,
+                alpha: random.range(0.1, 0.22),
+                age: 0.0,
+                life: random.range(0.45, 0.9),
+            });
+        }
+    }
 }
