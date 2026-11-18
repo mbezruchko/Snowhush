@@ -8,13 +8,15 @@
 #   linux/bench/run.sh kwin    the KWin script reports windows, and goes quiet once the app is killed
 #   linux/bench/run.sh side    window snow across two displays side by side, in Sway
 #   linux/bench/run.sh stacked the same with one display under the other
+#   linux/bench/run.sh newyear the New Year's tree, countdown and midnight fireworks, in Sway
 #
 # Settings for the app can follow the scene, as lines of its settings file: run.sh sway autumn=1
+# The holidays' previews pass through: SNOWHUSH_NEW_YEAR=1 SNOWHUSH_MIDNIGHT=1 run.sh sway
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
-scene=${1:?usage: run.sh sway|niri|kwin|side|stacked [setting=value…]}
+scene=${1:?usage: run.sh sway|niri|kwin|side|stacked|newyear [setting=value…]}
 shift
 out=$here/out/$scene
 rm -rf "$out"
@@ -27,6 +29,7 @@ docker run --rm -v "$root:/src:ro" -v snowhush-bench-target:/target -v snowhush-
     -e CARGO_TARGET_DIR=/target -w /src/linux rust:1-bookworm \
     bash -c "apt-get update -qq && apt-get install -y -qq libwayland-dev >/dev/null && cargo build --release --locked -q"
 echo "Running ${scene}…"
-docker run --rm -v "$here:/bench:ro" -v "$out:/out" -v snowhush-bench-target:/target:ro --user tester snowhush-bench \
+docker run --rm -v "$here:/bench:ro" -v "$out:/out" -v snowhush-bench-target:/target:ro --user tester \
+    -e SNOWHUSH_HALLOWEEN -e SNOWHUSH_HOUR -e SNOWHUSH_NEW_YEAR -e SNOWHUSH_MIDNIGHT snowhush-bench \
     dbus-run-session /bench/scene.sh "$scene" "$@"
 cat "$out/trace"

@@ -22,6 +22,7 @@ use zbus::blocking::Connection as Bus;
 use snowhush_core::geometry::V2;
 use snowhush_core::halloween::{Choice, Today};
 use snowhush_core::modes::Picked;
+use snowhush_core::new_year::{self, Holiday};
 use snowhush_core::simulation::{Borrowed, Mapping, Mode, SnowSimulation, Stray, WindowId};
 
 use crate::chores;
@@ -49,8 +50,11 @@ pub enum Command {
     /// Every frame at the display's highest rate, or as fast as what moves needs.
     Performance(bool),
     ShowInScreenshots(bool),
-    /// Halloween turned on or off from the menu.
-    Halloween(Choice),
+    /// Halloween or the New Year turned on or off from the menu: turning one on turns the other off.
+    Holidays {
+        halloween: Choice,
+        new_year: Choice,
+    },
     /// The screen locked or unlocked.
     Locked(bool),
     /// Blows all the snow away; when calm, for less motion, melts it where it lies instead.
@@ -93,8 +97,10 @@ pub struct App {
     budget: PowerBudget,
     light: [f32; 3],
     today: Today,
-    /// Whether the snow has Halloween's ghosts: wanted, over snow, not leaves.
+    new_year_today: Today,
+    /// Whether the snow has Halloween's ghosts, or the New Year's fir: whichever holiday it keeps.
     halloween: bool,
+    new_year: bool,
     /// How far into Halloween night it is.
     night: f32,
     tray: Option<ksni::blocking::Handle<Tray>>,
@@ -172,7 +178,9 @@ pub fn run() -> Result<(), String> {
         budget: PowerBudget::Full,
         light: daylight(),
         today: Today::default(),
+        new_year_today: Today::default(),
         halloween: false,
+        new_year: false,
         night: 0.0,
         tray: None,
         started: now,
@@ -324,8 +332,9 @@ impl App {
                 self.settings.show_in_screenshots = on;
                 self.source.show_in_screenshots(&self.bus, on);
             }
-            Command::Halloween(choice) => {
-                self.settings.halloween = choice;
+            Command::Holidays { halloween, new_year } => {
+                self.settings.halloween = halloween;
+                self.settings.new_year = new_year;
                 self.update_light();
             }
             Command::ClearSnow(calm) => {
@@ -432,7 +441,16 @@ impl App {
         let mut released = false;
         let mut reshaped = false;
         let mut gpu_lost = false;
+        // The New Year's countdown and midnight by the clock, and how often rockets go up.
+        let (celebration, rockets) = if self.new_year {
+            let local = light::now();
+            (new_year::celebration(local, (now - self.started).as_secs_f64()), new_year::fireworks_per_minute(local))
+        } else {
+            (None, 0.0)
+        };
         for screen in self.screens.iter_mut().filter(|screen| screen.next_due <= now) {
+            screen.simulation.celebration = celebration;
+            screen.simulation.fireworks_per_minute = rockets;
             // Shown over a full-screen app, the snow reaches the display's edges while the app has put the panels away,
             // so the drift lies along the bottom instead of over a panel no longer there. An overview isn't an app.
             if self.settings.over_full_screen && !self.settings.behind_windows {
@@ -506,22 +524,32 @@ impl App {
         }
     }
 
-    /// The light of the hour, and Halloween with it: its ghosts, its night and the tray's pumpkin.
+    /// The light of the hour, and the holiday with it: Halloween's ghosts, its night and the tray's pumpkin, or the New
+    /// Year's fir and the tray's fir.
     fn update_light(&mut self) {
         let today = light::today();
-        if today != self.today {
+        let new_year_today = light::new_year_today();
+        if today != self.today || new_year_today != self.new_year_today {
             self.today = today;
+            self.new_year_today = new_year_today;
             if let Some(tray) = &self.tray {
-                tray.update(|tray| tray.today = today);
+                tray.update(|tray| {
+                    tray.today = today;
+                    tray.new_year_today = new_year_today;
+                });
             }
         }
-        let halloween = self.settings.picked.modes() == [Mode::Snow] && self.settings.halloween.wanted(today);
-        if halloween != self.halloween {
+        let settings = &self.settings;
+        let holiday = new_year::holiday(settings.picked.modes() == [Mode::Snow], settings.new_year, new_year_today, settings.halloween, today);
+        let (halloween, festive) = (holiday == Some(Holiday::Halloween), holiday == Some(Holiday::NewYear));
+        if halloween != self.halloween || festive != self.new_year {
             self.halloween = halloween;
-            log!("halloween: {halloween}");
+            self.new_year = festive;
+            log!("holiday: {holiday:?}");
             let now = Instant::now();
             self.screens.iter_mut().for_each(|screen| {
                 screen.simulation.set_halloween(halloween);
+                screen.simulation.set_new_year(festive);
                 screen.wake(now);
             });
         }
@@ -546,6 +574,7 @@ impl App {
             log!("display {name}: {bounds:?}, scale {}, {refresh} Hz", info.scale_factor);
             let mut simulation = new_simulation(&bounds, &self.settings, self.budget);
             simulation.set_halloween(self.halloween);
+            simulation.set_new_year(self.new_year);
             let mut screen = Screen::new(
                 (&self.compositor, &self.layer_shell, &self.qh),
                 output.clone(),

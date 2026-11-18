@@ -6,7 +6,7 @@ use std::time::SystemTime;
 
 use zbus::blocking::Connection;
 
-use snowhush_core::halloween;
+use snowhush_core::{halloween, new_year};
 
 use crate::windows::Area;
 
@@ -26,6 +26,31 @@ pub fn daylight() -> [f32; 3] {
 pub fn today() -> halloween::Today {
     let (year, month, day, hour) = local_time().unwrap_or((0, 1, 1, 12.0));
     halloween::Today::at(year, month, day, hour as u32)
+}
+
+/// The year the New Year's season began in, and whether it is the season.
+pub fn new_year_today() -> halloween::Today {
+    new_year::today(now())
+}
+
+/// The local time to the fraction of a second, for the New Year's countdown.
+pub fn now() -> new_year::LocalTime {
+    let since = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default();
+    unsafe {
+        let seconds = since.as_secs() as libc::time_t;
+        let mut local: libc::tm = std::mem::zeroed();
+        if libc::localtime_r(&seconds, &mut local).is_null() {
+            return new_year::LocalTime::default();
+        }
+        new_year::LocalTime {
+            year: local.tm_year as u32 + 1900,
+            month: local.tm_mon as u32 + 1,
+            day: local.tm_mday as u32,
+            hour: local.tm_hour as u32,
+            minute: local.tm_min as u32,
+            second: local.tm_sec as f64 + since.subsec_nanos() as f64 / 1e9,
+        }
+    }
 }
 
 /// How far into Halloween night it is while Halloween is on.

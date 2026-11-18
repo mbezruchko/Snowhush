@@ -19,7 +19,10 @@ use ghosts::Haunting;
 pub use neighbours::{Borrowed, Carried, Caught, Mapping, Stray};
 use pumpkins::Pumpkins;
 use rain::Rain;
-pub use tree::{Bauble, Bough, Bulb, CELL_COUNT, HandPhase, Present, TREE_EXTENT, TREE_HEIGHT, Tree, cell_along, profile};
+pub use tree::{
+    BOUGH_SEGMENTS, Bauble, Bough, Bulb, CELL_COUNT, HandPhase, Present, TREE_EXTENT, TREE_HEIGHT, Tree, TreeBulb, TreeDrawing, TreePiece,
+    cell_along, profile, spark_pieces,
+};
 
 pub type WindowId = isize;
 

@@ -125,6 +125,25 @@ displays() {
     trace "$(grep -E 'display|windows from|window snow from' "$log")"
 }
 
+# The New Year at its previewed midnight, fifteen seconds in: the tree, the countdown on its garland, the first
+# rocket bursting and the presents' hands out with sparklers. Run with SNOWHUSH_NEW_YEAR=1 SNOWHUSH_MIDNIGHT=1.
+new_year() {
+    shot() { grim "/out/$1.png"; }
+    "$app" > /out/app.out 2>&1 &
+    sleep 4
+    shot 1-tree
+    sleep 6.3
+    shot 2-countdown
+    sleep 6.4
+    for k in 1 2 3 4 5; do
+        shot "3-burst-$k"
+        sleep 0.35
+    done
+    sleep 3
+    shot 4-sparklers
+    trace "$(grep -E 'adapter|display|holiday|frames' "$log")"
+}
+
 sway_move() { swaymsg "[app_id=foot] move right $1 px" > /dev/null; }
 sway_workspace() { swaymsg workspace "$1" > /dev/null; }
 sway_close() { swaymsg "[app_id=foot] kill" > /dev/null; }
@@ -151,6 +170,11 @@ niri)
     NIRI_SOCKET=$(ls "$XDG_RUNTIME_DIR"/niri.*.sock)
     export NIRI_SOCKET
     snowfall niri
+    ;;
+newyear)
+    headless_sway
+    export WAYLAND_DISPLAY=$sway_display
+    new_year
     ;;
 side | stacked)
     second=$([[ $1 == side ]] && echo "1280 0" || echo "0 800")

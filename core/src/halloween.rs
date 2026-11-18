@@ -68,6 +68,11 @@ impl Choice {
         self.on || today.season && self.skipped != today.year
     }
 
+    /// Turned off, as another holiday is turned on: for the season if it is the season.
+    pub fn turned_off(self, today: Today) -> Choice {
+        Choice { on: false, skipped: if today.season { today.year } else { self.skipped } }
+    }
+
     /// Turned on or off from the menu. Turned on in season, it ends with the season; any other day, it stays on.
     pub fn toggled(self, today: Today) -> Choice {
         match (self.wanted(today), today.season) {

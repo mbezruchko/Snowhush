@@ -1130,6 +1130,148 @@ impl Tree {
     }
 }
 
+/// One bough, bauble, bulb, star, present, arm or spark, as the tree's shaders read it: six groups of four numbers,
+/// whose meaning depends on its kind, which `c[3]` gives: for a bough 0 for a side bough, 1 the trunk, 2 the dark core;
+/// for the rest 0 a bauble, 1 a bulb, 2 a present, 3 the star, 4 Santa's arm, 5 a spark.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[repr(C)]
+pub struct TreePiece {
+    pub a: [f32; 4],
+    pub b: [f32; 4],
+    pub c: [f32; 4],
+    pub d: [f32; 4],
+    pub e: [f32; 4],
+    pub f: [f32; 4],
+}
+
+impl TreePiece {
+    fn new(a: [f32; 4], b: [f32; 4], c: [f32; 4]) -> TreePiece {
+        TreePiece { a, b, c, ..TreePiece::default() }
+    }
+}
+
+/// A garland bulb as the shaders light the tree with it: where it is, its size, and one in front of the tree or zero
+/// behind it; its colour and how bright it is.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[repr(C)]
+pub struct TreeBulb {
+    pub place: [f32; 4],
+    pub color: [f32; 4],
+}
+
+/// What is drawn of the tree, in order: the bulbs behind it, its boughs back to front, then what hangs on it and lies
+/// under it; and the bulbs whose light falls on it all.
+#[derive(Default)]
+pub struct TreeDrawing {
+    pub back: Vec<TreePiece>,
+    pub boughs: Vec<TreePiece>,
+    pub decor: Vec<TreePiece>,
+    pub bulbs: Vec<TreeBulb>,
+}
+
+/// A bough is drawn as a strip of this many segments bent along it: (`BOUGH_SEGMENTS` + 1) × 2 vertices.
+pub const BOUGH_SEGMENTS: usize = 10;
+
+impl Tree {
+    /// The tree as its shaders draw it. The Mac app packs the same in `TreeRenderer`.
+    pub fn drawing(&self) -> TreeDrawing {
+        let mut drawing = TreeDrawing::default();
+        let mut front = Vec::new();
+        for bulb in &self.bulbs {
+            let place = self.bulb_position(bulb);
+            let near = if self.boughs[bulb.bough].depth() > 0.0 { 1.0 } else { 0.0 };
+            let color = [bulb.color[0], bulb.color[1], bulb.color[2], bulb.brightness];
+            drawing.bulbs.push(TreeBulb { place: [place.x, place.y, 1.7, near], color });
+            let piece = TreePiece::new([place.x, place.y, 1.7, near], color, [0.0, 0.0, 0.0, 1.0]);
+            if near > 0.0 {
+                front.push(piece);
+            } else {
+                drawing.back.push(piece);
+            }
+        }
+        for bough in &self.boughs {
+            if bough.trunk || bough.core {
+                let top = (bough.height + bough.reach.y) / TREE_HEIGHT;
+                drawing.boughs.push(TreePiece {
+                    a: [self.base.x, self.base.y + bough.height, bough.reach.x, bough.reach.y],
+                    b: [self.sway * top * top, 0.0, bough.width, -1.0],
+                    c: [0.0, bough.seed, 0.0, if bough.trunk { 1.0 } else { 2.0 }],
+                    d: [bough.up.x, bough.up.y, 0.0, 0.0],
+                    ..TreePiece::default()
+                });
+                continue;
+            }
+            let flat = ((bough.up.y - 0.55) / 0.3).clamp(0.0, 1.0);
+            let full = (bough.capacity / CELL_COUNT as f32).max(0.01);
+            let depths = bough.cells.map(|cell| (cell / full).clamp(0.0, 2.5).sqrt() * (3.8 * flat));
+            let deepest = depths.iter().copied().fold(0.0, f32::max);
+            let root = self.root(bough);
+            drawing.boughs.push(TreePiece {
+                a: [root.x, root.y, bough.reach.x, bough.reach.y],
+                b: [bough.offset.x, bough.offset.y, bough.width, bough.depth()],
+                c: [bough.load(), bough.seed, bough.variant, 0.0],
+                d: [bough.up.x, bough.up.y, deepest, 0.0],
+                e: [depths[0], depths[1], depths[2], depths[3]],
+                f: [depths[4], depths[5], depths[6], depths[7]],
+            });
+        }
+        for bauble in &self.baubles {
+            let ball = self.ball(bauble);
+            let color = [bauble.color[0], bauble.color[1], bauble.color[2], bauble.seed];
+            drawing.decor.insert(0, TreePiece::new([ball.x, ball.y, bauble.radius, 0.0], color, [bauble.pivot.x, bauble.pivot.y, 0.0, 0.0]));
+        }
+        drawing.decor.extend(front);
+        if let Some(leader) = self.boughs.iter().position(|bough| bough.capacity == 0.0 && !bough.trunk && !bough.core) {
+            let tip = self.point(leader, 1.0);
+            let lean = tip - self.point(leader, 0.8);
+            let angle = lean.x.atan2(lean.y);
+            let star = tip + lean.normalized() * 6.0;
+            drawing.decor.push(TreePiece::new([star.x, star.y, 8.5, angle], [self.star_glow, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 3.0]));
+        }
+        for present in &self.presents {
+            drawing.decor.push(TreePiece::new(
+                [self.base.x + present.offset + present.jiggle, present.bottom, present.width, present.height],
+                [present.lid, present.snow / present.width, present.style, present.offset * 0.013],
+                [0.0, 0.0, 0.0, 2.0],
+            ));
+            if present.arm <= 0.01 {
+                continue;
+            }
+            // The arm rises out of the box and bends over toward the hand.
+            let shoulder = self.shoulder(present);
+            let out = present.arm * present.arm * (3.0 - 2.0 * present.arm);
+            let hand = shoulder + (present.hand - shoulder) * out;
+            let length = hand.distance(shoulder);
+            let bend = shoulder + V2::new(0.0, length * 0.55);
+            drawing.decor.push(TreePiece::new(
+                [shoulder.x, shoulder.y, hand.x, hand.y],
+                [bend.x, bend.y, present.grip, present.wave],
+                [present.bottom + present.height, 0.0, 0.0, 4.0],
+            ));
+        }
+        drawing
+    }
+}
+
+/// The fireworks' sparks as the spark shader draws them, each a glowing streak along its flight, `time` seconds in:
+/// a crackling one blinks with it.
+pub fn spark_pieces(sparks: &[super::Spark], time: f32) -> Vec<TreePiece> {
+    let tick = (time * 30.0).floor();
+    sparks
+        .iter()
+        .enumerate()
+        .map(|(k, spark)| {
+            let flicker = ((k as f32 * 12.9898 + tick * 78.233).sin() * 43758.547).fract().abs();
+            let dim = if spark.near >= 0.0 { 0.6 + 0.4 * spark.scale } else { 1.0 };
+            TreePiece::new(
+                [spark.position.x, spark.position.y, spark.velocity.x, spark.velocity.y],
+                [spark.color[0], spark.color[1], spark.color[2], spark.brightness(flicker) * dim],
+                [spark.size, if spark.flash { 1.0 } else { 0.0 }, spark.near, 5.0],
+            )
+        })
+        .collect()
+}
+
 /// Where the cursor touches a bough, if it does: how far along it, and how deep into its needles.
 fn contact(bough: &Bough, root: V2, cursor: V2) -> Option<(f32, f32)> {
     let tip = bough.reach + bough.offset;

@@ -25,6 +25,7 @@ pub struct Settings {
     /// Unix seconds of the first run, or 0 for an install older than the stamp.
     pub installed_at: u32,
     pub halloween: Choice,
+    pub new_year: Choice,
     /// What falls: the kind picked last, or two mixed.
     pub picked: Picked,
     /// Drawn at the display's highest rate all the time, instead of only while something is pushed around.
@@ -61,6 +62,7 @@ impl Settings {
             show_in_screenshots: read("showInScreenshots").is_some_and(|v| v != 0),
             installed_at: stamped.unwrap_or_else(|| if text.is_empty() { now() } else { 0 }),
             halloween: Choice { on: read("halloweenOn").is_some_and(|v| v != 0), skipped: read("halloweenSkipped").unwrap_or(0) },
+            new_year: Choice { on: read("newYearOn").is_some_and(|v| v != 0), skipped: read("newYearSkipped").unwrap_or(0) },
             max_performance: read("performance").is_some_and(|v| v == 1),
             opacity: read("fallingOpacity").map_or(100, |v| v.clamp(10, 100)),
             picked: Picked::load(read("mode"), read("autumn"), read("mixed"), [read("mix0"), read("mix1")]),
@@ -74,7 +76,7 @@ impl Settings {
     pub fn save(&self) {
         let Some(folder) = config_dir() else { return };
         let text = format!(
-            "intensity={}\nsettleGround={}\nsettlePanel={}\nmeltSnow={}\nsnowOnWindows={}\nbehindWindows={}\nshowOverFullScreen={}\nshowInScreenshots={}\ninstalledAt={}\nhalloweenOn={}\nhalloweenSkipped={}\nmode={}\nmixed={}\nmix0={}\nmix1={}\nautumn={}\nperformance={}\nfallingOpacity={}\n",
+            "intensity={}\nsettleGround={}\nsettlePanel={}\nmeltSnow={}\nsnowOnWindows={}\nbehindWindows={}\nshowOverFullScreen={}\nshowInScreenshots={}\ninstalledAt={}\nhalloweenOn={}\nhalloweenSkipped={}\nnewYearOn={}\nnewYearSkipped={}\nmode={}\nmixed={}\nmix0={}\nmix1={}\nautumn={}\nperformance={}\nfallingOpacity={}\n",
             self.intensity,
             self.ground as u32,
             self.panel as u32,
@@ -86,6 +88,8 @@ impl Settings {
             self.installed_at,
             self.halloween.on as u32,
             self.halloween.skipped,
+            self.new_year.on as u32,
+            self.new_year.skipped,
             modes::number(self.picked.mode),
             self.picked.mixed as u32,
             modes::number(self.picked.mix[0]),

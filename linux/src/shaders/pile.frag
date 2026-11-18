@@ -19,6 +19,10 @@ uniform vec4 rim;
 uniform vec4 lantern;
 // The pumpkins' candles: where each burns, how far its light reaches and how bright it is.
 uniform vec4 pumpkins[3];
+// The New Year's garland round the tree's foot, or the fireworks' bursts: where each light is, how far it reaches and
+// how bright it is; and its colour.
+uniform vec4 garland[3];
+uniform vec4 garlandColors[3];
 uniform vec4 occluders[16];
 uniform sampler2D heights;
 // The panel's rectangle, left, bottom, right, top: the snow lying behind it doesn't show.
@@ -75,6 +79,18 @@ vec3 withered(float seed) {
 
 float flicker(float t, float seed) {
     return 0.86 + 0.08 * sin(t * 11.0 + seed * 2.1) + 0.06 * sin(t * 29.0 + 1.3 + seed * 4.3);
+}
+
+/// The New Year's garland's light on the snow round the tree's foot.
+vec3 garlandGlow(vec2 point) {
+    vec3 sum = vec3(0.0);
+    for (int k = 0; k < 3; k++) {
+        vec4 bulb = garland[k];
+        if (bulb.w <= 0.0) continue;
+        vec2 d = point - bulb.xy;
+        sum += garlandColors[k].rgb * (bulb.w * exp(-dot(d, d) / (bulb.z * bulb.z)));
+    }
+    return sum;
 }
 
 /// How much candlelight reaches a point: the cursor's, and the pumpkins' in the snow.
@@ -151,5 +167,6 @@ void main() {
     color *= mix(light.rgb, mix(vec3(1.0), light.rgb, 0.4), leafy);
     color = mix(color, rim.rgb, rim.a * exp(-depth / 2.5) * (1.0 - leafy));
     color = mix(color, candle, candlelight(world) * (0.35 + 0.65 * exp(-depth / 14.0)) * 0.55);
+    color += garlandGlow(world) * (0.35 + 0.65 * exp(-depth / 14.0)) * (1.0 - leafy);
     fragment = vec4(color * coverage, coverage);
 }

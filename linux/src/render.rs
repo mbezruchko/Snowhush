@@ -14,7 +14,7 @@ use wayland_egl::WlEglSurface;
 
 use snowhush_core::geometry::V2;
 use snowhush_core::halloween::{self, PUMPKIN_ASPECT, PUMPKIN_CANDLE, SIGN_CAPTIONS};
-use snowhush_core::simulation::{COLUMN_WIDTH, PumpkinSprite, SnowSimulation, Sprite};
+use snowhush_core::simulation::{BOUGH_SEGMENTS, COLUMN_WIDTH, PumpkinSprite, SnowSimulation, Sprite, TREE_HEIGHT, TreePiece, spark_pieces};
 
 const SPRITE_VERTEX: &str = include_str!("shaders/sprite.vert");
 const SPRITE_FRAGMENT: &str = include_str!("shaders/sprite.frag");
@@ -31,6 +31,21 @@ const GLASS_FRAGMENT: &str = include_str!("shaders/glass.frag");
 const DROP: &str = include_str!("shaders/drop.glsl");
 const LEAVES: &str = include_str!("shaders/leaves.glsl");
 const LITTER: &str = include_str!("shaders/litter.glsl");
+const TREE: &str = include_str!("shaders/tree.glsl");
+const BOUGH_VERTEX: &str = include_str!("shaders/bough.vert");
+const BOUGH_FRAGMENT: &str = include_str!("shaders/bough.frag");
+const DECOR_VERTEX: &str = include_str!("shaders/decor.vert");
+const DECOR_FRAGMENT: &str = include_str!("shaders/decor.frag");
+const SPARK_VERTEX: &str = include_str!("shaders/spark.vert");
+const SPARK_FRAGMENT: &str = include_str!("shaders/spark.frag");
+/// The New Year fir's three bough pictures, drawn once on the Mac, its root at the left and its upper side at the top.
+const NEEDLES: [&[u8]; 3] = [
+    include_bytes!("../../windows/assets/tree/needles-0.png"),
+    include_bytes!("../../windows/assets/tree/needles-1.png"),
+    include_bytes!("../../windows/assets/tree/needles-2.png"),
+];
+/// What the tree's two programs are given.
+const TREE_UNIFORMS: [&str; 9] = ["viewSize", "shake", "time", "light", "shadowTint", "bulbCount", "bulbs", "panel", "needles"];
 /// A quad over the whole surface, drawn with a blend that leaves what is there at the given opacity.
 const FADE_VERTEX: &str = "#version 300 es
 void main() {
@@ -100,6 +115,10 @@ pub struct Gpu {
     pile: Program,
     sign: Program,
     pumpkin: Program,
+    /// The New Year's fir: its boughs, what hangs on it and lies under it, and the fireworks' sparks.
+    bough: Program,
+    decor: Program,
+    spark: Program,
     fade: Program,
     /// Drops on the glass: their bumps added up into a field, and the glass drawn from it.
     field: Program,
@@ -111,6 +130,11 @@ pub struct Gpu {
     sprite_buffer: glow::Buffer,
     /// Holds no attributes: the corners of the piles, the signs and the pumpkins come from the vertex index alone.
     empty_array: glow::VertexArray,
+    /// The tree's pieces and the sparks, one `TreePiece` an instance.
+    tree_array: glow::VertexArray,
+    tree_buffer: glow::Buffer,
+    /// The bough pictures, made the first time the tree is drawn.
+    needles: Option<glow::Texture>,
     heights: glow::Texture,
     /// Rows the height texture has room for; it is only made again when that changes.
     height_rows: usize,
@@ -170,7 +194,11 @@ impl Gpu {
         unsafe {
             let adapter = gl.get_parameter_string(glow::RENDERER);
             let included = |source: &str| {
-                source.replace("#include \"drop.glsl\"", DROP).replace("#include \"leaves.glsl\"", LEAVES).replace("#include \"litter.glsl\"", LITTER)
+                source
+                    .replace("#include \"drop.glsl\"", DROP)
+                    .replace("#include \"leaves.glsl\"", LEAVES)
+                    .replace("#include \"litter.glsl\"", LITTER)
+                    .replace("#include \"tree.glsl\"", TREE)
             };
             let sprite = program(
                 &gl,
@@ -222,6 +250,8 @@ impl Gpu {
                     "rim",
                     "lantern",
                     "pumpkins",
+                    "garland",
+                    "garlandColors",
                     "shake",
                     "occluders",
                     "heights",
@@ -244,6 +274,9 @@ impl Gpu {
             )?;
 
             let fade = program(&gl, FADE_VERTEX, FADE_FRAGMENT, &[])?;
+            let bough = program(&gl, BOUGH_VERTEX, &included(BOUGH_FRAGMENT), &TREE_UNIFORMS)?;
+            let decor = program(&gl, DECOR_VERTEX, &included(DECOR_FRAGMENT), &TREE_UNIFORMS)?;
+            let spark = program(&gl, SPARK_VERTEX, SPARK_FRAGMENT, &["viewSize", "shake", "covers", "coverCount", "panel"])?;
 
             let sprite_array = gl.create_vertex_array()?;
             let sprite_buffer = gl.create_buffer()?;
@@ -275,6 +308,15 @@ impl Gpu {
                 gl.vertex_attrib_divisor(location, 1);
             }
             let empty_array = gl.create_vertex_array()?;
+            let tree_array = gl.create_vertex_array()?;
+            let tree_buffer = gl.create_buffer()?;
+            gl.bind_vertex_array(Some(tree_array));
+            gl.bind_buffer(glow::ARRAY_BUFFER, Some(tree_buffer));
+            for location in 0..6 {
+                gl.enable_vertex_attrib_array(location);
+                gl.vertex_attrib_pointer_f32(location, 4, glow::FLOAT, false, size_of::<TreePiece>() as i32, location as i32 * 16);
+                gl.vertex_attrib_divisor(location, 1);
+            }
             gl.bind_vertex_array(None);
 
             let heights = gl.create_texture()?;
@@ -299,6 +341,9 @@ impl Gpu {
                 pile,
                 sign,
                 pumpkin,
+                bough,
+                decor,
+                spark,
                 fade,
                 field,
                 glass,
@@ -306,6 +351,9 @@ impl Gpu {
                 sprite_array,
                 sprite_buffer,
                 empty_array,
+                tree_array,
+                tree_buffer,
+                needles: None,
                 heights,
                 height_rows: 0,
                 sprites: Vec::new(),
@@ -381,6 +429,13 @@ impl Gpu {
         if !pumpkins.is_empty() {
             self.load_pumpkin();
         }
+        let tree = simulation.tree().filter(|tree| tree.base.y > -TREE_HEIGHT - 30.0);
+        if tree.is_some() {
+            self.load_needles();
+        }
+        let lights = simulation.tree_lights();
+        let garland: Vec<f32> = lights.iter().flat_map(|(light, _)| *light).collect();
+        let garland_colors: Vec<f32> = lights.iter().flat_map(|(_, color)| [color[0], color[1], color[2], 0.0]).collect();
 
         let gl = &self.gl;
         let view = [simulation.width(), simulation.height()];
@@ -408,6 +463,63 @@ impl Gpu {
             gl.clear(glow::COLOR_BUFFER_BIT);
             gl.enable(glow::BLEND);
             gl.blend_func_separate(glow::ONE, glow::ONE_MINUS_SRC_ALPHA, glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
+
+            // The fireworks, far off in the sky behind the tree and the snow, and behind the windows.
+            if let Some(fireworks) = simulation.fireworks()
+                && !fireworks.sparks.is_empty()
+            {
+                let pieces = spark_pieces(&fireworks.sparks, time);
+                let covers: Vec<f32> = simulation.covers.iter().take(32).flatten().copied().collect();
+                let spark = &self.spark;
+                gl.use_program(Some(spark.program));
+                gl.bind_vertex_array(Some(self.tree_array));
+                gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.tree_buffer));
+                gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes(&pieces), glow::STREAM_DRAW);
+                gl.uniform_2_f32_slice(spark.location("viewSize"), &view);
+                gl.uniform_2_f32_slice(spark.location("shake"), &shake);
+                gl.uniform_4_f32_slice(spark.location("panel"), &panel);
+                gl.uniform_1_i32(spark.location("coverCount"), (covers.len() / 4) as i32);
+                if !covers.is_empty() {
+                    gl.uniform_4_f32_slice(spark.location("covers"), &covers);
+                }
+                gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, 4, pieces.len() as i32);
+            }
+            // The New Year's fir under the snow, the drift round its foot covering the presents' bottoms: the bulbs
+            // behind it, its boughs back to front, then what hangs on it and lies under it.
+            if let Some(tree) = tree
+                && let Some(needles) = self.needles
+            {
+                let drawing = tree.drawing();
+                let bulbs: Vec<f32> = drawing.bulbs.iter().flat_map(|bulb| bulb.place.into_iter().chain(bulb.color)).collect();
+                gl.active_texture(glow::TEXTURE0);
+                gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(needles));
+                gl.bind_vertex_array(Some(self.tree_array));
+                gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.tree_buffer));
+                for (program, pieces, vertices) in [
+                    (&self.decor, &drawing.back, 4),
+                    (&self.bough, &drawing.boughs, (BOUGH_SEGMENTS as i32 + 1) * 2),
+                    (&self.decor, &drawing.decor, 4),
+                ] {
+                    if pieces.is_empty() {
+                        continue;
+                    }
+                    gl.use_program(Some(program.program));
+                    gl.uniform_2_f32_slice(program.location("viewSize"), &view);
+                    gl.uniform_2_f32_slice(program.location("shake"), &shake);
+                    gl.uniform_1_f32(program.location("time"), time);
+                    gl.uniform_4_f32_slice(program.location("light"), &light);
+                    gl.uniform_4_f32_slice(program.location("shadowTint"), &shadow_tint);
+                    gl.uniform_4_f32_slice(program.location("panel"), &panel);
+                    gl.uniform_1_i32(program.location("bulbCount"), drawing.bulbs.len().min(46) as i32);
+                    if !bulbs.is_empty() {
+                        gl.uniform_4_f32_slice(program.location("bulbs"), &bulbs[..bulbs.len().min(46 * 8)]);
+                    }
+                    gl.uniform_1_i32(program.location("needles"), 0);
+                    gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes(pieces), glow::STREAM_DRAW);
+                    gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, vertices, pieces.len() as i32);
+                }
+                gl.bind_texture(glow::TEXTURE_2D_ARRAY, None);
+            }
 
             // The pumpkins go down before the snow, so the drift they sit in covers their bottoms.
             if !pumpkins.is_empty()
@@ -459,6 +571,8 @@ impl Gpu {
                 gl.uniform_4_f32_slice(pile.location("rim"), &rim);
                 gl.uniform_4_f32_slice(pile.location("lantern"), &lantern);
                 gl.uniform_4_f32_slice(pile.location("pumpkins"), candles);
+                gl.uniform_4_f32_slice(pile.location("garland"), &garland);
+                gl.uniform_4_f32_slice(pile.location("garlandColors"), &garland_colors);
                 gl.uniform_2_f32_slice(pile.location("shake"), &shake);
                 gl.uniform_1_i32(pile.location("heights"), 0);
                 gl.uniform_4_f32_slice(pile.location("panel"), &panel);
@@ -634,6 +748,58 @@ impl Gpu {
         }
     }
 
+    /// The fir's bough pictures as one array texture the first time the tree is drawn, mipmapped: the boughs are shown
+    /// at a fraction of their size, and would shimmer otherwise.
+    fn load_needles(&mut self) {
+        if self.needles.is_some() {
+            return;
+        }
+        let mut pixels = Vec::new();
+        let mut size = (0, 0);
+        for png in NEEDLES {
+            let Ok(picture) = image::load_from_memory(png) else { return };
+            let picture = picture.to_rgba8();
+            size = picture.dimensions();
+            let mut layer = picture.into_raw();
+            for pixel in layer.chunks_exact_mut(4) {
+                let alpha = pixel[3] as u32;
+                for channel in &mut pixel[..3] {
+                    *channel = ((*channel as u32 * alpha + 127) / 255) as u8;
+                }
+            }
+            pixels.extend(layer);
+        }
+        let gl = &self.gl;
+        unsafe {
+            let Ok(texture) = gl.create_texture() else { return };
+            gl.active_texture(glow::TEXTURE0);
+            gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(texture));
+            for (parameter, value) in [
+                (glow::TEXTURE_MIN_FILTER, glow::LINEAR_MIPMAP_LINEAR),
+                (glow::TEXTURE_MAG_FILTER, glow::LINEAR),
+                (glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE),
+                (glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE),
+            ] {
+                gl.tex_parameter_i32(glow::TEXTURE_2D_ARRAY, parameter, value as i32);
+            }
+            gl.tex_image_3d(
+                glow::TEXTURE_2D_ARRAY,
+                0,
+                glow::RGBA8 as i32,
+                size.0 as i32,
+                size.1 as i32,
+                NEEDLES.len() as i32,
+                0,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelUnpackData::Slice(Some(&pixels)),
+            );
+            gl.generate_mipmap(glow::TEXTURE_2D_ARRAY);
+            gl.bind_texture(glow::TEXTURE_2D_ARRAY, None);
+            self.needles = Some(texture);
+        }
+    }
+
     /// A PNG as a texture, with its colours premultiplied as the blending wants, and its size in pixels.
     fn picture(&self, png: &[u8], mipmapped: bool) -> Option<(glow::Texture, [u32; 2])> {
         let picture = image::load_from_memory(png).ok()?.to_rgba8();
@@ -684,12 +850,19 @@ impl Drop for Gpu {
         if self.egl.make_current(self.display, None, None, Some(self.context)).is_ok() {
             let gl = &self.gl;
             unsafe {
-                for program in [&self.sprite, &self.pile, &self.sign, &self.pumpkin, &self.fade, &self.field, &self.glass] {
+                for program in
+                    [&self.sprite, &self.pile, &self.sign, &self.pumpkin, &self.bough, &self.decor, &self.spark, &self.fade, &self.field, &self.glass]
+                {
                     gl.delete_program(program.program);
                 }
                 gl.delete_vertex_array(self.sprite_array);
                 gl.delete_vertex_array(self.empty_array);
+                gl.delete_vertex_array(self.tree_array);
                 gl.delete_buffer(self.sprite_buffer);
+                gl.delete_buffer(self.tree_buffer);
+                if let Some(needles) = self.needles {
+                    gl.delete_texture(needles);
+                }
                 gl.delete_texture(self.heights);
                 for texture in self.signs.iter().flatten().map(|(texture, _)| *texture).chain(self.pumpkin_pictures.iter().flatten().copied()) {
                     gl.delete_texture(texture);
