@@ -52,12 +52,14 @@ pub struct Tray {
     pub new_year_today: Today,
     /// Whether the desktop is light, so the panel wants a black glyph: the snow loop keeps it up to date.
     pub light: bool,
+    /// The snowball fight's room as the menu shows it: what is going on, whether hosting it, and whether in one at all.
+    pub fight: (Option<String>, bool, bool),
 }
 
 impl Tray {
     pub fn new(settings: Settings, commands: Sender<Command>) -> Tray {
         let glyphs = GLYPHS.map(|colors| colors.map(|pictures| icons(&pictures)));
-        Tray { settings, commands, glyphs, today: Today::default(), new_year_today: Today::default(), light: false }
+        Tray { settings, commands, glyphs, today: Today::default(), new_year_today: Today::default(), light: false, fight: (None, false, false) }
     }
 
     fn holiday(&self) -> Option<Holiday> {
@@ -316,6 +318,46 @@ impl ksni::Tray for Tray {
             .into(),
             SubMenu { label: tr("accumulate").into(), submenu: surfaces, ..Default::default() }.into(),
             SubMenu { label: tr("mode").into(), submenu: kinds, ..Default::default() }.into(),
+            SubMenu {
+                label: tr("fight").into(),
+                visible: settings.fights(),
+                submenu: vec![
+                    StandardItem {
+                        label: self.fight.0.clone().unwrap_or_default(),
+                        enabled: false,
+                        visible: self.fight.0.is_some(),
+                        ..Default::default()
+                    }
+                    .into(),
+                    StandardItem {
+                        label: tr(if self.fight.1 { "fight.copy" } else { "fight.invite" }).into(),
+                        activate: Box::new(|tray: &mut Tray| {
+                            let _ = tray.commands.send(Command::FightInvite);
+                        }),
+                        ..Default::default()
+                    }
+                    .into(),
+                    StandardItem {
+                        label: tr("fight.join").into(),
+                        activate: Box::new(|tray: &mut Tray| {
+                            let _ = tray.commands.send(Command::FightJoin);
+                        }),
+                        ..Default::default()
+                    }
+                    .into(),
+                    StandardItem {
+                        label: tr("fight.leave").into(),
+                        visible: self.fight.2,
+                        activate: Box::new(|tray: &mut Tray| {
+                            let _ = tray.commands.send(Command::FightLeave);
+                        }),
+                        ..Default::default()
+                    }
+                    .into(),
+                ],
+                ..Default::default()
+            }
+            .into(),
             StandardItem {
                 label: text::kinds("clear", &heaps).into(),
                 visible: lies,

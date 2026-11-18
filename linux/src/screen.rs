@@ -618,6 +618,18 @@ impl Screen {
         }
     }
 
+    /// Someone in the room hit someone: the snowmen in this display's wallpaper show it.
+    pub fn thrown(&mut self, from: &str, at: &str, me: &str) {
+        if let Some(picture) = &mut self.picture {
+            picture.thrown(from, at, me, &mut self.simulation);
+        }
+    }
+
+    /// The friends this player hit in this display's wallpaper since this was last asked.
+    pub fn take_hits(&mut self) -> Vec<String> {
+        self.picture.as_mut().map(crate::picture::PictureSnow::take_hits).unwrap_or_default()
+    }
+
     /// A click on the wallpaper's layer, at `point` in its points: a snowball for the snowman there.
     pub fn click_picture(&mut self, surface: &wayland_client::protocol::wl_surface::WlSurface, point: (f64, f64), now: Instant) -> bool {
         match &mut self.picture {

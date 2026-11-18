@@ -21,6 +21,7 @@ use snowhush_core::simulation::{Borrowed, Mapping, Mode, ScatterPiece, SnowSimul
 
 use crate::clicks;
 use crate::desktop::{self, DesktopLayer};
+use crate::fight;
 use crate::halloween;
 use crate::light::{Sky, Wallpapers};
 use crate::log;
@@ -58,6 +59,10 @@ pub enum Command {
     ShowInScreenshots(bool),
     /// The snow settles on a selection dragged across the desktop too.
     Selection(bool),
+    /// The snowball fight's room: open one, or copy its link again; join the one on the clipboard; leave it.
+    FightInvite,
+    FightJoin,
+    FightLeave,
     /// Accumulate's Wallpaper, and Deep Interaction: the snow lying in the wallpaper's picture, and the flakes falling
     /// into its depth.
     Wallpaper(bool),
@@ -140,6 +145,8 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
     let mut picture_layer: Option<DesktopLayer> = None;
     // The snowball fight's room, while this player is in one.
     let mut room = snowhush_core::snowman::room::Room::default();
+    let mut opening: Option<fight::Opening> = None;
+    let mut room_shown = 0;
     let mut chores_at = 0;
     let mut light_at = 0;
     let mut displays_changed_at = None;
@@ -215,6 +222,19 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                     settings.depth = on;
                     screens.iter_mut().for_each(|screen| screen.simulation.picture_depth = on);
                     pictures_at = 0;
+                }
+                Command::FightInvite => match &room.invite {
+                    Some(invite) => fight::copy(&snowhush_core::snowman::room::link(invite)),
+                    None => opening = Some(fight::open(&mut room, None)),
+                },
+                Command::FightJoin => {
+                    if let Some(text) = fight::pasted().filter(|text| snowhush_core::snowman::room::holds_invite(text)) {
+                        opening = Some(fight::open(&mut room, Some(text)));
+                    }
+                }
+                Command::FightLeave => {
+                    opening = None;
+                    fight::leave(&mut room);
                 }
                 Command::Selection(on) => {
                     settings.selection = on;
@@ -498,8 +518,28 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
             pass_snow(&mut screens, &tracker, now);
             let seconds = clock.seconds(now - started);
             let fighting = settings.fights();
+            // The room: going on opening it once the site has answered, what the network said, the throws others made.
+            if let Some(waiting) = &opening
+                && fight::go_on(waiting, &mut room)
+            {
+                opening = None;
+            }
+            let me = room.me().map(str::to_string);
+            for (from, at) in fight::listen(&mut room, seconds) {
+                if let Some(me) = &me {
+                    screens.iter_mut().for_each(|screen| screen.thrown(&from, &at, me));
+                }
+            }
+            room.tick(seconds);
+            if room.version != room_shown {
+                room_shown = room.version;
+                fight::show(&room);
+            }
             for screen in &mut screens {
                 screen.tick_picture(&gpu, settings.wallpaper, fighting, &mut room, seconds);
+                for hit in screen.take_hits() {
+                    snowhush_net::play::throw(&hit);
+                }
             }
             for point in clicks::take() {
                 for screen in &mut screens {

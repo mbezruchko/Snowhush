@@ -224,7 +224,7 @@ impl Drop for Handle {
 }
 
 /// The whole of a file served over HTTPS.
-fn download(host: &str, path: &str) -> Result<Vec<u8>, String> {
+pub fn download(host: &str, path: &str) -> Result<Vec<u8>, String> {
     let failed = |what: &str| format!("{what} failed: {}", windows::core::Error::from_thread().message());
     let host: Vec<u16> = host.encode_utf16().chain([0]).collect();
     let path: Vec<u16> = path.encode_utf16().chain([0]).collect();

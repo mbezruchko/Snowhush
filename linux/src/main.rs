@@ -1,4 +1,5 @@
 mod chores;
+mod fight;
 mod hyprland;
 mod kwin;
 mod light;

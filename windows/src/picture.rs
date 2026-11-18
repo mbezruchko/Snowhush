@@ -253,6 +253,18 @@ impl PictureSnow {
         true
     }
 
+    /// Someone in the room hit someone, `me` being this player: the snowmen show it.
+    pub fn thrown(&mut self, from: &str, at: &str, me: &str, simulation: &mut SnowSimulation) {
+        if let Some(fight) = &mut self.fight {
+            fight.thrown(from, at, me, simulation);
+        }
+    }
+
+    /// The friends this player hit since this was last asked.
+    pub fn take_hits(&mut self) -> Vec<String> {
+        self.fight.as_mut().map(Fight::take_hits).unwrap_or_default()
+    }
+
     /// Whether a snowball fight is on in this display's picture.
     pub fn fighting(&self) -> bool {
         self.fight.is_some()

@@ -66,6 +66,9 @@ const ID_MIXED: u32 = 219;
 const ID_GROUND: u32 = 220;
 const ID_WALLPAPER: u32 = 223;
 const ID_SELECTION: u32 = 224;
+const ID_FIGHT_INVITE: u32 = 225;
+const ID_FIGHT_JOIN: u32 = 226;
+const ID_FIGHT_LEAVE: u32 = 227;
 const ID_OPACITY_FOLD: u32 = 221;
 /// Opacity from 10% up in steps of 5%: `ID_OPACITY` + the step.
 const ID_OPACITY: u32 = 400;
@@ -465,6 +468,19 @@ fn entries(settings: &Settings, login: bool, sliders: bool) -> Vec<Entry> {
     };
     entries.extend(accumulate(settings, !heaps.is_empty(), sliders));
     entries.push(Entry::Submenu { label: tr("mode").to_string(), entries: modes });
+    if settings.fights() {
+        let (status, hosting, inside) = crate::fight::shown();
+        let mut fighting = Vec::new();
+        if let Some(status) = status {
+            fighting.push(Entry::item(0, &status, false, false));
+        }
+        fighting.push(Entry::item(ID_FIGHT_INVITE, tr(if hosting { "fight.copy" } else { "fight.invite" }), false, true));
+        fighting.push(Entry::item(ID_FIGHT_JOIN, tr("fight.join"), false, true));
+        if inside {
+            fighting.push(Entry::item(ID_FIGHT_LEAVE, tr("fight.leave"), false, true));
+        }
+        entries.push(Entry::Submenu { label: tr("fight").to_string(), entries: fighting });
+    }
     if !heaps.is_empty() {
         entries.push(Entry::item(ID_CLEAR, text::kinds("clear", &heaps), false, true));
     }
@@ -662,6 +678,9 @@ fn choose(window: HWND, chosen: u32, login: bool) {
                     settings.selection = !settings.selection;
                     Command::Selection(settings.selection)
                 }
+                ID_FIGHT_INVITE => Command::FightInvite,
+                ID_FIGHT_JOIN => Command::FightJoin,
+                ID_FIGHT_LEAVE => Command::FightLeave,
                 ID_MAX_PERFORMANCE => {
                     settings.max_performance = !settings.max_performance;
                     Command::Performance(settings.max_performance)

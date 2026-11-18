@@ -531,6 +531,21 @@ impl Screen {
         }
     }
 
+    /// Someone in the room hit someone: the snowmen in this display's wallpaper show it, on the main display alone.
+    pub fn thrown(&mut self, from: &str, at: &str, me: &str) {
+        if self.monitor.bounds.left == 0
+            && self.monitor.bounds.top == 0
+            && let Some(picture) = &mut self.picture
+        {
+            picture.thrown(from, at, me, &mut self.simulation);
+        }
+    }
+
+    /// The friends this player hit in this display's wallpaper since this was last asked.
+    pub fn take_hits(&mut self) -> Vec<String> {
+        self.picture.as_mut().map(PictureSnow::take_hits).unwrap_or_default()
+    }
+
     /// Whether snowmen walk this display's wallpaper.
     pub fn fighting(&self) -> bool {
         self.picture.as_ref().is_some_and(PictureSnow::fighting)

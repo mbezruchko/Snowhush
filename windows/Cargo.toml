@@ -19,8 +19,10 @@ path = "src/bin/setup.rs"
 required-features = ["setup"]
 
 [dependencies]
+serde_json = "1"
 snowhush-core = { path = "../core" }
 snowhush-depth = { path = "../depth" }
+snowhush-net = { path = "../net" }
 
 [target.'cfg(windows)'.dependencies]
 windows-numerics = "0.3"
@@ -45,9 +47,13 @@ features = [
     "Win32_Graphics_Imaging",
     "Win32_Networking_WinHttp",
     "Win32_Security",
+    "Win32_Security_Authentication_Identity",
     "Win32_Storage_Packaging_Appx",
     "Win32_System_Com",
+    "Win32_System_DataExchange",
     "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
     "Win32_System_Performance",
     "Win32_System_Power",
     "Win32_System_Registry",

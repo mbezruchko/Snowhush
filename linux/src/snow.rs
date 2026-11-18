@@ -28,6 +28,7 @@ use snowhush_core::new_year::{self, Holiday};
 use snowhush_core::simulation::{Borrowed, Mapping, Mode, SnowSimulation, Stray, WindowId};
 
 use crate::chores;
+use crate::fight;
 use crate::kwin;
 use crate::light::{self, Shade, daylight};
 use crate::log;
@@ -66,6 +67,10 @@ pub enum Command {
     Locked(bool),
     /// Blows all the snow away; when calm, for less motion, melts it where it lies instead.
     ClearSnow(bool),
+    /// The snowball fight's room: open one, or copy its link again; join the one on the clipboard; leave it.
+    FightInvite,
+    FightJoin,
+    FightLeave,
     /// Other kinds fall, once what lies is cleared away as `ClearSnow` clears it; a kind only joining what falls
     /// starts at once.
     Mode {
@@ -83,8 +88,11 @@ pub enum Command {
 pub struct App {
     registry: RegistryState,
     outputs: OutputState,
-    /// The snowball fight's room, while this player is in one.
+    /// The snowball fight's room, while this player is in one; the one being opened or joined; and the room as the tray
+    /// last showed it.
     room: snowhush_core::snowman::room::Room,
+    opening: Option<fight::Opening>,
+    room_shown: u64,
     /// The seats' pointers, for clicks on the snowmen in the wallpaper.
     seat: SeatState,
     pointers: Vec<wayland_client::protocol::wl_pointer::WlPointer>,
@@ -177,6 +185,8 @@ pub fn run() -> Result<(), String> {
         outputs: OutputState::new(&globals, &qh),
         seat: SeatState::new(&globals, &qh),
         room: Default::default(),
+        opening: None,
+        room_shown: 0,
         pointers: Vec::new(),
         compositor,
         layer_shell,
@@ -368,6 +378,19 @@ impl App {
                 self.settings.new_year = new_year;
                 self.update_light();
             }
+            Command::FightInvite => match &self.room.invite {
+                Some(invite) => fight::copy(&snowhush_core::snowman::room::link(invite)),
+                None => self.opening = Some(fight::open(&mut self.room, None)),
+            },
+            Command::FightJoin => {
+                if let Some(text) = fight::pasted().filter(|text| snowhush_core::snowman::room::holds_invite(text)) {
+                    self.opening = Some(fight::open(&mut self.room, Some(text)));
+                }
+            }
+            Command::FightLeave => {
+                self.opening = None;
+                fight::leave(&mut self.room);
+            }
             Command::ClearSnow(calm) => {
                 let direction = self.screens.first().map_or(-1.0, |screen| screen.simulation.breeze_direction());
                 self.screens.iter_mut().for_each(|screen| screen.simulation.blow_away(direction, calm));
@@ -513,8 +536,12 @@ impl App {
             }
         }
         let (frost, fighting) = (self.settings.wallpaper, self.settings.fights());
+        self.play(now);
         for (index, screen) in self.screens.iter_mut().enumerate() {
             screen.tick_picture(&mut self.gpu, &self.compositor, frost, fighting, &mut self.room, index == 0, now);
+            for hit in screen.take_hits() {
+                snowhush_net::play::throw(&hit);
+            }
         }
         self.keep_picture(now);
         if gpu_lost {
@@ -773,6 +800,32 @@ fn window_list(report: &Report) -> String {
 }
 
 impl App {
+    /// Plays in the snowball fight's room: goes on opening it once the site has answered, hands the room what the network
+    /// said, has the snowmen show the throws others made, and shows the room in the tray as it changes.
+    fn play(&mut self, now: Instant) {
+        let seconds = (now - self.started).as_secs_f64();
+        if let Some(opening) = &self.opening
+            && fight::go_on(opening, &mut self.room)
+        {
+            self.opening = None;
+        }
+        let me = self.room.me().map(str::to_string);
+        for (from, at) in fight::listen(&mut self.room, seconds) {
+            if let (Some(me), Some(screen)) = (&me, self.screens.first_mut()) {
+                screen.thrown(&from, &at, me);
+            }
+        }
+        self.room.tick(seconds);
+        if self.room.version != self.room_shown {
+            self.room_shown = self.room.version;
+            let (status, hosting, inside) =
+                (fight::status(&self.room), self.room.invite.is_some(), self.room.state != snowhush_core::snowman::room::State::None);
+            if let Some(tray) = &self.tray {
+                tray.update(|tray| tray.fight = (status, hosting, inside));
+            }
+        }
+    }
+
     /// Keeps how much snow lies in the wallpaper for the next run, now and then while it changes.
     fn keep_picture(&mut self, now: Instant) {
         if now - self.picture_kept_at < Duration::from_secs(60) {
