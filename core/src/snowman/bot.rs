@@ -97,7 +97,7 @@ impl Whim {
         Whim(seed | 1)
     }
 
-    pub fn next(&mut self) -> f32 {
+    pub fn fraction(&mut self) -> f32 {
         self.0 ^= self.0 << 13;
         self.0 ^= self.0 >> 7;
         self.0 ^= self.0 << 17;
@@ -105,11 +105,11 @@ impl Whim {
     }
 
     pub fn range(&mut self, low: f32, high: f32) -> f32 {
-        low + (high - low) * self.next()
+        low + (high - low) * self.fraction()
     }
 
     pub fn below(&mut self, count: usize) -> usize {
-        ((self.next() * count as f32) as usize).min(count.saturating_sub(1))
+        ((self.fraction() * count as f32) as usize).min(count.saturating_sub(1))
     }
 }
 
@@ -478,7 +478,7 @@ impl Bot {
                 self.rest_until = now + self.whim.range(1.5, 5.0) as f64;
             }
         } else {
-            self.foot = self.foot + way * (speed * dt / distance);
+            self.foot += way * (speed * dt / distance);
         }
         // He waddles: rocks from side to side and bobs with each step.
         self.stride += dt * 9.0;
@@ -510,7 +510,7 @@ impl Bot {
         // where it is; all to one side.
         let h = self.height();
         let (body, arm, hat) = self.placements();
-        let side = if self.whim.next() < 0.5 { 1.0 } else { -1.0 };
+        let side = if self.whim.fraction() < 0.5 { 1.0 } else { -1.0 };
         let whim = &mut self.whim;
         let mut spread = || whim.range(0.8, 1.2);
         let angle = self.lean * self.facing;
@@ -561,7 +561,7 @@ impl Bot {
             let floor = foot.y + radius * h * 0.85;
             if !piece.resting {
                 piece.velocity.y -= 5.0 * h * dt;
-                piece.center = piece.center + piece.velocity * dt;
+                piece.center += piece.velocity * dt;
                 piece.angle += piece.spin * dt;
                 if piece.center.y < floor && piece.velocity.y < 0.0 {
                     piece.center.y = floor;
@@ -683,7 +683,7 @@ impl Bot {
             }
             Hat::Flying { mut position, mut velocity, mut turn, spin } => {
                 velocity.y -= 5.5 * h * dt;
-                position = position + velocity * dt;
+                position += velocity * dt;
                 turn += spin * dt;
                 let floor = self.foot.y + 0.01 * h;
                 if position.y <= floor && velocity.y < 0.0 {
