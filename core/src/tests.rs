@@ -1618,28 +1618,54 @@ fn a_bot_hit_six_times_is_out_and_comes_back() {
     let ground = Ground::strip(&scene, screen, 60.0);
     let mut simulation = SnowSimulation::new(screen.x, screen.y, 0.0);
     let mut fight = Fight::new(ground, 0.0, 11).expect("a fight");
+    let mut room = crate::snowman::room::Room::default();
     let mut now = 0.0;
-    let tick = |fight: &mut Fight, simulation: &mut SnowSimulation, now: &mut f64, seconds: f32| {
+    let tick = |fight: &mut Fight, simulation: &mut SnowSimulation, room: &mut crate::snowman::room::Room, now: &mut f64, seconds: f32| {
         for _ in 0..(seconds / DT) as usize {
             *now += DT as f64;
             simulation.step(DT, V2::new(-100.0, -100.0));
-            fight.step(*now, simulation, V2::ZERO, &[], true);
+            fight.step(*now, simulation, V2::ZERO, &[], true, room);
         }
     };
-    tick(&mut fight, &mut simulation, &mut now, 2.0);
-    let parts = fight.drawings()[0].parts.len();
+    tick(&mut fight, &mut simulation, &mut room, &mut now, 2.0);
+    let parts = fight.drawings(&room)[0].parts.len();
     assert_eq!(parts, 3, "a whole snowman is a body, an arm and a hat");
     // Aimed at his middle every four seconds, after a rest, the throws don't stray; one at him walking may miss.
     while fight.bot_lives() > 0 && fight.throws < 40 {
-        let drawing = &fight.drawings()[0];
+        let drawing = &fight.drawings(&room)[0];
         let middle = V2::new((drawing.reach[0] + drawing.reach[2]) / 2.0, drawing.reach[1] + (drawing.reach[3] - drawing.reach[1]) * 0.47);
         let near = fight.aim_near(middle, 0.9);
         fight.throw_ball(middle, near, now, &mut simulation, V2::ZERO);
-        tick(&mut fight, &mut simulation, &mut now, 4.0);
+        tick(&mut fight, &mut simulation, &mut room, &mut now, 4.0);
     }
     assert_eq!(fight.bot_lives(), 0, "forty snowballs at his middle didn't put him out");
-    tick(&mut fight, &mut simulation, &mut now, 6.0);
+    tick(&mut fight, &mut simulation, &mut room, &mut now, 6.0);
     assert_eq!(fight.bot_lives(), 6);
-    assert_eq!(fight.drawings()[0].parts.len(), 3, "the bot didn't come back whole");
+    assert_eq!(fight.drawings(&room)[0].parts.len(), 3, "the bot didn't come back whole");
     assert_finite(&simulation);
+}
+
+#[test]
+fn a_room_counts_hits_to_a_round_won_and_starts_another() {
+    use crate::snowman::room::{Heard, Room, STARTING_LIVES, State};
+    let mut room = Room::default();
+    room.opening(false);
+    assert_eq!(room.state, State::Opening);
+    room.take(Heard::Room { ticket: "t".into(), me: "me".into() }, 0.0);
+    room.take(Heard::Player { id: "ann".into(), name: "Ann".into() }, 0.0);
+    assert_eq!(room.me(), Some("me"));
+    assert_eq!(room.hearts("ann"), 5);
+    // Ann's throws at this player come back as heard; this player's own are counted as made.
+    assert_eq!(room.take(Heard::Throw { from: "ann".into(), at: "me".into() }, 1.0), Some(("ann".into(), "me".into())));
+    assert_eq!(room.lives("me"), STARTING_LIVES - 1);
+    for k in 0..STARTING_LIVES {
+        assert!(room.hit("ann", 2.0 + k as f64), "hit {k} didn't count");
+    }
+    assert_eq!(room.winner.as_deref(), Some("me"));
+    assert_eq!(room.wins("me"), 1);
+    assert!(!room.hit("ann", 3.0), "a hit counted after the round was won");
+    room.tick(30.0);
+    assert!(room.winner.is_none() && room.lives("ann") == STARTING_LIVES);
+    room.take(Heard::Closed { full: true }, 31.0);
+    assert!(matches!(room.state, State::Failed(_)) && room.players.is_empty());
 }
