@@ -2,9 +2,11 @@
 //! the Mac's Snowman.swift has them. Sizes and places are in parts of a snowman's height, from his feet.
 
 pub mod bot;
+pub mod fight;
 pub mod ground;
 
 pub use bot::{Bot, Debris, Mat2, Placement};
+pub use fight::{Drawing, Fight, Part, Picture};
 pub use ground::Ground;
 
 use crate::geometry::V2;

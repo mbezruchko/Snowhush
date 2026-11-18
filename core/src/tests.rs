@@ -1605,3 +1605,41 @@ fn snowballs_fly_into_the_picture_and_out_of_it() {
     run(&mut simulation, 2.0, V2::new(-100.0, -100.0));
     assert_finite(&simulation);
 }
+
+#[test]
+fn a_bot_hit_six_times_is_out_and_comes_back() {
+    use crate::snowman::{Fight, Ground};
+    use crate::wallpaper::{Light, Relief, Scene, Terrain};
+    let light = Light { width: 1, height: 1, cell: 16, pixels: vec![240; 4], haze: [0.8; 3] };
+    let terrain = Terrain { width: 1, height: 1, cell: 4, near: vec![0], far: 0.1, close: 0.9 };
+    let relief = Relief { width: 1, height: 1, cell: 2, lightness: vec![0], tops: vec![0], hold: vec![0], near: vec![0] };
+    let scene = Scene { ridges: Vec::new(), light, terrain, relief };
+    let screen = V2::new(1600.0, 1000.0);
+    let ground = Ground::strip(&scene, screen, 60.0);
+    let mut simulation = SnowSimulation::new(screen.x, screen.y, 0.0);
+    let mut fight = Fight::new(ground, 0.0, 11).expect("a fight");
+    let mut now = 0.0;
+    let tick = |fight: &mut Fight, simulation: &mut SnowSimulation, now: &mut f64, seconds: f32| {
+        for _ in 0..(seconds / DT) as usize {
+            *now += DT as f64;
+            simulation.step(DT, V2::new(-100.0, -100.0));
+            fight.step(*now, simulation, V2::ZERO, &[], true);
+        }
+    };
+    tick(&mut fight, &mut simulation, &mut now, 2.0);
+    let parts = fight.drawings()[0].parts.len();
+    assert_eq!(parts, 3, "a whole snowman is a body, an arm and a hat");
+    // Aimed at his middle every four seconds, after a rest, the throws don't stray; one at him walking may miss.
+    while fight.bot_lives() > 0 && fight.throws < 40 {
+        let drawing = &fight.drawings()[0];
+        let middle = V2::new((drawing.reach[0] + drawing.reach[2]) / 2.0, drawing.reach[1] + (drawing.reach[3] - drawing.reach[1]) * 0.47);
+        let near = fight.aim_near(middle, 0.9);
+        fight.throw_ball(middle, near, now, &mut simulation, V2::ZERO);
+        tick(&mut fight, &mut simulation, &mut now, 4.0);
+    }
+    assert_eq!(fight.bot_lives(), 0, "forty snowballs at his middle didn't put him out");
+    tick(&mut fight, &mut simulation, &mut now, 6.0);
+    assert_eq!(fight.bot_lives(), 6);
+    assert_eq!(fight.drawings()[0].parts.len(), 3, "the bot didn't come back whole");
+    assert_finite(&simulation);
+}
