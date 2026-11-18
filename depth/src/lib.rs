@@ -1,16 +1,15 @@
 //! The depth network that reads a wallpaper on Windows and Linux: Depth Anything V2 Small (Apache-2.0), run on the CPU
-//! by candle. The Mac runs the same network through Core ML. Its weights are downloaded on first use, packed to a
-//! quarter of their size: each large tensor's rows at eight bits with a scale of their own, which leaves the depth as it
-//! was to within a twentieth of a percent.
+//! by candle, looking at 518 by 392 pixels as the Mac's Core ML network does. Its weights are downloaded on first use,
+//! packed to a quarter of their size: each large tensor's rows at eight bits with a scale of their own, which leaves the
+//! depth as it was to within a twentieth of a percent.
+
+mod network;
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Arc;
 
-use candle_core::{DType, Device, Module, Tensor};
+use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
-use candle_transformers::models::depth_anything_v2::{DepthAnythingV2, DepthAnythingV2Config};
-use candle_transformers::models::dinov2;
 use half::f16;
 use sha2::{Digest, Sha256};
 use snowhush_core::wallpaper::{Network, Scene, Shown, scene};
@@ -22,9 +21,8 @@ pub const SHA256: &str = "5529647891ac4b3eff98ef376531f0e661f96f90c6e2944cf77fe4
 
 const MAGIC: &[u8; 8] = b"SNOWDEPT";
 const VERSION: u32 = 1;
-/// The side of the square the network looks at: 37 of its 14-pixel patches.
-const SIDE: usize = 518;
-/// What one look gives, as the Mac's network does: the parts it is fitted from are laid out for this.
+/// What the network looks at and gives, as the Mac's does, 37 of its 14-pixel patches across and 28 down: the parts the
+/// depth is fitted from are laid out for this.
 const SIZE: (usize, usize) = (518, 392);
 /// Tensors smaller than this are kept at half precision whole.
 const SMALL: usize = 4096;
@@ -44,7 +42,7 @@ pub fn read(shown: &Shown, weights: &Path, column_width: f32) -> Result<Scene, S
 }
 
 pub struct Model {
-    network: DepthAnythingV2,
+    network: network::Network,
     device: Device,
 }
 
@@ -52,25 +50,17 @@ impl Model {
     pub fn load(path: &Path) -> Result<Model, String> {
         let bytes = std::fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
         let device = Device::Cpu;
-        let mut tensors = unpack(&bytes, &device)?;
-        // The depth network has no use for DINOv2's classification head, which candle's encoder is made with all the same.
-        let zeros = |shape: &[usize]| Tensor::zeros(shape, DType::F32, &device).map_err(|error| error.to_string());
-        tensors.insert("pretrained.head.weight".into(), zeros(&[1000, 768])?);
-        tensors.insert("pretrained.head.bias".into(), zeros(&[1000])?);
+        let tensors = unpack(&bytes, &device)?;
         let weights = VarBuilder::from_tensors(tensors, DType::F32, &device);
-        let encoder = dinov2::vit_small(weights.pp("pretrained")).map_err(|error| error.to_string())?;
-        let network = DepthAnythingV2::new(Arc::new(encoder), DepthAnythingV2Config::vit_small(), weights).map_err(|error| error.to_string())?;
+        let network = network::Network::new(weights).map_err(|error| error.to_string())?;
         Ok(Model { network, device })
     }
 
     fn look(&self, shown: &Shown, part: [usize; 4]) -> candle_core::Result<Vec<f32>> {
-        let planes = normalized(&resample(shown, part, SIDE, SIDE), SIDE * SIDE);
-        let input = Tensor::from_vec(planes, (1, 3, SIDE, SIDE), &self.device)?;
-        let output = self.network.forward(&input)?;
-        let dims = output.dims().to_vec();
-        let (height, width) = (dims[dims.len() - 2], dims[dims.len() - 1]);
-        let values: Vec<f32> = output.flatten_all()?.to_vec1()?;
-        Ok(stretched(&values, width, height, SIZE.0, SIZE.1))
+        let (width, height) = SIZE;
+        let planes = normalized(&resample(shown, part, width, height), width * height);
+        let input = Tensor::from_vec(planes, (1, 3, height, width), &self.device)?;
+        self.network.forward(&input)?.flatten_all()?.to_vec1()
     }
 }
 
@@ -156,25 +146,6 @@ fn normalized(pixels: &[[f32; 3]], count: usize) -> Vec<f32> {
         }
     }
     planes
-}
-
-/// A grid of values stretched to another size, bilinear.
-fn stretched(values: &[f32], width: usize, height: usize, to_width: usize, to_height: usize) -> Vec<f32> {
-    let mut out = Vec::with_capacity(to_width * to_height);
-    for y in 0..to_height {
-        let fy = ((y as f32 + 0.5) / to_height as f32 * height as f32 - 0.5).clamp(0.0, (height - 1) as f32);
-        let (y0, ty) = (fy as usize, fy.fract());
-        let y1 = (y0 + 1).min(height - 1);
-        for x in 0..to_width {
-            let fx = ((x as f32 + 0.5) / to_width as f32 * width as f32 - 0.5).clamp(0.0, (width - 1) as f32);
-            let (x0, tx) = (fx as usize, fx.fract());
-            let x1 = (x0 + 1).min(width - 1);
-            let top = values[y0 * width + x0] * (1.0 - tx) + values[y0 * width + x1] * tx;
-            let bottom = values[y1 * width + x0] * (1.0 - tx) + values[y1 * width + x1] * tx;
-            out.push(top * (1.0 - ty) + bottom * ty);
-        }
-    }
-    out
 }
 
 /// Packs weights for download: each tensor by name, the large ones' rows at eight bits with a half-precision scale each.
