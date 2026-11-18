@@ -17,6 +17,9 @@ const FEATURES: usize = 64;
 const CHANNELS: [usize; 4] = [48, 96, 192, 384];
 /// The patches the position embedding was learned for, across and down.
 const LEARNED: usize = 37;
+/// Rows the last convolutions are done in at a time: candle unfolds a convolution's whole input first, which for these,
+/// at the picture's full size, would take hundreds of megabytes.
+const STRIP: usize = 64;
 
 struct Attention {
     qkv: Linear,
@@ -201,10 +204,23 @@ impl Network {
         let path = self.fusions[1].forward(&path, Some(&layers[1]), size(&layers[0])?)?;
         let (h, w) = size(&layers[0])?;
         let path = self.fusions[0].forward(&path, Some(&layers[0]), (h * 2, w * 2))?;
-        let out = bilinear(&self.output1.forward(&path)?, height, width)?;
-        let out = self.output2.1.forward(&self.output2.0.forward(&out)?.relu()?)?.relu()?;
-        out.relu()
+        let out = bilinear(&in_strips(&path, |xs| self.output1.forward(xs))?, height, width)?;
+        in_strips(&out, |xs| self.output2.1.forward(&self.output2.0.forward(xs)?.relu()?)?.relu())
     }
+}
+
+/// `convolve`, a 3 by 3 convolution padded by one and what follows it pixel by pixel, done a strip of rows at a time,
+/// each given the row either side of it.
+fn in_strips(xs: &Tensor, convolve: impl Fn(&Tensor) -> Result<Tensor>) -> Result<Tensor> {
+    let height = xs.dim(2)?;
+    let mut strips = Vec::with_capacity(height.div_ceil(STRIP));
+    for top in (0..height).step_by(STRIP) {
+        let bottom = (top + STRIP).min(height);
+        let (from, to) = (top.saturating_sub(1), (bottom + 1).min(height));
+        let out = convolve(&xs.narrow(2, from, to - from)?.contiguous()?)?;
+        strips.push(out.narrow(2, top - from, bottom - top)?);
+    }
+    Tensor::cat(&strips, 2)
 }
 
 /// Bilinear resizing of each plane to `height` by `width`, corners aligned, as PyTorch's: done on the CPU, which candle
