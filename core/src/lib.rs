@@ -9,6 +9,7 @@ pub mod new_year;
 pub mod simulation;
 pub mod text;
 pub mod version;
+pub mod wallpaper;
 
 #[cfg(test)]
 mod tests;

@@ -2,3 +2,6 @@
 name = "snowhush-core"
 edition = "2024"
 publish = false
+
+[dependencies]
+miniz_oxide = "0.8"
