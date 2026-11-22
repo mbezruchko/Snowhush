@@ -8,6 +8,7 @@ use std::thread::{self, JoinHandle};
 
 use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
+use windows::Win32::System::DataExchange::COPYDATASTRUCT;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Power::{POWERBROADCAST_SETTING, RegisterPowerSettingNotification};
 use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
@@ -207,9 +208,25 @@ thread_local! {
     static OPACITY_OPEN: Cell<bool> = const { Cell::new(false) };
 }
 
+/// Marks a link to a room handed over in WM_COPYDATA by another copy of Snowhush.
+const LINK: usize = 0x534E_4C4B;
+
+/// Hands a link to a snowball fight to the copy of Snowhush already running. Returns whether it took it.
+pub fn hand_over(link: &str) -> bool {
+    let text: Vec<u16> = link.encode_utf16().collect();
+    unsafe {
+        let Ok(window) = FindWindowW(CLASS, PCWSTR::null()) else { return false };
+        let data = COPYDATASTRUCT { dwData: LINK, cbData: (text.len() * 2) as u32, lpData: text.as_ptr() as *mut c_void };
+        let mut result = 0;
+        SendMessageTimeoutW(window, WM_COPYDATA, WPARAM(0), LPARAM(&raw const data as isize), SMTO_ABORTIFHUNG, 5000, Some(&mut result)).0 != 0
+            && result == 1
+    }
+}
+
 /// The tray icon and its menu, and the system events that pause the snow, on the main thread;
-/// the snow itself runs on its own thread so menus and other modal loops never stall it.
-pub fn run() -> Result<()> {
+/// the snow itself runs on its own thread so menus and other modal loops never stall it. `link`, to a snowball fight,
+/// is joined once the snow runs.
+pub fn run(link: Option<String>) -> Result<()> {
     unsafe {
         CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
         let instance = GetModuleHandleW(None)?;
@@ -244,6 +261,9 @@ pub fn run() -> Result<()> {
         }
         SetTimer(Some(window), TIMER_HALLOWEEN, 60_000, None);
         APP.set(Some(App { settings, commands, wake, snow, icon, emblem, light, locked: false, display_off: false, away: false, update: None }));
+        if let Some(link) = link {
+            APP.with_borrow(|app| app.as_ref().map(|app| send(app, Command::FightLink(link))));
+        }
 
         let mut message = MSG::default();
         while GetMessageW(&mut message, None, 0, 0).as_bool() {
@@ -288,6 +308,16 @@ unsafe extern "system" fn procedure(window: HWND, message: u32, wparam: WPARAM, 
         WM_CLOSE => {
             quit(window);
             LRESULT(0)
+        }
+        WM_COPYDATA => {
+            let data = unsafe { &*(lparam.0 as *const COPYDATASTRUCT) };
+            if data.dwData != LINK || data.lpData.is_null() {
+                return LRESULT(0);
+            }
+            let units = unsafe { std::slice::from_raw_parts(data.lpData as *const u16, data.cbData as usize / 2) };
+            let link = String::from_utf16_lossy(units);
+            APP.with_borrow(|app| app.as_ref().map(|app| send(app, Command::FightLink(link))));
+            LRESULT(1)
         }
         WM_TIMER if wparam.0 == TIMER_UPDATES => {
             unsafe { SetTimer(Some(window), TIMER_UPDATES, DAY, None) };

@@ -23,7 +23,8 @@ fn main() {
         std::process::exit(wallpaper::read_for_another_run(&arguments[2..]));
     }
     snowhush_core::text::choose(&languages());
-    if let Err(error) = snow::run() {
+    let link = arguments.iter().skip(1).find(|argument| argument.starts_with("snowhush://")).cloned();
+    if let Err(error) = snow::run(link) {
         log!("failed: {error}");
         eprintln!("Snowhush couldn't start: {error}");
         std::process::exit(1);

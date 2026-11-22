@@ -117,6 +117,8 @@ pub struct Shared {
     /// What the snow loop needs of the windows and the pointer, set at each frame.
     windows_demand: AtomicU8,
     pointer_wanted: AtomicBool,
+    /// Links to snowball fights opened with Snowhush, by this copy or by another handing them over.
+    links: Mutex<Vec<String>>,
 }
 
 impl Shared {
@@ -128,7 +130,20 @@ impl Shared {
             wake,
             windows_demand: AtomicU8::new(Demand::Live as u8),
             pointer_wanted: AtomicBool::new(true),
+            links: Mutex::new(Vec::new()),
         }
+    }
+
+    /// A link to a room to join, for the snow loop, woken for it.
+    pub fn hand_link(&self, link: String) {
+        if let Ok(mut links) = self.links.lock() {
+            links.push(link);
+        }
+        self.wake.ping();
+    }
+
+    pub fn take_links(&self) -> Vec<String> {
+        self.links.lock().map(|mut links| std::mem::take(&mut *links)).unwrap_or_default()
     }
 
     pub fn set_demand(&self, windows: Demand, pointer: bool) {

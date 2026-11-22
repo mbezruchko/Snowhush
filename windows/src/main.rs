@@ -36,9 +36,13 @@ fn main() {
         snowhush::install::uninstall();
         return;
     }
+    let link = arguments.iter().skip(1).find(|argument| argument.starts_with("snowhush://")).cloned();
     unsafe {
         let _instance = CreateMutexW(None, true, w!("Local\\Snowhush"));
         if GetLastError() == ERROR_ALREADY_EXISTS {
+            if let Some(link) = link {
+                app::hand_over(&link);
+            }
             return;
         }
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
@@ -47,7 +51,7 @@ fn main() {
     log::start();
     std::panic::set_hook(Box::new(|info| log!("panic on the {} thread: {info}", std::thread::current().name().unwrap_or("unnamed"))));
     log!("Snowhush {}", env!("CARGO_PKG_VERSION"));
-    if let Err(error) = app::run() {
+    if let Err(error) = app::run(link) {
         log!("failed: {error}");
     }
 }

@@ -185,6 +185,24 @@ fight() {
     trace "$(grep -E 'adapter|display|wallpaper|fight|thrown|frames' "$log" | head -40)"
 }
 
+# A snowball fight in a room: the app opened again with the link to a friend's room, SNOWHUSH_BENCH_INVITE, which the
+# running copy takes over D-Bus and joins. The friend, a peer outside the container, throws every few seconds; this
+# player's practice throws hit him. Run as the fight scene is.
+room() {
+    shot() { grim "/out/$1.png"; }
+    "$app" > /out/app.out 2>&1 &
+    for _ in $(seq 120); do grep -q 'wallpaper read' "$log" 2>/dev/null && break; sleep 1; done
+    sleep 2
+    shot 1-alone
+    "$app" "$SNOWHUSH_BENCH_INVITE" > /out/link.out 2>&1
+    trace "second copy: exit $?, $(cat /out/link.out)"
+    for k in $(seq 12); do
+        sleep 5
+        shot "2-room-$(printf %02d "$k")"
+    done
+    trace "$(grep -E 'adapter|display|wallpaper|fight|thrown|words' "$log" | head -40)"
+}
+
 sway_move() { swaymsg "[app_id=foot] move right $1 px" > /dev/null; }
 sway_workspace() { swaymsg workspace "$1" > /dev/null; }
 sway_close() { swaymsg "[app_id=foot] kill" > /dev/null; }
@@ -212,7 +230,7 @@ niri)
     export NIRI_SOCKET
     snowfall niri
     ;;
-wallpaper | fight)
+wallpaper | fight | room)
     background="/media/wallpaper.jpg fill"
     headless_sway
     export WAYLAND_DISPLAY=$sway_display

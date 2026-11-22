@@ -137,7 +137,8 @@ pub struct App {
     stats: Stats,
 }
 
-pub fn run() -> Result<(), String> {
+/// Runs Snowhush, joining the snowball fight `link` is to; or, with Snowhush already running, hands it the link.
+pub fn run(link: Option<String>) -> Result<(), String> {
     let settings = Settings::load();
     let mut event_loop: EventLoop<App> = EventLoop::try_new().map_err(|error| error.to_string())?;
     // First of all: the signals are blocked on this thread so the loop can take them, and threads started
@@ -150,9 +151,17 @@ pub fn run() -> Result<(), String> {
     event_loop.handle().insert_source(ping_source, |_, _, _| {}).map_err(|error| error.to_string())?;
     let shared = Arc::new(Shared::new(ping));
     let Some(bus) = kwin::serve(shared.clone()).map_err(|error| format!("D-Bus: {error}"))? else {
+        if let Some(link) = link
+            && kwin::hand_over(&link)
+        {
+            return Ok(());
+        }
         eprintln!("Snowhush is already running.");
         return Ok(());
     };
+    if let Some(link) = link {
+        shared.hand_link(link);
+    }
     // Only now: a second copy that stops here must not wipe the running one's log.
     crate::log::start();
     let report_panic = std::panic::take_hook();
@@ -806,6 +815,16 @@ impl App {
     /// said, has the snowmen show the throws others made, and shows the room in the tray as it changes.
     fn play(&mut self, now: Instant) {
         let seconds = (now - self.started).as_secs_f64();
+        for link in self.shared.take_links() {
+            if !self.settings.fights() {
+                log!("fight: a link to a room, with the fight off");
+            } else if snowhush_core::snowman::room::holds_invite(&link) {
+                if self.room.state != snowhush_core::snowman::room::State::None {
+                    fight::leave(&mut self.room);
+                }
+                self.opening = Some(fight::open(&mut self.room, Some(link)));
+            }
+        }
         if let Some(opening) = &self.opening
             && fight::go_on(opening, &mut self.room)
         {

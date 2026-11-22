@@ -65,6 +65,8 @@ pub enum Command {
     FightInvite,
     FightJoin,
     FightLeave,
+    /// Snowhush was opened with a link to a room: join it, leaving any other.
+    FightLink(String),
     /// Accumulate's Wallpaper, and Deep Interaction: the snow lying in the wallpaper's picture, and the flakes falling
     /// into its depth.
     Wallpaper(bool),
@@ -236,6 +238,16 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                 Command::FightLeave => {
                     opening = None;
                     fight::leave(&mut room);
+                }
+                Command::FightLink(link) => {
+                    if !settings.fights() {
+                        log!("fight: a link to a room, with the fight off");
+                    } else if snowhush_core::snowman::room::holds_invite(&link) {
+                        if room.state != snowhush_core::snowman::room::State::None {
+                            fight::leave(&mut room);
+                        }
+                        opening = Some(fight::open(&mut room, Some(link)));
+                    }
                 }
                 Command::Selection(on) => {
                     settings.selection = on;
