@@ -41,6 +41,8 @@ pub struct Settings {
     pub picture_level: u32,
     /// The snowball fight, still to be tried out: set by hand in the registry, or by SNOWHUSH_FIGHT=1.
     pub fight: bool,
+    /// Snowballs thrown, counted to three: until then the round tells how to throw.
+    pub fight_throws: u32,
     pub welcomed: bool,
     /// Unix seconds of the first run, or 0 for an install older than the stamp.
     pub installed_at: u32,
@@ -97,6 +99,7 @@ impl Settings {
             depth: read(w!("wallpaperDepth")).is_none_or(|v| v != 0),
             picture_level: read(w!("pictureLevel")).map_or(0, |v| v.min(2000)),
             fight: read(w!("fight")).is_some_and(|v| v != 0),
+            fight_throws: read(w!("fightThrows")).map_or(0, |v| v.min(3)),
             welcomed,
             installed_at,
             halloween: Choice { on: read(w!("halloweenOn")).is_some_and(|v| v != 0), skipped: read(w!("halloweenSkipped")).unwrap_or(0) },
@@ -134,6 +137,11 @@ impl Settings {
         write(w!("performance"), self.max_performance as u32);
         write(w!("fallingOpacity"), self.opacity);
     }
+}
+
+/// Keeps the snowballs thrown on their own: the menu's copy of the settings, saved whole, never hears of them.
+pub fn keep_fight_throws(count: u32) {
+    write(w!("fightThrows"), count);
 }
 
 pub fn opens_at_login() -> bool {

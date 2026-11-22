@@ -599,12 +599,13 @@ impl Screen {
         fighting: bool,
         room: &mut snowhush_core::snowman::room::Room,
         main: bool,
+        hint: &str,
         now: Instant,
     ) {
         let area = self.area();
         if let Some(picture) = &mut self.picture {
             picture.visible = !self.covered;
-            picture.tick(gpu, compositor, &mut self.simulation, &self.bounds, &area, frost && !self.covered, fighting, room, main, now);
+            picture.tick(gpu, compositor, &mut self.simulation, &self.bounds, &area, frost && !self.covered, fighting, room, main, hint, now);
         }
     }
 

@@ -4,6 +4,7 @@ mod app;
 mod clicks;
 mod desktop;
 mod fight;
+mod fonts;
 mod halloween;
 mod light;
 mod log;

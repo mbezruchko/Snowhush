@@ -56,6 +56,8 @@ pub struct Drawing {
     pub reach: [f32; 4],
     /// A friend's name over his snowman, and what is left of him; none for the bot, or for one out of the round.
     pub label: Option<(String, i32)>,
+    /// Where his label goes, just over his hat, in the display's points.
+    pub head: [f32; 2],
 }
 
 struct Figure {
@@ -383,5 +385,6 @@ fn drawing(bot: &Bot) -> Drawing {
         tint: bot.tint(),
         reach: bot.reach(),
         label: None,
+        head: [bot.foot.x, bot.foot.y + bot.height() * 1.02 + 9.0],
     }
 }

@@ -19,6 +19,8 @@ use snowhush_core::halloween::Choice;
 use snowhush_core::modes::Picked;
 use snowhush_core::simulation::{Borrowed, Mapping, Mode, ScatterPiece, SnowSimulation, Stray};
 
+use snowhush_core::text::tr;
+
 use crate::clicks;
 use crate::desktop::{self, DesktopLayer};
 use crate::fight;
@@ -27,7 +29,7 @@ use crate::light::{Sky, Wallpapers};
 use crate::log;
 use crate::new_year;
 use crate::picture::PictureSnow;
-use crate::prefs::Settings;
+use crate::prefs::{self, Settings};
 use crate::render::Gpu;
 use crate::screen::{BACKDROP_CHANGED, Clock, DISPLAYS_CHANGED, Monitor, PowerBudget, Screen, dip_size, listen, monitors, walls, watch_taskbar};
 use crate::tracker::{self, Tracker};
@@ -534,17 +536,17 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                 room_shown = room.version;
                 fight::show(&room);
             }
+            let hint = if settings.fight_throws < 3 { tr("fight.hint.ctrl") } else { "" };
             for screen in &mut screens {
-                screen.tick_picture(&gpu, settings.wallpaper, fighting, &mut room, seconds);
+                screen.tick_picture(&gpu, settings.wallpaper, fighting, &mut room, hint, seconds);
                 for hit in screen.take_hits() {
                     snowhush_net::play::throw(&hit);
                 }
             }
             for point in clicks::take() {
-                for screen in &mut screens {
-                    if screen.click_picture(point, seconds) {
-                        break;
-                    }
+                if screens.iter_mut().any(|screen| screen.click_picture(point, seconds)) && settings.fight_throws < 3 {
+                    settings.fight_throws += 1;
+                    prefs::keep_fight_throws(settings.fight_throws);
                 }
             }
             clicks::follow(screens.iter().filter(|screen| screen.fighting()).map(|screen| screen.monitor.bounds).collect(), links.wake as isize);

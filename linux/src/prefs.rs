@@ -40,6 +40,8 @@ pub struct Settings {
     pub picture_level: u32,
     /// The snowball fight, still to be tried out: set by hand in the settings file, or by SNOWHUSH_FIGHT=1.
     pub fight: bool,
+    /// Snowballs thrown, counted to three: until then the round tells how to throw.
+    pub fight_throws: u32,
 }
 
 impl Settings {
@@ -87,6 +89,7 @@ impl Settings {
             depth: read("wallpaperDepth").is_none_or(|v| v != 0),
             picture_level: read("pictureLevel").map_or(0, |v| v.min(2000)),
             fight: read("fight").is_some_and(|v| v != 0),
+            fight_throws: read("fightThrows").map_or(0, |v| v.min(3)),
             picked: Picked::load(read("mode"), read("autumn"), read("mixed"), [read("mix0"), read("mix1")]),
         };
         if stamped.is_none() {
@@ -97,8 +100,12 @@ impl Settings {
 
     pub fn save(&self) {
         let Some(folder) = config_dir() else { return };
+        // The menu keeps a copy of the settings that never hears of a throw, so the count kept only ever grows.
+        let thrown = std::fs::read_to_string(folder.join("settings"))
+            .ok()
+            .and_then(|text| text.lines().find_map(|line| line.strip_prefix("fightThrows=").and_then(|v| v.trim().parse::<u32>().ok())));
         let text = format!(
-            "intensity={}\nsettleGround={}\nsettlePanel={}\nmeltSnow={}\nsnowOnWindows={}\nbehindWindows={}\nshowOverFullScreen={}\nshowInScreenshots={}\ninstalledAt={}\nhalloweenOn={}\nhalloweenSkipped={}\nnewYearOn={}\nnewYearSkipped={}\nmode={}\nmixed={}\nmix0={}\nmix1={}\nautumn={}\nperformance={}\nfallingOpacity={}\nsettleWallpaper={}\nwallpaperDepth={}\npictureLevel={}\nfight={}\n",
+            "intensity={}\nsettleGround={}\nsettlePanel={}\nmeltSnow={}\nsnowOnWindows={}\nbehindWindows={}\nshowOverFullScreen={}\nshowInScreenshots={}\ninstalledAt={}\nhalloweenOn={}\nhalloweenSkipped={}\nnewYearOn={}\nnewYearSkipped={}\nmode={}\nmixed={}\nmix0={}\nmix1={}\nautumn={}\nperformance={}\nfallingOpacity={}\nsettleWallpaper={}\nwallpaperDepth={}\npictureLevel={}\nfight={}\nfightThrows={}\n",
             self.intensity,
             self.ground as u32,
             self.panel as u32,
@@ -122,7 +129,8 @@ impl Settings {
             self.wallpaper as u32,
             self.depth as u32,
             self.picture_level,
-            self.fight as u32
+            self.fight as u32,
+            self.fight_throws.max(thrown.unwrap_or(0)).min(3)
         );
         let _ = std::fs::create_dir_all(&folder);
         let _ = write_whole(&folder.join("settings"), text.as_bytes());

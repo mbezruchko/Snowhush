@@ -2,8 +2,11 @@
 //! on the surfaces that hold it and the caps along its ridges. It draws only when asked, when that snow has changed;
 //! what it draws the compositor then shows as it is, frame after frame, for nothing.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::mem::size_of;
 
+use snowhush_core::snowman::writing::{Image, Shown};
 use snowhush_core::snowman::{Drawing, Picture};
 use snowhush_core::wallpaper::drawing::{self, Cap};
 use snowhush_core::wallpaper::{GROUND, Scene};
@@ -73,6 +76,10 @@ pub(super) struct Programs {
     snowman_fragment: ID3D11PixelShader,
     snowman_constants: ID3D11Buffer,
     art: [ID3D11ShaderResourceView; 3],
+    writing_vertex: ID3D11VertexShader,
+    writing_fragment: ID3D11PixelShader,
+    /// What sets the words, made the first time there are any.
+    fonts: RefCell<Option<crate::fonts::Fonts>>,
 }
 
 /// What was found in one wallpaper, as the graphics card has it.
@@ -88,6 +95,8 @@ pub struct Painting {
     /// The snow as last drawn, the surface's size, for what moves over it to be drawn on; and whether it holds any.
     cache: Option<(ID3D11RenderTargetView, ID3D11ShaderResourceView, (u32, u32))>,
     cached: bool,
+    /// The words shown last, as the graphics card has them, by what they say at what scale.
+    written: HashMap<String, (ID3D11ShaderResourceView, Image)>,
     /// Each ridge's columns, each twice, one for each corner of its strip.
     columns: Option<ID3D11Buffer>,
     caps: Vec<Cap>,
@@ -156,6 +165,9 @@ impl Gpu {
             snowman_fragment: pixel_shader(device, &compile(s!("snowmanFragment"), s!("ps_4_0"))?)?,
             snowman_constants: dynamic_buffer(device, size_of::<SnowmanUniforms>(), D3D11_BIND_CONSTANT_BUFFER)?,
             art: [self.art(ART[0])?, self.art(ART[1])?, self.art(ART[2])?],
+            writing_vertex: vertex_shader(device, &compile(s!("writingVertex"), s!("vs_4_0"))?)?,
+            writing_fragment: pixel_shader(device, &compile(s!("writingFragment"), s!("ps_4_0"))?)?,
+            fonts: RefCell::new(None),
         })
     }
 
@@ -260,6 +272,7 @@ impl Gpu {
             lie: None,
             cache: None,
             cached: false,
+            written: HashMap::new(),
             columns,
             caps,
             column_width,
@@ -270,8 +283,17 @@ impl Gpu {
 }
 
 impl Surface {
-    /// Draws the snow lying in the picture, the whole display `view` DIPs across, and shows it.
-    pub fn draw_picture(&mut self, gpu: &Gpu, painting: &mut Painting, lying: &Lying, view: [f32; 2], snowmen: &[Drawing]) -> Result<()> {
+    /// Draws the snow lying in the picture, the whole display `view` DIPs across, and shows it with the snowmen standing
+    /// in it and the words over them.
+    pub fn draw_picture(
+        &mut self,
+        gpu: &Gpu,
+        painting: &mut Painting,
+        lying: &Lying,
+        view: [f32; 2],
+        snowmen: &[Drawing],
+        words: &[Shown],
+    ) -> Result<()> {
         let programs = gpu.picture_programs().ok_or_else(Error::empty)?;
         let context = &gpu.context;
         if painting.dabs_version != Some(lying.dabs_version) && lying.dabs_size.0 > 0 && lying.dabs.len() >= lying.dabs_size.0 * lying.dabs_size.1 {
@@ -369,13 +391,15 @@ impl Surface {
             context.PSSetShaderResources(0, Some(&[None, None, None, None]));
         }
         painting.cached = true;
-        self.present_picture(gpu, painting, view, snowmen)
+        self.present_picture(gpu, painting, view, snowmen, words)
     }
 
     /// Shows the snow as last drawn with the snowmen over it, as they are now, each hidden behind what in the picture is
-    /// nearer than he is.
-    pub fn present_picture(&mut self, gpu: &Gpu, painting: &Painting, view: [f32; 2], snowmen: &[Drawing]) -> Result<()> {
+    /// nearer than he is, and the words over everything.
+    pub fn present_picture(&mut self, gpu: &Gpu, painting: &mut Painting, view: [f32; 2], snowmen: &[Drawing], words: &[Shown]) -> Result<()> {
         let programs = gpu.picture_programs().ok_or_else(Error::empty)?;
+        let scale = self.width as f32 / view[0].max(1.0);
+        gpu.write_words(programs, painting, scale, words);
         let context = &gpu.context;
         let uniforms = PictureUniforms {
             view_size: view,
@@ -445,10 +469,62 @@ impl Surface {
                     }
                 }
             }
+            if !words.is_empty() {
+                context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+                context.OMSetBlendState(&gpu.blend, None, u32::MAX);
+                context.VSSetShader(&programs.writing_vertex, None);
+                context.PSSetShader(&programs.writing_fragment, None);
+                for shown in words {
+                    let Some((texture, image)) = painting.written.get(&written_key(&shown.writing.key, scale)) else { continue };
+                    let constants = SnowmanUniforms {
+                        rect: image.rect(shown.at, shown.hang),
+                        matrix: [0.0; 4],
+                        offset: [0.0; 2],
+                        alpha: 1.0,
+                        near: 0.0,
+                        picture: [0.0; 4],
+                        cut: [0.0; 4],
+                        tint: [0.0; 4],
+                    };
+                    gpu.write(&programs.snowman_constants, &constants)?;
+                    context.PSSetShaderResources(0, Some(&[Some(texture.clone())]));
+                    context.Draw(4, 0);
+                }
+            }
             context.PSSetShaderResources(0, Some(&[None, None]));
             self.swap_chain.Present(1, DXGI_PRESENT(0)).ok()
         }
     }
+}
+
+impl Gpu {
+    /// Makes sure the graphics card has each of `words` as it looks at `scale`, and lets go of what isn't shown now.
+    fn write_words(&self, programs: &Programs, painting: &mut Painting, scale: f32, words: &[Shown]) {
+        let wanted: Vec<String> = words.iter().map(|shown| written_key(&shown.writing.key, scale)).collect();
+        painting.written.retain(|key, _| wanted.contains(key));
+        let mut fonts = programs.fonts.borrow_mut();
+        for (shown, key) in words.iter().zip(wanted) {
+            if painting.written.contains_key(&key) {
+                continue;
+            }
+            if fonts.is_none() {
+                *fonts = crate::fonts::Fonts::new().inspect_err(|error| log!("fight: no DirectWrite: {error}")).ok();
+            }
+            let Some(fonts) = fonts.as_mut() else { return };
+            let mut image = shown.writing.image(fonts, scale);
+            match self.texture(DXGI_FORMAT_R8G8B8A8_UNORM, image.width, image.height, 4, &image.pixels, false) {
+                Ok((_, view)) => {
+                    image.pixels = Vec::new();
+                    painting.written.insert(key, (view, image));
+                }
+                Err(error) => log!("fight: words not taken in: {error}"),
+            }
+        }
+    }
+}
+
+fn written_key(key: &str, scale: f32) -> String {
+    format!("{key}@{scale}")
 }
 
 impl Painting {

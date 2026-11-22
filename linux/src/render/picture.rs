@@ -2,7 +2,10 @@
 //! on the surfaces that hold it and the caps along its ridges. It draws only when asked, when that snow has changed;
 //! what it draws the compositor then shows as it is, frame after frame, for nothing.
 
+use std::collections::HashMap;
+
 use glow::HasContext;
+use snowhush_core::snowman::writing::{Image, Shown};
 use snowhush_core::snowman::{Drawing, Picture};
 use snowhush_core::wallpaper::drawing::{self, Cap};
 use snowhush_core::wallpaper::{GROUND, Scene};
@@ -18,6 +21,8 @@ const PICTURE: &str = include_str!("../shaders/picture.glsl");
 const COPY_FRAGMENT: &str = include_str!("../shaders/copy.frag");
 const SNOWMAN_VERTEX: &str = include_str!("../shaders/snowman.vert");
 const SNOWMAN_FRAGMENT: &str = include_str!("../shaders/snowman.frag");
+const WRITING_VERTEX: &str = include_str!("../shaders/writing.vert");
+const WRITING_FRAGMENT: &str = include_str!("../shaders/writing.frag");
 /// The snowman's body, throwing arm and hat, drawn once on the Mac 220 points tall at two pixels a point.
 const ART: [&[u8]; 3] = [
     include_bytes!("../../../windows/assets/snowman/body.png"),
@@ -36,6 +41,8 @@ pub(super) struct Programs {
     snowman: Program,
     /// The snowman's pictures, made the first time one is drawn.
     art: Option<[glow::Texture; 3]>,
+    writing: Program,
+    fonts: crate::fonts::Fonts,
 }
 
 /// What was found in one wallpaper, as the graphics card has it.
@@ -51,6 +58,8 @@ pub struct Painting {
     /// The snow as last drawn, the surface's size, for what moves over it to be drawn on; and whether it holds any.
     cache: Option<(glow::Texture, glow::Framebuffer, (i32, i32))>,
     cached: bool,
+    /// The words shown last, as the graphics card has them, by what they say at what scale.
+    written: HashMap<String, (glow::Texture, Image)>,
     columns: glow::Buffer,
     caps: Vec<Cap>,
     column_width: f32,
@@ -94,7 +103,8 @@ impl Gpu {
                     SNOWMAN_FRAGMENT,
                     &["viewSize", "rect", "matrix", "offset", "picture", "alpha", "cut", "near", "nearness", "tint", "art", "relief"],
                 )?;
-                Programs { lie, show, cap, cap_array, noise, copy, snowman, art: None }
+                let writing = program(gl, WRITING_VERTEX, WRITING_FRAGMENT, &["viewSize", "rect", "words"])?;
+                Programs { lie, show, cap, cap_array, noise, copy, snowman, art: None, writing, fonts: Default::default() }
             };
             self.picture = Some(programs);
         }
@@ -129,6 +139,7 @@ impl Gpu {
                 lie: None,
                 cache: None,
                 cached: false,
+                written: HashMap::new(),
                 columns,
                 caps,
                 column_width,
@@ -144,6 +155,9 @@ impl Gpu {
             for texture in [painting.relief, painting.light, painting.dabs, painting.specks] {
                 gl.delete_texture(texture);
             }
+            for (texture, _) in painting.written.into_values() {
+                gl.delete_texture(texture);
+            }
             for (texture, framebuffer, _) in painting.lie.into_iter().chain(painting.cache) {
                 gl.delete_framebuffer(framebuffer);
                 gl.delete_texture(texture);
@@ -153,7 +167,7 @@ impl Gpu {
     }
 
     /// Draws the snow lying in the picture for `surface`, the whole display `view` points across, and shows it with the
-    /// snowmen standing in it.
+    /// snowmen standing in it and the words over them.
     pub fn draw_picture(
         &mut self,
         surface: &Surface,
@@ -161,6 +175,7 @@ impl Gpu {
         lying: &Lying,
         view: [f32; 2],
         snowmen: &[Drawing],
+        words: &[Shown],
     ) -> Result<(), String> {
         self.egl.make_current(self.display, Some(surface.surface), Some(surface.surface), Some(self.context)).map_err(|error| error.to_string())?;
         self.picture_programs()?;
@@ -279,7 +294,7 @@ impl Gpu {
             gl.active_texture(glow::TEXTURE0);
         }
         painting.cached = true;
-        self.present_picture(surface, painting, view, snowmen)
+        self.present_picture(surface, painting, view, snowmen, words)
     }
 
     /// Forgets the snow drawn last, as when it is gone: only the snowmen show after.
@@ -288,10 +303,18 @@ impl Gpu {
     }
 
     /// Shows the snow as last drawn with the snowmen over it, as they are now, each hidden behind what in the picture is
-    /// nearer than he is.
-    pub fn present_picture(&mut self, surface: &Surface, painting: &Painting, view: [f32; 2], snowmen: &[Drawing]) -> Result<(), String> {
+    /// nearer than he is, and the words over everything.
+    pub fn present_picture(
+        &mut self,
+        surface: &Surface,
+        painting: &mut Painting,
+        view: [f32; 2],
+        snowmen: &[Drawing],
+        words: &[Shown],
+    ) -> Result<(), String> {
         self.egl.make_current(self.display, Some(surface.surface), Some(surface.surface), Some(self.context)).map_err(|error| error.to_string())?;
         self.picture_programs()?;
+        self.write(painting, surface.width as f32 / view[0].max(1.0), words)?;
         if !snowmen.is_empty() && self.picture.as_ref().is_some_and(|programs| programs.art.is_none()) {
             let art = [self.picture(ART[0], true), self.picture(ART[1], true), self.picture(ART[2], true)];
             if let [Some(body), Some(arm), Some(hat)] = art {
@@ -350,10 +373,57 @@ impl Gpu {
                     }
                 }
             }
+            if !words.is_empty() {
+                gl.enable(glow::BLEND);
+                gl.blend_func_separate(glow::ONE, glow::ONE_MINUS_SRC_ALPHA, glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
+                let writing = &programs.writing;
+                gl.use_program(Some(writing.program));
+                gl.uniform_2_f32_slice(writing.location("viewSize"), &view);
+                gl.uniform_1_i32(writing.location("words"), 0);
+                gl.active_texture(glow::TEXTURE0);
+                let scale = surface.width as f32 / view[0].max(1.0);
+                for shown in words {
+                    let Some((texture, image)) = painting.written.get(&written_key(&shown.writing.key, scale)) else { continue };
+                    gl.bind_texture(glow::TEXTURE_2D, Some(*texture));
+                    gl.uniform_4_f32_slice(writing.location("rect"), &image.rect(shown.at, shown.hang));
+                    gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
+                }
+            }
             gl.bind_vertex_array(None);
         }
         self.egl.swap_buffers(self.display, surface.surface).map_err(|error| error.to_string())
     }
+
+    /// Makes sure the graphics card has each of `words` as it looks at `scale`, and lets go of what isn't shown now.
+    fn write(&mut self, painting: &mut Painting, scale: f32, words: &[Shown]) -> Result<(), String> {
+        let programs = self.picture.as_mut().expect("made");
+        if words.is_empty() {
+            programs.fonts.let_go();
+        }
+        let gl = &self.gl;
+        let wanted: Vec<String> = words.iter().map(|shown| written_key(&shown.writing.key, scale)).collect();
+        painting.written.retain(|key, (texture, _)| {
+            let keep = wanted.contains(key);
+            if !keep {
+                unsafe { gl.delete_texture(*texture) };
+            }
+            keep
+        });
+        for (shown, key) in words.iter().zip(wanted) {
+            if painting.written.contains_key(&key) {
+                continue;
+            }
+            let mut image = shown.writing.image(&mut programs.fonts, scale);
+            let made = unsafe { texture(gl, glow::RGBA8, glow::RGBA, image.width, image.height, &image.pixels, false, glow::CLAMP_TO_EDGE)? };
+            image.pixels = Vec::new();
+            painting.written.insert(key, (made, image));
+        }
+        Ok(())
+    }
+}
+
+fn written_key(key: &str, scale: f32) -> String {
+    format!("{key}@{scale}")
 }
 
 /// A texture of `pixels`, top row first, or with nothing in it yet when they are empty.

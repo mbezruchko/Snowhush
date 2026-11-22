@@ -9,6 +9,7 @@ name = "snowhush"
 path = "src/main.rs"
 
 [dependencies]
+ab_glyph = "0.2"
 snowhush-core = { path = "../core" }
 snowhush-depth = { path = "../depth" }
 snowhush-net = { path = "../net" }

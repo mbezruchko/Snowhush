@@ -506,14 +506,14 @@ impl Screen {
 
     /// Looks after the snow in the wallpaper's picture, `now` in seconds: `frost` draws it, and `fighting` has snowmen
     /// walk it.
-    pub fn tick_picture(&mut self, gpu: &Gpu, frost: bool, fighting: bool, room: &mut snowhush_core::snowman::room::Room, now: f64) {
+    pub fn tick_picture(&mut self, gpu: &Gpu, frost: bool, fighting: bool, room: &mut snowhush_core::snowman::room::Room, hint: &str, now: f64) {
         let area = dip_rect(&self.monitor, &self.monitor.rect);
         let covered = self.covered;
         // The friends show on the main display alone, so that each throws once.
         let main = self.monitor.bounds.left == 0 && self.monitor.bounds.top == 0;
         if let Some(picture) = &mut self.picture {
             picture.visible = !covered;
-            picture.tick(gpu, &mut self.simulation, [area[0], area[1]], frost && !covered, fighting, room, main, now);
+            picture.tick(gpu, &mut self.simulation, [area[0], area[1]], frost && !covered, fighting, room, main, hint, now);
         }
     }
 

@@ -1,5 +1,6 @@
 mod chores;
 mod fight;
+mod fonts;
 mod hyprland;
 mod kwin;
 mod light;

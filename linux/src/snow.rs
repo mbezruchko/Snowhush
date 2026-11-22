@@ -26,6 +26,7 @@ use snowhush_core::halloween::{Choice, Today};
 use snowhush_core::modes::Picked;
 use snowhush_core::new_year::{self, Holiday};
 use snowhush_core::simulation::{Borrowed, Mapping, Mode, SnowSimulation, Stray, WindowId};
+use snowhush_core::text::tr;
 
 use crate::chores;
 use crate::fight;
@@ -537,8 +538,9 @@ impl App {
         }
         let (frost, fighting) = (self.settings.wallpaper, self.settings.fights());
         self.play(now);
+        let hint = if self.settings.fight_throws < 3 { tr("fight.hint.snowman") } else { "" };
         for (index, screen) in self.screens.iter_mut().enumerate() {
-            screen.tick_picture(&mut self.gpu, &self.compositor, frost, fighting, &mut self.room, index == 0, now);
+            screen.tick_picture(&mut self.gpu, &self.compositor, frost, fighting, &mut self.room, index == 0, hint, now);
             for hit in screen.take_hits() {
                 snowhush_net::play::throw(&hit);
             }
@@ -949,10 +951,9 @@ impl PointerHandler for App {
         for event in events {
             if let PointerEventKind::Press { button: LEFT_BUTTON, .. } = event.kind {
                 let now = Instant::now();
-                for screen in &mut self.screens {
-                    if screen.click_picture(&event.surface, event.position, now) {
-                        break;
-                    }
+                if self.screens.iter_mut().any(|screen| screen.click_picture(&event.surface, event.position, now)) && self.settings.fight_throws < 3 {
+                    self.settings.fight_throws += 1;
+                    self.settings.save();
                 }
             }
         }

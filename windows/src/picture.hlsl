@@ -259,3 +259,21 @@ float4 snowmanFragment(SnowmanOut input) : SV_Target {
     float a = color.a * shown * partAlpha;
     return float4(rgb * a, a);
 }
+
+// Words over the picture, a friend's name or the round: the rect they cover in the display's points, as partRect.
+struct WritingOut {
+    float4 position : SV_Position;
+    float2 uv : TEXCOORD0;
+};
+
+WritingOut writingVertex(uint vid : SV_VertexID) {
+    float2 corner = float2(float(vid & 1), float(vid >> 1));
+    WritingOut output;
+    output.position = float4(lerp(partRect.xy, partRect.zw, corner) / viewSize * 2.0 - 1.0, 0.0, 1.0);
+    output.uv = float2(corner.x, 1.0 - corner.y);
+    return output;
+}
+
+float4 writingFragment(WritingOut input) : SV_Target {
+    return artTexture.SampleLevel(trilinear, input.uv, 0.0);
+}

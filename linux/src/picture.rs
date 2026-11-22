@@ -16,6 +16,7 @@ use wayland_client::protocol::wl_surface::WlSurface;
 use snowhush_core::geometry::V2;
 use snowhush_core::simulation::{COLUMN_WIDTH, SnowSimulation};
 use snowhush_core::snowman::room::Room;
+use snowhush_core::snowman::writing;
 use snowhush_core::snowman::{Drawing, Fight, Ground};
 use snowhush_core::wallpaper::Scene;
 
@@ -60,6 +61,8 @@ pub struct PictureSnow {
     practiced: Instant,
     /// Where clicks are taken: over the snowmen, left, top, width and height in the surface's points.
     taking: Vec<[i32; 4]>,
+    /// What the words over the picture said when last shown.
+    said: Vec<String>,
 }
 
 impl PictureSnow {
@@ -95,6 +98,7 @@ impl PictureSnow {
             started: Instant::now(),
             taking: Vec::new(),
             practiced: Instant::now(),
+            said: Vec::new(),
         }
     }
 
@@ -170,7 +174,8 @@ impl PictureSnow {
     /// Looks after the picture's snow once the simulation has stepped: takes in what a reading found, reads a wallpaper
     /// not read yet, gives the simulation the picture where the overlay `area` lies on the display `bounds`, moves the
     /// snowmen on while `fighting`, and draws what changed. `frost` draws the snow at all; without, the picture is read
-    /// only for its depth.
+    /// only for its depth. The `main` display shows the round at its top, and `hint`, how to throw, while it isn't
+    /// empty.
     #[allow(clippy::too_many_arguments)]
     pub fn tick(
         &mut self,
@@ -183,6 +188,7 @@ impl PictureSnow {
         fighting: bool,
         room: &mut Room,
         main: bool,
+        hint: &str,
         now: Instant,
     ) {
         self.take_reading(gpu, simulation, bounds);
@@ -217,6 +223,10 @@ impl PictureSnow {
             moved = fight.step(seconds, simulation, offset, &covers, self.visible, room);
         }
         let snowmen = self.fight.as_ref().map(|fight| fight.drawings(room)).unwrap_or_default();
+        let words = if self.fight.is_some() { writing::shown(&snowmen, room, hint, main, view) } else { Vec::new() };
+        let said: Vec<String> = words.iter().map(|shown| shown.writing.key.clone()).collect();
+        let changed = said != self.said;
+        self.said = said;
         let cleared = simulation.take_picture_cleared();
         let (level, veil) = (simulation.picture_level(), simulation.picture_veil());
         let snow = frost && !cleared && (level > 0.0 || veil > 0.0 || simulation.has_picture_dabs());
@@ -224,13 +234,13 @@ impl PictureSnow {
         if !snow {
             gpu.uncache(painting);
             self.drawn_version = None;
-            if snowmen.is_empty() {
+            if snowmen.is_empty() && words.is_empty() {
                 if self.showing {
                     let _ = gpu.clear(surface);
                     self.showing = false;
                 }
-            } else if moved || !self.showing {
-                self.showing = gpu.present_picture(surface, painting, view, &snowmen).is_ok();
+            } else if moved || changed || !self.showing {
+                self.showing = gpu.present_picture(surface, painting, view, &snowmen, &words).is_ok();
             }
         } else {
             let version = simulation.picture_version();
@@ -239,7 +249,7 @@ impl PictureSnow {
                 let origin = self.given.map_or([0.0; 2], |(_, origin)| origin);
                 let dabs_area = [origin[0], origin[1], dabs_size.0 as f32 * cell, dabs_size.1 as f32 * cell];
                 let lying = Lying { level, veil, dabs, specks, dabs_size, dabs_version, dabs_area };
-                match gpu.draw_picture(surface, painting, &lying, view, &snowmen) {
+                match gpu.draw_picture(surface, painting, &lying, view, &snowmen, &words) {
                     Ok(()) => {
                         self.showing = true;
                         self.drawn_version = Some(version);
@@ -247,8 +257,8 @@ impl PictureSnow {
                     }
                     Err(error) => log!("{}: wallpaper snow not drawn: {error}", self.name),
                 }
-            } else if moved {
-                let _ = gpu.present_picture(surface, painting, view, &snowmen);
+            } else if moved || changed {
+                let _ = gpu.present_picture(surface, painting, view, &snowmen, &words);
             }
         }
         self.take_clicks_over(&snowmen, view[1], compositor);

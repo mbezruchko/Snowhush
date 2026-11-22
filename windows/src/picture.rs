@@ -7,7 +7,7 @@ use std::sync::mpsc;
 use snowhush_core::geometry::V2;
 use snowhush_core::simulation::{COLUMN_WIDTH, SnowSimulation};
 use snowhush_core::snowman::room::Room;
-use snowhush_core::snowman::{Fight, Ground};
+use snowhush_core::snowman::{Fight, Ground, writing};
 use snowhush_core::wallpaper::Scene;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{DestroyWindow, IsWindow, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetWindowPos};
@@ -49,6 +49,8 @@ pub struct PictureSnow {
     offset: V2,
     /// Whether the display is seen, not covered by a full-screen window: the bot throws only then.
     pub visible: bool,
+    /// What the words over the picture said when last shown.
+    said: Vec<String>,
 }
 
 impl PictureSnow {
@@ -89,6 +91,7 @@ impl PictureSnow {
             fight: None,
             offset: V2::ZERO,
             visible: true,
+            said: Vec::new(),
         })
     }
 
@@ -134,7 +137,8 @@ impl PictureSnow {
     /// Looks after the picture's snow once the simulation has stepped: takes in what a reading found, reads a wallpaper
     /// not read yet, gives the simulation the picture where the overlay `area` lies on the display, both in DIPs from
     /// its top left, and draws the snow if it changed. `frost` draws it at all; without, the picture is read only for
-    /// its depth. `now` in seconds.
+    /// its depth. The `main` display shows the round at its top, and `hint`, how to throw, while it isn't empty. `now`
+    /// in seconds.
     #[allow(clippy::too_many_arguments)]
     pub fn tick(
         &mut self,
@@ -145,6 +149,7 @@ impl PictureSnow {
         fighting: bool,
         room: &mut Room,
         main: bool,
+        hint: &str,
         now: f64,
     ) {
         if let Some((wallpaper, found)) = &self.reading {
@@ -207,6 +212,10 @@ impl PictureSnow {
             moved = fight.step(now, simulation, offset, &covers, self.visible, room);
         }
         let snowmen = self.fight.as_ref().map(|fight| fight.drawings(room)).unwrap_or_default();
+        let words = if self.fight.is_some() { writing::shown(&snowmen, room, hint, main, view) } else { Vec::new() };
+        let said: Vec<String> = words.iter().map(|shown| shown.writing.key.clone()).collect();
+        let changed = said != self.said;
+        self.said = said;
         let cleared = simulation.take_picture_cleared();
         let (level, veil) = (simulation.picture_level(), simulation.picture_veil());
         let snow = frost && !cleared && (level > 0.0 || veil > 0.0 || simulation.has_picture_dabs());
@@ -214,13 +223,13 @@ impl PictureSnow {
         if !snow {
             painting.uncache();
             self.drawn_version = None;
-            if snowmen.is_empty() {
+            if snowmen.is_empty() && words.is_empty() {
                 if self.showing {
                     let _ = self.surface.clear(gpu);
                     self.showing = false;
                 }
-            } else if moved || !self.showing {
-                self.showing = self.surface.present_picture(gpu, painting, view, &snowmen).is_ok();
+            } else if moved || changed || !self.showing {
+                self.showing = self.surface.present_picture(gpu, painting, view, &snowmen, &words).is_ok();
             }
             return;
         }
@@ -230,7 +239,7 @@ impl PictureSnow {
             let origin = self.given.map_or([0.0; 2], |(_, origin)| origin);
             let dabs_area = [origin[0], origin[1], dabs_size.0 as f32 * cell, dabs_size.1 as f32 * cell];
             let lying = Lying { level, veil, dabs, specks, dabs_size, dabs_version, dabs_area };
-            match self.surface.draw_picture(gpu, painting, &lying, view, &snowmen) {
+            match self.surface.draw_picture(gpu, painting, &lying, view, &snowmen, &words) {
                 Ok(()) => {
                     self.showing = true;
                     self.drawn_version = Some(version);
@@ -238,8 +247,8 @@ impl PictureSnow {
                 }
                 Err(error) => log!("{}: wallpaper snow not drawn: {error}", self.name),
             }
-        } else if moved {
-            let _ = self.surface.present_picture(gpu, painting, view, &snowmen);
+        } else if moved || changed {
+            let _ = self.surface.present_picture(gpu, painting, view, &snowmen, &words);
         }
     }
 

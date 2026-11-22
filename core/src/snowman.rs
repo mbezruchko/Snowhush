@@ -5,6 +5,7 @@ pub mod bot;
 pub mod fight;
 pub mod ground;
 pub mod room;
+pub mod writing;
 
 pub use bot::{Bot, Debris, Mat2, Placement};
 pub use fight::{Drawing, Fight, Part, Picture};
