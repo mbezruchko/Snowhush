@@ -1,5 +1,5 @@
 # Packs the built app into Snowhush.msix for the Microsoft Store, which signs it on upload: the app, the manifest with
-# this version and the logos. Needs the Windows SDK's makeappx.exe.
+# this version, the logos and the third-party notices. Needs the Windows SDK's makeappx.exe.
 #   pwsh windows/store/pack.ps1 [-Exe windows\target\release\Snowhush.exe] [-Output dist\Snowhush.msix]
 param(
     [string]$Exe = "$PSScriptRoot\..\target\release\Snowhush.exe",
@@ -16,6 +16,7 @@ $stage = Join-Path ([System.IO.Path]::GetTempPath()) "snowhush-msix-$PID"
 New-Item -ItemType Directory -Force $stage | Out-Null
 Copy-Item $Exe "$stage\Snowhush.exe"
 Copy-Item -Recurse "$PSScriptRoot\Assets" "$stage\Assets"
+Copy-Item "$PSScriptRoot\..\..\Resources\ThirdParty\Notices.txt" "$stage\ThirdPartyNotices.txt"
 # The Store wants four parts, the last one 0.
 (Get-Content -Raw "$PSScriptRoot\AppxManifest.xml").Replace('$VERSION', "$version.0") | Set-Content -NoNewline "$stage\AppxManifest.xml"
 

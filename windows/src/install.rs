@@ -28,6 +28,8 @@ const SETTINGS: PCWSTR = w!("Software\\Snowhush");
 const LINKS: PCWSTR = w!("Software\\Classes\\snowhush");
 const LINKS_COMMAND: PCWSTR = w!("Software\\Classes\\snowhush\\shell\\open\\command");
 const NAME: PCWSTR = w!("Snowhush");
+/// The licenses of the work of others the app carries, which go with it.
+const NOTICES: &str = include_str!("../../Resources/ThirdParty/Notices.txt");
 /// The app's hidden window, which a running Snowhush always has.
 const CONTROLLER: PCWSTR = w!("SnowhushController");
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -55,6 +57,7 @@ pub fn install(app: &[u8], version: &str) -> Result<PathBuf, String> {
         std::thread::sleep(Duration::from_millis(200));
     }
 
+    let _ = std::fs::write(folder.join("ThirdPartyNotices.txt"), NOTICES);
     if let Some(programs) = known_folder(&FOLDERID_Programs) {
         let _ = shortcut(&exe, &programs.join("Snowhush.lnk"));
     }
