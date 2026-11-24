@@ -27,8 +27,9 @@ pub struct PictureSnow {
     name: String,
     window: HWND,
     surface: Surface,
-    /// The display in DIPs.
+    /// The display in DIPs, and in physical pixels on the desktop.
     size: (u32, u32),
+    bounds: RECT,
     /// The wallpaper the display shows, as last told.
     wallpaper: Option<Wallpaper>,
     /// The wallpaper being read, and where what is found comes back.
@@ -82,6 +83,7 @@ impl PictureSnow {
             window,
             surface,
             size,
+            bounds: monitor.bounds,
             wallpaper: None,
             reading: None,
             read: None,
@@ -174,9 +176,9 @@ impl PictureSnow {
             && let Some(wallpaper) = self.wallpaper.clone()
         {
             let (sender, found) = mpsc::channel();
-            let (size, reading, name) = (self.size, wallpaper.clone(), self.name.clone());
+            let (size, bounds, reading, name) = (self.size, self.bounds, wallpaper.clone(), self.name.clone());
             let started = std::thread::Builder::new().name("wallpaper".into()).spawn(move || {
-                let scene = reading.read_apart(size, COLUMN_WIDTH);
+                let scene = reading.read_apart(size, COLUMN_WIDTH, bounds);
                 if scene.is_none() {
                     log!("{name}: nothing read in {}", reading.path.display());
                 }

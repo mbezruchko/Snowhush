@@ -1,6 +1,6 @@
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 use windows::Win32::Foundation::{GENERIC_READ, RECT};
 use windows::Win32::Graphics::Imaging::{
@@ -88,8 +88,7 @@ impl Wallpapers {
                 }
                 return match picture.filter(|path| !path.is_empty()) {
                     Some(path) => {
-                        let size = (bounds.right - bounds.left, bounds.bottom - bounds.top);
-                        let path = shown(PathBuf::from(path), size);
+                        let path = shown(PathBuf::from(path));
                         let modified = std::fs::metadata(&path).and_then(|metadata| metadata.modified()).ok();
                         Some(Backdrop::Picture(path, modified))
                     }
@@ -104,30 +103,19 @@ impl Wallpapers {
     pub fn wallpaper(&self, bounds: &RECT) -> Option<Wallpaper> {
         let Some(Backdrop::Picture(path, _)) = self.backdrop(bounds) else { return None };
         unsafe {
-            let placement = if laid_out(&path) {
-                Placement::Stretch
-            } else {
-                self.desktop.GetPosition().map_or(Placement::Fill, |position| Placement::from_position(position.0))
-            };
+            let placement = self.desktop.GetPosition().map_or(Placement::Fill, |position| Placement::from_position(position.0));
             let fill =
                 self.desktop.GetBackgroundColor().map_or([0.0; 3], |color| std::array::from_fn(|i| ((color.0 >> (8 * i)) & 0xff) as f32 / 255.0));
             Wallpaper::new(path, placement, fill)
         }
     }
 
-    /// For the log: how big the backdrop's picture is, how Windows lays pictures out, and the layouts it keeps.
+    /// For the log: how big the backdrop's picture is, and how Windows lays pictures out.
     pub fn described(&self, backdrop: &Backdrop) -> String {
         let Backdrop::Picture(path, _) = backdrop else { return String::new() };
         let size = self.size(path).map_or("unreadable".to_string(), |(width, height)| format!("{width}x{height}"));
         let position = unsafe { self.desktop.GetPosition() }.map_or(-1, |position| position.0);
-        let kept: Vec<String> = themes()
-            .and_then(|themes| std::fs::read_dir(themes.join("CachedFiles")).ok())
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|entry| entry.file_name().to_string_lossy().into_owned())
-            .collect();
-        format!("picture {size}, position {position}, laid out by Windows: {kept:?}")
+        format!("picture {size}, position {position}")
     }
 
     fn size(&self, path: &Path) -> Option<(u32, u32)> {
@@ -185,38 +173,14 @@ fn themes() -> Option<PathBuf> {
     std::env::var_os("APPDATA").map(|folder| PathBuf::from(folder).join(r"Microsoft\Windows\Themes"))
 }
 
-fn modified(path: &Path) -> Option<SystemTime> {
-    std::fs::metadata(path).ok()?.modified().ok()
-}
-
-/// The picture a display `size` physical pixels across shows. Windows keeps each display's wallpaper as it lays it out
-/// there, under Themes\CachedFiles: taken when it is there and no older than the wallpaper, it lines up with the screen
-/// however Windows fills it. Else the file the wallpaper was set from; or, when that has gone since or is on a drive
-/// that isn't there, the copy Windows goes on showing it from.
-fn shown(path: PathBuf, size: (i32, i32)) -> PathBuf {
-    let Some(themes) = themes() else { return path };
-    let copy = themes.join("TranscodedWallpaper");
-    let set = modified(&copy);
-    let name = format!("CachedImage_{}_{}_POS", size.0, size.1);
-    let kept = std::fs::read_dir(themes.join("CachedFiles"))
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|entry| entry.file_name().to_string_lossy().starts_with(&name))
-        .filter_map(|entry| Some((modified(&entry.path())?, entry.path())))
-        .max_by_key(|(at, _)| *at)
-        .filter(|(at, _)| set.is_none_or(|set| *at + Duration::from_secs(120) >= set));
-    match kept {
-        Some((_, kept)) => kept,
-        None if path.is_file() => path,
-        None if copy.is_file() => copy,
-        None => path,
+/// The picture a display shows. Windows names the file the wallpaper was set from, which may since have gone or be on a
+/// drive that isn't there, while it goes on showing the copy it keeps of it.
+fn shown(path: PathBuf) -> PathBuf {
+    if path.is_file() {
+        return path;
     }
-}
-
-/// Whether the picture is one Windows already laid out on its display.
-fn laid_out(path: &Path) -> bool {
-    path.file_name().is_some_and(|name| name.to_string_lossy().starts_with("CachedImage_"))
+    let copy = themes().map(|themes| themes.join("TranscodedWallpaper"));
+    copy.filter(|copy| copy.is_file()).unwrap_or(path)
 }
 
 /// Copies a string the shell allocated and frees it.

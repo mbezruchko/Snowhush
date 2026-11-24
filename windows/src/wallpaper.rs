@@ -9,7 +9,11 @@ use std::process::Command;
 use std::time::{Duration, Instant, SystemTime};
 
 use snowhush_core::wallpaper::{Scene, Shown, cache_name};
-use windows::Win32::Foundation::GENERIC_READ;
+use windows::Win32::Foundation::{GENERIC_READ, RECT};
+use windows::Win32::Graphics::Gdi::{
+    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS, DeleteDC, DeleteObject, GdiFlush, GetDC, HGDIOBJ,
+    PaintDesktop, ReleaseDC, SelectObject,
+};
 use windows::Win32::Graphics::Imaging::{
     CLSID_WICImagingFactory, GUID_WICPixelFormat32bppRGBA, IWICImagingFactory, WICBitmapDitherTypeNone, WICBitmapInterpolationModeHighQualityCubic,
     WICBitmapPaletteTypeCustom, WICDecodeMetadataCacheOnDemand,
@@ -105,6 +109,7 @@ impl Wallpaper {
             &modified.to_string(),
             &self.bytes.to_string(),
             &column_width.to_string(),
+            "as Windows paints it",
         ]);
         Some(folder()?.join("wallpaper").join(name))
     }
@@ -113,18 +118,24 @@ impl Wallpaper {
         Scene::from_bytes(&std::fs::read(self.kept(size, column_width)?).ok()?)
     }
 
-    /// What is found in it, read by another run of the app the first time. Slow then, seconds to minutes: never on the
-    /// snow's own thread.
-    pub fn read_apart(&self, size: (u32, u32), column_width: f32) -> Option<Scene> {
+    /// What is found in it on the display `bounds`, in physical pixels, read by another run of the app the first time.
+    /// Slow then, seconds to minutes: never on the snow's own thread. Read as Windows paints it there, when it does:
+    /// how it crops a picture that fills the display is its own, and isn't centred.
+    pub fn read_apart(&self, size: (u32, u32), column_width: f32, bounds: RECT) -> Option<Scene> {
         if let Some(kept) = self.remembered(size, column_width) {
             return Some(kept);
         }
         let out = self.kept(size, column_width)?;
+        let painted = out.parent().and_then(|folder| std::fs::create_dir_all(folder).ok()).and_then(|()| {
+            let painted = out.with_extension("bmp");
+            paint(bounds, &self.path, self.placement, &painted).then_some(painted)
+        });
+        let (picture, placement) = painted.as_deref().map_or((self.path.as_path(), self.placement), |painted| (painted, Placement::Stretch));
         let fill = format!("{},{},{}", self.fill[0], self.fill[1], self.fill[2]);
         let mut reader = Command::new(std::env::current_exe().ok()?)
             .arg(READ)
-            .arg(&self.path)
-            .args([self.placement.name(), &fill, &size.0.to_string(), &size.1.to_string(), &column_width.to_string()])
+            .arg(picture)
+            .args([placement.name(), &fill, &size.0.to_string(), &size.1.to_string(), &column_width.to_string()])
             .arg(&out)
             .creation_flags(CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS)
             .spawn()
@@ -146,6 +157,9 @@ impl Wallpaper {
                     break;
                 }
             }
+        }
+        if let Some(painted) = &painted {
+            let _ = std::fs::remove_file(painted);
         }
         self.remembered(size, column_width)
     }
@@ -177,6 +191,150 @@ pub fn read_for_another_run(arguments: &[String]) -> i32 {
         return 1;
     }
     0
+}
+
+/// Paints the wallpaper on the display `bounds` as Windows does into `file`, a bitmap; whether it painted a picture.
+/// Logs how far from centred Windows lays a `picture` that fills the display.
+fn paint(bounds: RECT, picture: &Path, placement: Placement, file: &Path) -> bool {
+    if bounds.left < 0 || bounds.top < 0 || bounds.right <= bounds.left || bounds.bottom <= bounds.top {
+        return false;
+    }
+    let (width, height) = ((bounds.right - bounds.left) as usize, (bounds.bottom - bounds.top) as usize);
+    let mut pixels = vec![0u8; width * height * 4];
+    let painted = unsafe {
+        let screen = GetDC(None);
+        let memory = CreateCompatibleDC(Some(screen));
+        ReleaseDC(None, screen);
+        let info = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: bounds.right,
+                biHeight: -bounds.bottom,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut bits = std::ptr::null_mut();
+        let painted = match CreateDIBSection(Some(memory), &info, DIB_RGB_COLORS, &mut bits, None, 0) {
+            Ok(bitmap) => {
+                let previous = SelectObject(memory, HGDIOBJ(bitmap.0));
+                let painted = PaintDesktop(memory).as_bool();
+                let _ = GdiFlush();
+                if painted {
+                    let all = std::slice::from_raw_parts(bits.cast::<u8>(), bounds.right as usize * bounds.bottom as usize * 4);
+                    for (y, row) in pixels.chunks_exact_mut(width * 4).enumerate() {
+                        let from = ((bounds.top as usize + y) * bounds.right as usize + bounds.left as usize) * 4;
+                        row.copy_from_slice(&all[from..from + width * 4]);
+                    }
+                }
+                SelectObject(memory, previous);
+                let _ = DeleteObject(HGDIOBJ(bitmap.0));
+                painted
+            }
+            Err(_) => false,
+        };
+        let _ = DeleteDC(memory);
+        painted
+    };
+    let lightness: Vec<f32> = pixels.chunks_exact(4).step_by(997).map(|p| luma(p[2], p[1], p[0])).collect();
+    let mean = lightness.iter().sum::<f32>() / lightness.len().max(1) as f32;
+    let spread = (lightness.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / lightness.len().max(1) as f32).sqrt();
+    if !painted || spread < 2.0 {
+        log!("wallpaper: Windows painted {}", if painted { "one colour" } else { "nothing" });
+        return false;
+    }
+    if placement == Placement::Fill
+        && let Some((right, down)) = off_centre(picture, &pixels, width, height)
+    {
+        log!("wallpaper: Windows lays {} {right} px right and {down} px down of centred", picture.display());
+    }
+    pixels.chunks_exact_mut(4).for_each(|p| p[3] = 255);
+    write_bitmap(file, width, height, &pixels).is_ok()
+}
+
+fn luma(r: u8, g: u8, b: u8) -> f32 {
+    r as f32 * 0.2126 + g as f32 * 0.7152 + b as f32 * 0.0722
+}
+
+/// How far right and down of centred `picture` lies where Windows filled the display with it, `painted` BGRA, in
+/// physical pixels: found by sliding it, small, over what was painted.
+fn off_centre(picture: &Path, painted: &[u8], width: usize, height: usize) -> Option<(i32, i32)> {
+    let (w, h) = (256usize, (height * 256 / width).max(1));
+    let mut seen = vec![0f32; w * h];
+    for y in 0..h {
+        for x in 0..w {
+            let (x0, y0) = (x * width / w, y * height / h);
+            let (x1, y1) = (((x + 1) * width / w).max(x0 + 1), ((y + 1) * height / h).max(y0 + 1));
+            let (mut sum, mut count) = (0.0, 0.0);
+            for py in (y0..y1).step_by(2) {
+                for px in (x0..x1).step_by(2) {
+                    let i = (py * width + px) * 4;
+                    sum += luma(painted[i + 2], painted[i + 1], painted[i]);
+                    count += 1.0;
+                }
+            }
+            seen[y * w + x] = sum / count;
+        }
+    }
+    let name: Vec<u16> = picture.as_os_str().encode_wide().chain([0]).collect();
+    let (dw, dh, drawn) = unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let imaging: IWICImagingFactory = CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER).ok()?;
+        let decoder = imaging.CreateDecoderFromFilename(PCWSTR(name.as_ptr()), None, GENERIC_READ, WICDecodeMetadataCacheOnDemand).ok()?;
+        let frame = decoder.GetFrame(0).ok()?;
+        let (mut pw, mut ph) = (0u32, 0u32);
+        frame.GetSize(&mut pw, &mut ph).ok()?;
+        let scale = (w as f32 / pw.max(1) as f32).max(h as f32 / ph.max(1) as f32);
+        let (dw, dh) = (((pw as f32 * scale).round() as usize).max(w), ((ph as f32 * scale).round() as usize).max(h));
+        let scaler = imaging.CreateBitmapScaler().ok()?;
+        scaler.Initialize(&frame, dw as u32, dh as u32, WICBitmapInterpolationModeHighQualityCubic).ok()?;
+        let converter = imaging.CreateFormatConverter().ok()?;
+        converter.Initialize(&scaler, &GUID_WICPixelFormat32bppRGBA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeCustom).ok()?;
+        let mut drawn = vec![0u8; dw * dh * 4];
+        converter.CopyPixels(std::ptr::null(), (dw * 4) as u32, &mut drawn).ok()?;
+        (dw, dh, drawn)
+    };
+    let (ex, ey) = (dw - w, dh - h);
+    let mut best = (f32::MAX, 0, 0);
+    for oy in 0..=ey {
+        for ox in 0..=ex {
+            let mut differs = 0.0;
+            for y in 0..h {
+                for x in 0..w {
+                    let i = ((oy + y) * dw + ox + x) * 4;
+                    differs += (luma(drawn[i], drawn[i + 1], drawn[i + 2]) - seen[y * w + x]).abs();
+                }
+            }
+            if differs < best.0 {
+                best = (differs, ox, oy);
+            }
+        }
+    }
+    let factor = width as f32 / w as f32;
+    Some((((ex as f32 / 2.0 - best.1 as f32) * factor).round() as i32, ((ey as f32 / 2.0 - best.2 as f32) * factor).round() as i32))
+}
+
+/// A bitmap file of `bgra`, rows top first, `width` by `height`.
+fn write_bitmap(file: &Path, width: usize, height: usize, bgra: &[u8]) -> std::io::Result<()> {
+    let size = width * height * 4;
+    let mut bytes = Vec::with_capacity(54 + size);
+    bytes.extend_from_slice(b"BM");
+    bytes.extend_from_slice(&((54 + size) as u32).to_le_bytes());
+    bytes.extend_from_slice(&[0; 4]);
+    bytes.extend_from_slice(&54u32.to_le_bytes());
+    bytes.extend_from_slice(&40u32.to_le_bytes());
+    bytes.extend_from_slice(&(width as i32).to_le_bytes());
+    bytes.extend_from_slice(&(height as i32).to_le_bytes());
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&32u16.to_le_bytes());
+    bytes.extend_from_slice(&[0; 24]);
+    for row in bgra.chunks_exact(width * 4).rev() {
+        bytes.extend_from_slice(row);
+    }
+    std::fs::write(file, bytes)
 }
 
 fn forget_old(folder: &Path) {
