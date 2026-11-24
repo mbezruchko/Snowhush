@@ -9,8 +9,8 @@ use snowhush_core::simulation::{COLUMN_WIDTH, SnowSimulation};
 use snowhush_core::snowman::room::Room;
 use snowhush_core::snowman::{Fight, Ground, writing};
 use snowhush_core::wallpaper::Scene;
-use windows::Win32::Foundation::HWND;
-use windows::Win32::UI::WindowsAndMessaging::{DestroyWindow, IsWindow, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetWindowPos};
+use windows::Win32::Foundation::{HWND, RECT};
+use windows::Win32::UI::WindowsAndMessaging::{DestroyWindow, GetWindowRect, IsWindow, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetWindowPos};
 use windows::core::Result;
 
 use crate::desktop::DesktopLayer;
@@ -62,6 +62,9 @@ impl PictureSnow {
                 let _ = SetWindowPos(window, Some(over), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
             }
         }
+        let mut placed = RECT::default();
+        let _ = unsafe { GetWindowRect(window, &mut placed) };
+        log!("{}: wallpaper's snow at {placed:?}, the display at {:?}", monitor.name, monitor.bounds);
         let rect = dip_rect(monitor, &monitor.bounds);
         let size = ((rect[2] - rect[0]).round().max(1.0) as u32, (rect[3] - rect[1]).round().max(1.0) as u32);
         let physical = ((monitor.bounds.right - monitor.bounds.left) as f32, (monitor.bounds.bottom - monitor.bounds.top) as f32);

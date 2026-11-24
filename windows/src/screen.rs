@@ -501,7 +501,8 @@ impl Screen {
         }
         self.shadow_tint = backdrop.as_ref().and_then(|backdrop| wallpapers.tint(backdrop)).unwrap_or([0.0; 4]);
         let unreachable = if matches!(backdrop, Some(Backdrop::Picture(_, None))) { "; its picture can't be opened" } else { "" };
-        log!("backdrop of {}: {backdrop:?}, shadow {:?}{unreachable}", self.monitor.name, self.shadow_tint);
+        let described = backdrop.as_ref().map(|backdrop| wallpapers.described(backdrop)).unwrap_or_default();
+        log!("backdrop of {}: {backdrop:?}, shadow {:?}{unreachable}; {described}", self.monitor.name, self.shadow_tint);
         self.backdrop = backdrop;
     }
 
