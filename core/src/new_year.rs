@@ -7,11 +7,11 @@ use crate::halloween::Today;
 /// Lets the New Year be tried out on any day: SNOWHUSH_NEW_YEAR=1; and its midnight, five seconds after the app starts
 /// and every two minutes after: SNOWHUSH_MIDNIGHT=1.
 pub fn previewed() -> bool {
-    std::env::var("SNOWHUSH_NEW_YEAR").is_ok_and(|value| value == "1")
+    crate::preview::on("new_year")
 }
 
 pub fn midnight_previewed() -> bool {
-    std::env::var("SNOWHUSH_MIDNIGHT").is_ok_and(|value| value == "1")
+    crate::preview::on("midnight")
 }
 
 /// The local time, months and days counted from 1.

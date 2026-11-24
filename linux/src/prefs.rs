@@ -57,7 +57,7 @@ impl Settings {
 
     /// Whether snowmen live in the wallpaper's picture for a snowball fight: only with its depth.
     pub fn fights(&self) -> bool {
-        self.depth && (self.fight || std::env::var("SNOWHUSH_FIGHT").is_ok_and(|value| value == "1"))
+        self.depth && (self.fight || snowhush_core::preview::on("fight"))
     }
 
     pub fn load() -> Settings {

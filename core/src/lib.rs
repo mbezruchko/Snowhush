@@ -6,6 +6,7 @@ pub mod halloween;
 pub mod layer;
 pub mod modes;
 pub mod new_year;
+pub mod preview;
 pub mod simulation;
 pub mod snowman;
 pub mod text;

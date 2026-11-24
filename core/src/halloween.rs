@@ -30,7 +30,7 @@ pub const SIGN_CAPTIONS: [&str; 12] = [
 
 /// Lets Halloween be tried out on any day: SNOWHUSH_HALLOWEEN=1, and the daylight under it at any hour: SNOWHUSH_HOUR=22.
 pub fn previewed() -> bool {
-    std::env::var("SNOWHUSH_HALLOWEEN").is_ok_and(|value| value == "1")
+    crate::preview::on("halloween")
 }
 
 pub fn previewed_hour() -> Option<f32> {
