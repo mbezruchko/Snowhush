@@ -106,7 +106,7 @@ impl PictureSnow {
             return;
         }
         log!("{}: wallpaper {:?}", self.name, wallpaper.as_ref().map(|wallpaper| &wallpaper.path));
-        let other = matches!((&self.wallpaper, &wallpaper), (Some(old), Some(new)) if old.path != new.path);
+        let other = matches!((&self.wallpaper, &wallpaper), (Some(old), Some(new)) if old.path != new.path || old.modified != new.modified);
         self.wallpaper = wallpaper;
         self.forget(gpu, simulation);
         // Another picture starts over, and snow forms on it from the first flake.

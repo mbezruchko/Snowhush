@@ -88,7 +88,7 @@ impl Wallpapers {
                 }
                 return match picture.filter(|path| !path.is_empty()) {
                     Some(path) => {
-                        let path = PathBuf::from(path);
+                        let path = shown(PathBuf::from(path));
                         let modified = std::fs::metadata(&path).and_then(|metadata| metadata.modified()).ok();
                         Some(Backdrop::Picture(path, modified))
                     }
@@ -149,6 +149,16 @@ impl Wallpapers {
             Ok(sum.map(|channel| channel / count))
         }
     }
+}
+
+/// The picture a display shows. Windows names the file the wallpaper was set from, which may since have gone or be on a
+/// drive that isn't there, while it goes on showing the copy it keeps of it.
+fn shown(path: PathBuf) -> PathBuf {
+    if path.is_file() {
+        return path;
+    }
+    let copy = std::env::var_os("APPDATA").map(|folder| PathBuf::from(folder).join(r"Microsoft\Windows\Themes\TranscodedWallpaper"));
+    copy.filter(|copy| copy.is_file()).unwrap_or(path)
 }
 
 /// Copies a string the shell allocated and frees it.

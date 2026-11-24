@@ -140,6 +140,7 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
     let mut spooky = halloween::shows(&settings);
     let mut festive = new_year::shows(&settings);
     let mut sky = Sky::now(spooky);
+    log!("holiday: {:?}, wallpaper depth {}, snowball fight {}", new_year::holiday(&settings), settings.depth, settings.fights());
     let wallpapers = Wallpapers::new().inspect_err(|error| log!("wallpapers unavailable: {error}")).ok();
     // When the snow in the wallpapers was last looked after: each display's made or let go as wanted, and how much of it
     // lies kept for the next run.
