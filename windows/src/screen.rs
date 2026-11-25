@@ -3,8 +3,9 @@ use std::collections::HashSet;
 use std::ffi::c_void;
 use std::mem::size_of;
 use std::sync::Once;
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::time::{Duration, Instant};
+use windows::Win32::System::Registry::{HKEY, HKEY_CURRENT_USER, KEY_NOTIFY, REG_NOTIFY_CHANGE_LAST_SET, RegNotifyChangeKeyValue, RegOpenKeyExW};
 
 use windows::Win32::Foundation::{COLORREF, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{DWM_TIMING_INFO, DwmGetCompositionTimingInfo};
@@ -709,6 +710,23 @@ fn physical_size(monitor: &Monitor) -> (i32, i32) {
 /// Wakes the snow loop through `wake` the moment a taskbar that hides itself comes over an overlay, as it does when
 /// clicked. The loop doesn't read its messages between frames and would only raise the overlay at the next one, long
 /// enough for the drift to blink out under the taskbar, so the windows' stacking is watched from a thread of its own.
+/// Set when Windows has written another wallpaper's name: Settings changes it without telling the windows that listen
+/// for SPI_SETDESKWALLPAPER, so its key is watched.
+pub static WALLPAPER_SET: AtomicBool = AtomicBool::new(false);
+
+pub fn watch_wallpaper(wake: isize) {
+    let _ = std::thread::Builder::new().name("wallpaper key".into()).spawn(move || unsafe {
+        let mut key = HKEY::default();
+        if RegOpenKeyExW(HKEY_CURRENT_USER, w!("Control Panel\\Desktop"), None, KEY_NOTIFY, &mut key).is_err() {
+            return;
+        }
+        while RegNotifyChangeKeyValue(key, true, REG_NOTIFY_CHANGE_LAST_SET, None, false).is_ok() {
+            WALLPAPER_SET.store(true, Ordering::Relaxed);
+            let _ = SetEvent(HANDLE(wake as _));
+        }
+    });
+}
+
 pub fn watch_taskbar(wake: isize) {
     static WAKE: AtomicIsize = AtomicIsize::new(0);
     unsafe extern "system" fn on_restack(_: HWINEVENTHOOK, _: u32, _: HWND, _: i32, _: i32, _: u32, _: u32) {

@@ -31,7 +31,10 @@ use crate::new_year;
 use crate::picture::PictureSnow;
 use crate::prefs::{self, Settings};
 use crate::render::Gpu;
-use crate::screen::{BACKDROP_CHANGED, Clock, DISPLAYS_CHANGED, Monitor, PowerBudget, Screen, dip_size, listen, monitors, walls, watch_taskbar};
+use crate::screen::{
+    BACKDROP_CHANGED, Clock, DISPLAYS_CHANGED, Monitor, PowerBudget, Screen, WALLPAPER_SET, dip_size, listen, monitors, walls, watch_taskbar,
+    watch_wallpaper,
+};
 use crate::tracker::{self, Tracker};
 use snowhush_core::new_year as core_new_year;
 
@@ -161,6 +164,9 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
     // The display each window's snow lies on, as of the last window list.
     let mut owners = HashMap::new();
     watch_taskbar(links.wake);
+    watch_wallpaper(links.wake);
+    // When to look at the wallpaper again, after its key changed: Explorer may name the new one a moment later.
+    let mut backdrop_again: Vec<i64> = Vec::new();
 
     loop {
         screens.iter().filter(|screen| screen.under_taskbar()).for_each(Screen::raise);
@@ -348,6 +354,14 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
             light_at = 0;
         }
         if BACKDROP_CHANGED.take() {
+            light_at = 0;
+        }
+        if WALLPAPER_SET.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            light_at = 0;
+            backdrop_again = vec![now + clock.frequency * 3 / 2, now + clock.frequency * 4];
+        }
+        if backdrop_again.first().is_some_and(|&at| now >= at) {
+            backdrop_again.remove(0);
             light_at = 0;
         }
 
