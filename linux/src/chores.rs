@@ -97,7 +97,7 @@ fn shades(bus: &Bus, tints: &mut Vec<(Backdrop, Option<[f32; 4]>)>) -> Vec<Shade
     shades
 }
 
-fn plasma() -> bool {
+pub fn plasma() -> bool {
     std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|desktop| desktop.to_ascii_uppercase().split(':').any(|part| part == "KDE"))
 }
 

@@ -72,8 +72,10 @@ impl PictureSnow {
         if let Ok(region) = Region::new(compositor) {
             surface.set_input_region(Some(region.wl_region()));
         }
-        // Over the wallpaper, which a wallpaper daemon or the desktop puts on this layer before us, and under everything.
-        let layer = layer_shell.create_layer_surface(qh, surface, Layer::Background, Some("snowhush-wallpaper"), Some(output));
+        // Over the wallpaper, which a wallpaper daemon puts on this layer before us, and under everything. Plasma's
+        // desktop is a window of its own that comes over that layer once clicked, so there the snow goes a layer up.
+        let layer = if crate::chores::plasma() { Layer::Bottom } else { Layer::Background };
+        let layer = layer_shell.create_layer_surface(qh, surface, layer, Some("snowhush-wallpaper"), Some(output));
         layer.set_anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
         layer.set_exclusive_zone(-1);
         layer.set_keyboard_interactivity(KeyboardInteractivity::None);
