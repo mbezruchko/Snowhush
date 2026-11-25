@@ -51,6 +51,7 @@ FILES
 fi
 ditto "$models/$model.mlmodelc" "$app/Contents/Resources/$model.mlmodelc"
 cp Resources/ThirdParty/DepthAnything-LICENSE.txt "$app/Contents/Resources/"
+cp Resources/ThirdParty/Mac-Notices.txt "$app/Contents/Resources/ThirdPartyNotices.txt"
 for strings in locales/*.strings; do
     lproj="$app/Contents/Resources/$(basename "$strings" .strings).lproj"
     mkdir -p "$lproj"
