@@ -71,6 +71,10 @@
 "fight.invite" = "Invitar a amigos";
 "fight.copy" = "Copiar enlace de invitación";
 "fight.join" = "Unirse con el enlace copiado";
+"fight.paste" = "Pega el enlace de invitación…";
+"fight.copied" = "Enlace copiado";
+"fight.notlink" = "No es un enlace de invitación";
+"fight.nolink" = "No hay ningún enlace de invitación copiado";
 "fight.leave" = "Salir de la sala";
 "fight.opening" = "Abriendo una sala…";
 "fight.joining" = "Conectando…";

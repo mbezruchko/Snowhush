@@ -20,6 +20,8 @@ use crate::wallpaper;
 
 /// The room as the menu shows it: what is going on, whether hosting it, and whether in one at all.
 static SHOWN: Mutex<(Option<String>, bool, bool)> = Mutex::new((None, false, false));
+/// A word on what was just done, shown in place of the room's state for a moment, and since when.
+static NOTICE: Mutex<Option<(String, std::time::Instant)>> = Mutex::new(None);
 
 /// The room being opened or joined, waiting on what the site says.
 pub struct Opening(mpsc::Receiver<(Option<String>, bool)>, Option<String>);
@@ -154,7 +156,16 @@ pub fn show(room: &Room) {
 
 /// The room as the menu shows it.
 pub fn shown() -> (Option<String>, bool, bool) {
-    SHOWN.lock().map(|shown| shown.clone()).unwrap_or_default()
+    let (status, hosting, inside) = SHOWN.lock().map(|shown| shown.clone()).unwrap_or_default();
+    let notice = NOTICE.lock().ok().and_then(|notice| notice.clone()).filter(|(_, at)| at.elapsed().as_secs_f32() < 2.5);
+    (notice.map(|(text, _)| text).or(status), hosting, inside)
+}
+
+/// Says in the menu, for a moment, what was just done.
+pub fn notice(text: &str) {
+    if let Ok(mut notice) = NOTICE.lock() {
+        *notice = Some((text.to_string(), std::time::Instant::now()));
+    }
 }
 
 /// What is going on in the room, or none while there is none.

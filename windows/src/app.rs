@@ -70,6 +70,7 @@ const ID_SELECTION: u32 = 224;
 const ID_FIGHT_INVITE: u32 = 225;
 const ID_FIGHT_JOIN: u32 = 226;
 const ID_FIGHT_LEAVE: u32 = 227;
+const ID_FIGHT_FIELD: u32 = 228;
 const ID_OPACITY_FOLD: u32 = 221;
 /// Opacity from 10% up in steps of 5%: `ID_OPACITY` + the step.
 const ID_OPACITY: u32 = 400;
@@ -492,31 +493,40 @@ fn entries(settings: &Settings, login: bool, sliders: bool) -> Vec<Entry> {
         let opacities =
             OPACITY_STOPS.iter().map(|&stop| Entry::choice(ID_OPACITY + (stop - 10) / 5, &format!("{stop}%"), stop == settings.opacity)).collect();
         vec![
-            Entry::Submenu { label: tr("intensity").to_string(), entries: intensities },
-            Entry::Submenu { label: tr("opacity").to_string(), entries: opacities },
+            Entry::Submenu { label: tr("intensity").to_string(), entries: intensities, shimmer: false },
+            Entry::Submenu { label: tr("opacity").to_string(), entries: opacities, shimmer: false },
         ]
     };
     entries.extend(accumulate(settings, !heaps.is_empty(), sliders));
-    entries.push(Entry::Submenu { label: tr("mode").to_string(), entries: modes });
+    entries.push(Entry::Submenu { label: tr("mode").to_string(), entries: modes, shimmer: false });
     if settings.fights() {
         let (status, hosting, inside) = crate::fight::shown();
         let mut fighting = Vec::new();
         // Out of a room, how to throw.
         let status = status.unwrap_or_else(|| tr("fight.hint.ctrl").to_string());
         fighting.push(Entry::item(0, &status, false, false));
-        fighting.push(Entry::item(ID_FIGHT_INVITE, tr(if hosting { "fight.copy" } else { "fight.invite" }), false, true));
-        fighting.push(Entry::item(ID_FIGHT_JOIN, tr("fight.join"), false, true));
-        if inside {
-            fighting.push(Entry::item(ID_FIGHT_LEAVE, tr("fight.leave"), false, true));
+        let invite = tr(if hosting { "fight.copy" } else { "fight.invite" });
+        if sliders {
+            // The drawn menu stays open on these, for what they bring about to show in it; its rows keep their number,
+            // as it closes should they change.
+            fighting.push(Entry::toggle(ID_FIGHT_INVITE, invite, false, true));
+            fighting.push(Entry::Field { id: ID_FIGHT_FIELD, placeholder: tr("fight.paste").to_string(), enabled: !inside });
+            fighting.push(Entry::toggle(ID_FIGHT_LEAVE, tr("fight.leave"), false, inside));
+        } else {
+            fighting.push(Entry::item(ID_FIGHT_INVITE, invite, false, true));
+            fighting.push(Entry::item(ID_FIGHT_JOIN, tr("fight.join"), false, true));
+            if inside {
+                fighting.push(Entry::item(ID_FIGHT_LEAVE, tr("fight.leave"), false, true));
+            }
         }
-        entries.push(Entry::Submenu { label: tr("fight").to_string(), entries: fighting });
+        entries.push(Entry::Submenu { label: tr("fight").to_string(), entries: fighting, shimmer: true });
     }
     if !heaps.is_empty() {
         entries.push(Entry::item(ID_CLEAR, text::kinds("clear", &heaps), false, true));
     }
     entries.extend([
         Entry::Separator,
-        Entry::Submenu { label: tr("settings").to_string(), entries: options },
+        Entry::Submenu { label: tr("settings").to_string(), entries: options, shimmer: false },
         Entry::loved(ID_SPONSOR, tr("support")),
         Entry::item(ID_QUIT, tr("quit"), false, true),
     ]);
@@ -535,7 +545,7 @@ fn accumulate(settings: &Settings, heaps: bool, drawn: bool) -> Vec<Entry> {
     surfaces.push((ID_SELECTION, Icon::Selection, tr("surface.selection"), settings.selection));
     if !drawn {
         let entries = surfaces.iter().map(|&(id, _, label, on)| Entry::item(id, label, on, true)).collect();
-        return vec![Entry::Submenu { label: tr("accumulate").to_string(), entries }];
+        return vec![Entry::Submenu { label: tr("accumulate").to_string(), entries, shimmer: false }];
     }
     let on: Vec<Icon> = surfaces.iter().filter(|surface| surface.3).map(|surface| surface.1).collect();
     // Some on, the row shows their icons rather than their names, which would widen the menu.
@@ -591,12 +601,12 @@ unsafe fn append(menu: HMENU, entries: &[Entry]) {
                         let _ = CheckMenuRadioItem(menu, *id, *id, *id, MF_BYCOMMAND.0);
                     }
                 }
-                Entry::Submenu { label, entries } => {
+                Entry::Submenu { label, entries, .. } => {
                     let Ok(submenu) = CreatePopupMenu() else { continue };
                     append(submenu, entries);
                     let _ = AppendMenuW(menu, MF_POPUP, submenu.0 as usize, PCWSTR(text(label).as_ptr()));
                 }
-                Entry::Slider { .. } | Entry::Disclosure { .. } | Entry::Icons { .. } => {}
+                Entry::Slider { .. } | Entry::Disclosure { .. } | Entry::Icons { .. } | Entry::Field { .. } => {}
             }
         }
     }
@@ -708,8 +718,26 @@ fn choose(window: HWND, chosen: u32, login: bool) {
                     settings.selection = !settings.selection;
                     Command::Selection(settings.selection)
                 }
-                ID_FIGHT_INVITE => Command::FightInvite,
-                ID_FIGHT_JOIN => Command::FightJoin,
+                ID_FIGHT_INVITE => {
+                    if crate::fight::shown().1 {
+                        crate::fight::notice(tr("fight.copied"));
+                    }
+                    Command::FightInvite
+                }
+                ID_FIGHT_JOIN => {
+                    if !crate::fight::pasted().is_some_and(|text| snowhush_core::snowman::room::holds_invite(&text)) {
+                        crate::fight::notice(tr("fight.nolink"));
+                    }
+                    Command::FightJoin
+                }
+                ID_FIGHT_FIELD => {
+                    let text = menu::field_text();
+                    if !snowhush_core::snowman::room::holds_invite(&text) {
+                        crate::fight::notice(tr("fight.notlink"));
+                        return;
+                    }
+                    Command::FightLink(text)
+                }
                 ID_FIGHT_LEAVE => Command::FightLeave,
                 ID_MAX_PERFORMANCE => {
                     settings.max_performance = !settings.max_performance;

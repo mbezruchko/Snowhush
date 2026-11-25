@@ -71,6 +71,10 @@
 "fight.invite" = "Inviter des amis";
 "fight.copy" = "Copier le lien d’invitation";
 "fight.join" = "Rejoindre avec le lien copié";
+"fight.paste" = "Coller le lien d’invitation…";
+"fight.copied" = "Lien copié";
+"fight.notlink" = "Ce n’est pas un lien d’invitation";
+"fight.nolink" = "Aucun lien d’invitation dans le presse-papiers";
 "fight.leave" = "Quitter la salle";
 "fight.opening" = "Ouverture d’une salle…";
 "fight.joining" = "Connexion…";

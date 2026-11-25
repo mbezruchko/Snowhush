@@ -71,6 +71,10 @@
 "fight.invite" = "邀请朋友";
 "fight.copy" = "复制邀请链接";
 "fight.join" = "用复制的链接加入";
+"fight.paste" = "粘贴邀请链接…";
+"fight.copied" = "链接已复制";
+"fight.notlink" = "这不是邀请链接";
+"fight.nolink" = "剪贴板中没有邀请链接";
 "fight.leave" = "离开房间";
 "fight.opening" = "正在开启房间…";
 "fight.joining" = "正在连接…";

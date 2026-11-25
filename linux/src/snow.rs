@@ -94,6 +94,8 @@ pub struct App {
     room: snowhush_core::snowman::room::Room,
     opening: Option<fight::Opening>,
     room_shown: u64,
+    /// A word on what was just done, shown in the menu in place of the room's state until then.
+    notice: Option<std::time::Instant>,
     /// The seats' pointers, for clicks on the snowmen in the wallpaper.
     seat: SeatState,
     pointers: Vec<wayland_client::protocol::wl_pointer::WlPointer>,
@@ -197,6 +199,7 @@ pub fn run(link: Option<String>) -> Result<(), String> {
         room: Default::default(),
         opening: None,
         room_shown: 0,
+        notice: None,
         pointers: Vec::new(),
         compositor,
         layer_shell,
@@ -389,14 +392,16 @@ impl App {
                 self.update_light();
             }
             Command::FightInvite => match &self.room.invite {
-                Some(invite) => fight::copy(&snowhush_core::snowman::room::link(invite)),
+                Some(invite) => {
+                    fight::copy(&snowhush_core::snowman::room::link(invite));
+                    self.say(tr("fight.copied"));
+                }
                 None => self.opening = Some(fight::open(&mut self.room, None)),
             },
-            Command::FightJoin => {
-                if let Some(text) = fight::pasted().filter(|text| snowhush_core::snowman::room::holds_invite(text)) {
-                    self.opening = Some(fight::open(&mut self.room, Some(text)));
-                }
-            }
+            Command::FightJoin => match fight::pasted().filter(|text| snowhush_core::snowman::room::holds_invite(text)) {
+                Some(text) => self.opening = Some(fight::open(&mut self.room, Some(text))),
+                None => self.say(tr("fight.nolink")),
+            },
             Command::FightLeave => {
                 self.opening = None;
                 fight::leave(&mut self.room);
@@ -837,13 +842,24 @@ impl App {
             }
         }
         self.room.tick(seconds);
-        if self.room.version != self.room_shown {
+        let noticed = self.notice.is_some_and(|until| std::time::Instant::now() < until);
+        if !noticed && (self.room.version != self.room_shown || self.notice.is_some()) {
+            self.notice = None;
             self.room_shown = self.room.version;
             let (status, hosting, inside) =
                 (fight::status(&self.room), self.room.invite.is_some(), self.room.state != snowhush_core::snowman::room::State::None);
             if let Some(tray) = &self.tray {
                 tray.update(|tray| tray.fight = (status, hosting, inside));
             }
+        }
+    }
+
+    /// Says in the menu what was just done, for a few seconds.
+    fn say(&mut self, text: &str) {
+        self.notice = Some(std::time::Instant::now() + std::time::Duration::from_secs(3));
+        if let Some(tray) = &self.tray {
+            let text = text.to_string();
+            tray.update(move |tray| tray.fight.0 = Some(text));
         }
     }
 
