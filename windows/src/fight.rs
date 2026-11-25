@@ -150,7 +150,9 @@ pub fn pasted() -> Option<String> {
 /// Keeps the room as the menu is to show it.
 pub fn show(room: &Room) {
     if let Ok(mut shown) = SHOWN.lock() {
-        *shown = (status(room), room.invite.is_some(), room.state != State::None);
+        // Once a room couldn't be opened or joined, another link can be tried at once.
+        let inside = matches!(room.state, State::Opening | State::Joining | State::Open { .. });
+        *shown = (status(room), room.invite.is_some(), inside);
     }
 }
 

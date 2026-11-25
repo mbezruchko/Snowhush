@@ -13,7 +13,7 @@ use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_PIXEL_FORMAT,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_SMALL, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_ELLIPSE, D2D1_EXTEND_MODE_MIRROR, D2D1_FACTORY_TYPE_SINGLE_THREADED,
+    D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_SMALL, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_ELLIPSE, D2D1_EXTEND_MODE_WRAP, D2D1_FACTORY_TYPE_SINGLE_THREADED,
     D2D1_FEATURE_LEVEL_DEFAULT, D2D1_GAMMA_2_2, D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES, D2D1_RENDER_TARGET_PROPERTIES,
     D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1_RENDER_TARGET_USAGE_NONE, D2D1_ROUNDED_RECT, D2D1_SWEEP_DIRECTION_CLOCKWISE,
     D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE, D2D1CreateFactory, ID2D1Factory, ID2D1RenderTarget, ID2D1SolidColorBrush,
@@ -59,9 +59,13 @@ const TIMER_REFRESH: usize = 3;
 /// A field to type or paste into: its row, and its box inside the row.
 const FIELD: f32 = 36.0;
 const FIELD_BOX: f32 = 28.0;
-/// The colours a snowball fight's name runs through, as on the Mac.
-const SHIMMER: [(f32, f32, f32); 4] = [(1.0, 0.42, 0.78), (0.78, 0.45, 1.0), (0.45, 0.58, 1.0), (0.36, 0.85, 1.0)];
+/// The colours a snowball fight's name runs round through, as on the Mac, how wide one round is and how long it takes
+/// to slide by; and how often it is drawn as it slides.
+const SHIMMER: [(f32, f32, f32); 6] =
+    [(1.0, 0.42, 0.78), (0.78, 0.45, 1.0), (0.45, 0.58, 1.0), (0.36, 0.85, 1.0), (0.78, 0.45, 1.0), (1.0, 0.42, 0.78)];
 const SHIMMER_WIDTH: f32 = 140.0;
+const SHIMMER_ROUND: f32 = 2.5;
+const TIMER_SHIMMER: usize = 4;
 /// The first build of Windows 11 22H2, which has the system's backdrops.
 const BACKDROP_BUILD: u32 = 22621;
 /// Sizes in DIPs, after the menus of Windows 11.
@@ -142,7 +146,7 @@ pub enum Entry {
         shimmer: bool,
     },
     /// A box to type or paste text into. Return hands what is in it to the menu's `toggle` as `id`, leaving the menu
-    /// open; `field_text` gives it. Out of use, it is empty.
+    /// open; `field_text` gives it. Out of use, it folds away and what was typed goes.
     Field {
         id: u32,
         placeholder: String,
@@ -236,6 +240,7 @@ impl Entry {
         match self {
             Entry::Separator => SEPARATOR,
             Entry::Header(_) => HEADER,
+            Entry::Field { enabled: false, .. } => 0.0,
             Entry::Field { .. } => FIELD,
             Entry::Slider { shown: false, .. } => 0.0,
             Entry::Slider { caption, .. } if caption.is_empty() => SLIDER_BARE,
@@ -411,6 +416,8 @@ struct Menu {
     /// What is typed into the field, and whether keys go to it.
     typed: String,
     editing: bool,
+    /// When it opened, for where a shimmering name's colours have slid to.
+    opened: std::time::Instant,
 }
 
 thread_local! {
@@ -466,6 +473,7 @@ pub fn track(x: i32, y: i32, entries: Vec<Entry>, light: bool, toggle: &mut dyn 
         SetCapture(root);
         SetTimer(Some(root), TIMER_POINTER, 50, None);
         SetTimer(Some(root), TIMER_REFRESH, 500, None);
+        SetTimer(Some(root), TIMER_SHIMMER, 33, None);
 
         while !CLOSED.get() {
             let mut message = MSG::default();
@@ -487,6 +495,7 @@ pub fn track(x: i32, y: i32, entries: Vec<Entry>, light: bool, toggle: &mut dyn 
         let _ = KillTimer(Some(root), TIMER_SUBMENU);
         let _ = KillTimer(Some(root), TIMER_POINTER);
         let _ = KillTimer(Some(root), TIMER_REFRESH);
+        let _ = KillTimer(Some(root), TIMER_SHIMMER);
         let _ = ReleaseCapture();
         let windows: Vec<HWND> = MENU.take().map(|menu| menu.panels.iter().map(|panel| panel.window).collect()).unwrap_or_default();
         for window in windows.into_iter().rev() {
@@ -701,6 +710,18 @@ unsafe extern "system" fn procedure(window: HWND, message: u32, wparam: WPARAM, 
                 act(|menu| menu.sliding.is_none() && menu.panel_at(point).is_none() && menu.pointer(point));
                 LRESULT(0)
             }
+            WM_TIMER if wparam.0 == TIMER_SHIMMER => {
+                MENU.with(|menu| {
+                    let Ok(mut menu) = menu.try_borrow_mut() else { return };
+                    let Some(menu) = menu.as_mut() else { return };
+                    for p in 0..menu.panels.len() {
+                        if menu.panels[p].entries.iter().any(|entry| matches!(entry, Entry::Submenu { shimmer: true, .. })) {
+                            menu.render(p);
+                        }
+                    }
+                });
+                LRESULT(0)
+            }
             WM_TIMER if wparam.0 == TIMER_REFRESH => {
                 if TOGGLED.get().is_none() {
                     TOGGLED.set(Some(0));
@@ -784,6 +805,7 @@ impl Menu {
                 glyphs,
                 typed: String::new(),
                 editing: false,
+                opened: std::time::Instant::now(),
             })
         }
     }
@@ -1345,7 +1367,9 @@ impl Menu {
                         continue;
                     }
                     Entry::Field { placeholder, enabled, .. } => {
-                        self.field(target, panel, top, placeholder, *enabled)?;
+                        if *enabled {
+                            self.field(target, panel, top, placeholder, true, panel.hover == Some(i))?;
+                        }
                         continue;
                     }
                     Entry::Item { label, checked, enabled, radio, .. } => (label.as_str(), *checked, *radio, *enabled),
@@ -1383,10 +1407,11 @@ impl Menu {
                             color: D2D1_COLOR_F { r, g, b, a: 1.0 },
                         })
                         .collect();
-                    let stops = target.CreateGradientStopCollection(&stops, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_MIRROR)?;
+                    let stops = target.CreateGradientStopCollection(&stops, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_WRAP)?;
+                    let slid = (self.opened.elapsed().as_secs_f32() / SHIMMER_ROUND).fract() * SHIMMER_WIDTH;
                     let line = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
-                        startPoint: Vector2 { X: panel.label, Y: top },
-                        endPoint: Vector2 { X: panel.label + SHIMMER_WIDTH, Y: top },
+                        startPoint: Vector2 { X: panel.label - slid, Y: top },
+                        endPoint: Vector2 { X: panel.label - slid + SHIMMER_WIDTH, Y: top },
                     };
                     let shimmer = target.CreateLinearGradientBrush(&line, None, &stops)?;
                     target.DrawTextLayout(Vector2 { X: panel.label + shift, Y: top }, &layout, &shimmer, D2D1_DRAW_TEXT_OPTIONS_NONE);
@@ -1399,7 +1424,7 @@ impl Menu {
     }
 
     /// The field's box on the row from `top`: what is typed in it, its end kept in view, or `placeholder` faint.
-    fn field(&self, target: &ID2D1RenderTarget, panel: &Panel, top: f32, placeholder: &str, enabled: bool) -> Result<()> {
+    fn field(&self, target: &ID2D1RenderTarget, panel: &Panel, top: f32, placeholder: &str, enabled: bool, hovered: bool) -> Result<()> {
         let palette = self.palette;
         let typing = self.editing && enabled;
         let rect = D2D_RECT_F {
@@ -1411,7 +1436,16 @@ impl Menu {
         let inset = 10.0;
         unsafe {
             let fill = target.CreateSolidColorBrush(&palette.hover, None)?;
-            let edge = target.CreateSolidColorBrush(if typing { &palette.accent } else { &palette.line }, None)?;
+            let edge = target.CreateSolidColorBrush(
+                if typing {
+                    &palette.accent
+                } else if hovered && enabled {
+                    &palette.dim
+                } else {
+                    &palette.line
+                },
+                None,
+            )?;
             let rounded = D2D1_ROUNDED_RECT { rect, radiusX: ROW_RADIUS, radiusY: ROW_RADIUS };
             target.FillRoundedRectangle(&rounded, &fill);
             target.DrawRoundedRectangle(&rounded, &edge, if typing { 1.5 } else { 1.0 }, None);
