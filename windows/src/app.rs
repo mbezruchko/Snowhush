@@ -70,7 +70,6 @@ const ID_SELECTION: u32 = 224;
 const ID_FIGHT_INVITE: u32 = 225;
 const ID_FIGHT_JOIN: u32 = 226;
 const ID_FIGHT_LEAVE: u32 = 227;
-const ID_FIGHT_FIELD: u32 = 228;
 const ID_OPACITY_FOLD: u32 = 221;
 /// Opacity from 10% up in steps of 5%: `ID_OPACITY` + the step.
 const ID_OPACITY: u32 = 400;
@@ -506,19 +505,14 @@ fn entries(settings: &Settings, login: bool, sliders: bool) -> Vec<Entry> {
         let status = status.unwrap_or_else(|| tr("fight.hint.ctrl").to_string());
         fighting.push(Entry::item(0, &status, false, false));
         let invite = tr(if hosting { "fight.copy" } else { "fight.invite" });
-        if sliders {
-            // The drawn menu stays open on these, for what they bring about to show in it; its rows keep their number,
-            // as it closes should they change.
-            fighting.push(Entry::toggle(ID_FIGHT_INVITE, invite, false, true));
-            fighting.push(Entry::Field { id: ID_FIGHT_FIELD, placeholder: tr("fight.paste").to_string(), enabled: !inside });
-            fighting.push(Entry::toggle(ID_FIGHT_LEAVE, tr("fight.leave"), false, inside));
-        } else {
-            fighting.push(Entry::item(ID_FIGHT_INVITE, invite, false, true));
-            fighting.push(Entry::item(ID_FIGHT_JOIN, tr("fight.join"), false, true));
-            if inside {
-                fighting.push(Entry::item(ID_FIGHT_LEAVE, tr("fight.leave"), false, true));
-            }
-        }
+        // The drawn menu stays open on these, for what they bring about to show in it; its rows keep their number, as it
+        // closes should they change.
+        let row = |id: u32, label: &str, enabled: bool| {
+            if sliders { Entry::toggle(id, label, false, enabled) } else { Entry::item(id, label, false, enabled) }
+        };
+        fighting.push(row(ID_FIGHT_INVITE, invite, true));
+        fighting.push(row(ID_FIGHT_JOIN, tr("fight.join"), true));
+        fighting.push(row(ID_FIGHT_LEAVE, tr("fight.leave"), inside));
         entries.push(Entry::Submenu { label: tr("fight").to_string(), entries: fighting, shimmer: true });
     }
     if !heaps.is_empty() {
@@ -606,7 +600,7 @@ unsafe fn append(menu: HMENU, entries: &[Entry]) {
                     append(submenu, entries);
                     let _ = AppendMenuW(menu, MF_POPUP, submenu.0 as usize, PCWSTR(text(label).as_ptr()));
                 }
-                Entry::Slider { .. } | Entry::Disclosure { .. } | Entry::Icons { .. } | Entry::Field { .. } => {}
+                Entry::Slider { .. } | Entry::Disclosure { .. } | Entry::Icons { .. } => {}
             }
         }
     }
@@ -729,14 +723,6 @@ fn choose(window: HWND, chosen: u32, login: bool) {
                         crate::fight::notice(tr("fight.nolink"));
                     }
                     Command::FightJoin
-                }
-                ID_FIGHT_FIELD => {
-                    let text = menu::field_text();
-                    if !snowhush_core::snowman::room::holds_invite(&text) {
-                        crate::fight::notice(tr("fight.notlink"));
-                        return;
-                    }
-                    Command::FightLink(text)
                 }
                 ID_FIGHT_LEAVE => Command::FightLeave,
                 ID_MAX_PERFORMANCE => {

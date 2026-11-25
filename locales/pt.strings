@@ -71,9 +71,7 @@
 "fight.invite" = "Convidar amigos";
 "fight.copy" = "Copiar link de convite";
 "fight.join" = "Entrar com o link copiado";
-"fight.paste" = "Cole o link de convite…";
 "fight.copied" = "Link copiado";
-"fight.notlink" = "Isso não é um link de convite";
 "fight.nolink" = "Nenhum link de convite copiado";
 "fight.leave" = "Sair da sala";
 "fight.opening" = "Abrindo uma sala…";

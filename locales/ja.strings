@@ -71,9 +71,7 @@
 "fight.invite" = "友だちを招待";
 "fight.copy" = "招待リンクをコピー";
 "fight.join" = "コピーしたリンクで参加";
-"fight.paste" = "招待リンクを貼り付け…";
 "fight.copied" = "リンクをコピーしました";
-"fight.notlink" = "招待リンクではありません";
 "fight.nolink" = "クリップボードに招待リンクがありません";
 "fight.leave" = "ルームを退出";
 "fight.opening" = "ルームを開いています…";

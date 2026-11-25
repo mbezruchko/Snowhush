@@ -79,9 +79,7 @@
 "fight.invite" = "Invite Friends";
 "fight.copy" = "Copy Invite Link";
 "fight.join" = "Join from Clipboard";
-"fight.paste" = "Paste invite link…";
 "fight.copied" = "Link copied";
-"fight.notlink" = "That isn’t an invite link";
 "fight.nolink" = "No invite link in the clipboard";
 "fight.leave" = "Leave Room";
 "fight.opening" = "Opening a room…";

@@ -40,9 +40,7 @@ use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_BINARY, RRF
 use windows::Win32::UI::Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTW};
 use windows::Win32::UI::Controls::MARGINS;
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
-use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, ReleaseCapture, SetCapture, VK_BACK, VK_CONTROL, VK_DOWN, VK_ESCAPE, VK_LEFT, VK_RETURN, VK_RIGHT, VK_SPACE, VK_UP,
-};
+use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture, VK_DOWN, VK_ESCAPE, VK_LEFT, VK_RETURN, VK_RIGHT, VK_SPACE, VK_UP};
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{BOOL, PCWSTR, Result, s, w};
 use windows_numerics::{Matrix3x2, Vector2};
@@ -56,9 +54,6 @@ const TIMER_SUBMENU: usize = 1;
 const TIMER_POINTER: usize = 2;
 /// Builds the entries again now and then while the menu is open, for what changes on its own, such as a room opening.
 const TIMER_REFRESH: usize = 3;
-/// A field to type or paste into: its row, and its box inside the row.
-const FIELD: f32 = 36.0;
-const FIELD_BOX: f32 = 28.0;
 /// The colours a snowball fight's name runs round through, as on the Mac, how wide one round is and how long it takes
 /// to slide by; and how often it is drawn as it slides.
 const SHIMMER: [(f32, f32, f32); 6] =
@@ -145,13 +140,6 @@ pub enum Entry {
         /// Its name drawn in the colours a snowball fight's shimmers through on the Mac.
         shimmer: bool,
     },
-    /// A box to type or paste text into. Return hands what is in it to the menu's `toggle` as `id`, leaving the menu
-    /// open; `field_text` gives it. Out of use, it folds away and what was typed goes.
-    Field {
-        id: u32,
-        placeholder: String,
-        enabled: bool,
-    },
     /// Folds the row under it out or away, leaving the menu open; folded, `summary` trails it, and unfolded too with
     /// `keeps_summary`, for a value the row sets. With `icons`, those trail it instead: less room than their names.
     Disclosure {
@@ -222,14 +210,13 @@ impl Entry {
     fn label(&self) -> Option<&str> {
         match self {
             Entry::Item { label, .. } | Entry::Submenu { label, .. } | Entry::Header(label) | Entry::Disclosure { label, .. } => Some(label),
-            Entry::Field { placeholder, .. } => Some(placeholder),
             Entry::Separator | Entry::Slider { .. } | Entry::Icons { .. } => None,
         }
     }
 
     fn selectable(&self) -> bool {
         match self {
-            Entry::Item { enabled, .. } | Entry::Field { enabled, .. } => *enabled,
+            Entry::Item { enabled, .. } => *enabled,
             Entry::Submenu { .. } | Entry::Disclosure { .. } => true,
             Entry::Icons { shown, .. } | Entry::Slider { shown, .. } => *shown,
             Entry::Separator | Entry::Header(_) => false,
@@ -240,8 +227,6 @@ impl Entry {
         match self {
             Entry::Separator => SEPARATOR,
             Entry::Header(_) => HEADER,
-            Entry::Field { enabled: false, .. } => 0.0,
-            Entry::Field { .. } => FIELD,
             Entry::Slider { shown: false, .. } => 0.0,
             Entry::Slider { caption, .. } if caption.is_empty() => SLIDER_BARE,
             Entry::Slider { .. } => SLIDER,
@@ -413,9 +398,6 @@ struct Menu {
     heading: IDWriteTextFormat,
     caption: IDWriteTextFormat,
     glyphs: IDWriteTextFormat,
-    /// What is typed into the field, and whether keys go to it.
-    typed: String,
-    editing: bool,
     /// When it opened, for where a shimmering name's colours have slid to.
     opened: std::time::Instant,
 }
@@ -425,12 +407,6 @@ thread_local! {
     static CLOSED: Cell<bool> = const { Cell::new(false) };
     static CHOSEN: Cell<u32> = const { Cell::new(0) };
     static TOGGLED: Cell<Option<u32>> = const { Cell::new(None) };
-    static FIELD_TEXT: RefCell<String> = const { RefCell::new(String::new()) };
-}
-
-/// What was in the menu's field when Return was pressed in it.
-pub fn field_text() -> String {
-    FIELD_TEXT.with_borrow(Clone::clone)
 }
 
 /// Shows the menu at `x`, `y` in screen pixels, the way the system places a menu there, runs it until it closes and
@@ -687,10 +663,6 @@ unsafe extern "system" fn procedure(window: HWND, message: u32, wparam: WPARAM, 
                 act(|menu| menu.press(wparam.0));
                 LRESULT(0)
             }
-            WM_CHAR => {
-                act(|menu| menu.type_in(wparam.0 as u16));
-                LRESULT(0)
-            }
             WM_MOUSEWHEEL => {
                 // Unlike the other mouse messages, the wheel's carries a point on the screen.
                 let point = POINT { x: (lparam.0 & 0xffff) as i16 as i32, y: ((lparam.0 >> 16) & 0xffff) as i16 as i32 };
@@ -803,8 +775,6 @@ impl Menu {
                 heading,
                 caption,
                 glyphs,
-                typed: String::new(),
-                editing: false,
                 opened: std::time::Instant::now(),
             })
         }
@@ -1043,14 +1013,6 @@ impl Menu {
 
     /// Chooses an item or opens a submenu.
     fn activate(&mut self, p: usize, i: usize, keyboard: bool) -> bool {
-        let field = matches!(self.panels[p].entries[i], Entry::Field { enabled: true, .. });
-        if field != self.editing {
-            self.editing = field;
-            if field {
-                self.set_hover(p, Some(i));
-            }
-            return true;
-        }
         match &self.panels[p].entries[i] {
             Entry::Item { id, enabled: true, keep_open: true, .. } => {
                 TOGGLED.set(Some(*id));
@@ -1093,10 +1055,6 @@ impl Menu {
             if list.len() != self.panels[p].entries.len() {
                 CLOSED.set(true);
                 return false;
-            }
-            if list.iter().any(|entry| matches!(entry, Entry::Field { enabled: false, .. })) {
-                self.typed.clear();
-                self.editing = false;
             }
             let grown = list.iter().zip(&self.panels[p].entries).any(|(new, old)| new.height() != old.height());
             self.panels[p].entries = list;
@@ -1143,46 +1101,6 @@ impl Menu {
     fn press(&mut self, key: usize) -> bool {
         let is = |code: u16| key == code as usize;
         let last = self.panels.len() - 1;
-        if self.editing {
-            let control = unsafe { GetKeyState(VK_CONTROL.0 as i32) } < 0;
-            if is(VK_RETURN.0) {
-                let id = self.panels[last].entries.iter().find_map(|entry| match entry {
-                    Entry::Field { id, enabled: true, .. } => Some(*id),
-                    _ => None,
-                });
-                if let Some(id) = id {
-                    FIELD_TEXT.set(self.typed.trim().to_string());
-                    TOGGLED.set(Some(id));
-                }
-                return false;
-            }
-            if is(VK_ESCAPE.0) {
-                self.editing = false;
-                return true;
-            }
-            if is(VK_BACK.0) {
-                if control {
-                    self.typed.clear();
-                } else {
-                    self.typed.pop();
-                }
-                return true;
-            }
-            if control && key == 'V' as usize {
-                if let Some(text) = crate::fight::pasted() {
-                    self.typed.push_str(text.trim());
-                }
-                return true;
-            }
-            if control && key == 'A' as usize {
-                self.typed.clear();
-                return true;
-            }
-            if !(is(VK_DOWN.0) || is(VK_UP.0)) {
-                return false;
-            }
-            self.editing = false;
-        }
         if (is(VK_LEFT.0) || is(VK_RIGHT.0))
             && let Some(i) = self.panels[last].hover
             && self.panels[last].entries[i].is_slider()
@@ -1221,16 +1139,6 @@ impl Menu {
         } else {
             false
         }
-    }
-
-    /// A character typed while the field takes keys; control characters come as keys to `press` instead.
-    fn type_in(&mut self, unit: u16) -> bool {
-        if !self.editing || unit < 0x20 || unit == 0x7f {
-            return false;
-        }
-        let Some(character) = char::from_u32(unit as u32) else { return false };
-        self.typed.push(character);
-        true
     }
 
     /// Moves the light in a panel to the next entry that can be chosen, wrapping around.
@@ -1366,12 +1274,6 @@ impl Menu {
                         }
                         continue;
                     }
-                    Entry::Field { placeholder, enabled, .. } => {
-                        if *enabled {
-                            self.field(target, panel, top, placeholder, true, panel.hover == Some(i))?;
-                        }
-                        continue;
-                    }
                     Entry::Item { label, checked, enabled, radio, .. } => (label.as_str(), *checked, *radio, *enabled),
                     Entry::Submenu { label, .. } => (label.as_str(), false, false, true),
                 };
@@ -1418,71 +1320,6 @@ impl Menu {
                 } else {
                     target.DrawTextLayout(Vector2 { X: panel.label + shift, Y: top }, &layout, brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
                 }
-            }
-        }
-        Ok(())
-    }
-
-    /// The field's box on the row from `top`: what is typed in it, its end kept in view, or `placeholder` faint.
-    fn field(&self, target: &ID2D1RenderTarget, panel: &Panel, top: f32, placeholder: &str, enabled: bool, hovered: bool) -> Result<()> {
-        let palette = self.palette;
-        let typing = self.editing && enabled;
-        let rect = D2D_RECT_F {
-            left: PAD + 4.0,
-            top: top + (FIELD - FIELD_BOX) / 2.0,
-            right: panel.width - PAD - 4.0,
-            bottom: top + (FIELD + FIELD_BOX) / 2.0,
-        };
-        let inset = 10.0;
-        unsafe {
-            let fill = target.CreateSolidColorBrush(&palette.hover, None)?;
-            let edge = target.CreateSolidColorBrush(
-                if typing {
-                    &palette.accent
-                } else if hovered && enabled {
-                    &palette.dim
-                } else {
-                    &palette.line
-                },
-                None,
-            )?;
-            let rounded = D2D1_ROUNDED_RECT { rect, radiusX: ROW_RADIUS, radiusY: ROW_RADIUS };
-            target.FillRoundedRectangle(&rounded, &fill);
-            target.DrawRoundedRectangle(&rounded, &edge, if typing { 1.5 } else { 1.0 }, None);
-            let room = rect.right - rect.left - 2.0 * inset;
-            let shown = if self.typed.is_empty() || !enabled {
-                None
-            } else {
-                // The end of a long link, where it differs from others, stays in view.
-                let mut start = 0;
-                let mut text = self.typed.clone();
-                loop {
-                    let mut metrics = DWRITE_TEXT_METRICS::default();
-                    self.layout(&text, 10_000.0)?.GetMetrics(&mut metrics)?;
-                    if metrics.widthIncludingTrailingWhitespace <= room || start >= self.typed.len() {
-                        break Some((text, metrics.widthIncludingTrailingWhitespace));
-                    }
-                    start = self.typed.ceil_char_boundary(start + 1);
-                    text = format!("…{}", &self.typed[start..]);
-                }
-            };
-            let origin = Vector2 { X: rect.left + inset, Y: rect.top + (FIELD_BOX - ROW) / 2.0 };
-            let end = match &shown {
-                Some((text, width)) => {
-                    let ink = target.CreateSolidColorBrush(&palette.ink, None)?;
-                    target.DrawTextLayout(origin, &self.layout(text, room)?, &ink, D2D1_DRAW_TEXT_OPTIONS_NONE);
-                    rect.left + inset + width
-                }
-                None => {
-                    let dim = target.CreateSolidColorBrush(&palette.dim, None)?;
-                    target.DrawTextLayout(origin, &self.layout(placeholder, room)?, &dim, D2D1_DRAW_TEXT_OPTIONS_NONE);
-                    rect.left + inset
-                }
-            };
-            if typing {
-                let caret = target.CreateSolidColorBrush(&palette.ink, None)?;
-                let x = end + 1.0;
-                target.DrawLine(Vector2 { X: x, Y: rect.top + 7.0 }, Vector2 { X: x, Y: rect.bottom - 7.0 }, &caret, 1.0, None);
             }
         }
         Ok(())

@@ -225,9 +225,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
             fightStatusItem = status
             // They leave the menu open, to see the room open and who comes into it.
             fightInviteItem = action(tr("fight.invite"), #selector(inviteToFight), to: fight)
-            let join = fight.addItem(withTitle: tr("fight.join"), action: nil, keyEquivalent: "")
-            join.view = MenuField(placeholder: tr("fight.paste")) { [weak self] text in self?.joinFight(text) }
-            fightJoinItem = join
+            fightJoinItem = action(tr("fight.join"), #selector(joinFight), to: fight)
             fightLeaveItem = action(tr("fight.leave"), #selector(leaveFight), to: fight)
             let item = menu.addItem(withTitle: tr("fight"), action: nil, keyEquivalent: "")
             item.submenu = fight
@@ -507,12 +505,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private func updateFightItems() {
         guard let status = fightStatusItem else { return }
         let room = SnowballRoom.shared
-        // A friend's link is pasted only out of a room.
-        if case .failed = room.state {
-            fightJoinItem?.isHidden = false
-        } else {
-            fightJoinItem?.isHidden = room.state != .none
-        }
         let invite = room.invite != nil ? tr("fight.copy") : tr("fight.invite")
         fightInviteItem?.title = invite
         (fightInviteItem?.view as? MenuToggle)?.fit(invite)
@@ -560,14 +552,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         }
     }
 
-    /// Joins the room of a link pasted into the menu; says so when it is no invite.
-    private func joinFight(_ text: String) {
-        guard SnowballRoom.holdsInvite(text) else {
-            (fightJoinItem?.view as? MenuField)?.clear()
-            noteFight(tr(text.isEmpty ? "fight.nolink" : "fight.notlink"))
+    /// Joins the room of the link on the clipboard; says so when there is none.
+    @objc private func joinFight() {
+        guard let text = NSPasteboard.general.string(forType: .string), SnowballRoom.holdsInvite(text) else {
+            noteFight(tr("fight.nolink"))
             return
         }
-        (fightJoinItem?.view as? MenuField)?.clear()
         SnowballRoom.shared.join(text)
     }
 
