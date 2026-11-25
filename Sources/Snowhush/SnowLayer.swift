@@ -24,6 +24,8 @@ final class SnowLayer {
     private(set) var heights: [Float]
     /// How much of each column's snow a wall has packed down already, so it isn't packed again.
     private(set) var packed: [Float]
+    /// Compacted surface snow, in points. Fresh snowfall buries this crust; it adds no mass.
+    private(set) var crust: [Float]
     /// How much of each column's height is leaves, and how much of that is petals; the rest is snow.
     private(set) var leaves: [Float]
     private(set) var petals: [Float]
@@ -82,6 +84,7 @@ final class SnowLayer {
     private var supported: [Bool]
     private var supportedRange: ClosedRange<Int>?
     private var parity = false
+    private var edgeLoad: [Float] = [0, 0]
 
     init(origin: SIMD2<Float>, columns: Int, columnWidth: Float, depth: Float, opensAtEdges: Bool, phases: (Float, Float)) {
         self.origin = origin
@@ -93,6 +96,7 @@ final class SnowLayer {
         self.phases = phases
         heights = Array(repeating: 0, count: columns)
         packed = Array(repeating: 0, count: columns)
+        crust = Array(repeating: 0, count: columns)
         leaves = Array(repeating: 0, count: columns)
         petals = Array(repeating: 0, count: columns)
         bed = Array(repeating: 0, count: columns)
@@ -187,6 +191,7 @@ final class SnowLayer {
             }
         }
         roll(&packed)
+        roll(&crust)
         roll(&leaves)
         roll(&petals)
     }
@@ -205,12 +210,14 @@ final class SnowLayer {
             leaves[i] *= kept
             petals[i] *= kept
         }
+        crust[i] = min(crust[i], max(0, heights[i] - leaves[i]))
     }
 
     /// Takes snow alone off a column, leaving its leaves.
     func remove(snow amount: Float, from i: Int) {
         heights[i] = max(heights[i] - amount, leaves[i], 0)
         packed[i] = min(packed[i], heights[i])
+        crust[i] = min(crust[i], max(0, heights[i] - leaves[i]))
     }
 
     func replace(heights fresh: [Float], leaves freshLeaves: [Float]? = nil, petals freshPetals: [Float]? = nil) {
@@ -218,18 +225,22 @@ final class SnowLayer {
         leaves = freshLeaves ?? Array(repeating: 0, count: fresh.count)
         petals = freshPetals ?? Array(repeating: 0, count: fresh.count)
         packed = Array(repeating: 0, count: fresh.count)
+        crust = Array(repeating: 0, count: fresh.count)
         visible = Array(repeating: true, count: fresh.count)
         supported = Array(repeating: false, count: fresh.count)
         supportedRange = nil
+        edgeLoad = [0, 0]
         updateCapacity()
         updateBed()
     }
 
     func resize(columns: Int) {
         guard columns != heights.count else { return }
+        let keptCrust = Array(crust.prefix(columns))
         let padding = Array(repeating: Float(0), count: max(0, columns - heights.count))
         replace(heights: Array(heights.prefix(columns)) + padding, leaves: Array(leaves.prefix(columns)) + padding,
                 petals: Array(petals.prefix(columns)) + padding)
+        crust = keptCrust + padding
     }
 
     /// `seen` is where a column can be seen from, left to right: the screen, and the displays beside it.
@@ -245,9 +256,24 @@ final class SnowLayer {
         top = heights.max() ?? 0
     }
 
+    /// Surface firmness is separate from wall packing, so repeated gestures cannot destroy snow volume.
+    func firmness(_ i: Int) -> Float {
+        min(1, crust[i] / max(1, min(4, heights[i] - leaves[i])))
+    }
+
+    func compact(_ i: Int, pressure: Float) {
+        let cap = max(0, min(4, heights[i] - leaves[i]))
+        crust[i] += (cap - crust[i]) * min(1, max(0, pressure))
+    }
+
+    func sweepYield(_ i: Int, speed: Float) -> Float {
+        let breaking = min(1, max(0, (speed - 120) / 520))
+        return 1 - firmness(i) * 0.7 * (1 - breaking)
+    }
+
     /// Adds snow, or what `blend` says, centred on `x` and returns the area that fell outside the layer.
     @discardableResult
-    func deposit(_ area: Float, at x: Float, wide: Bool, blend: Blend = .snow) -> Float {
+    func deposit(_ area: Float, at x: Float, wide: Bool, blend: Blend = .snow, fresh: Bool = false, compaction: Float = 0) -> Float {
         guard area > 0 else { return 0 }
         let center = Int(((x - base.x) / columnWidth).rounded(.down))
         let amount = area / columnWidth
@@ -261,6 +287,8 @@ final class SnowLayer {
                 heights[i] += amount * weight
                 leaves[i] += amount * weight * blend.leaves
                 petals[i] += amount * weight * blend.petals
+                if fresh { crust[i] = max(0, crust[i] - amount * weight * (1 - blend.leaves)) }
+                if compaction > 0 { compact(i, pressure: compaction * (1 - blend.leaves)) }
             } else {
                 missed += area * weight
             }
@@ -328,7 +356,7 @@ final class SnowLayer {
 
     /// Slumps slopes steeper than the angle of repose and rounds crests, measured on the snow surface over the bed,
     /// so snow slides off rounded corners. Open layers shed what slides past their ends into `spill`.
-    func relax(repose: Float, rounding: Float) -> Bool {
+    func relax(repose: Float, rounding: Float, bonding: Float = 1) -> Bool {
         let count = heights.count
         guard count > 1, top > 0 else { return false }
         let limit = repose * columnWidth
@@ -342,7 +370,9 @@ final class SnowLayer {
         var spilledRight: Float = 0
         let open = opensAtEdges
         let outside = self.outside
+        let cohesive = bonding > 0 && crust.contains { $0 > 0.001 }
 
+        crust.withUnsafeMutableBufferPointer { selfCrust in
         heights.withUnsafeMutableBufferPointer { h in
             packed.withUnsafeMutableBufferPointer { p in
             leaves.withUnsafeMutableBufferPointer { l in
@@ -353,6 +383,9 @@ final class SnowLayer {
                         func shift(_ amount: Float, from a: Int, to c: Int) {
                             let share = h[a] > 0 ? min(p[a], amount * p[a] / h[a]) : 0
                             let part = h[a] > 0 ? min(amount / h[a], 1) : 0
+                            let crustShare = selfCrust[a] * part
+                            selfCrust[a] -= crustShare
+                            selfCrust[c] += crustShare
                             h[a] -= amount
                             h[c] += amount
                             p[a] -= share
@@ -368,8 +401,13 @@ final class SnowLayer {
                             let part = h[a] > 0 ? min(amount / h[a], 1) : 0
                             h[a] -= amount
                             p[a] = min(p[a], h[a])
+                            selfCrust[a] *= 1 - part
                             l[a] *= 1 - part
                             q[a] *= 1 - part
+                        }
+                        func firm(_ i: Int) -> Float {
+                            guard cohesive else { return 0 }
+                            return min(1, selfCrust[i] / max(1, min(4, h[i] - l[i]))) * bonding
                         }
                         for pass in 0..<6 {
                             var shifted = false
@@ -379,8 +417,9 @@ final class SnowLayer {
                                 if held[i] || held[i + 1] { continue }
                                 let difference = (b[i] + h[i]) - (b[i + 1] + h[i + 1])
                                 let fall = b[i] - b[i + 1]
-                                let ahead = limit + min(max(fall, 0), steepest)
-                                let behind = limit + min(max(-fall, 0), steepest)
+                                let cohesion = max(firm(i), firm(i + 1)) * columnWidth * 2.2
+                                let ahead = limit + cohesion + min(max(fall, 0), steepest)
+                                let behind = limit + cohesion + min(max(-fall, 0), steepest)
                                 if difference > ahead + 0.01 {
                                     let transfer = min((difference - ahead) * 0.5, h[i])
                                     shift(transfer, from: i, to: i + 1)
@@ -392,15 +431,17 @@ final class SnowLayer {
                                 }
                             }
                             if open {
-                                if !held[0] && h[0] - outside.left > limit + 0.01 {
-                                    let transfer = (h[0] - outside.left - limit) * 0.5
+                                let leftLip = min(4, max(0, h[0] - l[0]))
+                                let rightLip = min(4, max(0, h[count - 1] - l[count - 1]))
+                                if !held[0] && h[0] - outside.left > limit + leftLip + 0.01 {
+                                    let transfer = (h[0] - outside.left - limit - leftLip) * 0.5
                                     spill(transfer, from: 0)
                                     spilledLeft += transfer
                                     moved = true
                                     shifted = true
                                 }
-                                if !held[count - 1] && h[count - 1] - outside.right > limit + 0.01 {
-                                    let transfer = (h[count - 1] - outside.right - limit) * 0.5
+                                if !held[count - 1] && h[count - 1] - outside.right > limit + rightLip + 0.01 {
+                                    let transfer = (h[count - 1] - outside.right - limit - rightLip) * 0.5
                                     spill(transfer, from: count - 1)
                                     spilledRight += transfer
                                     moved = true
@@ -415,7 +456,10 @@ final class SnowLayer {
                             let s0 = b[i - 1] + h[i - 1], s1 = b[i] + h[i], s2 = b[i + 1] + h[i + 1], s3 = b[i + 2] + h[i + 2]
                             let kink = (s1 - s2) - 0.5 * ((s0 - s1) + (s2 - s3))
                             guard abs(kink) > 0.02 else { continue }
-                            let transfer = kink > 0 ? min(kink * rounding, h[i]) : max(kink * rounding, -h[i + 1])
+                            let soft = max(0, 1 - max(firm(i), firm(i + 1)))
+                            let softness = soft * soft * soft
+                            let rounded = rounding * softness
+                            let transfer = kink > 0 ? min(kink * rounded, h[i]) : max(kink * rounded, -h[i + 1])
                             if transfer > 0 { shift(transfer, from: i, to: i + 1) } else { shift(-transfer, from: i + 1, to: i) }
                             if abs(transfer) > 0.003 { moved = true }
                         }
@@ -425,9 +469,40 @@ final class SnowLayer {
             }
             }
         }
+        }
         spill.left += spilledLeft * columnWidth
         spill.right += spilledRight * columnWidth
         return moved
+    }
+
+    /// Open ledges briefly hold a rounded lip. Only its existing snow is released when the load wins.
+    func breakCornices(dt: Float) -> [(position: SIMD2<Float>, area: Float)] {
+        guard opensAtEdges, count >= 6, dt.isFinite, dt > 0 else { return [] }
+        var pieces: [(position: SIMD2<Float>, area: Float)] = []
+        for side in 0...1 {
+            let edge = side == 0 ? 0 : count - 1
+            let snow = heights[edge] - leaves[edge]
+            let x = centerX(edge), y = surface(edge)
+            guard visible[edge], snow > 2.5,
+                  !occluders.contains(where: { x >= $0.x && x < $0.z && y >= $0.y && y < $0.w }) else {
+                edgeLoad[side] = 0; continue
+            }
+            edgeLoad[side] += min(dt, 0.1) * (0.25 + snow / 12) * (1 - 0.45 * firmness(edge))
+            guard edgeLoad[side] >= 4 else { continue }
+            edgeLoad[side] = 0
+            var area: Float = 0
+            for step in 0..<3 {
+                let i = side == 0 ? step : count - 1 - step
+                guard visible[i] else { continue }
+                let removed = min(max(0, heights[i] - leaves[i]) * 0.65, max(0, 180 - area) / columnWidth)
+                remove(snow: removed, from: i)
+                area += removed * columnWidth
+            }
+            if area > 0 {
+                pieces.append((SIMD2(side == 0 ? base.x - 1 : base.x + width + 1, y), area))
+            }
+        }
+        return pieces
     }
 
     /// Snow down to `floor` melts slowly; anything heaped above it settles back down over `settle` seconds. Leaves
@@ -438,19 +513,25 @@ final class SnowLayer {
         for i in heights.indices where heights[i] > 0 {
             let h = heights[i]
             let kept = floor * (1 - min(leaves[i] / h, 1))
-            let loss = min(h, (rate + max(0, h - kept) / settle) * dt)
+            let snowShare = 1 - min(leaves[i] / h, 1)
+            let powder = 0.6 * exp(-h / 3)
+            let density = 1 + snowShare * (powder - 0.5 * firmness(i))
+            let left = heights[max(0, i - 1)], right = heights[min(heights.count - 1, i + 1)]
+            let exposed = min(0.25, max(0, h - (left + right) * 0.5) * 0.04) * snowShare
+            let loss = min(h, (rate + max(0, h - kept) / max(0.01, settle)) * max(0, dt) * density * (1 + exposed))
             heights[i] = h - loss
             packed[i] = min(packed[i], heights[i])
             leaves[i] *= heights[i] / h
             petals[i] *= heights[i] / h
+            crust[i] = min(crust[i], max(0, heights[i] - leaves[i]))
             fastest = max(fastest, loss)
         }
         // Sub-pixel melting is picked up by the idle glint refresh instead of forcing full-rate frames.
         return fastest > 0.01
     }
 
-    /// Floats `writeSmoothed` writes per column.
-    static let rows = 4
+    /// Surface, bed, leaf share, petal share, surface firmness and open-edge flag.
+    static let rows = 6
     /// The simulation's mark from when it last found this layer on the screen.
     var shown = 0
     /// What `writeSmoothed` writes, worked out before it goes to the GPU.
@@ -464,11 +545,19 @@ final class SnowLayer {
         var empty = true
         makeup.withUnsafeMutableBufferPointer { m in
             let surfaces = m.baseAddress!, beds = surfaces + count, shares = beds + count, kinds = shares + count
+            let firmnesses = kinds + count, edges = firmnesses + count
+            var leftFirmness: Float = count > 0 ? firmness(0) : 0
+            var centerFirmness = leftFirmness
             for i in 0..<count {
                 let l = max(i - 1, 0), r = min(i + 1, count - 1)
                 let height = 0.25 * heights[l] + 0.5 * heights[i] + 0.25 * heights[r]
                 let leafy = 0.25 * leaves[l] + 0.5 * leaves[i] + 0.25 * leaves[r]
                 let petal = 0.25 * petals[l] + 0.5 * petals[i] + 0.25 * petals[r]
+                let rightFirmness = firmness(r)
+                firmnesses[i] = 0.25 * leftFirmness + 0.5 * centerFirmness + 0.25 * rightFirmness
+                leftFirmness = centerFirmness
+                centerFirmness = rightFirmness
+                edges[i] = opensAtEdges ? 1 : 0
                 surfaces[i] = bed[i] + height
                 beds[i] = bed[i]
                 shares[i] = height > 0 ? min(leafy / height, 1) : -1

@@ -1107,7 +1107,7 @@ struct PileOut {
 
 vertex PileOut pileVertex(uint vid [[vertex_id]], constant Uniforms &u [[buffer(0)]]) {
     float2 corner = float2(float(vid & 1), float(vid >> 1));
-    float2 p = float2(corner.x * float(u.columnCount) * u.columnWidth, mix(u.pileBottom, u.pileTop, corner.y));
+    float2 p = float2(mix(-4.0, float(u.columnCount) * u.columnWidth + 4.0, corner.x), mix(u.pileBottom, u.pileTop, corner.y));
     PileOut out;
     out.position = float4((p + u.origin + u.shake.xy) / u.viewSize * 2.0 - 1.0, 0.0, 1.0);
     out.point = p;
@@ -1115,7 +1115,7 @@ vertex PileOut pileVertex(uint vid [[vertex_id]], constant Uniforms &u [[buffer(
 }
 
 static float heightAt(const device float *h, constant Uniforms &u, float x) {
-    float f = x / u.columnWidth - 0.5;
+    float f = clamp(x / u.columnWidth - 0.5, 0.0, float(u.columnCount - 1));
     float base = floor(f);
     int i = clamp(int(base), 0, u.columnCount - 1);
     int j = min(i + 1, u.columnCount - 1);
@@ -1140,6 +1140,18 @@ fragment float4 pileFragment(PileOut in [[stage_in]],
     // How much of the heap is leaves, and how much of those petals: snow and leaves fallen together lie mixed.
     float leaves = heightAt(heights + 2 * u.columnCount, u, x);
     float petals = heightAt(heights + 3 * u.columnCount, u, x);
+    float firmness = saturate(heightAt(heights + 4 * u.columnCount, u, x));
+    float edge = heightAt(heights + 5 * u.columnCount, u, x);
+    float outside = max(-x, x - float(u.columnCount) * u.columnWidth);
+    if (outside > 0.0) {
+        float reach = 4.0 * saturate((level - bed) / 4.0) * (1.0 - leaves) * edge;
+        if (reach <= 0.01 || outside >= reach) discard_fragment();
+        float round = sqrt(max(0.0, 1.0 - (outside * outside) / (reach * reach)));
+        float middle = (level + bed) * 0.5;
+        float halfHeight = (level - bed) * 0.5 * round;
+        level = middle + halfHeight;
+        bed = middle - halfHeight;
+    }
     // The leaves on top are drawn one by one, the heap under them as a mass with a ragged top; a leaf or two lie on their own.
     if (leaves > 0.0) {
         level -= 2.5 * leaves;
@@ -1158,15 +1170,19 @@ fragment float4 pileFragment(PileOut in [[stage_in]],
     if (leaves < 1.0) {
         float3 shadow = mix(float3(0.72, 0.78, 0.88), u.shadowTint.rgb, u.shadowTint.a);
         float3 surface = mix(float3(0.925, 0.94, 0.965), min(u.shadowTint.rgb * 1.18, float3(1.0)), u.shadowTint.a * 0.2);
+        float nearby = 0.5 * (heightAt(heights, u, x - 8.0) + heightAt(heights, u, x + 8.0));
+        float sheltered = saturate((nearby - level) / 7.0);
         float shade = (1.0 - exp(-depth / 30.0)) * 0.32 + (1.0 - light) * 0.6 * exp(-depth / 5.0);
+        shade += sheltered * 0.24 * exp(-depth / 12.0);
         color = mix(surface, shadow, saturate(shade));
         color = mix(color, float3(0.975, 0.982, 0.995), exp(-depth * 0.9) * 0.6);
-        color += (hash(floor(in.position.xy)) - 0.5) * 0.02;
-
-        float seed = hash(floor(in.position.xy * 0.5) + 31.7);
-        if (seed > 0.992) {
-            float twinkle = pow(saturate(sin(u.time * (0.6 + seed * 1.8) + seed * 90.0)), 28.0);
-            color = mix(color, float3(1.0), twinkle * exp(-depth / 7.0));
+        // Texture moves with the drift rather than sparkling independently in screen pixels.
+        color += (hash(floor(grain * 1.5)) - 0.5) * mix(0.018, 0.009, firmness);
+        float sheen = firmness * pow(saturate(light), 14.0) * exp(-depth / 5.0) * 0.045;
+        color += float3(sheen);
+        float crystal = hash(floor(grain * 0.5) + 31.7);
+        if (crystal > 0.997) {
+            color = mix(color, float3(1.0), 0.16 * saturate(light) * exp(-depth / 5.0));
         }
     }
     // Where leaves are, a leaf shows where one lies; mostly leaves, the gaps between them are the heap's shadow too.

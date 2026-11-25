@@ -73,3 +73,7 @@
 "setup.open" = "Open Snowhush";
 "setup.failed" = "Couldn't install: {error}.";
 "setup.retry" = "Try Again";
+
+/* Direct snow sculpting (macOS). */
+"snowman.gesture" = "⌥ + drag snow · stack a smaller ball on a larger one";
+"snowman.sound" = "Snow interaction sounds";

@@ -51,7 +51,8 @@ final class OverlayWindow: NSWindow {
         FixedSpace.hold(self)
     }
 
-    override var canBecomeKey: Bool { false }
+    var allowsEditing = false
+    override var canBecomeKey: Bool { allowsEditing }
     override var canBecomeMain: Bool { false }
 
     // Borderless windows are otherwise pushed below the menu bar.

@@ -55,7 +55,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     /// Frames per second while the snow is being disturbed: the display's highest rate, up to 120 on ProMotion screens.
     var interactiveFrameRate = 60
     var budget = PowerBudget.full
-    /// Every frame at the display's highest rate, whatever the snow is doing and whatever the power.
+    /// The display's highest rate while plugged in. Battery and thermal limits still take priority.
     var maxFrameRate = false
     /// Called when there is nothing to draw and nothing on its way, for the view to stop until the snow is stirred.
     var rest: () -> Void = {}
@@ -81,7 +81,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     private var pumpkinPictures: (shell: MTLTexture, face: MTLTexture)?
     /// Each caption's sign, drawn the first time a ghost holds it up, and its size in points.
     private var signPictures: [Int: (texture: MTLTexture, size: SIMD2<Float>)] = [:]
-    private let framesInFlight = 3
+    private let framesInFlight = 2
     private let semaphore: DispatchSemaphore
     private var spriteBuffers: [MTLBuffer] = []
     private var heightBuffers: [MTLBuffer] = []
@@ -89,7 +89,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     private var heightCapacity = 0
     private var slot = 0
     private var lastTime: CFTimeInterval = 0
-    private var idleFrames = 0
+    private var needsFrame = true
     /// Whether the Dock's strip still shows snow.
     private var dockDrawn = false
     private let epoch = CACurrentMediaTime()
@@ -165,6 +165,7 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     func resetClock() {
         lastTime = 0
+        needsFrame = true
     }
 
     /// Whether the lantern's glow at `point` reaches this screen: three times its reach out it is gone.
@@ -192,6 +193,13 @@ final class Renderer: NSObject, MTKViewDelegate {
     func releaseFrames(of view: MTKView) {
         guard view.drawableSize != Self.released else { return }
         field = nil
+        spriteBuffers.removeAll()
+        heightBuffers.removeAll()
+        spriteCapacity = 0
+        heightCapacity = 0
+        signPictures.removeAll()
+        pumpkinPictures = nil
+        needsFrame = true
         Self.resize(view, to: Self.released)
         clear(view)
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.handBack) { [weak self, weak view] in
@@ -232,7 +240,10 @@ final class Renderer: NSObject, MTKViewDelegate {
         let dt = lastTime > 0 ? Float(min(now - lastTime, 0.05)) : 1.0 / 60
         lastTime = now
 
+        let previousAmbient = ambient
         ambient = sceneLight(now)
+        let lightingChanged = ambient.light != previousAmbient.light || ambient.shadowTint != previousAmbient.shadowTint
+            || ambient.rim != previousAmbient.rim || ambient.lantern != previousAmbient.lantern
         if let update = windowSurfaces(now) {
             simulation.updateWindows(update.surfaces, interval: update.interval, parked: update.parked, elsewhere: update.elsewhere, sliding: update.sliding)
             if update.slideVelocity != 0 { simulation.spaceSlid(velocity: update.slideVelocity) }
@@ -249,21 +260,16 @@ final class Renderer: NSObject, MTKViewDelegate {
         // The lantern follows the cursor even over snow that lies still.
         let lanternMoved = ambient.lantern > 0 && simd_distance(cursor, lanternAt) > 0.5 && (lights(cursor) || lights(lanternAt))
         lanternAt = cursor
-        let fastest = budget == .full ? interactiveFrameRate : min(60, interactiveFrameRate)
-        // 24 only where it divides the display's rate evenly; elsewhere it would judder.
-        let calm = budget == .saver && interactiveFrameRate % 24 == 0 ? 24 : 30
-        let frameRate = switch simulation.pace {
-        case .calm: calm
-        case .lively: min(60, fastest)
-        case .interactive: fastest
-        }
-        let pace = maxFrameRate ? interactiveFrameRate : lanternMoved ? max(frameRate, min(60, fastest)) : frameRate
+        let frameRate = budget.frameRate(for: simulation.pace, displayRate: interactiveFrameRate)
+        let interactionRate = budget.frameRate(for: .interactive, displayRate: interactiveFrameRate)
+        let pace = maxFrameRate && budget == .full ? interactiveFrameRate : lanternMoved ? max(frameRate, min(60, interactionRate)) : frameRate
         if view.preferredFramesPerSecond != pace { view.preferredFramesPerSecond = pace }
-        idleFrames = changed || lanternMoved ? 0 : idleFrames + 1
-        // A still pile only needs a slow refresh for its glints.
-        guard changed || lanternMoved || ((simulation.hasSnow || !simulation.pumpkins.isEmpty) && idleFrames % 2 == 0) else { return }
+        // Static snow has no time-varying glints. Keep the compositor's last frame until something changes.
+        needsFrame = needsFrame || changed || lanternMoved || lightingChanged || !simulation.pumpkins.isEmpty
+        guard needsFrame else { return }
 
-        semaphore.wait()
+        // A busy GPU must not block the main thread. Preserve the dirty frame for the next opportunity.
+        guard semaphore.wait(timeout: .now()) == .success else { return }
         guard let pass = view.currentRenderPassDescriptor,
               let drawable = view.currentDrawable,
               let commandBuffer = queue.makeCommandBuffer() else {
@@ -275,6 +281,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         commandBuffer.present(drawable)
         commandBuffer.addCompletedHandler { [semaphore] _ in semaphore.signal() }
         commandBuffer.commit()
+        needsFrame = false
     }
 
     func encode(into commandBuffer: MTLCommandBuffer, pass: MTLRenderPassDescriptor, scale: Float, time: Float) {
@@ -499,12 +506,14 @@ final class Renderer: NSObject, MTKViewDelegate {
     }
 
     private func reserve(sprites: Int, columns: Int) {
-        if sprites > spriteCapacity || spriteBuffers.isEmpty {
+        // Periodically return peak allocations after a storm or closing many windows, without resizing every frame.
+        let trim = slot > 0 && slot % 300 == 0
+        if sprites > spriteCapacity || spriteBuffers.isEmpty || (trim && spriteCapacity > max(1024, sprites * 4)) {
             spriteCapacity = max(1024, sprites * 3 / 2)
             spriteBuffers = makeBuffers(length: spriteCapacity * MemoryLayout<Sprite>.stride)
         }
-        if columns > heightCapacity || heightBuffers.isEmpty {
-            heightCapacity = max(256, columns)
+        if columns > heightCapacity || heightBuffers.isEmpty || (trim && heightCapacity > max(256, columns * 4)) {
+            heightCapacity = max(256, columns * 3 / 2)
             heightBuffers = makeBuffers(length: heightCapacity * MemoryLayout<Float>.stride)
         }
     }

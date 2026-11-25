@@ -7,6 +7,7 @@ final class ScreenSnow {
     let window: OverlayWindow
     let dock: DockOverlay
     let simulation: SnowSimulation
+    private let snowmen: SnowmanCanvas
     private let view: MTKView
     private let renderer: Renderer
     private let tracker: WindowTracker
@@ -110,6 +111,7 @@ final class ScreenSnow {
             NSLog("Snowhush: Metal setup failed: \(error)")
             return nil
         }
+        snowmen = SnowmanCanvas(frame: CGRect(origin: .zero, size: screen.frame.size), displayID: displayID)
         self.displayID = displayID
         self.displays = displays
         tracker = WindowTracker(displays: displays)
@@ -128,6 +130,7 @@ final class ScreenSnow {
         renderer.cursorLocation = { [unowned self] in
             // Notification Center is in front of the snow then, which the pointer over it can't reach.
             if window.notificationLevel != nil && tracker.notificationCoversPointer { return SIMD2(-10_000, -10_000) }
+            if snowmen.dragging || NSEvent.modifierFlags.contains(.option) { return SIMD2(-10_000, -10_000) }
             let mouse = NSEvent.mouseLocation
             return SIMD2(Float(mouse.x - window.frame.minX), Float(mouse.y - window.frame.minY))
         }
@@ -163,8 +166,57 @@ final class ScreenSnow {
         measure()
         view.delegate = renderer
         window.contentView = view
+        view.addSubview(snowmen)
+        snowmen.finished = { [weak self] in self?.finishBuilding() }
+        snowmen.takeSnow = { [weak simulation] point, radius, limit in
+            CGFloat(simulation?.sculpt(at: SIMD2(Float(point.x), Float(point.y)), radius: Float(radius), limit: Float(limit)) ?? 0)
+        }
+        snowmen.support = { [weak simulation] point, previous in
+            simulation?.snowmanSupport(at: point, previous: previous)
+        }
+        snowmen.pressSnow = { [weak simulation] point, radius, mass, dt, surface in
+            simulation?.pressSnow(at: point, radius: radius, mass: mass, dt: dt, support: surface)
+        }
+        simulation.catchSnowOnFigure = { [weak canvas = snowmen] x, from, to, area, above in
+            canvas?.catchSnow(x: CGFloat(x), from: CGFloat(from), to: CGFloat(to), area: CGFloat(area), above: CGFloat(above)) ?? false
+        }
+        snowmen.feedback = { strength in SnowFeedback.shared.play(strength: strength) }
+        snowmen.startAnimating()
+        snowmen.returnSnow = { [weak simulation] point, area in
+            simulation?.returnSculptedSnow(Float(area), at: SIMD2(Float(point.x), Float(point.y)))
+        }
         window.orderFrontRegardless()
         checkCovered()
+    }
+
+    /// Arm only over snow while Option is held; ordinary desktop clicks always pass through.
+    func updateSculptingGesture() {
+        guard !snowmen.dragging else { return }
+        let global = NSEvent.mouseLocation
+        let point = NSPoint(x: global.x - window.frame.minX, y: global.y - window.frame.minY)
+        let available = active && !covered && window.isVisible && window.alphaValue > 0.95
+            && window.notificationLevel == nil && !window.behindWindows
+        let modifiers = NSEvent.modifierFlags.intersection([.option, .command, .control])
+        let sculpting = modifiers == .option && simulation.canSculpt(at: SIMD2(Float(point.x), Float(point.y)))
+        let touchingFigure = (modifiers.isEmpty || modifiers == .option) && snowmen.containsFigure(at: point)
+        let eligible = available && NSEvent.pressedMouseButtons == 0 && window.frame.contains(global)
+            && (touchingFigure || sculpting)
+        if eligible {
+            snowmen.editing = true
+            snowmen.hover = sculpting && !touchingFigure ? point : nil
+            window.allowsEditing = true
+            window.ignoresMouseEvents = false
+        } else if snowmen.editing {
+            finishBuilding()
+        }
+    }
+
+    func finishBuilding() {
+        snowmen.cancelDrag()
+        snowmen.editing = false
+        window.ignoresMouseEvents = true
+        window.allowsEditing = false
+        if window.isKeyWindow { window.resignKey() }
     }
 
     func fit(to screen: NSScreen) {
@@ -189,8 +241,10 @@ final class ScreenSnow {
     }
 
     func apply(_ budget: PowerBudget) {
+        snowmen.powerSaving = budget != .full
         renderer.budget = budget
-        simulation.density = budget == .saver ? 0.75 : 1
+        simulation.density = budget.particleDensity
+        tracker.idlePollInterval = budget.windowPollInterval
     }
 
     /// `asleep` with the screens off, locked or switched away from. Inactive, nothing is seen, so the frames are given
@@ -200,7 +254,9 @@ final class ScreenSnow {
             self.asleep = asleep
             restartLookout()
         }
+        if !active { finishBuilding() }
         self.active = active
+        snowmen.active = active
         if !active { renderer.releaseFrames(of: view) }
         guard view.isPaused == active else { return }
         if active { Renderer.fitDrawable(of: view) }
@@ -414,6 +470,7 @@ final class ScreenSnow {
     }
 
     func spaceChanged() {
+        finishBuilding()
         checkCovered()
         simulation.spaceChanged()
         light.invalidate()
@@ -425,9 +482,12 @@ final class ScreenSnow {
     /// Out of the screenshot tool's way, or back in place.
     func stepAside(_ aside: Bool) {
         if aside {
+            snowmen.active = false
+            finishBuilding()
             window.orderOut(nil)
             dock.window.orderOut(nil)
         } else {
+            snowmen.active = active
             window.orderFrontRegardless()
             dock.window.orderFrontRegardless()
         }
@@ -437,7 +497,11 @@ final class ScreenSnow {
         tracker.watchClosely(now: CACurrentMediaTime())
     }
 
+    func preserveScene() { snowmen.preserveScene() }
+
     func close() {
+        snowmen.active = false
+        finishBuilding()
         lookout?.invalidate()
         active = false
         view.isPaused = true
@@ -468,6 +532,7 @@ final class ScreenSnow {
         let view = MTKView(frame: CGRect(origin: .zero, size: size), device: device)
         view.wantsLayer = true
         view.layer?.isOpaque = false
+        (view.layer as? CAMetalLayer)?.maximumDrawableCount = 2
         view.colorPixelFormat = .bgra8Unorm
         view.clearColor = MTLClearColorMake(0, 0, 0, 0)
         view.framebufferOnly = true

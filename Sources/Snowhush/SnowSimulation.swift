@@ -584,6 +584,8 @@ final class SnowSimulation {
     private var clock: Double = 0
     private var cursor: SIMD2<Float>?
     private var cursorVelocity = SIMD2<Float>(repeating: 0)
+    private var weather = SnowWeather.sample(at: ProcessInfo.processInfo.systemUptime)
+    private var sculpted = false
     private var heightsChanged = false
     private var windowsChanged = false
     private var lastWindowMotion: Double = -10
@@ -678,6 +680,47 @@ final class SnowSimulation {
     }
 
     var pileTop: Float { ground.top }
+
+    var catchSnowOnFigure: (Float, Float, Float, Float, Float) -> Bool = { _, _, _, _, _ in false }
+
+    func pressSnow(at point: CGPoint, radius: CGFloat, mass: CGFloat, dt: CGFloat, support: SnowmanSupport) {
+        guard let layer = layers.first(where: { ObjectIdentifier($0) == support.id }) else { return }
+        let previousSpill = layer.spill
+        if SnowSculpting.press(on: layer, x: Float(point.x), radius: Float(radius), mass: Float(mass), dt: Float(dt)) > 0 {
+            // Footprints move snow alone, even in a mixed pile of snow and leaves.
+            let left = layer.spill.left - previousSpill.left
+            let right = layer.spill.right - previousSpill.right
+            layer.spill = previousSpill
+            if left > 0 { release(left, at: edgePoint(of: layer, left: true), velocity: SIMD2(-8, -12)) }
+            if right > 0 { release(right, at: edgePoint(of: layer, left: false), velocity: SIMD2(8, -12)) }
+            sculpted = true; stirred()
+        }
+    }
+
+    func snowmanSupport(at point: CGPoint, previous: SnowmanSupport?) -> SnowmanSupport? {
+        SnowSculpting.support(at: point, previous: previous, in: layers)
+    }
+
+    func canSculpt(at point: SIMD2<Float>) -> Bool {
+        SnowSculpting.layer(at: point, in: layers) != nil
+    }
+
+    func sculpt(at point: SIMD2<Float>, radius: Float, limit: Float) -> Float {
+        let area = SnowSculpting.take(at: point, radius: radius, limit: limit, from: layers)
+        if area > 0 { sculpted = true; stirred() }
+        return area
+    }
+
+    func returnSculptedSnow(_ area: Float, at point: SIMD2<Float>) {
+        // An emptied or closed ledge may no longer be under the hand; return it to the ground then.
+        let contact = SnowSculpting.support(at: CGPoint(x: CGFloat(point.x), y: CGFloat(point.y)), previous: nil, in: layers)
+        let support = layers.first { ObjectIdentifier($0) == contact?.id } ?? ground
+        support.deposit(area, at: point.x, wide: true)
+        support.refreshTop()
+        sculpted = true
+        stirred()
+    }
+
     var hasSnow: Bool { !lying.isEmpty || layers.contains { $0.top > 0.5 } }
     /// Nothing falls, lies, waits for its window or haunts, and nothing will until the snow is stirred.
     var isEmpty: Bool {
@@ -709,9 +752,11 @@ final class SnowSimulation {
     /// Returns whether anything visible changed.
     func step(dt: Float, cursor point: SIMD2<Float>) -> Bool {
         clock += Double(dt)
+        weather = SnowWeather.sample(at: ProcessInfo.processInfo.systemUptime)
         let wasMoving = !flakes.isEmpty || !grains.isEmpty || !motes.isEmpty || !ghosts.isEmpty || !fallingSigns.isEmpty || !snowballs.isEmpty
             || !splashes.isEmpty || !glassDrops.isEmpty || wet
-        heightsChanged = false
+        heightsChanged = sculpted
+        sculpted = false
         leafBudget = nil
 
         releaseScattered()
@@ -877,7 +922,9 @@ final class SnowSimulation {
             count += 1
             if !drop.hanging {
                 let speed = simd_length(sprite.velocity)
-                let reach = max(sprite.size, 1.5) * 1.1 + min(speed * 0.08, sprite.size * 0.9) + speed * 0.024 + 1
+                let baseReach: Float = max(sprite.size, 1.5) * 1.1
+                let motionReach: Float = min(speed * 0.08, sprite.size * 0.9)
+                let reach: Float = baseReach + motionReach + speed * 0.024 + 1
                 let bounds = SIMD4(lowHalf: sprite.position - reach, highHalf: sprite.position + reach)
                 glassReach = glassReach.map { SIMD4(lowHalf: simd_min($0.lowHalf, bounds.lowHalf), highHalf: simd_max($0.highHalf, bounds.highHalf)) } ?? bounds
             }
@@ -1782,10 +1829,16 @@ final class SnowSimulation {
                 if !heldLayers.contains(where: { $0 === layer }) { heldLayers.append(layer) }
                 layer.hold(i)
             }
+            let firmness = layer.firmness(i)
+            let yielding = layer.sweepYield(i, speed: speed)
+            if !buried && h >= bottom - 1 && travel > 0 {
+                let pressure = 1 - exp(-travel / (2 * radius) * (1 - spray.snow * 0.6))
+                layer.compact(i, pressure: pressure)
+            }
             guard h > bottom + 0.01 else { continue }
 
             // A buried cursor only displaces the snow it sweeps through; the rest rests on top of it.
-            let removed = buried ? (top - bottom) * min(1, travel / (2 * radius)) : h - bottom
+            let removed = (buried ? (top - bottom) * min(1, travel / (2 * radius)) : h - bottom) * yielding
             guard removed > 0.001 else { continue }
             let blend = layer.blend(i)
             layer.set(i, h - removed)
@@ -1797,19 +1850,19 @@ final class SnowSimulation {
             let area = max(0, removed - hidden) * columnWidth
             let surface = layer.floor(i) + (buried ? h - removed : h)
             let share = blend.leaves > 0.5 ? spray.leaves : spray.snow
-            let sprayed = share > 0 ? emit(area * share, from: SIMD2(x, surface), center: center, velocity: velocity, blend: blend) : 0
+            let sprayed = share > 0 ? emit(area * share, from: SIMD2(x, surface), center: center, velocity: velocity, blend: blend, firmness: firmness) : 0
             let side = abs(velocity.x) > 40 ? velocity.x : dx
             if side < 0 { pushedLeft.add(area - sprayed, blend) } else { pushedRight.add(area - sprayed, blend) }
         }
 
         for (pushed, x) in [(pushedLeft, center.x - radius - columnWidth * 3), (pushedRight, center.x + radius + columnWidth * 3)] where pushed.area > 0 {
-            let missed = layer.deposit(pushed.area, at: x, wide: true, blend: pushed.blend)
+            let missed = layer.deposit(pushed.area, at: x, wide: true, blend: pushed.blend, compaction: 0.45 * (1 - spray.snow))
             dropPast(layer, missed, near: x, velocity: velocity.x * 0.5, blend: pushed.blend)
         }
     }
 
     /// Throws some of what the cursor sweeps out of a heap into the air; returns how much.
-    private func emit(_ area: Float, from origin: SIMD2<Float>, center: SIMD2<Float>, velocity: SIMD2<Float>, blend: Blend) -> Float {
+    private func emit(_ area: Float, from origin: SIMD2<Float>, center: SIMD2<Float>, velocity: SIMD2<Float>, blend: Blend, firmness: Float = 0) -> Float {
         guard area > 0.6, grains.count < maxGrains else { return 0 }
         let speed = simd_length(velocity)
         let offset = origin - center
@@ -1837,7 +1890,8 @@ final class SnowSimulation {
 
         let snow = area - leafy
         guard snow > 0.6 else { return thrown }
-        let count = min(4, Int(snow / 1.6) + 1)
+        let cohesive = firmness > 0.35 && speed > 350 && snow > 4
+        let count = cohesive ? 1 : min(4, Int(snow / 1.6) + 1)
         let share = snow / Float(count)
         for _ in 0..<count {
             var v = velocity * random.range(0.55, 1.25) + outward * (speed * random.range(0.05, 0.25))
@@ -1847,7 +1901,8 @@ final class SnowSimulation {
                 position: origin + SIMD2(random.range(-1, 1), random.range(0, 2)),
                 velocity: v,
                 area: share,
-                size: min(4.2, max(1.1, share.squareRoot() * 1.05))
+                size: min(cohesive ? 9 : 4.2, max(1.1, share.squareRoot() * 1.05)),
+                lump: cohesive ? random.range(0.05, 1) : 0
             ))
         }
         return thrown + snow
@@ -1933,6 +1988,14 @@ final class SnowSimulation {
                     i -= 1
                     continue
                 }
+                if !flake.rain && flake.leaf == 0,
+                   catchSnowOnFigure(flake.position.x, previousY, flake.position.y,
+                                     flake.size * flake.size * deposition * flake.mass,
+                                     hit.map { $0.layer.surface($0.index) } ?? -Float.greatestFiniteMagnitude) {
+                    recycle(i)
+                    i -= 1
+                    continue
+                }
                 if let hit {
                     if flake.rain {
                         splash(at: SIMD2(flake.position.x, hit.layer.surface(hit.index)), depth: flake.depth)
@@ -1958,7 +2021,7 @@ final class SnowSimulation {
                             flip: isFlower(flake.leaf, petal: petal) ? flowerTilt(seed: flake.leaf, phase: flake.phase).face : tumble(flake.leaf),
                             drift: flake.velocity.x)
                     } else {
-                        hit.layer.deposit(flake.size * flake.size * deposition * flake.mass * hit.layer.fill(hit.index), at: flake.position.x, wide: true)
+                        hit.layer.deposit(flake.size * flake.size * deposition * flake.mass * hit.layer.fill(hit.index), at: flake.position.x, wide: true, fresh: true)
                     }
                     heightsChanged = true
                     recycle(i)
@@ -2029,6 +2092,8 @@ final class SnowSimulation {
             } else {
                 grain.velocity.y -= gravity * dt
                 grain.velocity *= damping
+                let catchAir: Float = grain.lump > 0 ? 0.15 : 0.9
+                grain.velocity.x += (wind - grain.velocity.x) * min(1, dt * catchAir)
             }
             grain.position += grain.velocity * dt
             let hit = grain.blown || grain.velocity.y > 0 ? nil : landing(x: grain.position.x, from: previousY, to: grain.position.y, here: !crossed(grain.position), ground: groundSettles)
@@ -3173,8 +3238,7 @@ final class SnowSimulation {
     }
 
     private func breeze() -> Float {
-        let t = clock
-        return Float(10 * sin(t * 0.07) + 6 * sin(t * 0.19 + 1.7) + 3 * sin(t * 0.43 + 4.1))
+        weather.wind
     }
 
     private func gustSpeed() -> Float {
@@ -3308,42 +3372,48 @@ final class SnowSimulation {
     /// The wind of a sliding Space skims the drifts, most off the crests that stand above the snow around them:
     /// a little powder flies a short way downwind and settles again.
     private func skim(dt: Float) {
-        let share = abs(slideWind) / slideWindMax
-        guard share > 0.1 else { return }
+        let share = max(abs(slideWind) / slideWindMax, weather.lift * 0.16)
+        let airflow = slideWind + weather.wind
+        guard share > 0.025, grains.count < maxGrains else { return }
         // Of leaves it lifts some of those lying on top, never the mass under them.
         let shown = markShown()
         for k in lying.indices.reversed() where random.next() < share * dt {
             let leaf = lying[k]
             guard leaf.layer.shown == shown, let i = leaf.layer.index(at: leaf.layer.heapX + leaf.x),
                   leaf.layer.visible[i], leaf.layer.surface(i) - leaf.layer.base.y < leaf.top + 2 else { continue }
-            fly(k, velocity: SIMD2(slideWind * random.range(1.5, 3), random.range(30, 120)))
+            fly(k, velocity: SIMD2(airflow * random.range(1.5, 3), random.range(30, 120)))
         }
         for layer in layers {
             let count = layer.count
             var dust: Float = 0
+            var lastColumn = 0
             for i in 0..<count where layer.visible[i] {
+                guard grains.count < maxGrains else { break }
+                lastColumn = i
                 let height = layer.heights[i]
                 let snow = height - layer.leaves[i]
                 guard snow > 1.5 else { continue }
                 let around = (layer.heights[max(i - 12, 0)] + layer.heights[min(i + 12, count - 1)]) / 2
-                let loss = min(snow * 0.2, (0.2 + max(0, height - around) * 1.5) * share * dt)
+                let loss = min(snow * 0.2, (0.2 + max(0, height - around) * 1.5) * share * (1 - layer.firmness(i) * 0.85) * dt)
                 layer.remove(snow: loss, from: i)
                 heightsChanged = true
                 dust += loss * layer.columnWidth
-                while dust >= 1.5 {
-                    puff(at: SIMD2(layer.centerX(i), layer.surface(i)), area: 1.5)
+                while dust >= 1.5 && grains.count < maxGrains {
+                    puff(at: SIMD2(layer.centerX(i), layer.surface(i)), area: 1.5, wind: airflow)
                     dust -= 1.5
                 }
             }
+            // Sub-grain remainders and a full particle budget stay in the drift, never vanish.
+            if dust > 0 { layer.set(lastColumn, layer.heights[lastColumn] + dust / layer.columnWidth) }
         }
     }
 
     /// A pinch of powder off a crest, thrown downwind by a sliding Space's wind; it lands again where it falls.
-    private func puff(at position: SIMD2<Float>, area: Float) {
+    private func puff(at position: SIMD2<Float>, area: Float, wind: Float) {
         guard grains.count < maxGrains else { return }
         grains.append(Grain(
             position: position + SIMD2(random.range(-1, 1), random.range(-2, 0)),
-            velocity: SIMD2(slideWind * random.range(1.5, 3), random.range(60, 260)),
+            velocity: SIMD2(wind * random.range(1.5, 3), random.range(30, abs(wind) > 100 ? 260 : 90)),
             area: area,
             size: random.range(1.1, 2.4)
         ))
@@ -3628,6 +3698,12 @@ final class SnowSimulation {
         let meltPace = falling > 0 ? pow(falling / thawBalance, thawExponent) : 1
         for ledge in ledgeList { ledge.outside = (outside(of: ledge, left: true), outside(of: ledge, left: false)) }
         for layer in layers {
+            if grains.count < maxGrains - 16 {
+                for broken in layer.breakCornices(dt: dt) {
+                    throwLump(broken.area, at: broken.position, velocity: SIMD2(weather.wind * 0.4, -15))
+                    heightsChanged = true
+                }
+            }
             let bare = layer === ground && !groundSettles
             if !accumulates || thaws || bare {
                 // Withered leaves leave nothing behind.
@@ -3637,7 +3713,7 @@ final class SnowSimulation {
             // Shaken harder than gravity, a granular pile fluidizes and slumps to a flatter slope.
             // Leaves catch on one another and heap up steeper than snow.
             let steepest = repose * (1 + 0.8 * layer.blend.leaves)
-            if layer.relax(repose: layer.agitation > shaking ? steepest * 0.35 : steepest, rounding: rounding) { heightsChanged = true }
+            if layer.relax(repose: layer.agitation > shaking ? steepest * 0.35 : steepest, rounding: rounding, bonding: layer.agitation > shaking ? 0 : 1) { heightsChanged = true }
             if layer.spill.left > 1.5 {
                 release(layer.spill.left, at: edgePoint(of: layer, left: true), velocity: layer.trackVelocity + SIMD2(-6, -15), spread: SIMD2(0.25, 1),
                         blend: layer.blend(0))

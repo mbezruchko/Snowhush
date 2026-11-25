@@ -4,10 +4,29 @@ import IOKit.ps
 /// How much the snow may spend on drawing.
 enum PowerBudget {
     case full
-    /// On battery: no frame rates above 60, which are hard to tell apart in snow anyway.
+    /// On battery: 30 fps in the background, up to 60 during interaction.
     case battery
     /// Low Power Mode, or a Mac running hot: a little less snow, drawn a little less often.
     case saver
+
+    var particleDensity: Float {
+        switch self { case .full: 1; case .battery: 0.85; case .saver: 0.6 }
+    }
+
+    var windowPollInterval: TimeInterval {
+        switch self { case .full: 0.2; case .battery: 1.0 / 3; case .saver: 0.5 }
+    }
+
+    func frameRate(for pace: SnowSimulation.Pace, displayRate: Int) -> Int {
+        switch self {
+        case .full:
+            switch pace { case .calm: return 30; case .lively: return min(60, displayRate); case .interactive: return displayRate }
+        case .battery:
+            return pace == .interactive ? min(60, displayRate) : 30
+        case .saver:
+            return pace == .interactive ? 30 : (displayRate % 24 == 0 ? 24 : 30)
+        }
+    }
 }
 
 final class PowerMonitor {

@@ -5,6 +5,10 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 flags=(-c release --arch arm64 --arch x86_64)
+# Command Line Tools can build for this Mac without Xcode's universal-build driver.
+if [[ "${1:-}" == --native ]]; then
+    flags=(-c release)
+fi
 swift build "${flags[@]}"
 products="$(swift build "${flags[@]}" --show-bin-path)"
 

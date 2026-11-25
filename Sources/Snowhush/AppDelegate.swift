@@ -23,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var surfacesItem: NSMenuItem!
     private let surfacePicker = SurfacePicker()
     private var meltItem: NSMenuItem!
+    private var snowSoundItem: NSMenuItem!
     private var clearItem: NSMenuItem!
     private var halloweenItem: NSMenuItem!
     private var mixedItem: NSMenuItem!
@@ -42,6 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var welcome: WelcomeController?
     private let power = PowerMonitor()
     private var halloweenTimer: Timer?
+    private var sculptingTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if AppMover.moveIfNeeded() {
@@ -71,12 +73,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         refreshHalloween()
         halloweenTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in self?.refreshHalloween() }
         observeSystem()
+        let gestureTimer = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
+            guard let self, !screensAsleep, !screenLocked, !sessionInactive else { return }
+            screens.forEach { $0.updateSculptingGesture() }
+        }
+        gestureTimer.tolerance = 0.005
+        RunLoop.main.add(gestureTimer, forMode: .common)
+        sculptingTimer = gestureTimer
         Marquee.enabled = Preferences.deepInteraction
         screenshots.stepAside = { [weak self] aside in self?.screens.forEach { $0.stepAside(aside) } }
         screenshots.start()
         if snowfallHeld {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in self?.showWelcome() }
         }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        screens.forEach { $0.preserveScene() }
     }
 
     // A menu bar app has no Dock icon to badge, so update reminders are left to Sparkle's own gentle alerts.
@@ -198,6 +211,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         settings.autoenablesItems = false
         settings.addItem(.sectionHeader(title: tr("behavior")))
         meltItem = toggle(tr("melt.snow"), #selector(toggleMeltSnow), to: settings)
+        snowSoundItem = toggle(tr("snowman.sound"), #selector(toggleSnowSound), to: settings)
         deepInteractionItem = toggle(tr("deep"), #selector(toggleDeepInteraction), to: settings)
         settings.addItem(.separator())
         settings.addItem(.sectionHeader(title: tr("display")))
@@ -275,6 +289,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         accumulateRow.summaryIcons = every || lit.isEmpty ? [] : lit
         // Unfolded, the summary isn't shown: the menu keeps its width while the icons are switched.
         if !accumulateRow.open { accumulateRow.fit(accumulateItem.title, least: surfacePicker.frame.width) }
+        snowSoundItem.state = SnowFeedback.soundEnabled ? .on : .off
         meltItem.state = thaws ? .on : .off
         meltItem.isEnabled = !surfaces.isEmpty
         deepInteractionItem.state = Preferences.deepInteraction ? .on : .off
@@ -309,6 +324,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
             menu.items.forEach { $0.view?.needsDisplay = true }
         }
     }
+
+    @objc private func toggleSnowSound() { SnowFeedback.soundEnabled.toggle() }
 
     @objc private func toggleMeltSnow() {
         thaws.toggle()

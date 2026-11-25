@@ -18,6 +18,7 @@ final class DockOverlay {
         layer.pixelFormat = .bgra8Unorm
         layer.isOpaque = false
         layer.framebufferOnly = true
+        layer.maximumDrawableCount = 2
         // While the strip resizes, a frame of the other size stays pinned to the shared origin instead of stretching.
         layer.contentsGravity = .bottomLeft
         layer.needsDisplayOnBoundsChange = false

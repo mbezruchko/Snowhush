@@ -162,6 +162,8 @@ final class WindowTracker {
 
     /// Returns the windows when they changed since the last poll.
     /// `eager` polls every frame, e.g. while a mouse button is down and a drag may be starting.
+    var idlePollInterval: TimeInterval = 0.2
+
     func poll(now: CFTimeInterval, eager: Bool) -> WindowUpdate? {
         let interval = now - lastQuery
         let minimizing = watchForMinimize(now: now)
@@ -173,7 +175,7 @@ final class WindowTracker {
         // A sliding Space is followed every frame, its snow riding on the windows with no smoothing.
         // Turned to hide by itself, a Dock that stayed out slides away at once: the slow polls would let its snow hang.
         let dockTurnedToHide = dockStays && Dock.autoHides
-        guard minimizing || bannerMoving || now < slidingUntil || interval >= (closely ? 1.0 / 62 : 0.2) || dockTurnedToHide || (Self.slideMayStart && watchedMoved()) else { return nil }
+        guard minimizing || bannerMoving || now < slidingUntil || interval >= (closely ? 1.0 / 62 : idlePollInterval) || dockTurnedToHide || (Self.slideMayStart && watchedMoved()) else { return nil }
         lastQuery = now
         let before = windowFrames
         let surfaces = query(now: now)

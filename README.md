@@ -32,6 +32,28 @@ A tiny app that lives in the menu bar on macOS and in the tray on Windows and Li
 - **Hides.** Screenshots and screen sharing show your desktop without it, unless you turn on Show in Screenshots.
 - **Rests.** About 6% of one processor core and 65 MB of memory, and less on battery or in Low Power Mode. It pauses while your screen sleeps, locks or is covered.
 
+## Snow that remembers your touch (macOS)
+
+Power use adapts automatically: on battery, background snowfall runs at 30 fps with 85% of the usual particles, returning to up to 60 fps during interaction. Low Power Mode or thermal pressure uses 60% of the particles and caps interaction at 30 fps. Max Performance only overrides the frame rate on external power. Window tracking polls less frequently while idle on battery, while drags and Space transitions retain fast tracking. Static snow no longer triggers GPU redraws for glints. Two frames in flight reduce drawable and staging-buffer memory; hidden/sleeping overlays release staging buffers and optional artwork, and oversized buffers shrink periodically after activity subsides.
+
+Flakes and loose powder share smoothly changing wind across displays. Gusts lift fresh powder more easily than compacted snow. Window ledges hold small rounded snow lips that eventually break into falling lumps, returning their snow to the scene. Thin powder melts faster and dense, worked snow lasts longer. Soft shading adds depth to hollows, with stationary crystalline highlights instead of flickering drifts. Snowman animations also reduce their update rate in power-saving modes.
+
+Slow strokes leave a groove and push snow into banks. Repeated strokes compact the surface: worked snow resists a gentle pass and holds its shape longer, while a fast flick can break it into clumps that burst when they land. Rolling snowballs also presses the snow left beneath them.
+
+Fresh snowfall gradually buries the compacted surface, softens the banks and fills the grooves. This follows the snow that actually lands, so turning snowfall off does not instantly reset your tracks. Melting and shaking still affect the drifts normally. Surface compaction changes how snow moves, without subtracting snow or compacting autumn leaves and petals.
+
+## A shared winter scene (macOS)
+
+Snowballs collide and push each other; a hard throw can knock the upper ball off a snowman. Figures press rounded footprints into settled snow according to the bottom sphere's curvature and the weight it carries. Equal weight spreads over a larger ball; stacking adds pressure to the bottom ball. Snow gradually firms under the load and stops further sinking. Displaced snow banks up beside the footprint instead of disappearing, and leaves remain in place.
+
+Falling flakes can settle on the figures themselves. Their heads and shoulders become lightly dusted, and moving or hitting them shakes that snow back into the scene. The sculpting hint retires after the first successful roll. Trackpad feedback marks contact and assembly; optional **Settings › Snow interaction sounds** adds a quiet synthesized crunch (off by default).
+
+## Sculpt the snow (macOS)
+
+Hold **Option (⌥)** over a settled drift, then **click and drag with the trackpad or mouse**. The ball gathers the actual snow under your stroke, leaving a groove. Let go to put it down. Roll a smaller ball, lift it to the top of a larger one, and release when the snap outline appears. A gentle magnetic pull helps align the ball with the nearest suitable stack; three stacked balls become a snowman. Trackpads give a small haptic tick at the snap point.
+
+**Shift-drag** any sphere in a stack to lift that sphere out and reuse it elsewhere; Escape restores the stack if you change your mind. A Shift-click without dragging leaves it intact. Drag existing balls and snowmen normally to pick them up; a quick release throws them. Hold still briefly before releasing to place a figure without throwing it. Loose balls fall, bounce and roll to rest on the ground or a window ledge. Figures follow the supporting window and fall when it closes. Hold Option while rolling a loose ball through a drift to gather more snow. A plain click breaks the sphere you aim at and returns its snow to the scene. A completed snowman greets you, watches the cursor, and blinks; reduced-motion settings suppress these decorative movements. Option-double-click a finished snowman to change its scarf. Option-secondary-click (a two-finger trackpad click) crumbles it back into snow. Escape cancels the current stroke and returns its snow. Release Option to return to normal desktop interaction. Figures are saved per display, with up to 24 per display. Moving figures are checkpointed periodically, and the scene is saved immediately when the display sleeps, disconnects, or the app quits. Sculpting works over visible snow in front of windows; it does not capture clicks with Behind Windows enabled.
+
 ## Autumn Leaves
 
 Choose Mode › Autumn Leaves and leaves fall instead of snow. They turn and swing on the way down, settle in heaps you can see are made of leaves, scatter under the cursor and come off a window you shake or drag. Melt Snow and Clear Snow become Wither Leaves and Clear Leaves.
@@ -54,9 +76,12 @@ Everything else lives in the menu bar: an Intensity slider for how much falls, O
 
 ```sh
 ./build.sh            # build/Snowhush.app, signed ad hoc
+./build.sh --native   # this Mac only; works with Command Line Tools
 open build/Snowhush.app
 windows/build.sh      # dist/Snowhush-Setup.exe, cross-compiled from macOS
 ```
+
+Run `scripts/test-snowmen.sh` on macOS to check snow collection, stacking, cancellation, persistence, compaction, wind, melting and mass conservation using in-memory preferences. Run `scripts/test-snow-scene.sh` for a synthetic two-display simulation benchmark, window transfer and resize checks, production Metal pipeline compilation, and an offscreen snow render (saved to `/tmp/snowhush-snow-preview.png`). These checks do not replace testing physical display connections or system sleep.
 
 ### Linux
 
