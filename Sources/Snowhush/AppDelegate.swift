@@ -563,7 +563,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     /// Joins the room of a link pasted into the menu; says so when it is no invite.
     private func joinFight(_ text: String) {
         guard SnowballRoom.holdsInvite(text) else {
-            noteFight(tr("fight.notlink"))
+            (fightJoinItem?.view as? MenuField)?.clear()
+            noteFight(tr(text.isEmpty ? "fight.nolink" : "fight.notlink"))
             return
         }
         (fightJoinItem?.view as? MenuField)?.clear()
