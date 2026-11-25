@@ -287,6 +287,8 @@ pub struct Tree {
     pub presents: Vec<Present>,
     /// The middle of the trunk's foot.
     pub base: V2,
+    /// What it stands on, from the screen's bottom: a panel's shelf, over which nothing of it under that shows.
+    pub floor: f32,
     /// How far the top of the tree leans over, and how fast.
     pub sway: f32,
     sway_velocity: f32,
@@ -368,6 +370,7 @@ impl Tree {
             bulbs,
             presents,
             base: V2::new(120.0, 0.0),
+            floor: 0.0,
             sway: 0.0,
             sway_velocity: 0.0,
             sway_acceleration: 0.0,

@@ -3400,6 +3400,7 @@ impl SnowSimulation {
         let covered =
             self.covers.iter().any(|cover| cover[0] < right && cover[2] > left && cover[1] < floor + TREE_HEIGHT + 20.0 && cover[3] > floor);
         let target = if covered { -(TREE_HEIGHT + 40.0) } else { floor };
+        tree.floor = floor;
         tree.base = V2::new(TREE_X, tree.base.y + (target - tree.base.y) * (dt * 5.0).min(1.0));
         let shown = tree.base.y > -TREE_HEIGHT;
         tree.celebration = self.celebration.map(|t| t as f32);

@@ -514,6 +514,12 @@ impl Gpu {
             {
                 let drawing = tree.drawing();
                 let bulbs: Vec<f32> = drawing.bulbs.iter().flat_map(|bulb| bulb.place.into_iter().chain(bulb.color)).collect();
+                // Standing on a panel, its lowest boughs, which reach under its foot, would hang over the panel.
+                if tree.floor > 0.0 {
+                    let bottom = (tree.floor * surface.height as f32 / view[1].max(1.0)).round() as i32;
+                    gl.enable(glow::SCISSOR_TEST);
+                    gl.scissor(0, bottom, surface.width, surface.height - bottom);
+                }
                 gl.active_texture(glow::TEXTURE0);
                 gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(needles));
                 gl.bind_vertex_array(Some(self.tree_array));
@@ -542,6 +548,7 @@ impl Gpu {
                     gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, vertices, pieces.len() as i32);
                 }
                 gl.bind_texture(glow::TEXTURE_2D_ARRAY, None);
+                gl.disable(glow::SCISSOR_TEST);
             }
             // The sparklers in the hands, in front of the tree as the hands are, and of the windows as it is.
             if let Some(fireworks) = simulation.fireworks() {
