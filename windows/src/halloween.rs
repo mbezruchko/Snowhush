@@ -11,7 +11,7 @@ use windows::Win32::UI::Shell::SHCreateMemStream;
 use windows::core::{Error, Result};
 
 use snowhush_core::halloween::{Choice, SIGN_CAPTIONS, Today};
-use snowhush_core::simulation::Mode;
+use snowhush_core::new_year::Holiday;
 
 use crate::prefs::Settings;
 
@@ -48,9 +48,9 @@ pub fn wanted(choice: Choice) -> bool {
     choice.wanted(today())
 }
 
-/// Whether the snow is spooky: Halloween wanted, over snow alone, not leaves or rain.
+/// Whether the snow is spooky: Halloween the holiday it keeps, over snow alone, not leaves or rain.
 pub fn shows(settings: &Settings) -> bool {
-    settings.picked.modes() == [Mode::Snow] && wanted(settings.halloween)
+    crate::new_year::holiday(settings) == Some(Holiday::Halloween)
 }
 
 /// A picture drawn on the Mac: rows of premultiplied RGBA from the top.
@@ -70,7 +70,7 @@ pub fn pumpkin_pictures() -> Result<[Picture; 2]> {
     Ok([decode(LANTERN[0])?, decode(LANTERN[1])?])
 }
 
-fn decode(data: &[u8]) -> Result<Picture> {
+pub fn decode(data: &[u8]) -> Result<Picture> {
     unsafe {
         let imaging: IWICImagingFactory = CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?;
         let stream = SHCreateMemStream(Some(data)).ok_or_else(Error::empty)?;

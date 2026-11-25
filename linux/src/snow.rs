@@ -12,22 +12,28 @@ use calloop_wayland_source::WaylandSource;
 use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState};
 use smithay_client_toolkit::output::{OutputHandler, OutputState};
 use smithay_client_toolkit::registry::{ProvidesRegistryState, RegistryState};
+use smithay_client_toolkit::seat::pointer::{PointerEvent, PointerEventKind, PointerHandler};
+use smithay_client_toolkit::seat::{Capability, SeatHandler, SeatState};
 use smithay_client_toolkit::shell::wlr_layer::{LayerShell, LayerShellHandler, LayerSurface, LayerSurfaceConfigure};
 use smithay_client_toolkit::{delegate_dispatch2, delegate_registry, registry_handlers};
 use wayland_client::globals::registry_queue_init;
-use wayland_client::protocol::{wl_output, wl_surface};
+use wayland_client::protocol::{wl_output, wl_seat, wl_surface};
 use wayland_client::{Connection, QueueHandle};
 use zbus::blocking::Connection as Bus;
 
 use snowhush_core::geometry::V2;
 use snowhush_core::halloween::{Choice, Today};
 use snowhush_core::modes::Picked;
+use snowhush_core::new_year::{self, Holiday};
 use snowhush_core::simulation::{Borrowed, Mapping, Mode, SnowSimulation, Stray, WindowId};
+use snowhush_core::text::tr;
 
 use crate::chores;
+use crate::fight;
 use crate::kwin;
 use crate::light::{self, Shade, daylight};
 use crate::log;
+use crate::picture::PictureSnow;
 use crate::prefs::Settings;
 use crate::render::{Ambient, Gpu};
 use crate::screen::{self, PowerBudget, Screen};
@@ -42,6 +48,10 @@ pub enum Command {
     FallingOpacity(f32),
     Ground(bool),
     Panel(bool),
+    /// Accumulate's Wallpaper, and Deep Interaction: the snow lying in the wallpaper's picture, and the flakes falling
+    /// into its depth.
+    Wallpaper(bool),
+    Depth(bool),
     Melt(bool),
     SnowOnWindows(bool),
     BehindWindows(bool),
@@ -49,12 +59,19 @@ pub enum Command {
     /// Every frame at the display's highest rate, or as fast as what moves needs.
     Performance(bool),
     ShowInScreenshots(bool),
-    /// Halloween turned on or off from the menu.
-    Halloween(Choice),
+    /// Halloween or the New Year turned on or off from the menu: turning one on turns the other off.
+    Holidays {
+        halloween: Choice,
+        new_year: Choice,
+    },
     /// The screen locked or unlocked.
     Locked(bool),
     /// Blows all the snow away; when calm, for less motion, melts it where it lies instead.
     ClearSnow(bool),
+    /// The snowball fight's room: open one, or copy its link again; join the one on the clipboard; leave it.
+    FightInvite,
+    FightJoin,
+    FightLeave,
     /// Other kinds fall, once what lies is cleared away as `ClearSnow` clears it; a kind only joining what falls
     /// starts at once.
     Mode {
@@ -72,6 +89,16 @@ pub enum Command {
 pub struct App {
     registry: RegistryState,
     outputs: OutputState,
+    /// The snowball fight's room, while this player is in one; the one being opened or joined; and the room as the tray
+    /// last showed it.
+    room: snowhush_core::snowman::room::Room,
+    opening: Option<fight::Opening>,
+    room_shown: u64,
+    /// A word on what was just done, shown in the menu in place of the room's state until then.
+    notice: Option<std::time::Instant>,
+    /// The seats' pointers, for clicks on the snowmen in the wallpaper.
+    seat: SeatState,
+    pointers: Vec<wayland_client::protocol::wl_pointer::WlPointer>,
     compositor: CompositorState,
     layer_shell: LayerShell,
     qh: QueueHandle<App>,
@@ -93,8 +120,10 @@ pub struct App {
     budget: PowerBudget,
     light: [f32; 3],
     today: Today,
-    /// Whether the snow has Halloween's ghosts: wanted, over snow, not leaves.
+    new_year_today: Today,
+    /// Whether the snow has Halloween's ghosts, or the New Year's fir: whichever holiday it keeps.
     halloween: bool,
+    new_year: bool,
     /// How far into Halloween night it is.
     night: f32,
     tray: Option<ksni::blocking::Handle<Tray>>,
@@ -103,10 +132,15 @@ pub struct App {
     light_at: Instant,
     /// Asks the chores for the desktop pictures again.
     backdrops_wanted: mpsc::Sender<()>,
+    /// The desktop pictures as the chores last found them.
+    shades: Vec<Shade>,
+    /// When the snow's level in the wallpaper was last kept for the next run.
+    picture_kept_at: Instant,
     stats: Stats,
 }
 
-pub fn run() -> Result<(), String> {
+/// Runs Snowhush, joining the snowball fight `link` is to; or, with Snowhush already running, hands it the link.
+pub fn run(link: Option<String>) -> Result<(), String> {
     let settings = Settings::load();
     let mut event_loop: EventLoop<App> = EventLoop::try_new().map_err(|error| error.to_string())?;
     // First of all: the signals are blocked on this thread so the loop can take them, and threads started
@@ -119,9 +153,17 @@ pub fn run() -> Result<(), String> {
     event_loop.handle().insert_source(ping_source, |_, _, _| {}).map_err(|error| error.to_string())?;
     let shared = Arc::new(Shared::new(ping));
     let Some(bus) = kwin::serve(shared.clone()).map_err(|error| format!("D-Bus: {error}"))? else {
+        if let Some(link) = link
+            && kwin::hand_over(&link)
+        {
+            return Ok(());
+        }
         eprintln!("Snowhush is already running.");
         return Ok(());
     };
+    if let Some(link) = link {
+        shared.hand_link(link);
+    }
     // Only now: a second copy that stops here must not wipe the running one's log.
     crate::log::start();
     let report_panic = std::panic::take_hook();
@@ -153,6 +195,12 @@ pub fn run() -> Result<(), String> {
     let mut app = App {
         registry: RegistryState::new(&globals),
         outputs: OutputState::new(&globals, &qh),
+        seat: SeatState::new(&globals, &qh),
+        room: Default::default(),
+        opening: None,
+        room_shown: 0,
+        notice: None,
+        pointers: Vec::new(),
         compositor,
         layer_shell,
         qh: qh.clone(),
@@ -172,13 +220,17 @@ pub fn run() -> Result<(), String> {
         budget: PowerBudget::Full,
         light: daylight(),
         today: Today::default(),
+        new_year_today: Today::default(),
         halloween: false,
+        new_year: false,
         night: 0.0,
         tray: None,
         started: now,
         chores_at: now,
         light_at: now,
         backdrops_wanted: chores::start(bus.clone(), commands.clone()),
+        shades: Vec::new(),
+        picture_kept_at: Instant::now(),
         stats: Stats::new(now),
     };
     let result = 'run: {
@@ -289,6 +341,16 @@ impl App {
                     if windows { screen.rewatch() } else { screen.drop_window_snow() }
                 });
             }
+            Command::Wallpaper(on) => {
+                self.settings.wallpaper = on;
+                let accumulates = self.settings.accumulates();
+                self.screens.iter_mut().for_each(|screen| screen.simulation.accumulates = accumulates);
+                self.follow_pictures();
+            }
+            Command::Depth(on) => {
+                self.settings.depth = on;
+                self.follow_pictures();
+            }
             Command::Melt(on) => {
                 self.settings.melt = on;
                 self.screens.iter_mut().for_each(|screen| screen.simulation.thaws = on);
@@ -324,9 +386,25 @@ impl App {
                 self.settings.show_in_screenshots = on;
                 self.source.show_in_screenshots(&self.bus, on);
             }
-            Command::Halloween(choice) => {
-                self.settings.halloween = choice;
+            Command::Holidays { halloween, new_year } => {
+                self.settings.halloween = halloween;
+                self.settings.new_year = new_year;
                 self.update_light();
+            }
+            Command::FightInvite => match &self.room.invite {
+                Some(invite) => {
+                    fight::copy(&snowhush_core::snowman::room::link(invite));
+                    self.say(tr("fight.copied"));
+                }
+                None => self.opening = Some(fight::open(&mut self.room, None)),
+            },
+            Command::FightJoin => match fight::pasted().filter(|text| snowhush_core::snowman::room::holds_invite(text)) {
+                Some(text) => self.opening = Some(fight::open(&mut self.room, Some(text))),
+                None => self.say(tr("fight.nolink")),
+            },
+            Command::FightLeave => {
+                self.opening = None;
+                fight::leave(&mut self.room);
             }
             Command::ClearSnow(calm) => {
                 let direction = self.screens.first().map_or(-1.0, |screen| screen.simulation.breeze_direction());
@@ -361,7 +439,12 @@ impl App {
                 log!("power: {budget:?}");
                 self.screens.iter_mut().for_each(|screen| screen.simulation.set_density(density(budget)));
             }
-            Command::Backdrops(shades) => self.screens.iter_mut().for_each(|screen| screen.update_backdrop(&shades)),
+            Command::Backdrops(shades) => {
+                for screen in &mut self.screens {
+                    screen.update_backdrop(&shades, &self.gpu);
+                }
+                self.shades = shades;
+            }
             Command::Light(light) => {
                 if let Some(tray) = &self.tray {
                     tray.update(|tray| tray.light = light);
@@ -432,7 +515,16 @@ impl App {
         let mut released = false;
         let mut reshaped = false;
         let mut gpu_lost = false;
+        // The New Year's countdown and midnight by the clock, and how often rockets go up.
+        let (celebration, rockets) = if self.new_year {
+            let local = light::now();
+            (new_year::celebration(local, (now - self.started).as_secs_f64()), new_year::fireworks_per_minute(local))
+        } else {
+            (None, 0.0)
+        };
         for screen in self.screens.iter_mut().filter(|screen| screen.next_due <= now) {
+            screen.simulation.celebration = celebration;
+            screen.simulation.fireworks_per_minute = rockets;
             // Shown over a full-screen app, the snow reaches the display's edges while the app has put the panels away,
             // so the drift lies along the bottom instead of over a panel no longer there. An overview isn't an app.
             if self.settings.over_full_screen && !self.settings.behind_windows {
@@ -458,6 +550,16 @@ impl App {
                 Err(error) => gpu_lost |= screen.failing() || error.contains(&khronos_egl::Error::ContextLost.to_string()),
             }
         }
+        let (frost, fighting) = (self.settings.wallpaper, self.settings.fights());
+        self.play(now);
+        let hint = if self.settings.fight_throws < 3 { tr("fight.hint.snowman") } else { "" };
+        for (index, screen) in self.screens.iter_mut().enumerate() {
+            screen.tick_picture(&mut self.gpu, &self.compositor, frost, fighting, &mut self.room, index == 0, hint, now);
+            for hit in screen.take_hits() {
+                snowhush_net::play::throw(&hit);
+            }
+        }
+        self.keep_picture(now);
         if gpu_lost {
             self.renew_gpu(now);
         }
@@ -506,22 +608,32 @@ impl App {
         }
     }
 
-    /// The light of the hour, and Halloween with it: its ghosts, its night and the tray's pumpkin.
+    /// The light of the hour, and the holiday with it: Halloween's ghosts, its night and the tray's pumpkin, or the New
+    /// Year's fir and the tray's fir.
     fn update_light(&mut self) {
         let today = light::today();
-        if today != self.today {
+        let new_year_today = light::new_year_today();
+        if today != self.today || new_year_today != self.new_year_today {
             self.today = today;
+            self.new_year_today = new_year_today;
             if let Some(tray) = &self.tray {
-                tray.update(|tray| tray.today = today);
+                tray.update(|tray| {
+                    tray.today = today;
+                    tray.new_year_today = new_year_today;
+                });
             }
         }
-        let halloween = self.settings.picked.modes() == [Mode::Snow] && self.settings.halloween.wanted(today);
-        if halloween != self.halloween {
+        let settings = &self.settings;
+        let holiday = new_year::holiday(settings.picked.modes() == [Mode::Snow], settings.new_year, new_year_today, settings.halloween, today);
+        let (halloween, festive) = (holiday == Some(Holiday::Halloween), holiday == Some(Holiday::NewYear));
+        if halloween != self.halloween || festive != self.new_year {
             self.halloween = halloween;
-            log!("halloween: {halloween}");
+            self.new_year = festive;
+            log!("holiday: {holiday:?}");
             let now = Instant::now();
             self.screens.iter_mut().for_each(|screen| {
                 screen.simulation.set_halloween(halloween);
+                screen.simulation.set_new_year(festive);
                 screen.wake(now);
             });
         }
@@ -546,6 +658,7 @@ impl App {
             log!("display {name}: {bounds:?}, scale {}, {refresh} Hz", info.scale_factor);
             let mut simulation = new_simulation(&bounds, &self.settings, self.budget);
             simulation.set_halloween(self.halloween);
+            simulation.set_new_year(self.new_year);
             let mut screen = Screen::new(
                 (&self.compositor, &self.layer_shell, &self.qh),
                 output.clone(),
@@ -557,6 +670,11 @@ impl App {
             );
             screen.max_rate = self.settings.max_performance;
             screen.panel = self.settings.panel;
+            if self.settings.reads_wallpaper() {
+                let picture = PictureSnow::new((&self.compositor, &self.layer_shell, &self.qh), &output, &screen.name);
+                screen.picture = Some(picture);
+                screen.update_backdrop(&self.shades, &self.gpu);
+            }
             self.screens.push(screen);
         }
         for screen in current {
@@ -697,11 +815,94 @@ fn window_list(report: &Report) -> String {
     report.windows.iter().map(window).collect::<Vec<_>>().join(", ")
 }
 
+impl App {
+    /// Plays in the snowball fight's room: goes on opening it once the site has answered, hands the room what the network
+    /// said, has the snowmen show the throws others made, and shows the room in the tray as it changes.
+    fn play(&mut self, now: Instant) {
+        let seconds = (now - self.started).as_secs_f64();
+        for link in self.shared.take_links() {
+            if !self.settings.fights() {
+                log!("fight: a link to a room, with the fight off");
+            } else if snowhush_core::snowman::room::holds_invite(&link) {
+                if self.room.state != snowhush_core::snowman::room::State::None {
+                    fight::leave(&mut self.room);
+                }
+                self.opening = Some(fight::open(&mut self.room, Some(link)));
+            }
+        }
+        if let Some(opening) = &self.opening
+            && fight::go_on(opening, &mut self.room)
+        {
+            self.opening = None;
+        }
+        let me = self.room.me().map(str::to_string);
+        for (from, at) in fight::listen(&mut self.room, seconds) {
+            if let (Some(me), Some(screen)) = (&me, self.screens.first_mut()) {
+                screen.thrown(&from, &at, me);
+            }
+        }
+        self.room.tick(seconds);
+        let noticed = self.notice.is_some_and(|until| std::time::Instant::now() < until);
+        if !noticed && (self.room.version != self.room_shown || self.notice.is_some()) {
+            self.notice = None;
+            self.room_shown = self.room.version;
+            let (status, hosting, inside) =
+                (fight::status(&self.room), self.room.invite.is_some(), self.room.state != snowhush_core::snowman::room::State::None);
+            if let Some(tray) = &self.tray {
+                tray.update(|tray| tray.fight = (status, hosting, inside));
+            }
+        }
+    }
+
+    /// Says in the menu what was just done, for a few seconds.
+    fn say(&mut self, text: &str) {
+        self.notice = Some(std::time::Instant::now() + std::time::Duration::from_secs(3));
+        if let Some(tray) = &self.tray {
+            let text = text.to_string();
+            tray.update(move |tray| tray.fight.0 = Some(text));
+        }
+    }
+
+    /// Keeps how much snow lies in the wallpaper for the next run, now and then while it changes.
+    fn keep_picture(&mut self, now: Instant) {
+        if now - self.picture_kept_at < Duration::from_secs(60) {
+            return;
+        }
+        self.picture_kept_at = now;
+        let Some(level) = self.screens.iter().find(|screen| screen.picture.is_some()).map(|screen| screen.simulation.picture_level()) else { return };
+        let kept = (level * 1000.0).round() as u32;
+        if kept.abs_diff(self.settings.picture_level) >= 20 {
+            self.settings.picture_level = kept;
+            self.settings.save();
+        }
+    }
+
+    /// Reads the wallpapers, or stops, as Accumulate's Wallpaper and Deep Interaction now want.
+    fn follow_pictures(&mut self) {
+        let wanted = self.settings.reads_wallpaper();
+        for screen in &mut self.screens {
+            screen.simulation.picture_frost = self.settings.wallpaper;
+            screen.simulation.picture_depth = self.settings.depth;
+            match (wanted, screen.picture.is_some()) {
+                (true, false) => {
+                    screen.picture = Some(PictureSnow::new((&self.compositor, &self.layer_shell, &self.qh), &screen.output, &screen.name));
+                    screen.update_backdrop(&self.shades, &self.gpu);
+                }
+                (false, true) => screen.drop_picture(&self.gpu),
+                _ => {}
+            }
+        }
+    }
+}
+
 fn new_simulation(bounds: &Area, settings: &Settings, budget: PowerBudget) -> SnowSimulation {
     let mut simulation = SnowSimulation::new(bounds.w as f32, bounds.h as f32, settings.intensity as f32 / 100.0);
     simulation.thaws = settings.melt;
     simulation.accumulates = settings.accumulates();
     simulation.ground_settles = settings.ground;
+    simulation.picture_frost = settings.wallpaper;
+    simulation.picture_depth = settings.depth;
+    simulation.restore_picture(settings.picture_level as f32 / 1000.0);
     simulation.falling_opacity = settings.opacity as f32 / 100.0;
     simulation.set_modes(&settings.picked.modes());
     simulation.set_density(density(budget));
@@ -752,6 +953,48 @@ impl Stats {
     }
 }
 
+impl SeatHandler for App {
+    fn seat_state(&mut self) -> &mut SeatState {
+        &mut self.seat
+    }
+
+    fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+
+    fn new_capability(&mut self, _: &Connection, qh: &QueueHandle<Self>, seat: wl_seat::WlSeat, capability: Capability) {
+        if capability == Capability::Pointer
+            && let Ok(pointer) = self.seat.get_pointer(qh, &seat)
+        {
+            self.pointers.push(pointer);
+        }
+    }
+
+    fn remove_capability(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat, capability: Capability) {
+        if capability == Capability::Pointer {
+            for pointer in self.pointers.drain(..) {
+                pointer.release();
+            }
+        }
+    }
+
+    fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+}
+
+impl PointerHandler for App {
+    /// A click reaches us only over a snowman in the wallpaper: everywhere else the layers take none.
+    fn pointer_frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wayland_client::protocol::wl_pointer::WlPointer, events: &[PointerEvent]) {
+        const LEFT_BUTTON: u32 = 0x110;
+        for event in events {
+            if let PointerEventKind::Press { button: LEFT_BUTTON, .. } = event.kind {
+                let now = Instant::now();
+                if self.screens.iter_mut().any(|screen| screen.click_picture(&event.surface, event.position, now)) && self.settings.fight_throws < 3 {
+                    self.settings.fight_throws += 1;
+                    self.settings.save();
+                }
+            }
+        }
+    }
+}
+
 impl CompositorHandler for App {
     fn scale_factor_changed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: i32) {}
 
@@ -789,6 +1032,12 @@ impl OutputHandler for App {
 impl LayerShellHandler for App {
     /// The compositor took the surface away, as when its display goes: the display sync makes a new one if needed.
     fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, layer: &LayerSurface) {
+        if let Some(screen) = self.screens.iter_mut().find(|screen| screen.picture.as_ref().is_some_and(|picture| picture.is(layer))) {
+            log!("{}: wallpaper layer closed", screen.name);
+            screen.drop_picture(&self.gpu);
+            self.displays_changed_at = Some(Instant::now());
+            return;
+        }
         if let Some(index) = self.screens.iter().position(|screen| screen.is(layer)) {
             let screen = self.screens.swap_remove(index);
             log!("{}: overlay closed", screen.name);
@@ -798,9 +1047,11 @@ impl LayerShellHandler for App {
     }
 
     fn configure(&mut self, _: &Connection, _: &QueueHandle<Self>, layer: &LayerSurface, configure: LayerSurfaceConfigure, _: u32) {
+        let (width, height) = configure.new_size;
         if let Some(screen) = self.screens.iter_mut().find(|screen| screen.is(layer)) {
-            let (width, height) = configure.new_size;
             screen.configure(&self.gpu, width, height);
+        } else if let Some(picture) = self.screens.iter_mut().find_map(|screen| screen.picture.as_mut().filter(|picture| picture.is(layer))) {
+            picture.configure(&self.gpu, width, height);
         }
     }
 }
@@ -809,7 +1060,7 @@ impl ProvidesRegistryState for App {
     fn registry(&mut self) -> &mut RegistryState {
         &mut self.registry
     }
-    registry_handlers![OutputState];
+    registry_handlers![OutputState, SeatState];
 }
 
 delegate_registry!(App);

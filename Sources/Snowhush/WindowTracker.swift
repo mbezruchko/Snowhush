@@ -168,8 +168,10 @@ final class WindowTracker {
         let bannerMoving = banner.update(now: now, screen: screen, menuBarHeight: menuBarHeight, pointer: pointer)
         // Panels like Spotlight vanish on a keystroke; once one has stayed a while it's more likely a long-lived floating window.
         let panelOpen = panelsShownAt.values.contains { now - $0 < 20 }
+        // A search bar grows and shrinks as it's typed in, whenever that is: its snow follows each keystroke at once.
+        let typedInPanel = !panelsShownAt.isEmpty && CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .keyDown) < 0.5
         // Even while windows move, 60 looks a second are plenty: the snow follows a smoothed path of the window anyway.
-        let closely = eager || now - lastChange < 0.6 || dockShownAt != nil || dockHides || dockMayCome || panelOpen || exposing || windowsMayChange(now: now)
+        let closely = eager || now - lastChange < 0.6 || dockShownAt != nil || dockHides || dockMayCome || panelOpen || typedInPanel || exposing || windowsMayChange(now: now)
         // A sliding Space is followed every frame, its snow riding on the windows with no smoothing.
         // Turned to hide by itself, a Dock that stayed out slides away at once: the slow polls would let its snow hang.
         let dockTurnedToHide = dockStays && Dock.autoHides
@@ -675,7 +677,7 @@ final class WindowTracker {
             dockStays = false
         }
         dockWasOut = dockOut
-        if collects.contains(.windows), let band = Marquee.rect(over: list), band.intersects(screen), band.width >= 16 {
+        if collects.contains(.selection), let band = Marquee.rect(over: list), band.intersects(screen), band.width >= 16 {
             // The rubber band lies on the desktop, behind every window, and hides nothing: it is see-through.
             let frame = CGRect(x: band.minX - screen.minX, y: screen.maxY - band.maxY, width: band.width, height: band.height)
             let region = CGRect(x: frame.minX, y: frame.maxY, width: frame.width, height: 40)
@@ -1034,7 +1036,7 @@ enum Marquee {
     /// A window number no window has: the rubber band's.
     static let id = CGWindowID.max - 1
 
-    /// Followed only with Deep Interaction on.
+    /// Followed only while snow settles on a selection.
     static var enabled = false {
         didSet {
             guard enabled != oldValue else { return }

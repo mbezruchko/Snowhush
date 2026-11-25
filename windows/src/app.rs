@@ -8,6 +8,7 @@ use std::thread::{self, JoinHandle};
 
 use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
+use windows::Win32::System::DataExchange::COPYDATASTRUCT;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Power::{POWERBROADCAST_SETTING, RegisterPowerSettingNotification};
 use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
@@ -25,6 +26,7 @@ use windows::core::{PCWSTR, Result, w};
 use crate::halloween;
 use crate::log;
 use crate::menu::{self, Entry, Icon, Tile};
+use crate::new_year;
 use crate::prefs::{self, Settings};
 use crate::snow::{self, Command, Links};
 use crate::store;
@@ -51,6 +53,7 @@ const ID_QUIT: u32 = 299;
 const ID_UPDATES: u32 = 206;
 const ID_CLEAR: u32 = 207;
 const ID_HALLOWEEN: u32 = 208;
+const ID_NEW_YEAR: u32 = 222;
 const ID_TASKBAR: u32 = 209;
 const ID_SNOW: u32 = 210;
 const ID_AUTUMN: u32 = 211;
@@ -62,6 +65,11 @@ const ID_BLOSSOM: u32 = 217;
 const ID_SPONSOR: u32 = 218;
 const ID_MIXED: u32 = 219;
 const ID_GROUND: u32 = 220;
+const ID_WALLPAPER: u32 = 223;
+const ID_SELECTION: u32 = 224;
+const ID_FIGHT_INVITE: u32 = 225;
+const ID_FIGHT_JOIN: u32 = 226;
+const ID_FIGHT_LEAVE: u32 = 227;
 const ID_OPACITY_FOLD: u32 = 221;
 /// Opacity from 10% up in steps of 5%: `ID_OPACITY` + the step.
 const ID_OPACITY: u32 = 400;
@@ -109,13 +117,16 @@ const RAIN_WHITE: Glyph = glyph!("rain-white");
 const RAIN_BLACK: Glyph = glyph!("rain-black");
 const BLOSSOM_WHITE: Glyph = glyph!("blossom-white");
 const BLOSSOM_BLACK: Glyph = glyph!("blossom-black");
+const FIR_WHITE: Glyph = glyph!("fir-white");
+const FIR_BLACK: Glyph = glyph!("fir-black");
 
-/// What the tray shows: a snowflake, a jack-o'-lantern while it is Halloween and wanted, a leaf while leaves fall, a
-/// rain cloud while it rains, or a cherry blossom while its petals fall.
+/// What the tray shows: a snowflake, a jack-o'-lantern while it is Halloween and wanted, a fir while it is the New Year
+/// and wanted, a leaf while leaves fall, a rain cloud while it rains, or a cherry blossom while its petals fall.
 #[derive(Clone, Copy, PartialEq)]
 enum Emblem {
     Snowflake,
     Pumpkin,
+    Fir,
     Leaf,
     Rain,
     Blossom,
@@ -125,6 +136,8 @@ impl Emblem {
     fn of(settings: &Settings) -> Emblem {
         if halloween::shows(settings) {
             Emblem::Pumpkin
+        } else if new_year::shows(settings) {
+            Emblem::Fir
         } else {
             match settings.picked.mode {
                 Mode::Snow => Emblem::Snowflake,
@@ -144,6 +157,8 @@ impl Emblem {
             (Emblem::Leaf, true) => &LEAF_BLACK,
             (Emblem::Pumpkin, false) => &PUMPKIN_WHITE,
             (Emblem::Pumpkin, true) => &PUMPKIN_BLACK,
+            (Emblem::Fir, false) => &FIR_WHITE,
+            (Emblem::Fir, true) => &FIR_BLACK,
             (Emblem::Rain, false) => &RAIN_WHITE,
             (Emblem::Rain, true) => &RAIN_BLACK,
             (Emblem::Blossom, false) => &BLOSSOM_WHITE,
@@ -193,9 +208,25 @@ thread_local! {
     static OPACITY_OPEN: Cell<bool> = const { Cell::new(false) };
 }
 
+/// Marks a link to a room handed over in WM_COPYDATA by another copy of Snowhush.
+const LINK: usize = 0x534E_4C4B;
+
+/// Hands a link to a snowball fight to the copy of Snowhush already running. Returns whether it took it.
+pub fn hand_over(link: &str) -> bool {
+    let text: Vec<u16> = link.encode_utf16().collect();
+    unsafe {
+        let Ok(window) = FindWindowW(CLASS, PCWSTR::null()) else { return false };
+        let data = COPYDATASTRUCT { dwData: LINK, cbData: (text.len() * 2) as u32, lpData: text.as_ptr() as *mut c_void };
+        let mut result = 0;
+        SendMessageTimeoutW(window, WM_COPYDATA, WPARAM(0), LPARAM(&raw const data as isize), SMTO_ABORTIFHUNG, 5000, Some(&mut result)).0 != 0
+            && result == 1
+    }
+}
+
 /// The tray icon and its menu, and the system events that pause the snow, on the main thread;
-/// the snow itself runs on its own thread so menus and other modal loops never stall it.
-pub fn run() -> Result<()> {
+/// the snow itself runs on its own thread so menus and other modal loops never stall it. `link`, to a snowball fight,
+/// is joined once the snow runs.
+pub fn run(link: Option<String>) -> Result<()> {
     unsafe {
         CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
         let instance = GetModuleHandleW(None)?;
@@ -230,6 +261,9 @@ pub fn run() -> Result<()> {
         }
         SetTimer(Some(window), TIMER_HALLOWEEN, 60_000, None);
         APP.set(Some(App { settings, commands, wake, snow, icon, emblem, light, locked: false, display_off: false, away: false, update: None }));
+        if let Some(link) = link {
+            APP.with_borrow(|app| app.as_ref().map(|app| send(app, Command::FightLink(link))));
+        }
 
         let mut message = MSG::default();
         while GetMessageW(&mut message, None, 0, 0).as_bool() {
@@ -274,6 +308,16 @@ unsafe extern "system" fn procedure(window: HWND, message: u32, wparam: WPARAM, 
         WM_CLOSE => {
             quit(window);
             LRESULT(0)
+        }
+        WM_COPYDATA => {
+            let data = unsafe { &*(lparam.0 as *const COPYDATASTRUCT) };
+            if data.dwData != LINK || data.lpData.is_null() {
+                return LRESULT(0);
+            }
+            let units = unsafe { std::slice::from_raw_parts(data.lpData as *const u16, data.cbData as usize / 2) };
+            let link = String::from_utf16_lossy(units);
+            APP.with_borrow(|app| app.as_ref().map(|app| send(app, Command::FightLink(link))));
+            LRESULT(1)
         }
         WM_TIMER if wparam.0 == TIMER_UPDATES => {
             unsafe { SetTimer(Some(window), TIMER_UPDATES, DAY, None) };
@@ -394,6 +438,7 @@ fn entries(settings: &Settings, login: bool, sliders: bool) -> Vec<Entry> {
         kind(ID_BLOSSOM, tr("blossom"), Mode::Blossom),
         Entry::Separator,
         Entry::item(ID_HALLOWEEN, tr("halloween"), halloween::wanted(settings.halloween), falling == [Mode::Snow]),
+        Entry::item(ID_NEW_YEAR, tr("newyear"), new_year::wanted(settings.new_year), falling == [Mode::Snow]),
     ];
     let mut behavior = vec![Entry::header(tr("behavior"))];
     // Rain doesn't lie anywhere: nothing to keep, melt or clear.
@@ -410,7 +455,7 @@ fn entries(settings: &Settings, login: bool, sliders: bool) -> Vec<Entry> {
     }
     let mut options = behavior;
     options.extend([
-        Entry::toggle(ID_DEEP, tr("deep"), settings.deep_interaction, settings.snow_on_windows),
+        Entry::toggle(ID_DEEP, tr("deep"), settings.depth, true),
         Entry::Separator,
         Entry::header(tr("display")),
         Entry::toggle(ID_BEHIND, tr("behind"), settings.behind_windows, true),
@@ -447,18 +492,35 @@ fn entries(settings: &Settings, login: bool, sliders: bool) -> Vec<Entry> {
         let opacities =
             OPACITY_STOPS.iter().map(|&stop| Entry::choice(ID_OPACITY + (stop - 10) / 5, &format!("{stop}%"), stop == settings.opacity)).collect();
         vec![
-            Entry::Submenu { label: tr("intensity").to_string(), entries: intensities },
-            Entry::Submenu { label: tr("opacity").to_string(), entries: opacities },
+            Entry::Submenu { label: tr("intensity").to_string(), entries: intensities, shimmer: false },
+            Entry::Submenu { label: tr("opacity").to_string(), entries: opacities, shimmer: false },
         ]
     };
     entries.extend(accumulate(settings, !heaps.is_empty(), sliders));
-    entries.push(Entry::Submenu { label: tr("mode").to_string(), entries: modes });
+    entries.push(Entry::Submenu { label: tr("mode").to_string(), entries: modes, shimmer: false });
+    if settings.fights() {
+        let (status, hosting, inside) = crate::fight::shown();
+        let mut fighting = Vec::new();
+        // Out of a room, how to throw.
+        let status = status.unwrap_or_else(|| tr("fight.hint.ctrl").to_string());
+        fighting.push(Entry::item(0, &status, false, false));
+        let invite = tr(if hosting { "fight.copy" } else { "fight.invite" });
+        // The drawn menu stays open on these, for what they bring about to show in it; its rows keep their number, as it
+        // closes should they change.
+        let row = |id: u32, label: &str, enabled: bool| {
+            if sliders { Entry::toggle(id, label, false, enabled) } else { Entry::item(id, label, false, enabled) }
+        };
+        fighting.push(row(ID_FIGHT_INVITE, invite, true));
+        fighting.push(row(ID_FIGHT_JOIN, tr("fight.join"), true));
+        fighting.push(row(ID_FIGHT_LEAVE, tr("fight.leave"), inside));
+        entries.push(Entry::Submenu { label: tr("fight").to_string(), entries: fighting, shimmer: true });
+    }
     if !heaps.is_empty() {
         entries.push(Entry::item(ID_CLEAR, text::kinds("clear", &heaps), false, true));
     }
     entries.extend([
         Entry::Separator,
-        Entry::Submenu { label: tr("settings").to_string(), entries: options },
+        Entry::Submenu { label: tr("settings").to_string(), entries: options, shimmer: false },
         Entry::loved(ID_SPONSOR, tr("support")),
         Entry::item(ID_QUIT, tr("quit"), false, true),
     ]);
@@ -472,10 +534,12 @@ fn accumulate(settings: &Settings, heaps: bool, drawn: bool) -> Vec<Entry> {
     let mut surfaces = vec![(ID_WINDOWS, Icon::Windows, tr("surface.windows"), settings.snow_on_windows)];
     if heaps {
         surfaces.push((ID_GROUND, Icon::Ground, tr("surface.ground"), settings.ground));
+        surfaces.push((ID_WALLPAPER, Icon::Wallpaper, tr("surface.wallpaper"), settings.wallpaper));
     }
+    surfaces.push((ID_SELECTION, Icon::Selection, tr("surface.selection"), settings.selection));
     if !drawn {
         let entries = surfaces.iter().map(|&(id, _, label, on)| Entry::item(id, label, on, true)).collect();
-        return vec![Entry::Submenu { label: tr("accumulate").to_string(), entries }];
+        return vec![Entry::Submenu { label: tr("accumulate").to_string(), entries, shimmer: false }];
     }
     let on: Vec<Icon> = surfaces.iter().filter(|surface| surface.3).map(|surface| surface.1).collect();
     // Some on, the row shows their icons rather than their names, which would widen the menu.
@@ -531,7 +595,7 @@ unsafe fn append(menu: HMENU, entries: &[Entry]) {
                         let _ = CheckMenuRadioItem(menu, *id, *id, *id, MF_BYCOMMAND.0);
                     }
                 }
-                Entry::Submenu { label, entries } => {
+                Entry::Submenu { label, entries, .. } => {
                     let Ok(submenu) = CreatePopupMenu() else { continue };
                     append(submenu, entries);
                     let _ = AppendMenuW(menu, MF_POPUP, submenu.0 as usize, PCWSTR(text(label).as_ptr()));
@@ -559,12 +623,25 @@ fn choose(window: HWND, chosen: u32, login: bool) {
             let status = prefs::set_opens_at_login(!login);
             log!("open at login {}: {status:?}", !login);
         }
-        ID_HALLOWEEN => {
+        ID_HALLOWEEN | ID_NEW_YEAR => {
             APP.with_borrow_mut(|app| {
                 let Some(app) = app else { return };
-                app.settings.halloween = app.settings.halloween.toggled(halloween::today());
-                app.settings.save();
-                send(app, Command::Halloween(app.settings.halloween));
+                let settings = &mut app.settings;
+                let (today, new_year_today) = (halloween::today(), new_year::today());
+                // Turning one holiday on turns the other off.
+                if chosen == ID_HALLOWEEN {
+                    settings.halloween = settings.halloween.toggled(today);
+                    if settings.halloween.wanted(today) {
+                        settings.new_year = settings.new_year.turned_off(new_year_today);
+                    }
+                } else {
+                    settings.new_year = settings.new_year.toggled(new_year_today);
+                    if settings.new_year.wanted(new_year_today) {
+                        settings.halloween = settings.halloween.turned_off(today);
+                    }
+                }
+                settings.save();
+                send(app, Command::Holidays { halloween: app.settings.halloween, new_year: app.settings.new_year });
             });
             refresh_icon(window);
         }
@@ -624,9 +701,30 @@ fn choose(window: HWND, chosen: u32, login: bool) {
                     Command::ShowInScreenshots(settings.show_in_screenshots)
                 }
                 ID_DEEP => {
-                    settings.deep_interaction = !settings.deep_interaction;
-                    Command::DeepInteraction(settings.deep_interaction)
+                    settings.depth = !settings.depth;
+                    Command::Depth(settings.depth)
                 }
+                ID_WALLPAPER => {
+                    settings.wallpaper = !settings.wallpaper;
+                    Command::Wallpaper(settings.wallpaper)
+                }
+                ID_SELECTION => {
+                    settings.selection = !settings.selection;
+                    Command::Selection(settings.selection)
+                }
+                ID_FIGHT_INVITE => {
+                    if crate::fight::shown().1 {
+                        crate::fight::notice(tr("fight.copied"));
+                    }
+                    Command::FightInvite
+                }
+                ID_FIGHT_JOIN => {
+                    if !crate::fight::pasted().is_some_and(|text| snowhush_core::snowman::room::holds_invite(&text)) {
+                        crate::fight::notice(tr("fight.nolink"));
+                    }
+                    Command::FightJoin
+                }
+                ID_FIGHT_LEAVE => Command::FightLeave,
                 ID_MAX_PERFORMANCE => {
                     settings.max_performance = !settings.max_performance;
                     Command::Performance(settings.max_performance)

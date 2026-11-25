@@ -3,8 +3,9 @@ use std::collections::HashSet;
 use std::ffi::c_void;
 use std::mem::size_of;
 use std::sync::Once;
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::time::{Duration, Instant};
+use windows::Win32::System::Registry::{HKEY, HKEY_CURRENT_USER, KEY_NOTIFY, REG_NOTIFY_CHANGE_LAST_SET, RegNotifyChangeKeyValue, RegOpenKeyExW};
 
 use windows::Win32::Foundation::{COLORREF, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{DWM_TIMING_INFO, DwmGetCompositionTimingInfo};
@@ -27,6 +28,7 @@ use snowhush_core::simulation::{Pace, SnowSimulation, WindowId, WindowSurface};
 use crate::desktop::DesktopLayer;
 use crate::light::{Backdrop, Sky, Wallpapers};
 use crate::log;
+use crate::picture::PictureSnow;
 use crate::prefs::Settings;
 use crate::render::{Ambient, Gpu, LANTERN_REACH, Surface};
 use crate::tracker::{COVER_ONLY, Tracker, class_name, cloaked, local_frame, process_name};
@@ -248,6 +250,8 @@ pub struct Screen {
     behind_taskbar: bool,
     /// Where the cursor's candlelight was last drawn.
     lantern_at: V2,
+    /// The snow lying in the display's wallpaper, while it is read for that or for its depth.
+    pub picture: Option<PictureSnow>,
 }
 
 impl Screen {
@@ -289,6 +293,7 @@ impl Screen {
             layer,
             behind_taskbar: settings.behind_taskbar,
             lantern_at: V2::new(-10_000.0, -10_000.0),
+            picture: None,
         })
     }
 
@@ -486,15 +491,87 @@ impl Screen {
         true
     }
 
-    /// Picks up the shadow colour again if the desktop picture changed.
-    pub fn update_backdrop(&mut self, wallpapers: &Wallpapers) {
+    /// Picks up the shadow colour again if the desktop picture changed, and the picture's snow its wallpaper.
+    pub fn update_backdrop(&mut self, wallpapers: &Wallpapers, gpu: &Gpu) {
+        if let Some(picture) = &mut self.picture {
+            picture.show(wallpapers.wallpaper(&self.monitor.bounds), gpu, &mut self.simulation);
+        }
         let backdrop = wallpapers.backdrop(&self.monitor.bounds);
         if backdrop == self.backdrop {
             return;
         }
         self.shadow_tint = backdrop.as_ref().and_then(|backdrop| wallpapers.tint(backdrop)).unwrap_or([0.0; 4]);
-        log!("backdrop of {}: {backdrop:?}, shadow {:?}", self.monitor.name, self.shadow_tint);
+        let unreachable = if matches!(backdrop, Some(Backdrop::Picture(_, None))) { "; its picture can't be opened" } else { "" };
+        let described = backdrop.as_ref().map(|backdrop| wallpapers.described(backdrop)).unwrap_or_default();
+        log!("backdrop of {}: {backdrop:?}, shadow {:?}{unreachable}; {described}", self.monitor.name, self.shadow_tint);
         self.backdrop = backdrop;
+    }
+
+    /// Looks after the snow in the wallpaper's picture, `now` in seconds: `frost` draws it, and `fighting` has snowmen
+    /// walk it.
+    pub fn tick_picture(&mut self, gpu: &Gpu, frost: bool, fighting: bool, room: &mut snowhush_core::snowman::room::Room, hint: &str, now: f64) {
+        let area = dip_rect(&self.monitor, &self.monitor.rect);
+        let covered = self.covered;
+        // The friends show on the main display alone, so that each throws once.
+        let main = self.monitor.bounds.left == 0 && self.monitor.bounds.top == 0;
+        if let Some(picture) = &mut self.picture {
+            picture.visible = !covered;
+            picture.tick(gpu, &mut self.simulation, [area[0], area[1]], frost && !covered, fighting, room, main, hint, now);
+        }
+    }
+
+    /// A Ctrl-click at `point` in physical pixels on the shared desktop: a snowball into the picture there, if it is on
+    /// this display and a fight is on. Returns whether it was taken.
+    pub fn click_picture(&mut self, point: (i32, i32), now: f64) -> bool {
+        let bounds = self.monitor.bounds;
+        if point.0 < bounds.left || point.0 >= bounds.right || point.1 < bounds.top || point.1 >= bounds.bottom {
+            return false;
+        }
+        let at = RECT { left: point.0, top: point.1, right: point.0, bottom: point.1 };
+        let place = dip_rect(&self.monitor, &at);
+        match &mut self.picture {
+            Some(picture) => picture.click([place[0], place[1]], &mut self.simulation, now),
+            None => false,
+        }
+    }
+
+    /// Someone in the room hit someone: the snowmen in this display's wallpaper show it, on the main display alone.
+    pub fn thrown(&mut self, from: &str, at: &str, me: &str) {
+        if self.monitor.bounds.left == 0
+            && self.monitor.bounds.top == 0
+            && let Some(picture) = &mut self.picture
+        {
+            picture.thrown(from, at, me, &mut self.simulation);
+        }
+    }
+
+    /// The friends this player hit in this display's wallpaper since this was last asked.
+    pub fn take_hits(&mut self) -> Vec<String> {
+        self.picture.as_mut().map(PictureSnow::take_hits).unwrap_or_default()
+    }
+
+    /// Whether snowmen walk this display's wallpaper.
+    pub fn fighting(&self) -> bool {
+        self.picture.as_ref().is_some_and(PictureSnow::fighting)
+    }
+
+    /// Puts the wallpaper's snow back under the icons, or under the overlay when that is in the wallpaper layer too,
+    /// should something have come over it: Explorer lays a newly chosen wallpaper's window on top.
+    pub fn raise_picture(&self, layer: &DesktopLayer) {
+        let Some(picture) = &self.picture else { return };
+        if !behind_needs_raise(picture.window(), layer.icons) {
+            return;
+        }
+        log!("{}: the wallpaper's snow raised again", self.monitor.name);
+        let above = self.overlay_behind().or(layer.icons).unwrap_or(HWND_TOP);
+        unsafe {
+            let _ = SetWindowPos(picture.window(), Some(above), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+        }
+    }
+
+    /// The overlay, when it is in the desktop's wallpaper layer too: the picture's snow goes under it.
+    pub fn overlay_behind(&self) -> Option<HWND> {
+        self.layer.map(|_| self.overlay.0)
     }
 
     /// Reads the windows again at the next frame, as after another display handed over a window's snow.
@@ -612,6 +689,13 @@ impl Screen {
     }
 }
 
+/// Where `rect`, in physical pixels, lies on the display, in DIPs from its top left: left, top, right and bottom.
+pub fn dip_rect(monitor: &Monitor, rect: &RECT) -> [f32; 4] {
+    let scale = monitor.dpi.max(96) as f32 / 96.0;
+    let (x, y) = (monitor.bounds.left, monitor.bounds.top);
+    [(rect.left - x) as f32 / scale, (rect.top - y) as f32 / scale, (rect.right - x) as f32 / scale, (rect.bottom - y) as f32 / scale]
+}
+
 pub fn dip_size(monitor: &Monitor) -> (u32, u32) {
     let (width, height) = physical_size(monitor);
     let scale = monitor.dpi.max(96) as f32 / 96.0;
@@ -626,6 +710,23 @@ fn physical_size(monitor: &Monitor) -> (i32, i32) {
 /// Wakes the snow loop through `wake` the moment a taskbar that hides itself comes over an overlay, as it does when
 /// clicked. The loop doesn't read its messages between frames and would only raise the overlay at the next one, long
 /// enough for the drift to blink out under the taskbar, so the windows' stacking is watched from a thread of its own.
+/// Set when Windows has written another wallpaper's name: Settings changes it without telling the windows that listen
+/// for SPI_SETDESKWALLPAPER, so its key is watched.
+pub static WALLPAPER_SET: AtomicBool = AtomicBool::new(false);
+
+pub fn watch_wallpaper(wake: isize) {
+    let _ = std::thread::Builder::new().name("wallpaper key".into()).spawn(move || unsafe {
+        let mut key = HKEY::default();
+        if RegOpenKeyExW(HKEY_CURRENT_USER, w!("Control Panel\\Desktop"), None, KEY_NOTIFY, &mut key).is_err() {
+            return;
+        }
+        while RegNotifyChangeKeyValue(key, true, REG_NOTIFY_CHANGE_LAST_SET, None, false).is_ok() {
+            WALLPAPER_SET.store(true, Ordering::Relaxed);
+            let _ = SetEvent(HANDLE(wake as _));
+        }
+    });
+}
+
 pub fn watch_taskbar(wake: isize) {
     static WAKE: AtomicIsize = AtomicIsize::new(0);
     unsafe extern "system" fn on_restack(_: HWINEVENTHOOK, _: u32, _: HWND, _: i32, _: i32, _: u32, _: u32) {
@@ -713,7 +814,7 @@ fn lowest_open_popup() -> Option<HWND> {
 
 /// Whether a behind-windows overlay must move: something other than our own overlays sits above it
 /// before the desktop icons (a live wallpaper, a stray WorkerW, …), or the icons are not above it at all.
-fn behind_needs_raise(overlay: HWND, icons: Option<HWND>) -> bool {
+pub fn behind_needs_raise(overlay: HWND, icons: Option<HWND>) -> bool {
     unsafe {
         match icons {
             Some(icons) => {
@@ -802,7 +903,7 @@ fn create_overlay(rect: &RECT, shown_in_screenshots: bool) -> Result<HWND> {
 
 /// A child of the wallpaper layer, under the icons, so it needs neither click-through nor a place above other windows.
 /// Screenshots can't leave it out: only top-level windows can be kept from capture.
-fn create_behind(rect: &RECT, layer: &DesktopLayer) -> Result<HWND> {
+pub fn create_behind(rect: &RECT, layer: &DesktopLayer) -> Result<HWND> {
     register_class()?;
     unsafe {
         let mut origin = POINT { x: rect.left, y: rect.top };

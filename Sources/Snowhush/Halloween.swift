@@ -17,19 +17,22 @@ enum Halloween {
     }
 
     /// Whether the snow is spooky: Halloween wanted, and snow falling, not leaves or rain.
-    static var isOn: Bool { isWanted && Preferences.modes == [.snow] }
+    static var isOn: Bool { Holiday.current == .halloween }
 
-    /// Turned on in season, Halloween ends with the season; any other day, it stays on.
+    /// Turned on in season, Halloween ends with the season; any other day, it stays on. Turning it on puts the New
+    /// Year away.
     static func toggle() {
-        let season = isSeason()
         if isWanted {
-            Preferences.halloween = false
-            if season { Preferences.halloweenSkipped = year }
-        } else if season {
-            Preferences.halloweenSkipped = 0
+            turnOff()
         } else {
-            Preferences.halloween = true
+            NewYear.turnOff()
+            if isSeason() { Preferences.halloweenSkipped = 0 } else { Preferences.halloween = true }
         }
+    }
+
+    static func turnOff() {
+        Preferences.halloween = false
+        if isSeason() { Preferences.halloweenSkipped = year }
     }
 
     private static var year: Int { Calendar.current.component(.year, from: Date()) }

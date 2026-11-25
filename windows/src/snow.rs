@@ -19,14 +19,24 @@ use snowhush_core::halloween::Choice;
 use snowhush_core::modes::Picked;
 use snowhush_core::simulation::{Borrowed, Mapping, Mode, ScatterPiece, SnowSimulation, Stray};
 
+use snowhush_core::text::tr;
+
+use crate::clicks;
 use crate::desktop::{self, DesktopLayer};
+use crate::fight;
 use crate::halloween;
 use crate::light::{Sky, Wallpapers};
 use crate::log;
-use crate::prefs::Settings;
+use crate::new_year;
+use crate::picture::PictureSnow;
+use crate::prefs::{self, Settings};
 use crate::render::Gpu;
-use crate::screen::{BACKDROP_CHANGED, Clock, DISPLAYS_CHANGED, Monitor, PowerBudget, Screen, dip_size, listen, monitors, walls, watch_taskbar};
+use crate::screen::{
+    BACKDROP_CHANGED, Clock, DISPLAYS_CHANGED, Monitor, PowerBudget, Screen, WALLPAPER_SET, dip_size, listen, monitors, walls, watch_taskbar,
+    watch_wallpaper,
+};
 use crate::tracker::{self, Tracker};
+use snowhush_core::new_year as core_new_year;
 
 /// A piece of the welcome window crumbling into snow, in physical screen pixels.
 pub struct Piece {
@@ -53,7 +63,17 @@ pub enum Command {
     ShellRestarted,
     ShowInScreenshots(bool),
     /// The snow settles on a selection dragged across the desktop too.
-    DeepInteraction(bool),
+    Selection(bool),
+    /// The snowball fight's room: open one, or copy its link again; join the one on the clipboard; leave it.
+    FightInvite,
+    FightJoin,
+    FightLeave,
+    /// Snowhush was opened with a link to a room: join it, leaving any other.
+    FightLink(String),
+    /// Accumulate's Wallpaper, and Deep Interaction: the snow lying in the wallpaper's picture, and the flakes falling
+    /// into its depth.
+    Wallpaper(bool),
+    Depth(bool),
     /// Off while the screen is locked, asleep or the session is away.
     Active(bool),
     Scatter(Vec<Piece>),
@@ -61,8 +81,11 @@ pub enum Command {
     ReleaseSnowfall,
     /// Blows all the snow away; when calm, for less motion, melts it where it lies instead.
     ClearSnow(bool),
-    /// Halloween turned on or off from the menu.
-    Halloween(Choice),
+    /// Halloween or the New Year turned on or off from the menu: turning one on turns the other off.
+    Holidays {
+        halloween: Choice,
+        new_year: Choice,
+    },
     /// Other kinds fall, once a gust has blown what is there away; when calm, for less motion, it melts where it
     /// lies instead. A kind only joining what falls starts at once.
     SwitchMode {
@@ -118,8 +141,20 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
     let mut active = true;
     let mut budget = PowerBudget::Full;
     let mut spooky = halloween::shows(&settings);
+    let mut festive = new_year::shows(&settings);
     let mut sky = Sky::now(spooky);
+    log!("holiday: {:?}, wallpaper depth {}, snowball fight {}", new_year::holiday(&settings), settings.depth, settings.fights());
     let wallpapers = Wallpapers::new().inspect_err(|error| log!("wallpapers unavailable: {error}")).ok();
+    // When the snow in the wallpapers was last looked after: each display's made or let go as wanted, and how much of it
+    // lies kept for the next run.
+    let mut pictures_at = 0;
+    let mut picture_kept_at = 0;
+    // The desktop's wallpaper layer the snow in the wallpapers goes into, found when it is first wanted.
+    let mut picture_layer: Option<DesktopLayer> = None;
+    // The snowball fight's room, while this player is in one.
+    let mut room = snowhush_core::snowman::room::Room::default();
+    let mut opening: Option<fight::Opening> = None;
+    let mut room_shown = 0;
     let mut chores_at = 0;
     let mut light_at = 0;
     let mut displays_changed_at = None;
@@ -129,6 +164,9 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
     // The display each window's snow lies on, as of the last window list.
     let mut owners = HashMap::new();
     watch_taskbar(links.wake);
+    watch_wallpaper(links.wake);
+    // When to look at the wallpaper again, after its key changed: Explorer may name the new one a moment later.
+    let mut backdrop_again: Vec<i64> = Vec::new();
 
     loop {
         screens.iter().filter(|screen| screen.under_taskbar()).for_each(Screen::raise);
@@ -181,8 +219,45 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                         light_at = 0;
                     }
                 }
-                Command::DeepInteraction(on) => {
-                    settings.deep_interaction = on;
+                Command::Wallpaper(on) => {
+                    settings.wallpaper = on;
+                    let accumulates = settings.accumulates();
+                    screens.iter_mut().for_each(|screen| {
+                        screen.simulation.accumulates = accumulates;
+                        screen.simulation.picture_frost = on;
+                    });
+                    pictures_at = 0;
+                }
+                Command::Depth(on) => {
+                    settings.depth = on;
+                    screens.iter_mut().for_each(|screen| screen.simulation.picture_depth = on);
+                    pictures_at = 0;
+                }
+                Command::FightInvite => match &room.invite {
+                    Some(invite) => fight::copy(&snowhush_core::snowman::room::link(invite)),
+                    None => opening = Some(fight::open(&mut room, None)),
+                },
+                Command::FightJoin => {
+                    if let Some(text) = fight::pasted().filter(|text| snowhush_core::snowman::room::holds_invite(text)) {
+                        opening = Some(fight::open(&mut room, Some(text)));
+                    }
+                }
+                Command::FightLeave => {
+                    opening = None;
+                    fight::leave(&mut room);
+                }
+                Command::FightLink(link) => {
+                    if !settings.fights() {
+                        log!("fight: a link to a room, with the fight off");
+                    } else if snowhush_core::snowman::room::holds_invite(&link) {
+                        if room.state != snowhush_core::snowman::room::State::None {
+                            fight::leave(&mut room);
+                        }
+                        opening = Some(fight::open(&mut room, Some(link)));
+                    }
+                }
+                Command::Selection(on) => {
+                    settings.selection = on;
                     if !on {
                         tracker.drop_marquee();
                     }
@@ -226,8 +301,9 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                     let direction = screens.first().map_or(-1.0, |screen| screen.simulation.breeze_direction());
                     screens.iter_mut().for_each(|screen| screen.simulation.blow_away(direction, calm));
                 }
-                Command::Halloween(choice) => {
-                    settings.halloween = choice;
+                Command::Holidays { halloween, new_year } => {
+                    settings.halloween = halloween;
+                    settings.new_year = new_year;
                     chores_at = 0;
                     light_at = 0;
                 }
@@ -280,6 +356,14 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
         if BACKDROP_CHANGED.take() {
             light_at = 0;
         }
+        if WALLPAPER_SET.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            light_at = 0;
+            backdrop_again = vec![now + clock.frequency * 3 / 2, now + clock.frequency * 4];
+        }
+        if backdrop_again.first().is_some_and(|&at| now >= at) {
+            backdrop_again.remove(0);
+            light_at = 0;
+        }
 
         if now >= chores_at {
             chores_at = now + clock.frequency;
@@ -327,18 +411,35 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
             }
             if now >= light_at {
                 light_at = now + clock.frequency * 60;
-                let on = halloween::shows(&settings);
-                if on != spooky {
+                let (on, tree) = (halloween::shows(&settings), new_year::shows(&settings));
+                if on != spooky || tree != festive {
                     spooky = on;
-                    log!("halloween: {on}");
+                    festive = tree;
+                    log!("holiday: {:?}", new_year::holiday(&settings));
                     screens.iter_mut().for_each(|screen| {
                         screen.simulation.set_halloween(on);
+                        screen.simulation.set_new_year(tree);
                         screen.wake(now);
                     });
                 }
                 sky = Sky::now(spooky);
                 if let Some(wallpapers) = &wallpapers {
-                    screens.iter_mut().for_each(|screen| screen.update_backdrop(wallpapers));
+                    screens.iter_mut().for_each(|screen| screen.update_backdrop(wallpapers, &gpu));
+                }
+            }
+        }
+
+        if now >= pictures_at {
+            pictures_at = now + clock.frequency;
+            follow_pictures(&gpu, &settings, &mut screens, &mut picture_layer, wallpapers.as_ref());
+            if now >= picture_kept_at {
+                picture_kept_at = now + clock.frequency * 60;
+                if let Some(level) = screens.iter().find(|screen| screen.picture.is_some()).map(|screen| screen.simulation.picture_level()) {
+                    let kept = (level * 1000.0).round() as u32;
+                    if kept.abs_diff(settings.picture_level) >= 20 {
+                        settings.picture_level = kept;
+                        settings.save();
+                    }
                 }
             }
         }
@@ -349,7 +450,7 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                 screens.iter_mut().for_each(|screen| screen.wake(now));
             }
             // The desktop's rubber band moves with the pointer, so it is drawn right away too.
-            if settings.snow_on_windows && settings.deep_interaction && tracker.follow_marquee() {
+            if settings.snow_on_windows && settings.selection && tracker.follow_marquee() {
                 screens.iter_mut().for_each(|screen| screen.wake(now));
             }
             tracker.set_displays(screens.iter().map(|screen| (screen.monitor.name.as_str(), screen.monitor.rect, screen.monitor.bounds)));
@@ -375,9 +476,18 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
             let mut drawn = false;
             let mut released = false;
             let mut reshaped = false;
+            // The New Year's countdown and midnight by the clock, and how often rockets go up.
+            let (celebration, rockets) = if festive {
+                let local = new_year::now();
+                (core_new_year::celebration(local, clock.seconds(now - started)), core_new_year::fireworks_per_minute(local))
+            } else {
+                (None, 0.0)
+            };
             for (index, screen) in
                 screens.iter_mut().enumerate().filter(|(_, screen)| recover_at.is_none() && screen.next_due <= now + clock.tolerance())
             {
+                screen.simulation.celebration = celebration;
+                screen.simulation.fireworks_per_minute = rockets;
                 let in_front = tracker.covering(&screen.monitor.bounds);
                 // Shown over a full-screen app, the snow reaches down to the bottom of the display while the app has put
                 // the taskbar away, so the drift lies along the bottom instead of over a taskbar no longer there; a
@@ -434,6 +544,39 @@ fn run_loop(commands: &Receiver<Command>, links: &Links, mut settings: Settings)
                 }
             }
             pass_snow(&mut screens, &tracker, now);
+            let seconds = clock.seconds(now - started);
+            let fighting = settings.fights();
+            // The room: going on opening it once the site has answered, what the network said, the throws others made.
+            if let Some(waiting) = &opening
+                && fight::go_on(waiting, &mut room)
+            {
+                opening = None;
+            }
+            let me = room.me().map(str::to_string);
+            for (from, at) in fight::listen(&mut room, seconds) {
+                if let Some(me) = &me {
+                    screens.iter_mut().for_each(|screen| screen.thrown(&from, &at, me));
+                }
+            }
+            room.tick(seconds);
+            if room.version != room_shown {
+                room_shown = room.version;
+                fight::show(&room);
+            }
+            let hint = if settings.fight_throws < 3 { tr("fight.hint.ctrl") } else { "" };
+            for screen in &mut screens {
+                screen.tick_picture(&gpu, settings.wallpaper, fighting, &mut room, hint, seconds);
+                for hit in screen.take_hits() {
+                    snowhush_net::play::throw(&hit);
+                }
+            }
+            for point in clicks::take() {
+                if screens.iter_mut().any(|screen| screen.click_picture(point, seconds)) && settings.fight_throws < 3 {
+                    settings.fight_throws += 1;
+                    prefs::keep_fight_throws(settings.fight_throws);
+                }
+            }
+            clicks::follow(screens.iter().filter(|screen| screen.fighting()).map(|screen| screen.monitor.bounds).collect(), links.wake as isize);
             // The first display the welcome window's snow reaches starts the snowfall on all of them.
             if released {
                 settings.welcomed = true;
@@ -712,15 +855,54 @@ fn find_layer() -> Option<DesktopLayer> {
     layer
 }
 
+/// Gives each display the snow in its wallpaper while the wallpaper is read, and lets it go when not; makes it again for
+/// one whose window went with Explorer.
+fn follow_pictures(gpu: &Gpu, settings: &Settings, screens: &mut [Screen], layer: &mut Option<DesktopLayer>, wallpapers: Option<&Wallpapers>) {
+    let wanted = settings.reads_wallpaper();
+    let mut lost = false;
+    for screen in screens.iter_mut() {
+        if screen.picture.as_ref().is_some_and(|picture| !wanted || !picture.alive()) {
+            lost |= wanted;
+            screen.picture = None;
+            screen.simulation.set_picture(None, None);
+        }
+    }
+    if let (true, Some(desktop)) = (wanted && !lost, layer.as_ref()) {
+        screens.iter().for_each(|screen| screen.raise_picture(desktop));
+    }
+    if !wanted || screens.iter().all(|screen| screen.picture.is_some()) {
+        return;
+    }
+    if layer.is_none() || lost {
+        *layer = find_layer();
+    }
+    let Some(desktop) = *layer else { return };
+    for screen in screens.iter_mut().filter(|screen| screen.picture.is_none()) {
+        match PictureSnow::new(gpu, &screen.monitor, &desktop, screen.overlay_behind()) {
+            Ok(picture) => {
+                screen.picture = Some(picture);
+                if let Some(wallpapers) = wallpapers {
+                    screen.update_backdrop(wallpapers, gpu);
+                }
+            }
+            Err(error) => log!("{}: no window for the wallpaper's snow: {error}", screen.monitor.name),
+        }
+    }
+}
+
 fn new_simulation(monitor: &Monitor, settings: &Settings) -> SnowSimulation {
     let (width, height) = dip_size(monitor);
     let mut simulation = SnowSimulation::new(width as f32, height as f32, settings.intensity as f32 / 100.0);
     simulation.thaws = settings.melt;
     simulation.accumulates = settings.accumulates();
     simulation.ground_settles = settings.ground;
+    simulation.picture_frost = settings.wallpaper;
+    simulation.picture_depth = settings.depth;
+    simulation.restore_picture(settings.picture_level as f32 / 1000.0);
     simulation.falling_opacity = settings.opacity as f32 / 100.0;
     simulation.set_snowfall_held(!settings.welcomed);
     simulation.set_halloween(halloween::shows(settings));
+    simulation.set_new_year(new_year::shows(settings));
     simulation.set_modes(&settings.picked.modes());
     simulation
 }

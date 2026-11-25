@@ -14,6 +14,7 @@ use snowhush_core::simulation::{Pace, SnowSimulation, WindowId, WindowSurface};
 
 use crate::light::{self, Backdrop, Shade};
 use crate::log;
+use crate::picture::PictureSnow;
 use crate::render::{Ambient, Gpu, LANTERN_REACH, Surface};
 use crate::snow::App;
 use crate::source::Report;
@@ -96,6 +97,8 @@ pub struct Screen {
     failure_logged: Option<Instant>,
     /// The drawing surface was let go, to be made again at the next frame.
     renew: bool,
+    /// The snow lying in the display's wallpaper, while it is read for that or for its depth.
+    pub picture: Option<PictureSnow>,
 }
 
 impl Screen {
@@ -156,6 +159,7 @@ impl Screen {
             failures: 0,
             failure_logged: None,
             renew: false,
+            picture: None,
         }
     }
 
@@ -537,9 +541,12 @@ impl Screen {
         true
     }
 
-    /// Picks up the shadow colour again if the desktop picture changed.
-    pub fn update_backdrop(&mut self, shades: &[Shade]) {
-        let shade = light::shade_of(shades, &self.bounds);
+    /// Picks up the shadow colour again if the desktop picture changed, and the picture's snow its wallpaper.
+    pub fn update_backdrop(&mut self, shades: &[Shade], gpu: &Gpu) {
+        let shade = light::shade_of(shades, &self.name, &self.bounds);
+        if let Some(picture) = &mut self.picture {
+            picture.show(shade.and_then(|shade| shade.wallpaper.clone()), gpu, &mut self.simulation);
+        }
         let backdrop = shade.map(|shade| shade.backdrop.clone());
         if backdrop == self.backdrop {
             return;
@@ -576,6 +583,60 @@ impl Screen {
     pub fn release(mut self, gpu: &Gpu) {
         if let Some(surface) = self.surface.take() {
             gpu.release(surface);
+        }
+        if let Some(picture) = self.picture.take() {
+            picture.release(gpu);
+        }
+    }
+
+    /// Looks after the snow in the wallpaper's picture: `frost` draws it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn tick_picture(
+        &mut self,
+        gpu: &mut Gpu,
+        compositor: &CompositorState,
+        frost: bool,
+        fighting: bool,
+        room: &mut snowhush_core::snowman::room::Room,
+        main: bool,
+        hint: &str,
+        now: Instant,
+    ) {
+        let area = self.area();
+        if let Some(picture) = &mut self.picture {
+            picture.visible = !self.covered;
+            picture.tick(gpu, compositor, &mut self.simulation, &self.bounds, &area, frost && !self.covered, fighting, room, main, hint, now);
+        }
+    }
+
+    /// Someone in the room hit someone: the snowmen in this display's wallpaper show it.
+    pub fn thrown(&mut self, from: &str, at: &str, me: &str) {
+        if let Some(picture) = &mut self.picture {
+            picture.thrown(from, at, me, &mut self.simulation);
+        }
+    }
+
+    /// The friends this player hit in this display's wallpaper since this was last asked.
+    pub fn take_hits(&mut self) -> Vec<String> {
+        self.picture.as_mut().map(crate::picture::PictureSnow::take_hits).unwrap_or_default()
+    }
+
+    /// A click on the wallpaper's layer, at `point` in its points: a snowball for the snowman there.
+    pub fn click_picture(&mut self, surface: &wayland_client::protocol::wl_surface::WlSurface, point: (f64, f64), now: Instant) -> bool {
+        match &mut self.picture {
+            Some(picture) if picture.owns(surface) => {
+                picture.click(point, &mut self.simulation, now);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Stops reading the wallpaper, and lets its snow go.
+    pub fn drop_picture(&mut self, gpu: &Gpu) {
+        if let Some(picture) = self.picture.take() {
+            picture.release(gpu);
+            self.simulation.set_picture(None, None);
         }
     }
 }

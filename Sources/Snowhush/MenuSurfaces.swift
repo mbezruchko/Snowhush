@@ -110,8 +110,8 @@ final class MenuDisclosure: NSView {
     }
 }
 
-/// A row of icons, each over its name, that switch what snow settles on; bright while on, faint while off. The menu
-/// stays open, so several can be switched in one go.
+/// Two rows of icons, each over its name, that switch what snow settles on; bright while on, faint while off. The
+/// menu stays open, so several can be switched in one go.
 final class SurfacePicker: NSView {
     /// What can be switched, in the order shown.
     var choices: [Surfaces] = [] {
@@ -120,7 +120,7 @@ final class SurfacePicker: NSView {
             needsDisplay = true
             let font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
             let widest = choices.map { NSAttributedString(string: Self.name(of: $0), attributes: [.font: font]).size().width }.max() ?? 0
-            setFrameSize(NSSize(width: max(200, ceil(2 * Self.inset + CGFloat(choices.count) * max(widest + 14, 52))), height: frame.height))
+            setFrameSize(NSSize(width: max(200, ceil(2 * Self.inset + CGFloat(columns) * max(widest + 14, 52))), height: Self.height * CGFloat(rows)))
             setAccessibilityChildren(choices.map { surface in
                 let tile = Tile(surface)
                 tile.setAccessibilityParent(self)
@@ -180,16 +180,21 @@ final class SurfacePicker: NSView {
         toggled(choices[k])
     }
 
+    private var rows: Int { choices.count > 1 ? 2 : 1 }
+    private var columns: Int { max((choices.count + rows - 1) / rows, 1) }
+
     private func tile(at point: NSPoint) -> Int? {
         guard !choices.isEmpty, bounds.contains(point) else { return nil }
-        let k = Int((point.x - Self.inset) / tileWidth)
-        return k >= 0 && k < choices.count ? k : nil
+        let column = Int((point.x - Self.inset) / tileWidth), row = Int(point.y / Self.height)
+        let k = row * columns + column
+        return column >= 0 && column < columns && k >= 0 && k < choices.count ? k : nil
     }
 
-    private var tileWidth: CGFloat { (bounds.width - 2 * Self.inset) / CGFloat(max(choices.count, 1)) }
+    private var tileWidth: CGFloat { (bounds.width - 2 * Self.inset) / CGFloat(columns) }
 
     private func frame(of k: Int) -> NSRect {
-        NSRect(x: Self.inset + tileWidth * CGFloat(k), y: 2, width: tileWidth, height: bounds.height - 4)
+        let column = k % columns, row = k / columns
+        return NSRect(x: Self.inset + tileWidth * CGFloat(column), y: Self.height * CGFloat(row) + 2, width: tileWidth, height: Self.height - 4)
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -215,13 +220,16 @@ final class SurfacePicker: NSView {
         case .ground: tr("surface.ground")
         case .dock: tr("surface.dock")
         case .widgets: tr("surface.widgets")
+        case .wallpaper: tr("surface.wallpaper")
+        case .selection: tr("surface.selection")
         default: tr("surface.windows")
         }
     }
 
     static func drawIcon(_ surface: Surfaces, in box: NSRect, color: NSColor, pointSize: CGFloat = 18) {
         guard surface == .ground else {
-            let symbol = surface == .dock ? "dock.rectangle" : surface == .widgets ? "widget.small" : "macwindow"
+            let symbol = surface == .dock ? "dock.rectangle" : surface == .widgets ? "widget.small" : surface == .wallpaper ? "mountain.2"
+                : surface == .selection ? "rectangle.dashed" : "macwindow"
             guard let image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
                 .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: pointSize, weight: .medium).applying(.init(paletteColors: [color])))
             else { return }

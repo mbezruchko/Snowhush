@@ -39,8 +39,11 @@ layout(location = 13) in vec2 rain;
 // A drop on the glass: its outline's seed, how it has turned as it ran, how far it bulges forward, held back, and how
 // far it is squashed or stretched.
 layout(location = 14) in vec4 drop;
-// One for a cherry blossom petal or flower instead of a leaf.
-layout(location = 15) in float petal;
+// One for a cherry blossom petal or flower instead of a leaf; then, in the wallpaper's picture, how near it is there,
+// below zero for anything else, and how much of the picture's light it takes. One attribute: a vertex takes sixteen.
+layout(location = 15) in vec3 petalScene;
+// The picture's air: its light, and how near what stands there is, by the screen's points from its top left.
+uniform sampler2D air;
 
 out vec2 vCoord;
 out float vAlpha;
@@ -64,6 +67,7 @@ flat out vec4 vSmear;
 flat out vec4 vRain;
 flat out vec4 vDrop;
 flat out float vPetal;
+out vec3 vSceneLight;
 
 float flicker(float t, float seed) {
     return 0.86 + 0.08 * sin(t * 11.0 + seed * 2.1) + 0.06 * sin(t * 29.0 + 1.3 + seed * 4.3);
@@ -112,10 +116,11 @@ void main() {
     }
     vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
     vCoord = vec2(corner.x, 1.0 - corner.y);
+    vSceneLight = vec3(1.0);
     vWarm = candlelight(position);
     vRain = vec4(0.0);
     vDrop = vec4(0.0);
-    vPetal = petal;
+    vPetal = petalScene.x;
     if (rain.x > 4.5) {
         // A piece of the film a running drop leaves behind: `velocity` from one end to the other, `size` wide.
         float thick = max(size * scale, 1.0);
@@ -224,4 +229,12 @@ void main() {
     vPose = pose;
     vMood = vec4(mood, size, 0.0);
     if (ghost.x > 0.0) vSpin = time + ghost.x * 40.0;
+    // A flake in the wallpaper's picture takes the picture's light where it falls, and fades out behind whatever stands
+    // nearer there than it is.
+    vec2 scene = petalScene.yz;
+    if (scene.x >= 0.0) {
+        vec4 here = textureLod(air, vec2(position.x / viewSize.x, 1.0 - position.y / viewSize.y), 0.0);
+        vAlpha *= smoothstep(-0.02, 0.02, scene.x - here.a);
+        vSceneLight = mix(vec3(1.0), here.rgb, scene.y);
+    }
 }

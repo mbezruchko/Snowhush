@@ -12,6 +12,8 @@ final class ScreenSnow {
     private let tracker: WindowTracker
     private let displays: Displays
     private let light = SceneLight()
+    /// The snow lying in the wallpaper, in windows of its own at the desktop's level.
+    let picture: PictureSnow?
     private(set) var screen: NSScreen
     /// Awake and showing; at rest with nothing to draw, the view may still be paused.
     private var active = true
@@ -86,6 +88,15 @@ final class ScreenSnow {
             simulation.halloween = halloween
         }
     }
+    var newYear = false {
+        didSet {
+            simulation.newYear = newYear
+            treeView.isHidden = !newYear
+            placeTree()
+            wake()
+        }
+    }
+    private let treeView: TreeView
     var modes: [Mode] {
         get { simulation.modes }
         set { simulation.modes = newValue }
@@ -123,8 +134,14 @@ final class ScreenSnow {
         dock = DockOverlay(screen: screen, device: device)
         dock.window.showsInScreenshots = Preferences.showInScreenshots
         renderer.dockOverlay = dock
+        picture = PictureSnow(screen: screen, device: device, simulation: simulation)
+        picture?.showsInScreenshots = Preferences.showInScreenshots
         view = Self.makeView(device: device, size: screen.frame.size)
+        treeView = TreeView(device: device)
+        renderer.treeView = treeView
 
+        // The closures below name the properties through self: init's own `renderer` and `simulation` would be captured
+        // instead, and the renderer would keep itself, and the simulation, alive after the display is gone.
         renderer.cursorLocation = { [unowned self] in
             // Notification Center is in front of the snow then, which the pointer over it can't reach.
             if window.notificationLevel != nil && tracker.notificationCoversPointer { return SIMD2(-10_000, -10_000) }
@@ -143,26 +160,41 @@ final class ScreenSnow {
             guard tracked else { return nil }
             forgetClosed(now: now)
             for (id, display) in update?.handed ?? [:] { displays.hand(id, from: self, to: display) }
-            simulation.windowFrames = tracker.covers.map { SIMD4(Float($0.minX), Float($0.minY), Float($0.maxX), Float($0.maxY)) }
+            self.simulation.windowFrames = tracker.covers.map { SIMD4(Float($0.minX), Float($0.minY), Float($0.maxX), Float($0.maxY)) }
             return update
         }
         renderer.borrowedSnow = { [unowned self] in
             surfaces().contains(.windows) ? displays.borrowed(by: self) : []
         }
-        renderer.stepped = { [unowned self] in displays.pass(from: self) }
+        renderer.stepped = { [unowned self] in
+            displays.pass(from: self)
+            picture?.stepFight()
+        }
         renderer.sceneLight = { [unowned self] now in
             light.update(screen: self.screen, now: now)
             return (light.light, light.shadowTint, light.rim, light.lantern)
         }
         renderer.rest = { [unowned self] in
             view.isPaused = true
-            renderer.releaseFrames(of: view)
+            self.renderer.releaseFrames(of: view)
         }
         simulation.stirred = { [unowned self] in wake() }
+        renderer.fireworksOnDesktop = { [unowned self] fireworks, time in picture?.drawFireworks(fireworks, time: time) ?? false }
+        simulation.pictureCleared = { [unowned self] in picture?.cleared() }
+        simulation.pictureChanged = { [unowned self] in picture?.refresh() }
+        picture?.frost = settled.contains(.wallpaper)
+        picture?.depth = Preferences.depth
+        picture?.wanted = settled.contains(.wallpaper) || Preferences.depth
         renderer.interactiveFrameRate = Self.interactiveFrameRate(of: screen)
         measure()
         view.delegate = renderer
-        window.contentView = view
+        // The tree goes under the snow, so the drift covers its foot and the snow falls in front of it.
+        let content = NSView(frame: CGRect(origin: .zero, size: screen.frame.size))
+        content.wantsLayer = true
+        content.autoresizingMask = [.width, .height]
+        content.addSubview(treeView)
+        content.addSubview(view)
+        window.contentView = content
         window.orderFrontRegardless()
         checkCovered()
     }
@@ -172,11 +204,21 @@ final class ScreenSnow {
         window.setFrame(screen.frame, display: true)
         dock.fit(to: screen)
         Renderer.fitDrawable(of: view)
+        placeTree()
         simulation.resize(width: Float(screen.frame.width), height: Float(screen.frame.height))
+        picture?.fit(to: screen)
         light.invalidate()
         renderer.interactiveFrameRate = Self.interactiveFrameRate(of: screen)
         measure()
         checkCovered()
+    }
+
+    private func placeTree() {
+        guard newYear else { return }
+        let x = CGFloat(simulation.treeX)
+        let extent = ChristmasTree.extent
+        let frame = CGRect(x: max(0, x + CGFloat(extent.x)), y: 0, width: CGFloat(extent.z - extent.x), height: CGFloat(extent.w))
+        treeView.fit(frame, scale: screen.backingScaleFactor)
     }
 
     private static func interactiveFrameRate(of screen: NSScreen) -> Int {
@@ -201,6 +243,7 @@ final class ScreenSnow {
             restartLookout()
         }
         self.active = active
+        picture?.setActive(active)
         if !active { renderer.releaseFrames(of: view) }
         guard view.isPaused == active else { return }
         if active { Renderer.fitDrawable(of: view) }
@@ -209,6 +252,7 @@ final class ScreenSnow {
     }
 
     private func wake() {
+        picture?.wake()
         guard active, view.isPaused else { return }
         Renderer.fitDrawable(of: view)
         view.isPaused = false
@@ -416,6 +460,7 @@ final class ScreenSnow {
     func spaceChanged() {
         checkCovered()
         simulation.spaceChanged()
+        picture?.spaceChanged()
         light.invalidate()
         watchWindows()
         window.holdInPlace()
@@ -424,6 +469,7 @@ final class ScreenSnow {
 
     /// Out of the screenshot tool's way, or back in place.
     func stepAside(_ aside: Bool) {
+        picture?.stepAside(aside)
         if aside {
             window.orderOut(nil)
             dock.window.orderOut(nil)
@@ -444,6 +490,7 @@ final class ScreenSnow {
         view.delegate = nil
         window.orderOut(nil)
         dock.close()
+        picture?.close()
     }
 
     /// Window bounds come in global coordinates with the origin at the top left of the primary display.
@@ -476,6 +523,32 @@ final class ScreenSnow {
         view.autoResizeDrawable = false
         Renderer.fitDrawable(of: view)
         return view
+    }
+}
+
+/// The New Year's tree's own layer, drawn at the screen's full resolution: the snow is drawn at one pixel a point.
+final class TreeView: NSView {
+    let metalLayer = CAMetalLayer()
+
+    init(device: MTLDevice) {
+        super.init(frame: .zero)
+        metalLayer.device = device
+        metalLayer.pixelFormat = .bgra8Unorm
+        metalLayer.isOpaque = false
+        metalLayer.framebufferOnly = true
+        wantsLayer = true
+        isHidden = true
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    override func makeBackingLayer() -> CALayer { metalLayer }
+
+    func fit(_ frame: CGRect, scale: CGFloat) {
+        self.frame = frame
+        metalLayer.contentsScale = scale
+        metalLayer.drawableSize = CGSize(width: frame.width * scale, height: frame.height * scale)
     }
 }
 

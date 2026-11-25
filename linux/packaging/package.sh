@@ -27,6 +27,7 @@ install -Dm644 "$root/site/assets/icon-64.png" "$stage/usr/share/icons/hicolor/6
 install -Dm644 "$root/windows/assets/icon-256.png" "$stage/usr/share/icons/hicolor/256x256/apps/snowhush.png"
 install -Dm644 "$root/site/assets/icon-512.png" "$stage/usr/share/icons/hicolor/512x512/apps/snowhush.png"
 install -Dm644 "$root/LICENSE" "$stage/usr/share/licenses/snowhush/LICENSE"
+install -Dm644 "$root/Resources/ThirdParty/Notices.txt" "$stage/usr/share/licenses/snowhush/ThirdPartyNotices.txt"
 
 echo "Tarball…"
 tar -C "$stage" --owner=0 --group=0 -czf "$out/snowhush-linux-x86_64.tar.gz" usr
@@ -36,6 +37,7 @@ deb=$work/deb
 cp -a "$stage" "$deb"
 mkdir -p "$deb/DEBIAN" "$deb/usr/share/doc/snowhush"
 mv "$deb/usr/share/licenses/snowhush/LICENSE" "$deb/usr/share/doc/snowhush/copyright"
+mv "$deb/usr/share/licenses/snowhush/ThirdPartyNotices.txt" "$deb/usr/share/doc/snowhush/ThirdPartyNotices.txt"
 rm -r "$deb/usr/share/licenses"
 cat > "$deb/DEBIAN/control" <<EOF
 Package: snowhush

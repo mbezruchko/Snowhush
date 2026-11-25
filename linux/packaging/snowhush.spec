@@ -21,6 +21,7 @@ cp -a %{snowhush_stage}/usr %{buildroot}/
 
 %files
 %license %{_datadir}/licenses/%{name}/LICENSE
+%license %{_datadir}/licenses/%{name}/ThirdPartyNotices.txt
 %{_bindir}/snowhush
 %{_datadir}/applications/snowhush.desktop
 %{_datadir}/icons/hicolor/*/apps/snowhush.png

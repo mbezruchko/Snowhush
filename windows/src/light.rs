@@ -1,5 +1,5 @@
 use std::os::windows::ffi::OsStrExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use windows::Win32::Foundation::{GENERIC_READ, RECT};
@@ -13,6 +13,8 @@ use windows::Win32::UI::Shell::{DesktopWallpaper, IDesktopWallpaper};
 use windows::core::{PCWSTR, PWSTR, Result};
 
 use snowhush_core::halloween;
+
+use crate::wallpaper::{Placement, Wallpaper};
 
 /// What the hour brings to the snow's light: daylight, and how far into Halloween night it is.
 #[derive(Clone, Copy)]
@@ -86,7 +88,7 @@ impl Wallpapers {
                 }
                 return match picture.filter(|path| !path.is_empty()) {
                     Some(path) => {
-                        let path = PathBuf::from(path);
+                        let path = shown(PathBuf::from(path));
                         let modified = std::fs::metadata(&path).and_then(|metadata| metadata.modified()).ok();
                         Some(Backdrop::Picture(path, modified))
                     }
@@ -95,6 +97,35 @@ impl Wallpapers {
             }
         }
         None
+    }
+
+    /// The picture on the display with these bounds, in physical pixels, as it is laid out; none for a plain colour.
+    pub fn wallpaper(&self, bounds: &RECT) -> Option<Wallpaper> {
+        let Some(Backdrop::Picture(path, _)) = self.backdrop(bounds) else { return None };
+        unsafe {
+            let placement = self.desktop.GetPosition().map_or(Placement::Fill, |position| Placement::from_position(position.0));
+            let fill =
+                self.desktop.GetBackgroundColor().map_or([0.0; 3], |color| std::array::from_fn(|i| ((color.0 >> (8 * i)) & 0xff) as f32 / 255.0));
+            Wallpaper::new(path, placement, fill)
+        }
+    }
+
+    /// For the log: how big the backdrop's picture is, and how Windows lays pictures out.
+    pub fn described(&self, backdrop: &Backdrop) -> String {
+        let Backdrop::Picture(path, _) = backdrop else { return String::new() };
+        let size = self.size(path).map_or("unreadable".to_string(), |(width, height)| format!("{width}x{height}"));
+        let position = unsafe { self.desktop.GetPosition() }.map_or(-1, |position| position.0);
+        format!("picture {size}, position {position}")
+    }
+
+    fn size(&self, path: &Path) -> Option<(u32, u32)> {
+        let name: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+        unsafe {
+            let decoder = self.imaging.CreateDecoderFromFilename(PCWSTR(name.as_ptr()), None, GENERIC_READ, WICDecodeMetadataCacheOnDemand).ok()?;
+            let (mut width, mut height) = (0, 0);
+            decoder.GetFrame(0).ok()?.GetSize(&mut width, &mut height).ok()?;
+            Some((width, height))
+        }
     }
 
     /// The backdrop's average colour along the bottom quarter, brought to the brightness of snow in shade.
@@ -136,6 +167,20 @@ impl Wallpapers {
             Ok(sum.map(|channel| channel / count))
         }
     }
+}
+
+fn themes() -> Option<PathBuf> {
+    std::env::var_os("APPDATA").map(|folder| PathBuf::from(folder).join(r"Microsoft\Windows\Themes"))
+}
+
+/// The picture a display shows. Windows names the file the wallpaper was set from, which may since have gone or be on a
+/// drive that isn't there, while it goes on showing the copy it keeps of it.
+fn shown(path: PathBuf) -> PathBuf {
+    if path.is_file() {
+        return path;
+    }
+    let copy = themes().map(|themes| themes.join("TranscodedWallpaper"));
+    copy.filter(|copy| copy.is_file()).unwrap_or(path)
 }
 
 /// Copies a string the shell allocated and frees it.

@@ -33,7 +33,7 @@ headless_sway() {
     [[ -n ${second:-} ]] && export WLR_HEADLESS_OUTPUTS=2
     mkdir -p ~/.config/sway
     cat > ~/.config/sway/config <<CONFIG
-output HEADLESS-1 resolution 1280x800 position 0 0 bg #1d2b44 solid_color
+output HEADLESS-1 resolution 1280x800 position 0 0 bg ${background:-#1d2b44 solid_color}
 ${second:+output HEADLESS-2 resolution 1280x800 position $second bg #24344f solid_color}
 default_border pixel 2
 for_window [app_id="niri"] border none, fullscreen enable
@@ -125,6 +125,84 @@ displays() {
     trace "$(grep -E 'display|windows from|window snow from' "$log")"
 }
 
+# The New Year at its previewed midnight, fifteen seconds in: the tree, the countdown on its garland, the first
+# rocket bursting and the presents' hands out with sparklers. Run with SNOWHUSH_NEW_YEAR=1 SNOWHUSH_MIDNIGHT=1.
+new_year() {
+    shot() { grim "/out/$1.png"; }
+    "$app" > /out/app.out 2>&1 &
+    sleep 4
+    shot 1-tree
+    sleep 6.3
+    shot 2-countdown
+    sleep 6.4
+    for k in 1 2 3 4 5; do
+        shot "3-burst-$k"
+        sleep 0.35
+    done
+    sleep 3
+    shot 4-sparklers
+    trace "$(grep -E 'adapter|display|holiday|frames' "$log")"
+}
+
+# Snow falling into the wallpaper and lying in it, the picture swaybg shows read for its depth: before the reading, as
+# the first flakes land, and with all the snow down. Run with SNOWHUSH_BENCH_MEDIA holding wallpaper.jpg, and
+# settleWallpaper=1.
+wallpaper() {
+    shot() { grim "/out/$1.png"; }
+    "$app" > /out/app.out 2>&1 &
+    sleep 3
+    shot 1-before
+    for _ in $(seq 120); do grep -q 'wallpaper read' "$log" 2>/dev/null && break; sleep 1; done
+    sleep 20
+    shot 2-falling
+    sleep 40
+    shot 3-lying
+    trace "$(grep -E 'adapter|display|wallpaper|frames' "$log")"
+}
+
+# A snowball fight with the bot in swaybg's picture: the snowman standing, then clicks swept along the strip at the
+# bottom where he stands, which only he takes, and him reeling and breaking apart. Run as the wallpaper scene is,
+# with SNOWHUSH_FIGHT=1.
+fight() {
+    shot() { grim "/out/$1.png"; }
+    "$app" > /out/app.out 2>&1 &
+    for _ in $(seq 120); do grep -q 'wallpaper read' "$log" 2>/dev/null && break; sleep 1; done
+    sleep 4
+    shot 1-standing
+    for round in 1 2 3; do
+        for y in $(seq 716 8 772); do
+            for x in $(seq 240 8 1200); do
+                swaymsg seat seat0 cursor set "$x" "$y" > /dev/null
+                wlrctl pointer click left
+            done
+        done
+        sleep 0.4
+        shot "2-hit-$round"
+        sleep 2
+    done
+    sleep 1
+    shot 3-after
+    trace "$(grep -E 'adapter|display|wallpaper|fight|thrown|frames' "$log" | head -40)"
+}
+
+# A snowball fight in a room: the app opened again with the link to a friend's room, SNOWHUSH_BENCH_INVITE, which the
+# running copy takes over D-Bus and joins. The friend, a peer outside the container, throws every few seconds; this
+# player's practice throws hit him. Run as the fight scene is.
+room() {
+    shot() { grim "/out/$1.png"; }
+    "$app" > /out/app.out 2>&1 &
+    for _ in $(seq 120); do grep -q 'wallpaper read' "$log" 2>/dev/null && break; sleep 1; done
+    sleep 2
+    shot 1-alone
+    "$app" "$SNOWHUSH_BENCH_INVITE" > /out/link.out 2>&1
+    trace "second copy: exit $?, $(cat /out/link.out)"
+    for k in $(seq 12); do
+        sleep 5
+        shot "2-room-$(printf %02d "$k")"
+    done
+    trace "$(grep -E 'adapter|display|wallpaper|fight|thrown|words' "$log" | head -40)"
+}
+
 sway_move() { swaymsg "[app_id=foot] move right $1 px" > /dev/null; }
 sway_workspace() { swaymsg workspace "$1" > /dev/null; }
 sway_close() { swaymsg "[app_id=foot] kill" > /dev/null; }
@@ -151,6 +229,19 @@ niri)
     NIRI_SOCKET=$(ls "$XDG_RUNTIME_DIR"/niri.*.sock)
     export NIRI_SOCKET
     snowfall niri
+    ;;
+wallpaper | fight | room)
+    background="/media/wallpaper.jpg fill"
+    headless_sway
+    export WAYLAND_DISPLAY=$sway_display
+    SWAYSOCK=$(ls "$XDG_RUNTIME_DIR"/sway-ipc.*)
+    export SWAYSOCK
+    "$scene"
+    ;;
+newyear)
+    headless_sway
+    export WAYLAND_DISPLAY=$sway_display
+    new_year
     ;;
 side | stacked)
     second=$([[ $1 == side ]] && echo "1280 0" || echo "0 800")

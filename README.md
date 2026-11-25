@@ -26,6 +26,7 @@ A tiny app that lives in the menu bar on macOS and in the tray on Windows and Li
 
 - **Falls.** Every flake keeps its own pace and sways in a slow breeze.
 - **Settles.** It piles up and slumps to a natural slope along the bottom of the screen, on any window with room above it, and on the Dock.
+- **Falls into your wallpaper.** With Deep Interaction on, it reads the depth of your wallpaper once and snows inside the picture: far flakes pass behind nearer mountains and trees and take the picture's light, and snow gathers on its slopes, ridges and boughs with a thickness of its own, glowing under a sunset, grey at dusk. It comes on over minutes, lies deeper over an hour unless Melt Snow holds it, and is still there next time; change the wallpaper and it starts over on the new one. Windows hide it, as they hide the wallpaper, and it costs nothing while it lies still.
 - **Moves.** Push the cursor through a drift and it parts and sprays. Drag or shake a window and its snow slides off and lands below.
 - **Drops.** Close or minimize a window and its snow drops at once, in lumps that burst into powder where they land.
 - **Melts.** With Melt Snow on, the drift thaws slowly, so it never takes over your screen.
@@ -44,11 +45,19 @@ Choose Mode › Rain and rain beats down instead of snow, splashing where it lan
 
 Choose Mode › Cherry Blossom and pink petals fall instead of snow. Curved like a spoon, they glint as they tumble and glow where the light comes through them, and now and then a whole flower on its stalk spins down. They heap up and scatter just as leaves do, and with Wilt Petals on, the fallen ones brown from their edges before they go. Melt Snow and Clear Snow become Wilt Petals and Clear Petals.
 
+## Snowball Fight
+
+With Deep Interaction on, snowmen walk your wallpaper, small in the distance and large up close, hidden behind whatever in the picture is nearer. Throw snowballs at them with ⌘-click on the Mac, Ctrl-click on Windows, or a click on a snowman on Linux; hit one and he throws one back out of the picture at your screen. Choose Snowball Fight › Invite Friends and the link to a room goes to your clipboard: a friend who opens it, or picks Join from Clipboard with it copied, appears as a snowman in your wallpaper, and you in theirs. Everyone has five hearts, and the last one standing wins the round. Players connect to each other directly where they can and through a relay where they can't; only names and throws travel, nothing about your desktop.
+
+## New Year
+
+From December 20 until January 8 a decorated fir stands in the snow at the left of the screen. Its boughs sway in the wind and bend under the cursor, catch the falling snow and shake it off; presents lie under it, and a hand reaches out of one when the cursor comes near. Fireworks rise far off in the wallpaper's sky through the season, more and more toward the New Year, and at midnight on New Year's Eve the garland counts down the last ten seconds and every hand comes out with a sparkler. Choose Mode › New Year to have it any other day, as long as snow is falling.
+
 ## Halloween
 
 From October 30 until dawn on November 1 the snow turns spooky: jack-o'-lanterns glow in the drift and ghosts pop up out of it with signs. Choose Mode › Halloween to have it any other day, as long as snow is falling.
 
-Everything else lives in the menu bar: an Intensity slider for how much falls, Opacity for how see-through it is, a row showing its value that folds out a slider (on Linux and in the plain Windows menu, both are submenus of steps), Accumulate, which folds out a row of icons for what the snow settles on (the ground, the Dock, windows and desktop widgets on the Mac; the ground and windows on Windows; the ground, a floating panel and windows on Linux, as a submenu), Mode (Snow, Autumn Leaves, Rain, Cherry Blossom, and Halloween on top of snow) and Clear Snow, with the rest under Settings: Melt Snow, Deep Interaction (on Windows and the Mac, the snow also settles on a selection dragged across the desktop), Behind Windows, Show over Full Screen, Show in Screenshots, Max Performance (draws every frame at the display's full rate) and Open at Login. On Windows and the Mac, Settings stays open while you switch its options. On Windows, Behind Taskbar lets the snow settle at the bottom of the screen under a see-through taskbar, such as one made clear with TranslucentTB.
+Everything else lives in the menu bar: an Intensity slider for how much falls, Opacity for how see-through it is, a row showing its value that folds out a slider (on Linux and in the plain Windows menu, both are submenus of steps), Accumulate, which folds out a row of icons for what the snow settles on (the wallpaper, the ground, the Dock, windows, desktop widgets and a selection dragged across the desktop on the Mac; the wallpaper, the ground, windows and a selection on Windows; the wallpaper, the ground, a floating panel and windows on Linux, as a submenu), Mode (Snow, Autumn Leaves, Rain, Cherry Blossom, and Halloween or New Year on top of snow), Snowball Fight and Clear Snow, with the rest under Settings: Melt Snow, Deep Interaction (the snow falls into the wallpaper's depth and snowmen walk it), Behind Windows, Show over Full Screen, Show in Screenshots, Max Performance (draws every frame at the display's full rate) and Open at Login. On Windows and the Mac, Settings stays open while you switch its options. On Windows, Behind Taskbar lets the snow settle at the bottom of the screen under a see-through taskbar, such as one made clear with TranslucentTB.
 
 ## Building
 

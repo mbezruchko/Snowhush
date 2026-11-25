@@ -9,11 +9,13 @@ use std::sync::Once;
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
 use windows::Win32::Graphics::Direct2D::Common::{
-    D2D_RECT_F, D2D_SIZE_F, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_FIGURE_BEGIN_FILLED, D2D1_FIGURE_END_OPEN, D2D1_PIXEL_FORMAT,
+    D2D_RECT_F, D2D_SIZE_F, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_FIGURE_BEGIN_FILLED, D2D1_FIGURE_END_OPEN, D2D1_GRADIENT_STOP,
+    D2D1_PIXEL_FORMAT,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_SMALL, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_ELLIPSE, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT,
-    D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1_RENDER_TARGET_USAGE_NONE, D2D1_ROUNDED_RECT, D2D1_SWEEP_DIRECTION_CLOCKWISE,
+    D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_SMALL, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_ELLIPSE, D2D1_EXTEND_MODE_WRAP, D2D1_FACTORY_TYPE_SINGLE_THREADED,
+    D2D1_FEATURE_LEVEL_DEFAULT, D2D1_GAMMA_2_2, D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES, D2D1_RENDER_TARGET_PROPERTIES,
+    D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1_RENDER_TARGET_USAGE_NONE, D2D1_ROUNDED_RECT, D2D1_SWEEP_DIRECTION_CLOCKWISE,
     D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE, D2D1CreateFactory, ID2D1Factory, ID2D1RenderTarget, ID2D1SolidColorBrush,
 };
 use windows::Win32::Graphics::DirectWrite::{
@@ -50,6 +52,15 @@ const CLASS: PCWSTR = w!("SnowhushMenu");
 const TIMER_SUBMENU: usize = 1;
 /// Looks for the pointer leaving the menu, which sends no messages once it is over other windows.
 const TIMER_POINTER: usize = 2;
+/// Builds the entries again now and then while the menu is open, for what changes on its own, such as a room opening.
+const TIMER_REFRESH: usize = 3;
+/// The colours a snowball fight's name runs round through, as on the Mac, how wide one round is and how long it takes
+/// to slide by; and how often it is drawn as it slides.
+const SHIMMER: [(f32, f32, f32); 6] =
+    [(1.0, 0.42, 0.78), (0.78, 0.45, 1.0), (0.45, 0.58, 1.0), (0.36, 0.85, 1.0), (0.78, 0.45, 1.0), (1.0, 0.42, 0.78)];
+const SHIMMER_WIDTH: f32 = 140.0;
+const SHIMMER_ROUND: f32 = 2.5;
+const TIMER_SHIMMER: usize = 4;
 /// The first build of Windows 11 22H2, which has the system's backdrops.
 const BACKDROP_BUILD: u32 = 22621;
 /// Sizes in DIPs, after the menus of Windows 11.
@@ -126,6 +137,8 @@ pub enum Entry {
     Submenu {
         label: String,
         entries: Vec<Entry>,
+        /// Its name drawn in the colours a snowball fight's shimmers through on the Mac.
+        shimmer: bool,
     },
     /// Folds the row under it out or away, leaving the menu open; folded, `summary` trails it, and unfolded too with
     /// `keeps_summary`, for a value the row sets. With `icons`, those trail it instead: less room than their names.
@@ -159,6 +172,8 @@ pub struct Tile {
 pub enum Icon {
     Ground,
     Windows,
+    Wallpaper,
+    Selection,
 }
 
 impl Entry {
@@ -383,6 +398,8 @@ struct Menu {
     heading: IDWriteTextFormat,
     caption: IDWriteTextFormat,
     glyphs: IDWriteTextFormat,
+    /// When it opened, for where a shimmering name's colours have slid to.
+    opened: std::time::Instant,
 }
 
 thread_local! {
@@ -431,6 +448,8 @@ pub fn track(x: i32, y: i32, entries: Vec<Entry>, light: bool, toggle: &mut dyn 
         let _ = SetForegroundWindow(root);
         SetCapture(root);
         SetTimer(Some(root), TIMER_POINTER, 50, None);
+        SetTimer(Some(root), TIMER_REFRESH, 500, None);
+        SetTimer(Some(root), TIMER_SHIMMER, 33, None);
 
         while !CLOSED.get() {
             let mut message = MSG::default();
@@ -451,6 +470,8 @@ pub fn track(x: i32, y: i32, entries: Vec<Entry>, light: bool, toggle: &mut dyn 
 
         let _ = KillTimer(Some(root), TIMER_SUBMENU);
         let _ = KillTimer(Some(root), TIMER_POINTER);
+        let _ = KillTimer(Some(root), TIMER_REFRESH);
+        let _ = KillTimer(Some(root), TIMER_SHIMMER);
         let _ = ReleaseCapture();
         let windows: Vec<HWND> = MENU.take().map(|menu| menu.panels.iter().map(|panel| panel.window).collect()).unwrap_or_default();
         for window in windows.into_iter().rev() {
@@ -661,6 +682,24 @@ unsafe extern "system" fn procedure(window: HWND, message: u32, wparam: WPARAM, 
                 act(|menu| menu.sliding.is_none() && menu.panel_at(point).is_none() && menu.pointer(point));
                 LRESULT(0)
             }
+            WM_TIMER if wparam.0 == TIMER_SHIMMER => {
+                MENU.with(|menu| {
+                    let Ok(mut menu) = menu.try_borrow_mut() else { return };
+                    let Some(menu) = menu.as_mut() else { return };
+                    for p in 0..menu.panels.len() {
+                        if menu.panels[p].entries.iter().any(|entry| matches!(entry, Entry::Submenu { shimmer: true, .. })) {
+                            menu.render(p);
+                        }
+                    }
+                });
+                LRESULT(0)
+            }
+            WM_TIMER if wparam.0 == TIMER_REFRESH => {
+                if TOGGLED.get().is_none() {
+                    TOGGLED.set(Some(0));
+                }
+                LRESULT(0)
+            }
             WM_TIMER if wparam.0 == TIMER_SUBMENU => {
                 let _ = KillTimer(Some(window), TIMER_SUBMENU);
                 act(|menu| menu.rest());
@@ -736,6 +775,7 @@ impl Menu {
                 heading,
                 caption,
                 glyphs,
+                opened: std::time::Instant::now(),
             })
         }
     }
@@ -1260,7 +1300,26 @@ impl Menu {
                     0.0
                 };
                 let layout = self.layout(label, panel.width - panel.label - shift - TRAILING / 2.0)?;
-                target.DrawTextLayout(Vector2 { X: panel.label + shift, Y: top }, &layout, brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                if matches!(entry, Entry::Submenu { shimmer: true, .. }) {
+                    let stops: Vec<D2D1_GRADIENT_STOP> = SHIMMER
+                        .iter()
+                        .enumerate()
+                        .map(|(k, &(r, g, b))| D2D1_GRADIENT_STOP {
+                            position: k as f32 / (SHIMMER.len() - 1) as f32,
+                            color: D2D1_COLOR_F { r, g, b, a: 1.0 },
+                        })
+                        .collect();
+                    let stops = target.CreateGradientStopCollection(&stops, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_WRAP)?;
+                    let slid = (self.opened.elapsed().as_secs_f32() / SHIMMER_ROUND).fract() * SHIMMER_WIDTH;
+                    let line = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
+                        startPoint: Vector2 { X: panel.label - slid, Y: top },
+                        endPoint: Vector2 { X: panel.label - slid + SHIMMER_WIDTH, Y: top },
+                    };
+                    let shimmer = target.CreateLinearGradientBrush(&line, None, &stops)?;
+                    target.DrawTextLayout(Vector2 { X: panel.label + shift, Y: top }, &layout, &shimmer, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                } else {
+                    target.DrawTextLayout(Vector2 { X: panel.label + shift, Y: top }, &layout, brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                }
             }
         }
         Ok(())
@@ -1327,6 +1386,30 @@ impl Menu {
                     brush.SetOpacity(opacity);
                     target.DrawGeometry(&mound, brush, stroke, None);
                     target.DrawLine(Vector2 { X: x - half, Y: base }, Vector2 { X: x + half, Y: base }, brush, stroke, None);
+                }
+                Icon::Wallpaper => {
+                    let base = y + 16.0;
+                    let peaks = [(x - half, base), (x - 3.0, y + 5.0), (x + 1.5, y + 11.0), (x + 4.5, y + 7.5), (x + half, base)];
+                    for pair in peaks.windows(2) {
+                        target.DrawLine(Vector2 { X: pair[0].0, Y: pair[0].1 }, Vector2 { X: pair[1].0, Y: pair[1].1 }, brush, stroke, None);
+                    }
+                    target.DrawLine(Vector2 { X: x - half, Y: base }, Vector2 { X: x + half, Y: base }, brush, stroke, None);
+                }
+                Icon::Selection => {
+                    let (left, top, right, bottom) = (x - 9.0, y + 3.0, x + 9.0, y + 17.0);
+                    let dashes = |from: (f32, f32), to: (f32, f32)| {
+                        let length = ((to.0 - from.0).powi(2) + (to.1 - from.1).powi(2)).sqrt();
+                        let pieces = (length / 4.5).round().max(1.0) as usize;
+                        for k in 0..pieces {
+                            let (a, b) = (k as f32 / pieces as f32, (k as f32 + 0.55) / pieces as f32);
+                            let at = |t: f32| Vector2 { X: from.0 + (to.0 - from.0) * t, Y: from.1 + (to.1 - from.1) * t };
+                            target.DrawLine(at(a), at(b), brush, stroke, None);
+                        }
+                    };
+                    dashes((left, top), (right, top));
+                    dashes((right, top), (right, bottom));
+                    dashes((right, bottom), (left, bottom));
+                    dashes((left, bottom), (left, top));
                 }
             }
         }

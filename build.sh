@@ -4,6 +4,15 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+minimum=$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' Resources/Info.plist)
+
+# The rooms for snowball fights between friends: iroh, from net/, for both architectures in one library.
+for target in aarch64-apple-darwin x86_64-apple-darwin; do
+    MACOSX_DEPLOYMENT_TARGET="$minimum" cargo build --quiet --release --manifest-path net/Cargo.toml --target "$target"
+done
+mkdir -p build/net
+lipo -create net/target/{aarch64,x86_64}-apple-darwin/release/libsnowhush_net.a -output build/net/libsnowhush_net.a
+
 flags=(-c release --arch arm64 --arch x86_64)
 swift build "${flags[@]}"
 products="$(swift build "${flags[@]}" --show-bin-path)"
@@ -13,12 +22,36 @@ rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$app/Contents/Frameworks"
 # Swift Build stamps the binary with the deployment target as its SDK, and macOS then draws the app in its old
 # look, without Liquid Glass.
-minimum=$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' Resources/Info.plist)
 vtool -set-build-version macos "$minimum" "$(xcrun --sdk macosx --show-sdk-version)" -replace \
     -output "$app/Contents/MacOS/Snowhush" "$products/Snowhush"
+# Local symbols serve only a debugger; without them the app is several megabytes lighter.
+strip -x "$app/Contents/MacOS/Snowhush"
 ditto "$products/Sparkle.framework" "$app/Contents/Frameworks/Sparkle.framework"
 cp Resources/Info.plist "$app/Contents/"
 cp Resources/AppIcon.icns "$app/Contents/Resources/"
+
+# The depth network that finds the tops of things in the wallpaper for snow to lie on: Apple's Core ML conversion of
+# Depth Anything V2 Small, palettized to 6 bits (Apache-2.0). Fetched once at a fixed revision, checked, compiled.
+model=DepthAnythingV2SmallF16P6
+models=build/models
+if [[ ! -d "$models/$model.mlmodelc" ]]; then
+    revision=cfef6f6f2a70783dedc0bfae40cecbc2052285d3
+    base="https://huggingface.co/apple/coreml-depth-anything-v2-small/resolve/$revision/$model.mlpackage"
+    package="$models/$model.mlpackage"
+    while read -r sum file; do
+        mkdir -p "$package/${file:h}"
+        curl -sfL -o "$package/$file" "$base/$file"
+        echo "$sum  $package/$file" | shasum -a 256 -c --quiet
+    done <<'FILES'
+70e469c0359c89851bde4cdc1d89bf13fa06d4fccd8907b9b5f744e548ecaadf Manifest.json
+ee53b8f7e1682a66857b5a3d54cf04a97d89a98cf7b5979b5d726aaf9c24ad70 Data/com.apple.CoreML/model.mlmodel
+3e9bcccc9e35ae6f9759551f481a3b77226510bd74536e059ee9780dda618381 Data/com.apple.CoreML/weights/weight.bin
+FILES
+    xcrun coremlcompiler compile "$package" "$models" >/dev/null
+fi
+ditto "$models/$model.mlmodelc" "$app/Contents/Resources/$model.mlmodelc"
+cp Resources/ThirdParty/DepthAnything-LICENSE.txt "$app/Contents/Resources/"
+cp Resources/ThirdParty/Mac-Notices.txt "$app/Contents/Resources/ThirdPartyNotices.txt"
 for strings in locales/*.strings; do
     lproj="$app/Contents/Resources/$(basename "$strings" .strings).lproj"
     mkdir -p "$lproj"

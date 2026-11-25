@@ -14,9 +14,10 @@ use crate::light::{self, Backdrop, Shade};
 use crate::prefs;
 use crate::screen::PowerBudget;
 use crate::snow::Command;
+use crate::wallpaper::{self, Wallpaper};
 
 const POWER_EVERY: Duration = Duration::from_secs(5);
-const BACKDROPS_EVERY: Duration = Duration::from_secs(60);
+const BACKDROPS_EVERY: Duration = Duration::from_secs(15);
 const LIGHT_EVERY: Duration = Duration::from_secs(5);
 /// A desktop with no portal to ask may keep each ask waiting for long; it is asked again only now and then.
 const LIGHT_UNKNOWN_EVERY: Duration = Duration::from_secs(60);
@@ -74,22 +75,35 @@ pub fn start(bus: Bus, commands: Sender<Command>) -> mpsc::Sender<()> {
 
 /// Each display's backdrop with its tint, decoding only pictures not seen before.
 fn shades(bus: &Bus, tints: &mut Vec<(Backdrop, Option<[f32; 4]>)>) -> Vec<Shade> {
-    let shades: Vec<Shade> = light::backdrops(bus)
+    let mut found: Vec<(i32, i32, Option<String>, Backdrop, Option<Wallpaper>)> =
+        light::backdrops(bus).into_iter().map(|(x, y, backdrop, wallpaper)| (x, y, None, backdrop, wallpaper)).collect();
+    if found.is_empty() && !plasma() {
+        found = wallpaper::by_output()
+            .into_iter()
+            .map(|(output, wallpaper)| (0, 0, Some(output), Backdrop::Picture(wallpaper.path.clone(), wallpaper.modified), Some(wallpaper)))
+            .collect();
+    }
+    let shades: Vec<Shade> = found
         .into_iter()
-        .map(|(x, y, backdrop)| {
+        .map(|(x, y, output, backdrop, wallpaper)| {
             let tint = match tints.iter().find(|(seen, _)| *seen == backdrop) {
                 Some(&(_, tint)) => tint,
                 None => light::tint(&backdrop),
             };
-            Shade { x, y, backdrop, tint }
+            Shade { x, y, output, backdrop, tint, wallpaper }
         })
         .collect();
     *tints = shades.iter().map(|shade| (shade.backdrop.clone(), shade.tint)).collect();
     shades
 }
 
-fn plasma() -> bool {
+pub fn plasma() -> bool {
     std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|desktop| desktop.to_ascii_uppercase().split(':').any(|part| part == "KDE"))
+}
+
+/// Whether Plasma's colours are dark, which has a wallpaper with a dark variant show that.
+pub fn plasma_dark() -> bool {
+    plasma_panel_light() == Some(false)
 }
 
 /// Whether Plasma's panel is light. It takes its colours from the Plasma theme, which needn't match the apps'

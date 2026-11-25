@@ -25,4 +25,5 @@ package() {
     install -Dm644 "$_root/site/assets/icon-512.png" "$pkgdir/usr/share/icons/hicolor/512x512/apps/snowhush.png"
     install -Dm644 "$_root/site/assets/icon-64.png" "$pkgdir/usr/share/icons/hicolor/64x64/apps/snowhush.png"
     install -Dm644 "$_root/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 "$_root/Resources/ThirdParty/Notices.txt" "$pkgdir/usr/share/licenses/$pkgname/ThirdPartyNotices.txt"
 }

@@ -25,18 +25,37 @@ pub struct Settings {
     /// Unix seconds of the first run, or 0 for an install older than the stamp.
     pub installed_at: u32,
     pub halloween: Choice,
+    pub new_year: Choice,
     /// What falls: the kind picked last, or two mixed.
     pub picked: Picked,
     /// Drawn at the display's highest rate all the time, instead of only while something is pushed around.
     pub max_performance: bool,
     /// How opaque what falls is drawn, in percent.
     pub opacity: u32,
+    /// Snow lies in the wallpaper's picture: Accumulate's Wallpaper.
+    pub wallpaper: bool,
+    /// Deep Interaction: the snow falls into the wallpaper's depth, behind what is nearer in it.
+    pub depth: bool,
+    /// How much snow lies in the wallpaper's picture, in thousandths, kept from one run to the next.
+    pub picture_level: u32,
+    /// Snowballs thrown, counted to three: until then the round tells how to throw.
+    pub fight_throws: u32,
 }
 
 impl Settings {
     /// Whether snow settles anywhere.
     pub fn accumulates(&self) -> bool {
-        self.ground || self.panel || self.snow_on_windows
+        self.ground || self.panel || self.snow_on_windows || self.wallpaper
+    }
+
+    /// Whether the wallpaper is read at all: for the snow lying in it, its depth or both.
+    pub fn reads_wallpaper(&self) -> bool {
+        self.wallpaper || self.depth
+    }
+
+    /// Whether snowmen live in the wallpaper's picture for a snowball fight: only with its depth.
+    pub fn fights(&self) -> bool {
+        self.depth
     }
 
     pub fn load() -> Settings {
@@ -61,8 +80,13 @@ impl Settings {
             show_in_screenshots: read("showInScreenshots").is_some_and(|v| v != 0),
             installed_at: stamped.unwrap_or_else(|| if text.is_empty() { now() } else { 0 }),
             halloween: Choice { on: read("halloweenOn").is_some_and(|v| v != 0), skipped: read("halloweenSkipped").unwrap_or(0) },
+            new_year: Choice { on: read("newYearOn").is_some_and(|v| v != 0), skipped: read("newYearSkipped").unwrap_or(0) },
             max_performance: read("performance").is_some_and(|v| v == 1),
             opacity: read("fallingOpacity").map_or(100, |v| v.clamp(10, 100)),
+            wallpaper: read("settleWallpaper").is_some_and(|v| v != 0),
+            depth: read("wallpaperDepth").is_none_or(|v| v != 0),
+            picture_level: read("pictureLevel").map_or(0, |v| v.min(2000)),
+            fight_throws: read("fightThrows").map_or(0, |v| v.min(3)),
             picked: Picked::load(read("mode"), read("autumn"), read("mixed"), [read("mix0"), read("mix1")]),
         };
         if stamped.is_none() {
@@ -73,8 +97,12 @@ impl Settings {
 
     pub fn save(&self) {
         let Some(folder) = config_dir() else { return };
+        // The menu keeps a copy of the settings that never hears of a throw, so the count kept only ever grows.
+        let thrown = std::fs::read_to_string(folder.join("settings"))
+            .ok()
+            .and_then(|text| text.lines().find_map(|line| line.strip_prefix("fightThrows=").and_then(|v| v.trim().parse::<u32>().ok())));
         let text = format!(
-            "intensity={}\nsettleGround={}\nsettlePanel={}\nmeltSnow={}\nsnowOnWindows={}\nbehindWindows={}\nshowOverFullScreen={}\nshowInScreenshots={}\ninstalledAt={}\nhalloweenOn={}\nhalloweenSkipped={}\nmode={}\nmixed={}\nmix0={}\nmix1={}\nautumn={}\nperformance={}\nfallingOpacity={}\n",
+            "intensity={}\nsettleGround={}\nsettlePanel={}\nmeltSnow={}\nsnowOnWindows={}\nbehindWindows={}\nshowOverFullScreen={}\nshowInScreenshots={}\ninstalledAt={}\nhalloweenOn={}\nhalloweenSkipped={}\nnewYearOn={}\nnewYearSkipped={}\nmode={}\nmixed={}\nmix0={}\nmix1={}\nautumn={}\nperformance={}\nfallingOpacity={}\nsettleWallpaper={}\nwallpaperDepth={}\npictureLevel={}\nfightThrows={}\n",
             self.intensity,
             self.ground as u32,
             self.panel as u32,
@@ -86,13 +114,19 @@ impl Settings {
             self.installed_at,
             self.halloween.on as u32,
             self.halloween.skipped,
+            self.new_year.on as u32,
+            self.new_year.skipped,
             modes::number(self.picked.mode),
             self.picked.mixed as u32,
             modes::number(self.picked.mix[0]),
             modes::number(self.picked.mix[1]),
             (self.picked.mode == Mode::Autumn) as u32,
             self.max_performance as u32,
-            self.opacity
+            self.opacity,
+            self.wallpaper as u32,
+            self.depth as u32,
+            self.picture_level,
+            self.fight_throws.max(thrown.unwrap_or(0)).min(3)
         );
         let _ = std::fs::create_dir_all(&folder);
         let _ = write_whole(&folder.join("settings"), text.as_bytes());

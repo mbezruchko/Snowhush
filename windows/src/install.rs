@@ -24,7 +24,12 @@ const UNINSTALL: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Unin
 const RUN: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
 const STARTUP_APPROVED: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run");
 const SETTINGS: PCWSTR = w!("Software\\Snowhush");
+/// snowhush:// links, to snowball fights, which Windows opens with Snowhush.
+const LINKS: PCWSTR = w!("Software\\Classes\\snowhush");
+const LINKS_COMMAND: PCWSTR = w!("Software\\Classes\\snowhush\\shell\\open\\command");
 const NAME: PCWSTR = w!("Snowhush");
+/// The licenses of the work of others the app carries, which go with it.
+const NOTICES: &str = include_str!("../../Resources/ThirdParty/Notices.txt");
 /// The app's hidden window, which a running Snowhush always has.
 const CONTROLLER: PCWSTR = w!("SnowhushController");
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -52,6 +57,7 @@ pub fn install(app: &[u8], version: &str) -> Result<PathBuf, String> {
         std::thread::sleep(Duration::from_millis(200));
     }
 
+    let _ = std::fs::write(folder.join("ThirdPartyNotices.txt"), NOTICES);
     if let Some(programs) = known_folder(&FOLDERID_Programs) {
         let _ = shortcut(&exe, &programs.join("Snowhush.lnk"));
     }
@@ -67,6 +73,9 @@ pub fn install(app: &[u8], version: &str) -> Result<PathBuf, String> {
     write_number(UNINSTALL, w!("NoModify"), 1);
     write_number(UNINSTALL, w!("NoRepair"), 1);
     write_number(UNINSTALL, w!("EstimatedSize"), app.len().div_ceil(1024) as u32);
+    write_string(LINKS, PCWSTR::null(), "URL:Snowhush");
+    write_string(LINKS, w!("URL Protocol"), "");
+    write_string(LINKS_COMMAND, PCWSTR::null(), &format!("{quoted} \"%1\""));
     // Open at Login follows the app to where it now lives.
     if read_string(RUN, NAME).is_some() {
         write_string(RUN, NAME, &quoted);
@@ -87,6 +96,7 @@ pub fn uninstall() {
     unsafe {
         let _ = RegDeleteTreeW(HKEY_CURRENT_USER, UNINSTALL);
         let _ = RegDeleteTreeW(HKEY_CURRENT_USER, SETTINGS);
+        let _ = RegDeleteTreeW(HKEY_CURRENT_USER, LINKS);
         let _ = RegDeleteKeyValueW(HKEY_CURRENT_USER, RUN, NAME);
         let _ = RegDeleteKeyValueW(HKEY_CURRENT_USER, STARTUP_APPROVED, NAME);
     }

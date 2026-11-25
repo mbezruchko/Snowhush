@@ -27,13 +27,22 @@ use windows_numerics::Matrix3x2;
 
 use snowhush_core::geometry::V2;
 use snowhush_core::halloween::{PUMPKIN_ASPECT, PUMPKIN_CANDLE};
-use snowhush_core::simulation::{COLUMN_WIDTH, PumpkinSprite, SnowSimulation, Sprite};
+use snowhush_core::simulation::{BOUGH_SEGMENTS, COLUMN_WIDTH, PumpkinSprite, SnowSimulation, Sprite, TREE_HEIGHT, TreePiece, spark_pieces};
 
 use crate::halloween::{self, SIGN_SCALE};
 use crate::log;
+use crate::new_year;
+
+mod picture;
+
+pub use picture::{Lying, Painting};
 
 // The digitized leaves' tables come first: the shaders draw the leaves from them.
 const SHADERS: &str = concat!(include_str!("leaves.hlsl"), "\n", include_str!("shaders.hlsl"));
+/// The New Year's fir and its fireworks, as on the Mac and on Linux.
+const TREE_SHADERS: &str = include_str!("tree.hlsl");
+/// The most of the tree's pieces or the fireworks' sparks drawn at once: core keeps no more than 1600 sparks.
+const TREE_CAPACITY: usize = 2048;
 /// How far the cursor's candlelight reaches, in points.
 pub const LANTERN_REACH: f32 = 130.0;
 
@@ -47,7 +56,9 @@ const _: () = assert!(
         && offset_of!(Sprite, rain) == 108
         && offset_of!(Sprite, drop) == 116
         && offset_of!(Sprite, petal) == 132
-        && size_of::<Sprite>() == 136
+        && offset_of!(Sprite, scene) == 136
+        && offset_of!(Sprite, scene_light) == 140
+        && size_of::<Sprite>() == 144
 );
 
 #[repr(C)]
@@ -72,6 +83,9 @@ struct Uniforms {
     shake: [f32; 4],
     /// The pumpkins' candles: where each burns, how far its light reaches and how bright it is.
     pumpkins: [[f32; 4]; 3],
+    /// The New Year's garland round the tree's foot, or the fireworks' bursts, lighting the drift, and their colours.
+    garland: [[f32; 4]; 3],
+    garland_colors: [[f32; 4]; 3],
     occluders: [[f32; 4]; 16],
     /// One while all that heaps up is leaves, for a ghost; a pile has its own leaves and petals in each column.
     autumn: f32,
@@ -80,6 +94,22 @@ struct Uniforms {
     /// One while fallen leaves wither away.
     wilt: f32,
     padding: f32,
+}
+
+/// What the tree's shaders are given: see tree.hlsl.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct TreeUniforms {
+    view_size: [f32; 2],
+    shake: [f32; 2],
+    time: f32,
+    bulb_count: i32,
+    cover_count: i32,
+    unused: f32,
+    light: [f32; 4],
+    shadow_tint: [f32; 4],
+    covers: [[f32; 4]; 32],
+    bulbs: [[f32; 4]; 92],
 }
 
 /// Where a sign stands: its stick's foot, its size in points, how far it is turned and the drift's surface it comes up out of.
@@ -151,6 +181,21 @@ pub struct Gpu {
     field_fragment: ID3D11PixelShader,
     glass_vertex: ID3D11VertexShader,
     glass_fragment: ID3D11PixelShader,
+    /// The New Year's fir: its boughs, what hangs on it and lies under it, and the fireworks' sparks, each piece an
+    /// instance of `tree_layout` read from `tree_pieces`.
+    bough_vertex: ID3D11VertexShader,
+    bough_fragment: ID3D11PixelShader,
+    decor_vertex: ID3D11VertexShader,
+    decor_fragment: ID3D11PixelShader,
+    spark_vertex: ID3D11VertexShader,
+    spark_fragment: ID3D11PixelShader,
+    tree_layout: ID3D11InputLayout,
+    tree_pieces: ID3D11Buffer,
+    tree_constants: ID3D11Buffer,
+    /// The fir's bough pictures, made the first time the tree is drawn; none if they couldn't be.
+    needles: OnceCell<Option<ID3D11ShaderResourceView>>,
+    /// What draws the snow lying in wallpapers, made the first time it is; none if it couldn't be.
+    picture: OnceCell<Option<picture::Programs>>,
     adding: ID3D11BlendState,
     sampler: ID3D11SamplerState,
     /// Clear past the picture's edges, for the pumpkins' glow around them.
@@ -207,6 +252,12 @@ impl Gpu {
             let field_fragment = pixel_shader(&device, &code.field_fragment)?;
             let glass_vertex = vertex_shader(&device, &code.glass_vertex)?;
             let glass_fragment = pixel_shader(&device, &code.glass_fragment)?;
+            let bough_vertex = vertex_shader(&device, &code.bough_vertex)?;
+            let bough_fragment = pixel_shader(&device, &code.bough_fragment)?;
+            let decor_vertex = vertex_shader(&device, &code.decor_vertex)?;
+            let decor_fragment = pixel_shader(&device, &code.decor_fragment)?;
+            let spark_vertex = vertex_shader(&device, &code.spark_vertex)?;
+            let spark_fragment = pixel_shader(&device, &code.spark_fragment)?;
 
             let element = |name: PCSTR, format: DXGI_FORMAT, offset: u32| D3D11_INPUT_ELEMENT_DESC {
                 SemanticName: name,
@@ -230,10 +281,23 @@ impl Gpu {
                 element(s!("SPIN"), DXGI_FORMAT_R32G32_FLOAT, 100),
                 element(s!("RAIN"), DXGI_FORMAT_R32G32_FLOAT, 108),
                 element(s!("DROP"), DXGI_FORMAT_R32G32B32A32_FLOAT, 116),
-                element(s!("PETAL"), DXGI_FORMAT_R32_FLOAT, 132),
+                element(s!("PETAL"), DXGI_FORMAT_R32G32B32_FLOAT, 132),
             ];
             let mut sprite_layout = None;
             device.CreateInputLayout(&elements, &code.sprite_vertex, Some(&mut sprite_layout))?;
+            let piece = |index: u32| D3D11_INPUT_ELEMENT_DESC {
+                SemanticName: s!("PIECE"),
+                SemanticIndex: index,
+                Format: DXGI_FORMAT_R32G32B32A32_FLOAT,
+                InputSlot: 0,
+                AlignedByteOffset: index * 16,
+                InputSlotClass: D3D11_INPUT_PER_INSTANCE_DATA,
+                InstanceDataStepRate: 1,
+            };
+            let mut tree_layout = None;
+            device.CreateInputLayout(&(0..6).map(piece).collect::<Vec<_>>(), &code.bough_vertex, Some(&mut tree_layout))?;
+            let tree_pieces = dynamic_buffer(&device, TREE_CAPACITY * size_of::<TreePiece>(), D3D11_BIND_VERTEX_BUFFER)?;
+            let tree_constants = dynamic_buffer(&device, size_of::<TreeUniforms>(), D3D11_BIND_CONSTANT_BUFFER)?;
 
             let target = D3D11_RENDER_TARGET_BLEND_DESC {
                 BlendEnable: true.into(),
@@ -303,6 +367,17 @@ impl Gpu {
                 field_fragment,
                 glass_vertex,
                 glass_fragment,
+                bough_vertex,
+                bough_fragment,
+                decor_vertex,
+                decor_fragment,
+                spark_vertex,
+                spark_fragment,
+                tree_layout: tree_layout.ok_or_else(Error::empty)?,
+                tree_pieces,
+                tree_constants,
+                needles: OnceCell::new(),
+                picture: OnceCell::new(),
                 adding: adding.ok_or_else(Error::empty)?,
                 sampler: sampler.ok_or_else(Error::empty)?,
                 bordered: bordered.ok_or_else(Error::empty)?,
@@ -374,6 +449,122 @@ impl Gpu {
         Ok([self.mipmapped(&shell)?, self.mipmapped(&face)?])
     }
 
+    fn needles(&self) -> Option<&ID3D11ShaderResourceView> {
+        self.needles.get_or_init(|| self.make_needles().inspect_err(|error| log!("tree pictures failed: {error}")).ok()).as_ref()
+    }
+
+    /// The fir's bough pictures as one array, with their smaller copies: the boughs are shown at a fraction of their
+    /// pictures' size, and would shimmer without them.
+    fn make_needles(&self) -> Result<ID3D11ShaderResourceView> {
+        let pictures = new_year::needles()?;
+        let first = pictures.first().ok_or_else(Error::empty)?;
+        let levels = 32 - first.width.max(first.height).leading_zeros();
+        let desc = D3D11_TEXTURE2D_DESC {
+            Width: first.width,
+            Height: first.height,
+            MipLevels: levels,
+            ArraySize: pictures.len() as u32,
+            Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            Usage: D3D11_USAGE_DEFAULT,
+            BindFlags: (D3D11_BIND_SHADER_RESOURCE.0 | D3D11_BIND_RENDER_TARGET.0) as u32,
+            CPUAccessFlags: 0,
+            MiscFlags: D3D11_RESOURCE_MISC_GENERATE_MIPS.0 as u32,
+        };
+        let mut texture = None;
+        let mut view = None;
+        unsafe {
+            self.device.CreateTexture2D(&desc, None, Some(&mut texture))?;
+            let texture = texture.ok_or_else(Error::empty)?;
+            self.device.CreateShaderResourceView(&texture, None, Some(&mut view))?;
+            let view = view.ok_or_else(Error::empty)?;
+            for (slice, picture) in pictures.iter().enumerate() {
+                self.context.UpdateSubresource(&texture, slice as u32 * levels, None, picture.pixels.as_ptr().cast(), picture.width * 4, 0);
+            }
+            self.context.GenerateMips(&view);
+            Ok(view)
+        }
+    }
+
+    /// The New Year's fireworks, far off behind the windows, then its fir: drawn before the snow, so the drift round its
+    /// foot covers the presents' bottoms. It leaves the tree's constants bound: the snow binds its own after.
+    fn draw_new_year(&self, simulation: &SnowSimulation, light: [f32; 4], shadow_tint: [f32; 4], time: f32) -> Result<()> {
+        let tree = simulation.tree().filter(|tree| tree.base.y > -TREE_HEIGHT - 30.0);
+        let sparks = simulation.fireworks().map(|fireworks| spark_pieces(&fireworks.sparks, time)).unwrap_or_default();
+        let held = simulation.fireworks().map(|fireworks| spark_pieces(&fireworks.held, time)).unwrap_or_default();
+        if tree.is_none() && sparks.is_empty() && held.is_empty() {
+            return Ok(());
+        }
+        let drawing = tree.map(|tree| tree.drawing()).unwrap_or_default();
+        let shake = simulation.shake();
+        let covers = &simulation.covers[..simulation.covers.len().min(32)];
+        let mut uniforms = TreeUniforms {
+            view_size: [simulation.width(), simulation.height()],
+            shake: [shake.x, shake.y],
+            time,
+            bulb_count: drawing.bulbs.len().min(46) as i32,
+            cover_count: covers.len() as i32,
+            unused: 0.0,
+            light,
+            shadow_tint,
+            covers: [[0.0; 4]; 32],
+            bulbs: [[0.0; 4]; 92],
+        };
+        uniforms.covers[..covers.len()].copy_from_slice(covers);
+        for (k, bulb) in drawing.bulbs.iter().take(46).enumerate() {
+            uniforms.bulbs[2 * k] = bulb.place;
+            uniforms.bulbs[2 * k + 1] = bulb.color;
+        }
+        let context = &self.context;
+        unsafe {
+            self.write(&self.tree_constants, &uniforms)?;
+            context.VSSetConstantBuffers(0, Some(&[Some(self.tree_constants.clone())]));
+            context.PSSetConstantBuffers(0, Some(&[Some(self.tree_constants.clone())]));
+            context.IASetInputLayout(&self.tree_layout);
+            let stride = size_of::<TreePiece>() as u32;
+            let offset = 0;
+            context.IASetVertexBuffers(0, 1, Some(&Some(self.tree_pieces.clone())), Some(&stride), Some(&offset));
+            if let Some(needles) = self.needles() {
+                context.PSSetShaderResources(0, Some(&[Some(needles.clone())]));
+                context.PSSetSamplers(0, Some(&[Some(self.sampler.clone())]));
+            }
+            let strip = (BOUGH_SEGMENTS as u32 + 1) * 2;
+            for (vertex, fragment, pieces, vertices) in [
+                (&self.spark_vertex, &self.spark_fragment, sparks.as_slice(), 4),
+                (&self.decor_vertex, &self.decor_fragment, drawing.back.as_slice(), 4),
+                (&self.bough_vertex, &self.bough_fragment, drawing.boughs.as_slice(), strip),
+                (&self.decor_vertex, &self.decor_fragment, drawing.decor.as_slice(), 4),
+            ] {
+                let pieces = &pieces[..pieces.len().min(TREE_CAPACITY)];
+                if pieces.is_empty() {
+                    continue;
+                }
+                let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+                context.Map(&self.tree_pieces, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped))?;
+                std::ptr::copy_nonoverlapping(pieces.as_ptr(), mapped.pData.cast::<TreePiece>(), pieces.len());
+                context.Unmap(&self.tree_pieces, 0);
+                context.VSSetShader(vertex, None);
+                context.PSSetShader(fragment, None);
+                context.DrawInstanced(vertices, pieces.len() as u32, 0, 0);
+            }
+            // The sparklers in the hands, in front of the tree as the hands are, and of the windows as it is.
+            let held = &held[..held.len().min(TREE_CAPACITY)];
+            if !held.is_empty() {
+                uniforms.cover_count = 0;
+                self.write(&self.tree_constants, &uniforms)?;
+                let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+                context.Map(&self.tree_pieces, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped))?;
+                std::ptr::copy_nonoverlapping(held.as_ptr(), mapped.pData.cast::<TreePiece>(), held.len());
+                context.Unmap(&self.tree_pieces, 0);
+                context.VSSetShader(&self.spark_vertex, None);
+                context.PSSetShader(&self.spark_fragment, None);
+                context.DrawInstanced(4, held.len() as u32, 0, 0);
+            }
+            context.PSSetShaderResources(0, Some(&[None]));
+        }
+        Ok(())
+    }
+
     /// A picture with its smaller copies, made on the graphics card: the pumpkins are shown at a fraction of their
     /// pictures' size, and would shimmer without them.
     fn mipmapped(&self, picture: &halloween::Picture) -> Result<ID3D11ShaderResourceView> {
@@ -419,6 +610,8 @@ pub struct Surface {
     height_capacity: usize,
     /// The field drops on the glass add up into, as big as the swap chain; made while there are any.
     field: Option<(ID3D11RenderTargetView, ID3D11ShaderResourceView)>,
+    /// The wallpaper's air for the flakes falling in its picture, as the simulation last counted it.
+    air: Option<(ID3D11ShaderResourceView, u64)>,
 }
 
 impl Surface {
@@ -466,6 +659,7 @@ impl Surface {
                 heights: None,
                 height_capacity: 0,
                 field: None,
+                air: None,
             })
         }
     }
@@ -479,6 +673,7 @@ impl Surface {
 
     pub fn draw(&mut self, gpu: &Gpu, simulation: &SnowSimulation, ambient: Ambient, time: f32) -> Result<()> {
         self.reserve(gpu, simulation.sprite_count(), simulation.column_count())?;
+        let air = self.air(gpu, simulation)?;
         let glass = if simulation.has_glass_drops() {
             let field = self.field(gpu)?;
             simulation.glass_bounds().map(|drops| (field, drops))
@@ -514,12 +709,14 @@ impl Surface {
             context.RSSetState(&gpu.raster);
             context.OMSetBlendState(&gpu.blend, None, u32::MAX);
             context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+            gpu.draw_new_year(simulation, [ambient.light[0], ambient.light[1], ambient.light[2], 1.0], ambient.shadow_tint, time)?;
             let constants = [Some(gpu.uniforms.clone()), Some(gpu.placement.clone()), Some(gpu.pumpkin.clone())];
             context.VSSetConstantBuffers(0, Some(&constants));
             context.PSSetConstantBuffers(0, Some(&constants));
 
             let (cursor, glow) = ambient.lantern;
             let shake = simulation.shake();
+            let lights = simulation.tree_lights();
             let mut uniforms = Uniforms {
                 view_size: [simulation.width(), simulation.height()],
                 scale: 1.0,
@@ -537,6 +734,8 @@ impl Surface {
                 lantern: [cursor.x, cursor.y, LANTERN_REACH, glow],
                 shake: [shake.x, shake.y, 0.0, 0.0],
                 pumpkins: std::array::from_fn(|k| pumpkins.get(k).map_or([0.0; 4], |pumpkin| pumpkin.light(glow))),
+                garland: lights.map(|(light, _)| light),
+                garland_colors: lights.map(|(_, color)| [color[0], color[1], color[2], 0.0]),
                 occluders: [[0.0; 4]; 16],
                 autumn: if simulation.leafy() { 1.0 } else { 0.0 },
                 blossom: if simulation.blossom() { 1.0 } else { 0.0 },
@@ -599,6 +798,8 @@ impl Surface {
                 let stride = size_of::<Sprite>() as u32;
                 let offset = 0;
                 context.IASetInputLayout(&gpu.sprite_layout);
+                context.VSSetShaderResources(9, Some(&[Some(air.clone())]));
+                context.VSSetSamplers(2, Some(&[Some(gpu.sampler.clone())]));
                 context.IASetVertexBuffers(0, 1, Some(&Some(sprite_buffer.clone())), Some(&stride), Some(&offset));
                 // Drops on the glass first add up into their field.
                 if let Some(((field_target, _), _)) = &glass {
@@ -645,6 +846,47 @@ impl Surface {
     }
 
     /// The field drops on the glass add up into, made the first time it is needed.
+    /// Shows nothing, as when the snow it showed is gone.
+    pub fn clear(&mut self, gpu: &Gpu) -> Result<()> {
+        unsafe {
+            gpu.context.OMSetRenderTargets(Some(&[Some(self.target_view.clone())]), None);
+            gpu.context.ClearRenderTargetView(&self.target_view, &[0.0; 4]);
+            self.swap_chain.Present(0, DXGI_PRESENT(0)).ok()
+        }
+    }
+
+    /// The wallpaper's air for the flakes falling in its picture, made again only when the picture changes; one clear
+    /// cell while there is none.
+    fn air(&mut self, gpu: &Gpu, simulation: &SnowSimulation) -> Result<ID3D11ShaderResourceView> {
+        let (cells, size, version) = simulation.picture_air();
+        if let Some((view, seen)) = &self.air
+            && *seen == version
+        {
+            return Ok(view.clone());
+        }
+        let (pixels, width, height) = if size.0 > 0 { (cells, size.0, size.1) } else { (&[255u8, 255, 255, 0][..], 1, 1) };
+        let desc = D3D11_TEXTURE2D_DESC {
+            Width: width as u32,
+            Height: height as u32,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            Usage: D3D11_USAGE_IMMUTABLE,
+            BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+            ..Default::default()
+        };
+        let data = D3D11_SUBRESOURCE_DATA { pSysMem: pixels.as_ptr().cast(), SysMemPitch: (width * 4) as u32, SysMemSlicePitch: 0 };
+        let (mut texture, mut view) = (None, None);
+        unsafe {
+            gpu.device.CreateTexture2D(&desc, Some(&data), Some(&mut texture))?;
+            gpu.device.CreateShaderResourceView(&texture.ok_or_else(Error::empty)?, None, Some(&mut view))?;
+        }
+        let view = view.ok_or_else(Error::empty)?;
+        self.air = Some((view.clone(), version));
+        Ok(view)
+    }
+
     fn field(&mut self, gpu: &Gpu) -> Result<(ID3D11RenderTargetView, ID3D11ShaderResourceView)> {
         if let Some(field) = &self.field {
             return Ok(field.clone());
@@ -715,6 +957,12 @@ struct Code {
     field_fragment: Vec<u8>,
     glass_vertex: Vec<u8>,
     glass_fragment: Vec<u8>,
+    bough_vertex: Vec<u8>,
+    bough_fragment: Vec<u8>,
+    decor_vertex: Vec<u8>,
+    decor_fragment: Vec<u8>,
+    spark_vertex: Vec<u8>,
+    spark_fragment: Vec<u8>,
 }
 
 impl Code {
@@ -736,19 +984,33 @@ impl Code {
             field_fragment: compile(s!("fieldFragment"), s!("ps_4_0"))?,
             glass_vertex: compile(s!("glassVertex"), s!("vs_4_0"))?,
             glass_fragment: compile(s!("glassFragment"), s!("ps_4_0"))?,
+            bough_vertex: compile_tree(s!("boughVertex"), s!("vs_4_0"))?,
+            bough_fragment: compile_tree(s!("boughFragment"), s!("ps_4_0"))?,
+            decor_vertex: compile_tree(s!("decorVertex"), s!("vs_4_0"))?,
+            decor_fragment: compile_tree(s!("decorFragment"), s!("ps_4_0"))?,
+            spark_vertex: compile_tree(s!("sparkVertex"), s!("vs_4_0"))?,
+            spark_fragment: compile_tree(s!("sparkFragment"), s!("ps_4_0"))?,
         };
         Ok(CODE.get_or_init(|| code))
     }
 }
 
 fn compile(entry: PCSTR, target: PCSTR) -> Result<Vec<u8>> {
+    compile_from(SHADERS, s!("shaders.hlsl"), entry, target)
+}
+
+fn compile_tree(entry: PCSTR, target: PCSTR) -> Result<Vec<u8>> {
+    compile_from(TREE_SHADERS, s!("tree.hlsl"), entry, target)
+}
+
+fn compile_from(source: &str, name: PCSTR, entry: PCSTR, target: PCSTR) -> Result<Vec<u8>> {
     let mut code = None;
     let mut errors = None;
     let result = unsafe {
         D3DCompile(
-            SHADERS.as_ptr().cast(),
-            SHADERS.len(),
-            s!("shaders.hlsl"),
+            source.as_ptr().cast(),
+            source.len(),
+            name,
             None,
             None,
             entry,
