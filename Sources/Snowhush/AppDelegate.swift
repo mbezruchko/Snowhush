@@ -42,6 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     private var modeItems: [(item: NSMenuItem, mode: Mode)] = []
     private var maxPerformanceItem: NSMenuItem!
     private var behindWindowsItem: NSMenuItem!
+    private var ignoredAppsMenu: NSMenu!
     private var fullScreenItem: NSMenuItem!
     private var screenshotsItem: NSMenuItem!
     private var deepInteractionItem: NSMenuItem!
@@ -243,6 +244,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         fullScreenItem = toggle(tr("full_screen"), #selector(toggleFullScreen), to: settings)
         screenshotsItem = toggle(tr("screenshots"), #selector(toggleScreenshots), to: settings)
         maxPerformanceItem = toggle(tr("performance"), #selector(toggleMaxPerformance), to: settings)
+        ignoredAppsMenu = NSMenu()
+        ignoredAppsMenu.delegate = self
+        ignoredAppsMenu.autoenablesItems = false
+        settings.addItem(withTitle: tr("ignore.apps"), action: nil, keyEquivalent: "").submenu = ignoredAppsMenu
         settings.addItem(.separator())
         settings.addItem(.sectionHeader(title: tr("general")))
         loginItem = toggle(tr("login"), #selector(toggleOpenAtLogin), to: settings)
@@ -299,6 +304,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
+        if menu === ignoredAppsMenu {
+            fillIgnoredApps()
+            return
+        }
         intensitySlider.value = Preferences.intensity
         opacitySlider.value = Preferences.fallingOpacity
         opacityRow.summary = MenuSlider.percent(Preferences.fallingOpacity)
@@ -339,6 +348,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         fullScreenItem.isEnabled = !behindWindows
         screenshotsItem.state = Preferences.showInScreenshots ? .on : .off
         loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+    }
+
+    private func fillIgnoredApps() {
+        ignoredAppsMenu.removeAllItems()
+        let ignored = Set(Preferences.ignoredApps)
+        let owners = Set(WindowTracker.appOwners()).union(ignored)
+        for owner in owners.sorted(by: { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }) {
+            let item = ignoredAppsMenu.addItem(withTitle: owner, action: #selector(toggleIgnoredApp(_:)), keyEquivalent: "")
+            item.target = self
+            item.state = ignored.contains(owner) ? .on : .off
+        }
+    }
+
+    @objc private func toggleIgnoredApp(_ item: NSMenuItem) {
+        var ignored = Preferences.ignoredApps
+        if let index = ignored.firstIndex(of: item.title) {
+            ignored.remove(at: index)
+        } else {
+            ignored.append(item.title)
+        }
+        Preferences.ignoredApps = ignored
     }
 
     private func select(intensity: Double) {

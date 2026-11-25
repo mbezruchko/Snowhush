@@ -26,6 +26,7 @@
 "melt.blossom" = "Blüten welken";
 "deep" = "Tiefe Interaktion";
 "behind" = "Hinter Fenstern";
+"ignore.apps" = "Apps ignorieren";
 "full_screen" = "Über Vollbild zeigen";
 "taskbar" = "Hinter der Taskleiste";
 "screenshots" = "In Screenshots zeigen";

@@ -30,6 +30,7 @@
 "melt.blossom" = "Wilt Petals";
 "deep" = "Deep Interaction";
 "behind" = "Behind Windows";
+"ignore.apps" = "Ignore Apps";
 "full_screen" = "Show over Full Screen";
 "taskbar" = "Behind Taskbar";
 "screenshots" = "Show in Screenshots";

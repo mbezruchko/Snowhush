@@ -26,6 +26,7 @@
 "melt.blossom" = "花びらを枯らす";
 "deep" = "ディープインタラクション";
 "behind" = "ウインドウの後ろ";
+"ignore.apps" = "アプリを無視";
 "full_screen" = "フルスクリーンの上に表示";
 "taskbar" = "タスクバーの後ろ";
 "screenshots" = "スクリーンショットに表示";
