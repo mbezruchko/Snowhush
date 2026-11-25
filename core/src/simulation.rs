@@ -3390,8 +3390,16 @@ impl SnowSimulation {
     fn tend_tree(&mut self, dt: f32) {
         let Some(mut tree) = self.tree.take() else { return };
         let (left, right) = (TREE_X - 70.0, TREE_X + 70.0);
-        let covered = self.covers.iter().any(|cover| cover[0] < right && cover[2] > left && cover[1] < TREE_HEIGHT + 20.0 && cover[3] > 0.0);
-        let target = if covered { -(TREE_HEIGHT + 40.0) } else { 0.0 };
+        // A panel's shelf along the bottom under all of it, it stands on, as the pumpkins sit in its snow.
+        let floor = self
+            .shelf
+            .and_then(|id| self.ids.iter().position(|&other| other == id))
+            .map(|li| &self.layers[li])
+            .filter(|layer| layer.base().x <= left && layer.base().x + layer.width() >= right)
+            .map_or(0.0, |layer| layer.floor(layer.clamped_index(TREE_X)));
+        let covered =
+            self.covers.iter().any(|cover| cover[0] < right && cover[2] > left && cover[1] < floor + TREE_HEIGHT + 20.0 && cover[3] > floor);
+        let target = if covered { -(TREE_HEIGHT + 40.0) } else { floor };
         tree.base = V2::new(TREE_X, tree.base.y + (target - tree.base.y) * (dt * 5.0).min(1.0));
         let shown = tree.base.y > -TREE_HEIGHT;
         tree.celebration = self.celebration.map(|t| t as f32);
