@@ -491,7 +491,8 @@ impl Gpu {
     fn draw_new_year(&self, simulation: &SnowSimulation, light: [f32; 4], shadow_tint: [f32; 4], time: f32) -> Result<()> {
         let tree = simulation.tree().filter(|tree| tree.base.y > -TREE_HEIGHT - 30.0);
         let sparks = simulation.fireworks().map(|fireworks| spark_pieces(&fireworks.sparks, time)).unwrap_or_default();
-        if tree.is_none() && sparks.is_empty() {
+        let held = simulation.fireworks().map(|fireworks| spark_pieces(&fireworks.held, time)).unwrap_or_default();
+        if tree.is_none() && sparks.is_empty() && held.is_empty() {
             return Ok(());
         }
         let drawing = tree.map(|tree| tree.drawing()).unwrap_or_default();
@@ -545,6 +546,19 @@ impl Gpu {
                 context.VSSetShader(vertex, None);
                 context.PSSetShader(fragment, None);
                 context.DrawInstanced(vertices, pieces.len() as u32, 0, 0);
+            }
+            // The sparklers in the hands, in front of the tree as the hands are, and of the windows as it is.
+            let held = &held[..held.len().min(TREE_CAPACITY)];
+            if !held.is_empty() {
+                uniforms.cover_count = 0;
+                self.write(&self.tree_constants, &uniforms)?;
+                let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+                context.Map(&self.tree_pieces, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped))?;
+                std::ptr::copy_nonoverlapping(held.as_ptr(), mapped.pData.cast::<TreePiece>(), held.len());
+                context.Unmap(&self.tree_pieces, 0);
+                context.VSSetShader(&self.spark_vertex, None);
+                context.PSSetShader(&self.spark_fragment, None);
+                context.DrawInstanced(4, held.len() as u32, 0, 0);
             }
             context.PSSetShaderResources(0, Some(&[None]));
         }

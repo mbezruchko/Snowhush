@@ -341,8 +341,13 @@ final class Renderer: NSObject, MTKViewDelegate {
         // Far off in the sky: behind the snow.
         if !fireworksOnDesktop(simulation.fireworks, uniforms.time), let fireworks = simulation.fireworks, !fireworks.isEmpty,
            let treeRenderer = treeRenderer ?? makeTreeRenderer() {
-            treeRenderer.encode(fireworks, with: encoder, uniforms: TreeUniforms(origin: .zero, size: uniforms.viewSize, time: uniforms.time, shake: SIMD2(uniforms.shake.x, uniforms.shake.y)),
+            treeRenderer.encode(fireworks.sparks, with: encoder, uniforms: TreeUniforms(origin: .zero, size: uniforms.viewSize, time: uniforms.time, shake: SIMD2(uniforms.shake.x, uniforms.shake.y)),
                                 air: pictureAir(), covers: simulation.desktopCovers)
+        }
+        // The sparklers in the hands, in front of the tree, which stands under the snow, as the hands are.
+        if let held = simulation.fireworks?.held, !held.isEmpty, let treeRenderer = treeRenderer ?? makeTreeRenderer() {
+            treeRenderer.encode(held, with: encoder, uniforms: TreeUniforms(origin: .zero, size: uniforms.viewSize, time: uniforms.time, shake: SIMD2(uniforms.shake.x, uniforms.shake.y)),
+                                air: nil, covers: [])
         }
         drawPiles(piles.filter { !$0.isDock }, with: encoder, uniforms: uniforms, heights: heightBuffer)
         drawSigns(simulation.signs, with: encoder, uniforms: uniforms)

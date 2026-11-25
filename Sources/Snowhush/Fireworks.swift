@@ -45,6 +45,9 @@ final class Fireworks {
     }
 
     private(set) var sparks: [Spark] = []
+    /// The sparks of the sparklers in the hands out of the presents: in front of the tree, as the hands are, where the
+    /// fireworks are far off behind it.
+    private(set) var held: [Spark] = []
     private(set) var flashes: [Flash] = []
     /// How near the farthest and the nearest of the wallpaper are, when its depth is known.
     var span: (far: Float, close: Float)?
@@ -69,7 +72,7 @@ final class Fireworks {
         self.left = min(left, width * 0.5)
     }
 
-    var isEmpty: Bool { sparks.isEmpty }
+    var isEmpty: Bool { sparks.isEmpty && held.isEmpty }
 
     /// Seconds to the next rocket at `perMinute` a minute, never less than three: twenty a minute at most.
     private static func wait(_ perMinute: Float) -> Float {
@@ -119,6 +122,13 @@ final class Fireworks {
             i -= 1
         }
         for (position, shell, near, scale) in bursts { burst(shell, at: position, near: near, scale: scale) }
+        for k in held.indices.reversed() {
+            held[k].age += dt
+            held[k].velocity *= exp(-held[k].drag * dt)
+            held[k].velocity.y -= held[k].gravity * dt
+            held[k].position += held[k].velocity * dt
+            if held[k].age >= held[k].life { held.remove(at: k) }
+        }
         for k in flashes.indices.reversed() {
             flashes[k].strength *= exp(-dt / 0.35)
             if flashes[k].strength < 0.02 { flashes.remove(at: k) }
@@ -210,9 +220,9 @@ final class Fireworks {
     /// A sparkler held at `point`: a few tiny golden sparks spit out of it every frame.
     func sparkle(at point: SIMD2<Float>, dt: Float) {
         let count = Int(dt * 140 + Float.random(in: 0...1))
-        for _ in 0..<count where sparks.count < Self.maxSparks {
+        for _ in 0..<count where held.count < Self.maxSparks {
             let angle = Float.random(in: 0...(2 * .pi))
-            sparks.append(Spark(
+            held.append(Spark(
                 position: point, velocity: SIMD2(cos(angle), sin(angle)) * Float.random(in: 40...120), color: SIMD3(1, 0.85, 0.5),
                 life: Float.random(in: 0.15...0.35), size: 0.9, drag: 4, gravity: 120, crackles: true
             ))

@@ -43,7 +43,7 @@ final class FireworksLayer {
         pass.colorAttachments[0].storeAction = .store
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return }
         if let fireworks, sparks {
-            renderer.encode(fireworks, with: encoder, uniforms: TreeUniforms(origin: .zero, size: SIMD2(Float(size.width), Float(size.height)), time: time),
+            renderer.encode(fireworks.sparks, with: encoder, uniforms: TreeUniforms(origin: .zero, size: SIMD2(Float(size.width), Float(size.height)), time: time),
                             air: relief, covers: [])
         }
         encoder.endEncoding()

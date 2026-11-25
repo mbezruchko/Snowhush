@@ -417,6 +417,29 @@ impl Gpu {
         self.egl.swap_buffers(self.display, surface.surface).map_err(|error| error.to_string())
     }
 
+    /// Fireworks' sparks, or the sparklers', hidden behind the `covers` and the `panel`.
+    fn draw_sparks(&self, pieces: &[TreePiece], covers: &[f32], view: [f32; 2], shake: [f32; 2], panel: [f32; 4]) {
+        if pieces.is_empty() {
+            return;
+        }
+        let gl = &self.gl;
+        let spark = &self.spark;
+        unsafe {
+            gl.use_program(Some(spark.program));
+            gl.bind_vertex_array(Some(self.tree_array));
+            gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.tree_buffer));
+            gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes(pieces), glow::STREAM_DRAW);
+            gl.uniform_2_f32_slice(spark.location("viewSize"), &view);
+            gl.uniform_2_f32_slice(spark.location("shake"), &shake);
+            gl.uniform_4_f32_slice(spark.location("panel"), &panel);
+            gl.uniform_1_i32(spark.location("coverCount"), (covers.len() / 4) as i32);
+            if !covers.is_empty() {
+                gl.uniform_4_f32_slice(spark.location("covers"), covers);
+            }
+            gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, 4, pieces.len() as i32);
+        }
+    }
+
     /// `panel` is a rectangle the panel stands in front of, left, bottom, right, top in the simulation's
     /// coordinates: nothing of the snow shows inside it.
     pub fn draw(
@@ -480,24 +503,9 @@ impl Gpu {
             gl.blend_func_separate(glow::ONE, glow::ONE_MINUS_SRC_ALPHA, glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
 
             // The fireworks, far off in the sky behind the tree and the snow, and behind the windows.
-            if let Some(fireworks) = simulation.fireworks()
-                && !fireworks.sparks.is_empty()
-            {
-                let pieces = spark_pieces(&fireworks.sparks, time);
+            if let Some(fireworks) = simulation.fireworks() {
                 let covers: Vec<f32> = simulation.covers.iter().take(32).flatten().copied().collect();
-                let spark = &self.spark;
-                gl.use_program(Some(spark.program));
-                gl.bind_vertex_array(Some(self.tree_array));
-                gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.tree_buffer));
-                gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes(&pieces), glow::STREAM_DRAW);
-                gl.uniform_2_f32_slice(spark.location("viewSize"), &view);
-                gl.uniform_2_f32_slice(spark.location("shake"), &shake);
-                gl.uniform_4_f32_slice(spark.location("panel"), &panel);
-                gl.uniform_1_i32(spark.location("coverCount"), (covers.len() / 4) as i32);
-                if !covers.is_empty() {
-                    gl.uniform_4_f32_slice(spark.location("covers"), &covers);
-                }
-                gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, 4, pieces.len() as i32);
+                self.draw_sparks(&spark_pieces(&fireworks.sparks, time), &covers, view, shake, panel);
             }
             // The New Year's fir under the snow, the drift round its foot covering the presents' bottoms: the bulbs
             // behind it, its boughs back to front, then what hangs on it and lies under it.
@@ -534,6 +542,10 @@ impl Gpu {
                     gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, vertices, pieces.len() as i32);
                 }
                 gl.bind_texture(glow::TEXTURE_2D_ARRAY, None);
+            }
+            // The sparklers in the hands, in front of the tree as the hands are, and of the windows as it is.
+            if let Some(fireworks) = simulation.fireworks() {
+                self.draw_sparks(&spark_pieces(&fireworks.held, time), &[], view, shake, panel);
             }
 
             // The pumpkins go down before the snow, so the drift they sit in covers their bottoms.

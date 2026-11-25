@@ -71,6 +71,9 @@ pub const MAX_SPARKS: usize = 1600;
 
 pub struct Fireworks {
     pub sparks: Vec<Spark>,
+    /// The sparks of the sparklers in the hands out of the presents: in front of the tree, as the hands are, where the
+    /// fireworks are far off behind it.
+    pub held: Vec<Spark>,
     pub flashes: Vec<Flash>,
     /// How near the farthest and the nearest of the wallpaper are, when its depth is known.
     pub span: Option<(f32, f32)>,
@@ -87,6 +90,7 @@ impl Fireworks {
     pub fn new(width: f32, height: f32, left: f32) -> Fireworks {
         Fireworks {
             sparks: Vec::new(),
+            held: Vec::new(),
             flashes: Vec::new(),
             span: None,
             width,
@@ -99,7 +103,7 @@ impl Fireworks {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.sparks.is_empty()
+        self.sparks.is_empty() && self.held.is_empty()
     }
 
     /// Seconds to the next rocket at `per_minute` a minute, never less than three: twenty a minute at most.
@@ -164,6 +168,13 @@ impl Fireworks {
         for (position, shell, near, scale) in bursts {
             self.burst(shell, position, near, scale);
         }
+        self.held.retain_mut(|spark| {
+            spark.age += dt;
+            spark.velocity *= (-spark.drag * dt).exp();
+            spark.velocity.y -= spark.gravity * dt;
+            spark.position += spark.velocity * dt;
+            spark.age < spark.life
+        });
         for k in (0..self.flashes.len()).rev() {
             self.flashes[k].strength *= (-dt / 0.35).exp();
             if self.flashes[k].strength < 0.02 {
@@ -295,7 +306,7 @@ impl Fireworks {
     pub fn sparkle(&mut self, point: V2, dt: f32) {
         let count = (dt * 140.0 + self.random.next()) as usize;
         for _ in 0..count {
-            if self.sparks.len() >= MAX_SPARKS {
+            if self.held.len() >= MAX_SPARKS {
                 break;
             }
             let random = &mut self.random;
@@ -304,7 +315,7 @@ impl Fireworks {
             let life = random.range(0.15, 0.35);
             let mut spark = Spark::new(point, V2::new(angle.cos(), angle.sin()) * speed, [1.0, 0.85, 0.5], life, 0.9, 4.0, 120.0);
             spark.crackles = true;
-            self.sparks.push(spark);
+            self.held.push(spark);
         }
     }
 

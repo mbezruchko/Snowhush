@@ -175,15 +175,15 @@ final class TreeRenderer {
 
     /// The fireworks' sparks, each a glowing streak along its flight.
     /// They are on the desktop: `covers`, the windows and the Dock in front of it, hide them.
-    func encode(_ fireworks: Fireworks, with encoder: MTLRenderCommandEncoder, uniforms: TreeUniforms, air: MTLTexture?, covers: [SIMD4<Float>]) {
-        let sparks = fireworks.sparks
+    func encode(_ sparks: [Fireworks.Spark], with encoder: MTLRenderCommandEncoder, uniforms: TreeUniforms, air: MTLTexture?, covers: [SIMD4<Float>]) {
         guard !sparks.isEmpty else { return }
         let length = sparks.count * MemoryLayout<TreePiece>.stride
         if sparkBuffers.first.map({ $0.length < length }) ?? true {
-            sparkBuffers = (0..<3).compactMap { _ in device.makeBuffer(length: max(length * 2, 64 * 1024), options: .storageModeShared) }
+            // Two lots a frame, the fireworks and the sparklers, three frames in flight.
+            sparkBuffers = (0..<6).compactMap { _ in device.makeBuffer(length: max(length * 2, 64 * 1024), options: .storageModeShared) }
         }
-        guard sparkBuffers.count == 3 else { return }
-        let buffer = sparkBuffers[sparkSlot % 3]
+        guard sparkBuffers.count == 6 else { return }
+        let buffer = sparkBuffers[sparkSlot % 6]
         sparkSlot += 1
         let pieces = buffer.contents().bindMemory(to: TreePiece.self, capacity: sparks.count)
         for (k, spark) in sparks.enumerated() {
