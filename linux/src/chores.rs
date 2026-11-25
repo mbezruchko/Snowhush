@@ -101,6 +101,11 @@ fn plasma() -> bool {
     std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|desktop| desktop.to_ascii_uppercase().split(':').any(|part| part == "KDE"))
 }
 
+/// Whether Plasma's colours are dark, which has a wallpaper with a dark variant show that.
+pub fn plasma_dark() -> bool {
+    plasma_panel_light() == Some(false)
+}
+
 /// Whether Plasma's panel is light. It takes its colours from the Plasma theme, which needn't match the apps'
 /// (Breeze Twilight sets a dark panel over light windows), or, for a theme without colours of its own, from the
 /// colour scheme.

@@ -90,7 +90,7 @@ pub fn backdrops(connection: &Connection) -> Vec<(i32, i32, Backdrop, Option<Wal
 for (const d of desktops()) {
     var g = screenGeometry(d.screen);
     d.currentConfigGroup = ["Wallpaper", d.wallpaperPlugin, "General"];
-    lines.push([g.x, g.y, d.wallpaperPlugin, d.readConfig("Image"), d.readConfig("Color"), d.readConfig("FillMode")].join("\t"));
+    lines.push([g.x, g.y, d.wallpaperPlugin, d.readConfig("Image"), d.readConfig("Color"), d.readConfig("FillMode"), g.width, g.height].join("\t"));
 }
 print(lines.join("\n"));"#;
     let Ok(reply) = connection.call_method(Some("org.kde.plasmashell"), "/PlasmaShell", Some("org.kde.PlasmaShell"), "evaluateScript", &(SCRIPT,))
@@ -107,10 +107,11 @@ print(lines.join("\n"));"#;
             let image = parts.next().unwrap_or_default();
             let color = parts.next().unwrap_or_default();
             let fill_mode = parts.next().unwrap_or_default();
+            let size: Option<(f32, f32)> = parts.next().zip(parts.next()).and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)));
             let (backdrop, wallpaper) = match plugin {
                 "org.kde.color" => (Backdrop::Color(parse_color(color)?), None),
                 _ => {
-                    let path = PathBuf::from(image.strip_prefix("file://").unwrap_or(image));
+                    let path = shown(PathBuf::from(image.strip_prefix("file://").unwrap_or(image)), size);
                     if !path.is_file() {
                         return None;
                     }
@@ -122,6 +123,26 @@ print(lines.join("\n"));"#;
             Some((x, y, backdrop, wallpaper))
         })
         .collect()
+}
+
+/// The picture Plasma shows for a wallpaper: the file itself, or out of a wallpaper package, as Plasma's own come, the
+/// one of its sizes nearest the display's shape, the largest of those, from its dark variant under dark colours.
+fn shown(path: PathBuf, size: Option<(f32, f32)>) -> PathBuf {
+    if !path.is_dir() {
+        return path;
+    }
+    let contents = path.join("contents");
+    let dark = contents.join("images_dark");
+    let folder = if dark.is_dir() && crate::chores::plasma_dark() { dark } else { contents.join("images") };
+    let shape = size.filter(|(w, h)| *w > 0.0 && *h > 0.0).map_or(16.0 / 9.0, |(w, h)| w / h);
+    let pictures = std::fs::read_dir(&folder).into_iter().flatten().flatten().filter_map(|entry| {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let stem = name.rsplit_once('.').map_or(name.as_str(), |(stem, _)| stem);
+        let (w, h) = stem.split_once('x')?;
+        let (w, h): (f32, f32) = (w.parse().ok()?, h.parse().ok()?);
+        Some(((w / h / shape).ln().abs(), w * h, entry.path()))
+    });
+    pictures.min_by(|a, b| a.0.total_cmp(&b.0).then(b.1.total_cmp(&a.1))).map_or(path, |(_, _, picture)| picture)
 }
 
 /// A display's backdrop, by where the display sits, with the tint it gives the shadows.
