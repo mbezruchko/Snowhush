@@ -100,6 +100,10 @@ impl PictureSnow {
         })
     }
 
+    pub fn window(&self) -> HWND {
+        self.window
+    }
+
     /// Whether its window is still there: Explorer restarting takes the wallpaper layer and everything in it.
     pub fn alive(&self) -> bool {
         unsafe { IsWindow(Some(self.window)).as_bool() }

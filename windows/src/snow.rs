@@ -853,6 +853,9 @@ fn follow_pictures(gpu: &Gpu, settings: &Settings, screens: &mut [Screen], layer
             screen.simulation.set_picture(None, None);
         }
     }
+    if let (true, Some(desktop)) = (wanted && !lost, layer.as_ref()) {
+        screens.iter().for_each(|screen| screen.raise_picture(desktop));
+    }
     if !wanted || screens.iter().all(|screen| screen.picture.is_some()) {
         return;
     }

@@ -554,6 +554,20 @@ impl Screen {
         self.picture.as_ref().is_some_and(PictureSnow::fighting)
     }
 
+    /// Puts the wallpaper's snow back under the icons, or under the overlay when that is in the wallpaper layer too,
+    /// should something have come over it: Explorer lays a newly chosen wallpaper's window on top.
+    pub fn raise_picture(&self, layer: &DesktopLayer) {
+        let Some(picture) = &self.picture else { return };
+        if !behind_needs_raise(picture.window(), layer.icons) {
+            return;
+        }
+        log!("{}: the wallpaper's snow raised again", self.monitor.name);
+        let above = self.overlay_behind().or(layer.icons).unwrap_or(HWND_TOP);
+        unsafe {
+            let _ = SetWindowPos(picture.window(), Some(above), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+        }
+    }
+
     /// The overlay, when it is in the desktop's wallpaper layer too: the picture's snow goes under it.
     pub fn overlay_behind(&self) -> Option<HWND> {
         self.layer.map(|_| self.overlay.0)
@@ -782,7 +796,7 @@ fn lowest_open_popup() -> Option<HWND> {
 
 /// Whether a behind-windows overlay must move: something other than our own overlays sits above it
 /// before the desktop icons (a live wallpaper, a stray WorkerW, …), or the icons are not above it at all.
-fn behind_needs_raise(overlay: HWND, icons: Option<HWND>) -> bool {
+pub fn behind_needs_raise(overlay: HWND, icons: Option<HWND>) -> bool {
     unsafe {
         match icons {
             Some(icons) => {
