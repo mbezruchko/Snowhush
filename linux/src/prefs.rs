@@ -38,8 +38,6 @@ pub struct Settings {
     pub depth: bool,
     /// How much snow lies in the wallpaper's picture, in thousandths, kept from one run to the next.
     pub picture_level: u32,
-    /// The snowball fight, still to be tried out: set by hand in the settings file, or by SNOWHUSH_FIGHT=1.
-    pub fight: bool,
     /// Snowballs thrown, counted to three: until then the round tells how to throw.
     pub fight_throws: u32,
 }
@@ -57,7 +55,7 @@ impl Settings {
 
     /// Whether snowmen live in the wallpaper's picture for a snowball fight: only with its depth.
     pub fn fights(&self) -> bool {
-        self.depth && (self.fight || snowhush_core::preview::on("fight"))
+        self.depth
     }
 
     pub fn load() -> Settings {
@@ -88,7 +86,6 @@ impl Settings {
             wallpaper: read("settleWallpaper").is_some_and(|v| v != 0),
             depth: read("wallpaperDepth").is_none_or(|v| v != 0),
             picture_level: read("pictureLevel").map_or(0, |v| v.min(2000)),
-            fight: read("fight").is_some_and(|v| v != 0),
             fight_throws: read("fightThrows").map_or(0, |v| v.min(3)),
             picked: Picked::load(read("mode"), read("autumn"), read("mixed"), [read("mix0"), read("mix1")]),
         };
@@ -105,7 +102,7 @@ impl Settings {
             .ok()
             .and_then(|text| text.lines().find_map(|line| line.strip_prefix("fightThrows=").and_then(|v| v.trim().parse::<u32>().ok())));
         let text = format!(
-            "intensity={}\nsettleGround={}\nsettlePanel={}\nmeltSnow={}\nsnowOnWindows={}\nbehindWindows={}\nshowOverFullScreen={}\nshowInScreenshots={}\ninstalledAt={}\nhalloweenOn={}\nhalloweenSkipped={}\nnewYearOn={}\nnewYearSkipped={}\nmode={}\nmixed={}\nmix0={}\nmix1={}\nautumn={}\nperformance={}\nfallingOpacity={}\nsettleWallpaper={}\nwallpaperDepth={}\npictureLevel={}\nfight={}\nfightThrows={}\n",
+            "intensity={}\nsettleGround={}\nsettlePanel={}\nmeltSnow={}\nsnowOnWindows={}\nbehindWindows={}\nshowOverFullScreen={}\nshowInScreenshots={}\ninstalledAt={}\nhalloweenOn={}\nhalloweenSkipped={}\nnewYearOn={}\nnewYearSkipped={}\nmode={}\nmixed={}\nmix0={}\nmix1={}\nautumn={}\nperformance={}\nfallingOpacity={}\nsettleWallpaper={}\nwallpaperDepth={}\npictureLevel={}\nfightThrows={}\n",
             self.intensity,
             self.ground as u32,
             self.panel as u32,
@@ -129,7 +126,6 @@ impl Settings {
             self.wallpaper as u32,
             self.depth as u32,
             self.picture_level,
-            self.fight as u32,
             self.fight_throws.max(thrown.unwrap_or(0)).min(3)
         );
         let _ = std::fs::create_dir_all(&folder);

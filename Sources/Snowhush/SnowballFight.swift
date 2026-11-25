@@ -8,12 +8,6 @@ import simd
 /// apart and stands whole somewhere else; out of hearts, he is out, and in a room the last one standing wins the
 /// round.
 final class SnowballFight {
-    /// Lets it be tried out: defaults write com.mbezruchko.Snowhush previewSnowballFight -bool true, or a build handed
-    /// to friends with SnowballFight set in its Info.plist.
-    static var wanted: Bool {
-        UserDefaults.standard.bool(forKey: "previewSnowballFight") || Bundle.main.object(forInfoDictionaryKey: "SnowballFight") as? Bool == true
-    }
-
     private final class Figure {
         let bot: SnowmanBot
         let renderer: SnowmanRenderer

@@ -312,7 +312,7 @@ final class PictureSnow {
 
     /// Moves the snowball fight on a frame, while there is one to have in the wallpaper shown.
     func stepFight() {
-        guard SnowballFight.wanted, wanted, depth, active, let desktop = current else {
+        guard wanted, depth, active, let desktop = current else {
             endFight()
             return
         }
@@ -547,8 +547,8 @@ final class PictureSnow {
         guard wanted, active, let desktop = desktopShowing() else { return }
         // A snowman walking in the picture keeps the snow's frames coming, which may have come to rest before; with no
         // ground for one, a room's round is shown all the same.
-        if SnowballFight.wanted, desktop.ground != nil, !simulation.keepsAwake { simulation.stirred() }
-        if SnowballFight.wanted, desktop.ground == nil, SnowballRoom.shared.me != nil { stepFight() }
+        if desktop.ground != nil, !simulation.keepsAwake { simulation.stirred() }
+        if desktop.ground == nil, SnowballRoom.shared.me != nil { stepFight() }
         if desktop !== current {
             // Each desktop has snow of its own: the one left keeps what lay in it, and the one come to has been
             // snowed on for as long as it was away. One never shown before starts with what lies in this one.
@@ -582,7 +582,7 @@ final class PictureSnow {
         if let picture = desktop.picture, !reading, !desktop.read || (desktop.terrain != nil && loaded != picture) {
             reading = true
             let columnWidth = simulation.columnWidth
-            let size = screen.frame.size, fighting = SnowballFight.wanted
+            let size = screen.frame.size, fighting = depth
             let bottom = Float(screen.visibleFrame.minY - screen.frame.minY)
             Self.lookout.async { [weak self, weak desktop] in
                 let scene = Wallpaper.sceneReadApart(in: picture, columnWidth: columnWidth)

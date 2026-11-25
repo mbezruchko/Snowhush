@@ -39,8 +39,6 @@ pub struct Settings {
     pub depth: bool,
     /// How much snow lies in the wallpaper's picture, in thousandths, kept from one run to the next.
     pub picture_level: u32,
-    /// The snowball fight, still to be tried out: set by hand in the registry, or by SNOWHUSH_FIGHT=1.
-    pub fight: bool,
     /// Snowballs thrown, counted to three: until then the round tells how to throw.
     pub fight_throws: u32,
     pub welcomed: bool,
@@ -69,7 +67,7 @@ impl Settings {
 
     /// Whether snowmen live in the wallpaper's picture for a snowball fight: only with its depth.
     pub fn fights(&self) -> bool {
-        self.depth && (self.fight || snowhush_core::preview::on("fight"))
+        self.depth
     }
 
     pub fn load() -> Settings {
@@ -98,7 +96,6 @@ impl Settings {
             wallpaper: read(w!("settleWallpaper")).is_some_and(|v| v != 0),
             depth: read(w!("wallpaperDepth")).is_none_or(|v| v != 0),
             picture_level: read(w!("pictureLevel")).map_or(0, |v| v.min(2000)),
-            fight: read(w!("fight")).is_some_and(|v| v != 0),
             fight_throws: read(w!("fightThrows")).map_or(0, |v| v.min(3)),
             welcomed,
             installed_at,

@@ -217,21 +217,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
         halloweenItem = add(tr("halloween"), #selector(toggleHalloween), to: modes)
         newYearItem = add(tr("newyear"), #selector(toggleNewYear), to: modes)
         menu.addItem(withTitle: tr("mode"), action: nil, keyEquivalent: "").submenu = modes
-        if SnowballFight.wanted {
-            let fight = NSMenu()
-            fight.autoenablesItems = false
-            let status = fight.addItem(withTitle: "", action: nil, keyEquivalent: "")
-            status.isEnabled = false
-            fightStatusItem = status
-            // They leave the menu open, to see the room open and who comes into it.
-            fightInviteItem = action(tr("fight.invite"), #selector(inviteToFight), to: fight)
-            fightJoinItem = action(tr("fight.join"), #selector(joinFight), to: fight)
-            fightLeaveItem = action(tr("fight.leave"), #selector(leaveFight), to: fight)
-            let item = menu.addItem(withTitle: tr("fight"), action: nil, keyEquivalent: "")
-            item.submenu = fight
-            item.attributedTitle = Shimmer.title(tr("fight"), phase: 0)
-            fightItem = item
-        }
+        let fight = NSMenu()
+        fight.autoenablesItems = false
+        let status = fight.addItem(withTitle: "", action: nil, keyEquivalent: "")
+        status.isEnabled = false
+        fightStatusItem = status
+        // They leave the menu open, to see the room open and who comes into it.
+        fightInviteItem = action(tr("fight.invite"), #selector(inviteToFight), to: fight)
+        fightJoinItem = action(tr("fight.join"), #selector(joinFight), to: fight)
+        fightLeaveItem = action(tr("fight.leave"), #selector(leaveFight), to: fight)
+        let fightRow = menu.addItem(withTitle: tr("fight"), action: nil, keyEquivalent: "")
+        fightRow.submenu = fight
+        fightRow.attributedTitle = Shimmer.title(tr("fight"), phase: 0)
+        fightItem = fightRow
         clearItem = add(tr("clear.snow"), #selector(clearSnow), to: menu)
         menu.addItem(.separator())
         let settings = NSMenu()
@@ -584,7 +582,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SPUSta
 
     /// An invite link clicked anywhere opens the app and brings it into the room.
     func application(_ application: NSApplication, open urls: [URL]) {
-        guard SnowballFight.wanted, let url = urls.first(where: { $0.scheme == "snowhush" && $0.host == "join" }) else { return }
+        guard let url = urls.first(where: { $0.scheme == "snowhush" && $0.host == "join" }) else { return }
         SnowballRoom.shared.join(url.absoluteString)
     }
 
