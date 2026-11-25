@@ -6,8 +6,9 @@ use std::time::SystemTime;
 
 use zbus::blocking::Connection;
 
-use snowhush_core::halloween;
+use snowhush_core::{halloween, new_year};
 
+use crate::wallpaper::{Placement, Wallpaper};
 use crate::windows::Area;
 
 /// Clock-based rather than solar: close enough for mood, and needs no location.
@@ -26,6 +27,31 @@ pub fn daylight() -> [f32; 3] {
 pub fn today() -> halloween::Today {
     let (year, month, day, hour) = local_time().unwrap_or((0, 1, 1, 12.0));
     halloween::Today::at(year, month, day, hour as u32)
+}
+
+/// The year the New Year's season began in, and whether it is the season.
+pub fn new_year_today() -> halloween::Today {
+    new_year::today(now())
+}
+
+/// The local time to the fraction of a second, for the New Year's countdown.
+pub fn now() -> new_year::LocalTime {
+    let since = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default();
+    unsafe {
+        let seconds = since.as_secs() as libc::time_t;
+        let mut local: libc::tm = std::mem::zeroed();
+        if libc::localtime_r(&seconds, &mut local).is_null() {
+            return new_year::LocalTime::default();
+        }
+        new_year::LocalTime {
+            year: local.tm_year as u32 + 1900,
+            month: local.tm_mon as u32 + 1,
+            day: local.tm_mday as u32,
+            hour: local.tm_hour as u32,
+            minute: local.tm_min as u32,
+            second: local.tm_sec as f64 + since.subsec_nanos() as f64 / 1e9,
+        }
+    }
 }
 
 /// How far into Halloween night it is while Halloween is on.
@@ -57,13 +83,14 @@ pub enum Backdrop {
     Color([f32; 3]),
 }
 
-/// Asks Plasma for each desktop's wallpaper, by where its display sits: x, y, and the backdrop.
-pub fn backdrops(connection: &Connection) -> Vec<(i32, i32, Backdrop)> {
+/// Asks Plasma for each desktop's wallpaper, by where its display sits: x, y, the backdrop and, for a picture, how it
+/// is laid out.
+pub fn backdrops(connection: &Connection) -> Vec<(i32, i32, Backdrop, Option<Wallpaper>)> {
     const SCRIPT: &str = r#"var lines = [];
 for (const d of desktops()) {
     var g = screenGeometry(d.screen);
     d.currentConfigGroup = ["Wallpaper", d.wallpaperPlugin, "General"];
-    lines.push([g.x, g.y, d.wallpaperPlugin, d.readConfig("Image"), d.readConfig("Color")].join("\t"));
+    lines.push([g.x, g.y, d.wallpaperPlugin, d.readConfig("Image"), d.readConfig("Color"), d.readConfig("FillMode"), g.width, g.height].join("\t"));
 }
 print(lines.join("\n"));"#;
     let Ok(reply) = connection.call_method(Some("org.kde.plasmashell"), "/PlasmaShell", Some("org.kde.PlasmaShell"), "evaluateScript", &(SCRIPT,))
@@ -79,20 +106,43 @@ print(lines.join("\n"));"#;
             let plugin = parts.next()?;
             let image = parts.next().unwrap_or_default();
             let color = parts.next().unwrap_or_default();
-            let backdrop = match plugin {
-                "org.kde.color" => Backdrop::Color(parse_color(color)?),
+            let fill_mode = parts.next().unwrap_or_default();
+            let size: Option<(f32, f32)> = parts.next().zip(parts.next()).and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)));
+            let (backdrop, wallpaper) = match plugin {
+                "org.kde.color" => (Backdrop::Color(parse_color(color)?), None),
                 _ => {
-                    let path = PathBuf::from(image.strip_prefix("file://").unwrap_or(image));
+                    let path = shown(PathBuf::from(image.strip_prefix("file://").unwrap_or(image)), size);
                     if !path.is_file() {
                         return None;
                     }
                     let modified = std::fs::metadata(&path).and_then(|metadata| metadata.modified()).ok();
-                    Backdrop::Picture(path, modified)
+                    let wallpaper = Wallpaper::new(path.clone(), Placement::plasma(fill_mode), parse_color(color).unwrap_or([0.0; 3]));
+                    (Backdrop::Picture(path, modified), wallpaper)
                 }
             };
-            Some((x, y, backdrop))
+            Some((x, y, backdrop, wallpaper))
         })
         .collect()
+}
+
+/// The picture Plasma shows for a wallpaper: the file itself, or out of a wallpaper package, as Plasma's own come, the
+/// one of its sizes nearest the display's shape, the largest of those, from its dark variant under dark colours.
+fn shown(path: PathBuf, size: Option<(f32, f32)>) -> PathBuf {
+    if !path.is_dir() {
+        return path;
+    }
+    let contents = path.join("contents");
+    let dark = contents.join("images_dark");
+    let folder = if dark.is_dir() && crate::chores::plasma_dark() { dark } else { contents.join("images") };
+    let shape = size.filter(|(w, h)| *w > 0.0 && *h > 0.0).map_or(16.0 / 9.0, |(w, h)| w / h);
+    let pictures = std::fs::read_dir(&folder).into_iter().flatten().flatten().filter_map(|entry| {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let stem = name.rsplit_once('.').map_or(name.as_str(), |(stem, _)| stem);
+        let (w, h) = stem.split_once('x')?;
+        let (w, h): (f32, f32) = (w.parse().ok()?, h.parse().ok()?);
+        Some(((w / h / shape).ln().abs(), w * h, entry.path()))
+    });
+    pictures.min_by(|a, b| a.0.total_cmp(&b.0).then(b.1.total_cmp(&a.1))).map_or(path, |(_, _, picture)| picture)
 }
 
 /// A display's backdrop, by where the display sits, with the tint it gives the shadows.
@@ -100,13 +150,21 @@ print(lines.join("\n"));"#;
 pub struct Shade {
     pub x: i32,
     pub y: i32,
+    /// The output it is on, where it is known by that rather than by where the display sits; `*` for every output.
+    pub output: Option<String>,
     pub backdrop: Backdrop,
     pub tint: Option<[f32; 4]>,
+    /// The picture as it is laid out, for the snow that lies in it.
+    pub wallpaper: Option<Wallpaper>,
 }
 
-/// The shade of the display with these bounds.
-pub fn shade_of<'a>(shades: &'a [Shade], bounds: &Area) -> Option<&'a Shade> {
-    shades.iter().find(|shade| shade.x as f64 == bounds.x && shade.y as f64 == bounds.y)
+/// The shade of the display named `name` with these bounds.
+pub fn shade_of<'a>(shades: &'a [Shade], name: &str, bounds: &Area) -> Option<&'a Shade> {
+    shades
+        .iter()
+        .find(|shade| shade.output.as_deref() == Some(name))
+        .or_else(|| shades.iter().find(|shade| shade.output.is_none() && shade.x as f64 == bounds.x && shade.y as f64 == bounds.y))
+        .or_else(|| shades.iter().find(|shade| shade.output.as_deref() == Some("*")))
 }
 
 /// The backdrop's average colour along the bottom quarter, brought to the brightness of snow in shade.

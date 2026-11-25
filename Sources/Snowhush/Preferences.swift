@@ -7,8 +7,13 @@ struct Surfaces: OptionSet {
     static let dock = Surfaces(rawValue: 2)
     static let windows = Surfaces(rawValue: 4)
     static let widgets = Surfaces(rawValue: 8)
-    /// What the window list is read for.
-    static let tracked: Surfaces = [.dock, .windows, .widgets]
+    /// The tops of things in the wallpaper.
+    static let wallpaper = Surfaces(rawValue: 16)
+    /// A selection dragged across the desktop.
+    static let selection = Surfaces(rawValue: 32)
+    /// What the window list is read for: the snow on the wallpaper hides behind every window, and a selection is found
+    /// among the windows.
+    static let tracked: Surfaces = [.dock, .windows, .widgets, .wallpaper, .selection]
 }
 
 enum Preferences {
@@ -25,13 +30,20 @@ enum Preferences {
     private static let groundKey = "settleGround"
     private static let dockKey = "settleDock"
     private static let widgetsKey = "settleWidgets"
+    private static let wallpaperKey = "settleWallpaper"
     private static let snowOnWindowsKey = "snowOnWindows"
     private static let welcomedKey = "welcomed"
     private static let installedAtKey = "installedAt"
     private static let showInScreenshotsKey = "showInScreenshots"
+    /// Before Deep Interaction meant the wallpaper's depth, it meant snow settling on a selection on the desktop.
     private static let deepInteractionKey = "deepInteraction"
+    private static let selectionKey = "settleSelection"
+    private static let depthKey = "wallpaperDepth"
+    private static let pictureLevelKey = "pictureLevel"
     private static let halloweenKey = "halloweenOn"
     private static let halloweenSkippedKey = "halloweenSkipped"
+    private static let newYearKey = "newYearOn"
+    private static let newYearSkippedKey = "newYearSkipped"
     private static let modeKey = "mode"
     private static let mixedKey = "mixed"
     private static let mixKey = "mix"
@@ -56,20 +68,28 @@ enum Preferences {
             groundKey: true,
             dockKey: true,
             widgetsKey: true,
+            wallpaperKey: false,
             snowOnWindowsKey: true,
             showInScreenshotsKey: false,
-            deepInteractionKey: false,
+            selectionKey: true,
+            depthKey: true,
             halloweenKey: false,
             halloweenSkippedKey: 0,
+            newYearKey: false,
+            newYearSkippedKey: 0,
             autumnKey: false,
             mixedKey: false,
             fallingOpacityKey: 1.0,
         ])
         if defaults.object(forKey: accumulateKey) != nil {
             if !defaults.bool(forKey: accumulateKey) {
-                for key in [groundKey, dockKey, widgetsKey, snowOnWindowsKey] { defaults.set(false, forKey: key) }
+                for key in [groundKey, dockKey, widgetsKey, wallpaperKey, snowOnWindowsKey] { defaults.set(false, forKey: key) }
             }
             defaults.removeObject(forKey: accumulateKey)
+        }
+        if defaults.object(forKey: deepInteractionKey) != nil {
+            defaults.set(defaults.bool(forKey: deepInteractionKey), forKey: selectionKey)
+            defaults.removeObject(forKey: deepInteractionKey)
         }
         if defaults.object(forKey: installedAtKey) == nil {
             defaults.set(defaults.bool(forKey: welcomedKey) ? 0 : Date().timeIntervalSince1970, forKey: installedAtKey)
@@ -92,14 +112,16 @@ enum Preferences {
     static var surfaces: Surfaces {
         get {
             var surfaces: Surfaces = []
-            for (surface, key) in [(Surfaces.ground, groundKey), (.dock, dockKey), (.widgets, widgetsKey), (.windows, snowOnWindowsKey)]
+            for (surface, key) in [(Surfaces.ground, groundKey), (.dock, dockKey), (.widgets, widgetsKey), (.windows, snowOnWindowsKey),
+                                   (.wallpaper, wallpaperKey), (.selection, selectionKey)]
             where defaults.bool(forKey: key) {
                 surfaces.insert(surface)
             }
             return surfaces
         }
         set {
-            for (surface, key) in [(Surfaces.ground, groundKey), (.dock, dockKey), (.widgets, widgetsKey), (.windows, snowOnWindowsKey)] {
+            for (surface, key) in [(Surfaces.ground, groundKey), (.dock, dockKey), (.widgets, widgetsKey), (.windows, snowOnWindowsKey),
+                                   (.wallpaper, wallpaperKey), (.selection, selectionKey)] {
                 defaults.set(newValue.contains(surface), forKey: key)
             }
         }
@@ -130,10 +152,11 @@ enum Preferences {
         set { defaults.set(newValue, forKey: showInScreenshotsKey) }
     }
 
-    /// The snow also settles on what the desktop draws without a window of its own: a selection dragged across it.
-    static var deepInteraction: Bool {
-        get { defaults.bool(forKey: deepInteractionKey) }
-        set { defaults.set(newValue, forKey: deepInteractionKey) }
+    /// Deep Interaction: the snow falls into the wallpaper's depth, behind what is nearer in it, and what lives in the
+    /// wallpaper walks its ground.
+    static var depth: Bool {
+        get { defaults.bool(forKey: depthKey) }
+        set { defaults.set(newValue, forKey: depthKey) }
     }
 
     /// Halloween turned on from the menu, for every day.
@@ -146,6 +169,18 @@ enum Preferences {
     static var halloweenSkipped: Int {
         get { defaults.integer(forKey: halloweenSkippedKey) }
         set { defaults.set(newValue, forKey: halloweenSkippedKey) }
+    }
+
+    /// The New Year turned on from the menu, for every day.
+    static var newYear: Bool {
+        get { defaults.bool(forKey: newYearKey) }
+        set { defaults.set(newValue, forKey: newYearKey) }
+    }
+
+    /// The year whose New Year season, from its December, was turned off from the menu, zero for none.
+    static var newYearSkipped: Int {
+        get { defaults.integer(forKey: newYearSkippedKey) }
+        set { defaults.set(newValue, forKey: newYearSkippedKey) }
     }
 
     static var mode: Mode {
@@ -178,6 +213,12 @@ enum Preferences {
     static var fallingOpacity: Double {
         get { min(max(defaults.double(forKey: fallingOpacityKey), opacityRange.lowerBound), opacityRange.upperBound) }
         set { defaults.set(newValue, forKey: fallingOpacityKey) }
+    }
+
+    /// How much snow lies in the wallpaper's picture, kept from one run of the app to the next.
+    static var pictureLevel: Float {
+        get { defaults.float(forKey: pictureLevelKey) }
+        set { defaults.set(newValue, forKey: pictureLevelKey) }
     }
 
     /// Drawn at the display's highest rate all the time, instead of only while something is pushed around.

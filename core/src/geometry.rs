@@ -25,6 +25,15 @@ impl V2 {
     pub fn length(self) -> f32 {
         self.length_squared().sqrt()
     }
+
+    pub fn distance(self, other: V2) -> f32 {
+        (self - other).length()
+    }
+
+    /// The same way, one long; as `simd_normalize`, a zero vector gives NaNs.
+    pub fn normalized(self) -> V2 {
+        self / self.length()
+    }
 }
 
 impl Add for V2 {

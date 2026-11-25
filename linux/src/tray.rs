@@ -5,6 +5,7 @@ use calloop::channel::Sender;
 use ksni::menu::{CheckmarkItem, MenuItem, RadioGroup, RadioItem, StandardItem, SubMenu};
 
 use snowhush_core::halloween::Today;
+use snowhush_core::new_year::{self, Holiday};
 use snowhush_core::simulation::Mode;
 use snowhush_core::text::{self, tr};
 
@@ -27,14 +28,15 @@ macro_rules! glyph {
     };
 }
 
-/// The snowflake, the leaf while leaves fall, the jack-o'-lantern while Halloween is on, the rain cloud and the cherry
-/// blossom, each white then black.
-const GLYPHS: [[[&[u8]; 7]; 2]; 5] = [
+/// The snowflake, the leaf while leaves fall, the jack-o'-lantern while Halloween is on, the rain cloud, the cherry
+/// blossom and the fir while the New Year is on, each white then black.
+const GLYPHS: [[[&[u8]; 7]; 2]; 6] = [
     [glyph!("snowflake-white"), glyph!("snowflake-black")],
     [glyph!("leaf-white"), glyph!("leaf-black")],
     [glyph!("pumpkin-white"), glyph!("pumpkin-black")],
     [glyph!("rain-white"), glyph!("rain-black")],
     [glyph!("blossom-white"), glyph!("blossom-black")],
+    [glyph!("fir-white"), glyph!("fir-black")],
 ];
 /// The panel's menu can't hold a slider: Intensity and Opacity offer these, in percent.
 const INTENSITY_STOPS: [u32; 5] = [0, 25, 50, 75, 100];
@@ -44,21 +46,25 @@ const SPONSORS: &str = "https://github.com/sponsors/mbezruchko";
 pub struct Tray {
     settings: Settings,
     commands: Sender<Command>,
-    glyphs: [[Vec<ksni::Icon>; 2]; 5],
-    /// The year and whether it is Halloween: the snow loop keeps it up to date.
+    glyphs: [[Vec<ksni::Icon>; 2]; 6],
+    /// The year and whether it is Halloween, and the same for the New Year: the snow loop keeps them up to date.
     pub today: Today,
+    pub new_year_today: Today,
     /// Whether the desktop is light, so the panel wants a black glyph: the snow loop keeps it up to date.
     pub light: bool,
+    /// The snowball fight's room as the menu shows it: what is going on, whether hosting it, and whether in one at all.
+    pub fight: (Option<String>, bool, bool),
 }
 
 impl Tray {
     pub fn new(settings: Settings, commands: Sender<Command>) -> Tray {
         let glyphs = GLYPHS.map(|colors| colors.map(|pictures| icons(&pictures)));
-        Tray { settings, commands, glyphs, today: Today::default(), light: false }
+        Tray { settings, commands, glyphs, today: Today::default(), new_year_today: Today::default(), light: false, fight: (None, false, false) }
     }
 
-    fn halloween(&self) -> bool {
-        self.settings.picked.modes() == [Mode::Snow] && self.settings.halloween.wanted(self.today)
+    fn holiday(&self) -> Option<Holiday> {
+        let settings = &self.settings;
+        new_year::holiday(settings.picked.modes() == [Mode::Snow], settings.new_year, self.new_year_today, settings.halloween, self.today)
     }
 
     fn change(&mut self, change: impl FnOnce(&mut Settings) -> Command) {
@@ -96,8 +102,8 @@ impl ksni::Tray for Tray {
     }
 
     fn icon_pixmap(&self) -> Vec<ksni::Icon> {
-        let glyph = if self.halloween() {
-            2
+        let glyph = if let Some(holiday) = self.holiday() {
+            if holiday == Holiday::Halloween { 2 } else { 5 }
         } else {
             match self.settings.picked.mode {
                 Mode::Snow => 0,
@@ -185,10 +191,30 @@ impl ksni::Tray for Tray {
                 checked: settings.halloween.wanted(self.today),
                 enabled: falling == [Mode::Snow],
                 activate: Box::new(|tray: &mut Tray| {
-                    let today = tray.today;
+                    let (today, new_year_today) = (tray.today, tray.new_year_today);
                     tray.change(|settings| {
                         settings.halloween = settings.halloween.toggled(today);
-                        Command::Halloween(settings.halloween)
+                        if settings.halloween.wanted(today) {
+                            settings.new_year = settings.new_year.turned_off(new_year_today);
+                        }
+                        Command::Holidays { halloween: settings.halloween, new_year: settings.new_year }
+                    })
+                }),
+                ..Default::default()
+            }
+            .into(),
+            CheckmarkItem {
+                label: tr("newyear").into(),
+                checked: settings.new_year.wanted(self.new_year_today),
+                enabled: falling == [Mode::Snow],
+                activate: Box::new(|tray: &mut Tray| {
+                    let (today, new_year_today) = (tray.today, tray.new_year_today);
+                    tray.change(|settings| {
+                        settings.new_year = settings.new_year.toggled(new_year_today);
+                        if settings.new_year.wanted(new_year_today) {
+                            settings.halloween = settings.halloween.turned_off(today);
+                        }
+                        Command::Holidays { halloween: settings.halloween, new_year: settings.new_year }
                     })
                 }),
                 ..Default::default()
@@ -230,6 +256,18 @@ impl ksni::Tray for Tray {
                     tray.change(|settings| {
                         settings.ground = !settings.ground;
                         Command::Ground(settings.ground)
+                    })
+                }),
+                ..Default::default()
+            }
+            .into(),
+            CheckmarkItem {
+                label: tr("surface.wallpaper").into(),
+                checked: settings.wallpaper,
+                activate: Box::new(|tray: &mut Tray| {
+                    tray.change(|settings| {
+                        settings.wallpaper = !settings.wallpaper;
+                        Command::Wallpaper(settings.wallpaper)
                     })
                 }),
                 ..Default::default()
@@ -280,6 +318,46 @@ impl ksni::Tray for Tray {
             .into(),
             SubMenu { label: tr("accumulate").into(), submenu: surfaces, ..Default::default() }.into(),
             SubMenu { label: tr("mode").into(), submenu: kinds, ..Default::default() }.into(),
+            SubMenu {
+                label: tr("fight").into(),
+                visible: settings.fights(),
+                submenu: vec![
+                    StandardItem {
+                        // Out of a room, how to throw.
+                        label: self.fight.0.clone().unwrap_or_else(|| tr("fight.hint.snowman").to_string()),
+                        enabled: false,
+                        ..Default::default()
+                    }
+                    .into(),
+                    StandardItem {
+                        label: tr(if self.fight.1 { "fight.copy" } else { "fight.invite" }).into(),
+                        activate: Box::new(|tray: &mut Tray| {
+                            let _ = tray.commands.send(Command::FightInvite);
+                        }),
+                        ..Default::default()
+                    }
+                    .into(),
+                    StandardItem {
+                        label: tr("fight.join").into(),
+                        activate: Box::new(|tray: &mut Tray| {
+                            let _ = tray.commands.send(Command::FightJoin);
+                        }),
+                        ..Default::default()
+                    }
+                    .into(),
+                    StandardItem {
+                        label: tr("fight.leave").into(),
+                        visible: self.fight.2,
+                        activate: Box::new(|tray: &mut Tray| {
+                            let _ = tray.commands.send(Command::FightLeave);
+                        }),
+                        ..Default::default()
+                    }
+                    .into(),
+                ],
+                ..Default::default()
+            }
+            .into(),
             StandardItem {
                 label: text::kinds("clear", &heaps).into(),
                 visible: lies,
@@ -303,6 +381,18 @@ impl ksni::Tray for Tray {
                             tray.change(|settings| {
                                 settings.melt = !settings.melt;
                                 Command::Melt(settings.melt)
+                            })
+                        }),
+                        ..Default::default()
+                    }
+                    .into(),
+                    CheckmarkItem {
+                        label: tr("deep").into(),
+                        checked: settings.depth,
+                        activate: Box::new(|tray: &mut Tray| {
+                            tray.change(|settings| {
+                                settings.depth = !settings.depth;
+                                Command::Depth(settings.depth)
                             })
                         }),
                         ..Default::default()

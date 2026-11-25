@@ -21,6 +21,8 @@ struct Uniforms {
     float4 lantern;
     float4 shake;
     float4 pumpkins[3];
+    float4 garland[3];
+    float4 garlandColors[3];
 };
 
 struct Sprite {
@@ -51,6 +53,8 @@ struct Sprite {
     float flipSpeed;
     float rain;
     float petal;
+    float scene;
+    float sceneLight;
 };
 
 struct SpriteOut {
@@ -517,6 +521,18 @@ static float candlelight(constant Uniforms &u, float2 point) {
     return min(glow, 1.0);
 }
 
+/// The New Year's garland's light on the snow round the tree's foot.
+static float3 garlandGlow(constant Uniforms &u, float2 point) {
+    float3 sum = float3(0.0);
+    for (int k = 0; k < 3; k++) {
+        float4 light = u.garland[k];
+        if (light.w <= 0.0) continue;
+        float2 d = point - light.xy;
+        sum += u.garlandColors[k].rgb * (light.w * exp(-dot(d, d) / (light.z * light.z)));
+    }
+    return sum;
+}
+
 /// A drop hanging under an edge, in radii of the drop, from where it clings. Up to one along, it fills: a small one is
 /// a flat cap under the edge, and the more water it holds the further it sags, its sides straightening, its foot
 /// round. Where it meets the edge it flares out into it, as water wetting the edge does. From one to two it lets go,
@@ -692,11 +708,22 @@ static SpriteVaryings culled() {
 
 vertex SpriteVaryings spriteVertex(uint vid [[vertex_id]],
                                    const device Sprite *sprites [[buffer(0)]],
-                                   constant Uniforms &u [[buffer(1)]]) {
+                                   constant Uniforms &u [[buffer(1)]],
+                                   texture2d<float> air [[texture(0)]]) {
     // A running drop is drawn with the glass, from the field.
     float rain = rainOf(sprites[vid]);
     if (rain > 1.5 && rain < 2.5) return culled();
-    return pack(sprite(vid, sprites, u));
+    SpriteOut out = sprite(vid, sprites, u);
+    // A flake in the wallpaper's picture takes the picture's light where it falls, and fades out behind whatever
+    // stands nearer there than it is.
+    Sprite s = sprites[vid];
+    if (s.scene >= 0.0) {
+        constexpr sampler smooth(filter::linear, address::clamp_to_edge);
+        float4 here = air.sample(smooth, float2(s.position.x / u.viewSize.x, 1.0 - s.position.y / u.viewSize.y), level(0.0));
+        out.alpha *= smoothstep(-0.02, 0.02, s.scene - here.a);
+        out.light *= mix(float3(1.0), here.rgb, s.sceneLight);
+    }
+    return pack(out);
 }
 
 /// Only running drops add to the field.
@@ -1200,6 +1227,7 @@ fragment float4 pileFragment(PileOut in [[stage_in]],
     color *= mix(u.light.rgb, mix(float3(1.0), u.light.rgb, 0.4), leafy);
     color = mix(color, u.rim.rgb, u.rim.a * exp(-depth / 2.5) * (1.0 - leafy));
     color = mix(color, candle, candlelight(u, world) * (0.35 + 0.65 * exp(-depth / 14.0)) * 0.55);
+    color += garlandGlow(u, world) * (0.35 + 0.65 * exp(-depth / 14.0)) * (1.0 - leafy);
     return float4(color * coverage, coverage);
 }
 

@@ -8,6 +8,7 @@
 "rain" = "雨";
 "blossom" = "樱花";
 "halloween" = "万圣节";
+"newyear" = "新年";
 "settings" = "设置";
 "behavior" = "行为";
 "display" = "显示";
@@ -17,6 +18,7 @@
 "surface.dock" = "程序坞";
 "surface.widgets" = "小组件";
 "surface.windows" = "窗口";
+"surface.wallpaper" = "墙纸";
 "surface.panel" = "面板";
 "all" = "全部";
 "melt.snow" = "积雪融化";
@@ -69,3 +71,27 @@
 /* Direct snow sculpting (macOS). */
 "snowman.gesture" = "⌥ + drag snow · stack a smaller ball on a larger one";
 "snowman.sound" = "Snow interaction sounds";
+"fight" = "打雪仗";
+"fight.invite" = "邀请朋友";
+"fight.copy" = "复制邀请链接";
+"fight.join" = "用复制的链接加入";
+"fight.copied" = "链接已复制";
+"fight.nolink" = "剪贴板中没有邀请链接";
+"fight.leave" = "离开房间";
+"fight.opening" = "正在开启房间…";
+"fight.joining" = "正在连接…";
+"fight.waiting" = "链接已复制 — 等待朋友加入";
+"fight.with" = "与 %@ 一起";
+"fight.full" = "房间已满";
+"fight.closed" = "房间已关闭";
+"fight.failed" = "无法连接";
+"fight.unavailable" = "在线游戏暂时不可用";
+"surface.selection" = "选择框";
+"fight.you" = "你";
+"fight.won" = "%@ 获胜！";
+"fight.youwon" = "你赢了！";
+"fight.out" = "你出局了";
+"fight.wins" = "胜场";
+"fight.hint" = "⌘+点按墙纸来扔雪球";
+"fight.hint.ctrl" = "Ctrl+点按墙纸来扔雪球";
+"fight.hint.snowman" = "点按雪人来向他扔雪球";

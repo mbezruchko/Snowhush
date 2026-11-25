@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use crate::geometry::{Rect, V2};
 use crate::layer::SnowLayer;
-use crate::simulation::{Mapping, Mode, Pace, ScatterPiece, SnowSimulation, Sprite, WindowSurface};
+use crate::simulation::{COLUMN_WIDTH, Mapping, Mode, Pace, ScatterPiece, SnowSimulation, Sprite, WindowSurface};
 
 const DT: f32 = 1.0 / 60.0;
 const AWAY: V2 = V2::new(-10_000.0, -10_000.0);
@@ -1135,6 +1135,49 @@ fn a_heap_jerked_off_its_window_comes_off_as_leaves() {
 }
 
 #[test]
+fn snow_stays_where_it_lies_as_a_panel_grows_or_shrinks_about_its_middle() {
+    let mut simulation = SnowSimulation::new(1280.0, 800.0, 0.75);
+    simulation.thaws = false;
+    let none = HashSet::new();
+    simulation.update_windows(&[surface(3, 300.0, 600.0, 500.0)], 0.2, &none, &none, false);
+    run(&mut simulation, 60.0, AWAY);
+    simulation.set_intensity(0.0);
+    run(&mut simulation, 10.0, AWAY);
+    // The snow lying on the window between `from` and `to` along the screen: how much, and where its middle is.
+    let lying = |simulation: &SnowSimulation, from: f32, to: f32| -> (f32, f32) {
+        let mut buffer = vec![0.0; simulation.column_count()];
+        let piles = simulation.write_layers(&mut buffer);
+        let pile = piles.iter().find(|pile| pile.origin.y > 500.0).unwrap();
+        let (surface, bed) = buffer[pile.offset..pile.offset + 2 * pile.count].split_at(pile.count);
+        let (mut sum, mut bulk) = (0.0, 0.0);
+        for i in 0..pile.count {
+            let x = pile.origin.x + (i as f32 + 0.5) * COLUMN_WIDTH;
+            if x > from && x < to {
+                sum += x * (surface[i] - bed[i]);
+                bulk += surface[i] - bed[i];
+            }
+        }
+        (bulk, sum / bulk.max(1e-6))
+    };
+    let (bulk, middle) = lying(&simulation, 380.0, 720.0);
+    assert!(bulk > 50.0, "no snow on the window: {bulk}");
+
+    // Sixty points off each end at once, as a search bar folds its results away: the ends' snow falls, the rest stays.
+    simulation.update_windows(&[surface(3, 360.0, 600.0, 380.0)], DT, &none, &none, false);
+    simulation.step(DT, AWAY);
+    let (kept, shrunk) = lying(&simulation, 380.0, 720.0);
+    assert!((shrunk - middle).abs() < 3.0, "the snow slid {} points as the panel shrank", shrunk - middle);
+    assert!(kept > bulk * 0.9, "the snow in the middle fell as the panel shrank: {bulk} -> {kept}");
+
+    // Sixty points back on each end: the snow stays where it lies, the new ends bare.
+    simulation.update_windows(&[surface(3, 300.0, 600.0, 500.0)], DT, &none, &none, false);
+    simulation.step(DT, AWAY);
+    let (_, grown) = lying(&simulation, 380.0, 720.0);
+    assert!((grown - middle).abs() < 3.0, "the snow slid {} points as the panel grew", grown - middle);
+    assert_finite(&simulation);
+}
+
+#[test]
 fn leaves_stay_put_as_their_window_is_resized() {
     let mut simulation = SnowSimulation::new(1280.0, 800.0, 0.75);
     simulation.set_mode(Mode::Autumn);
@@ -1463,4 +1506,209 @@ fn toggles_mixed() {
     let mut picked = Picked { mode: Mode::Snow, mixed: false, mix: [Mode::Snow, Mode::Snow] };
     picked.toggle_mixed();
     assert_eq!(picked.mix, [Mode::Autumn, Mode::Snow]);
+}
+
+#[test]
+fn the_new_year_tree_rises_catches_snow_and_fireworks_go_up() {
+    let mut simulation = SnowSimulation::new(1440.0, 900.0, 1.0);
+    simulation.set_new_year(true);
+    simulation.fireworks_per_minute = 20.0;
+    run(&mut simulation, 30.0, AWAY);
+    let tree = simulation.tree().expect("a tree");
+    assert!(tree.base.y > -1.0, "the tree came up to the ground, at {}", tree.base.y);
+    let held: f32 = tree.boughs.iter().map(|bough| bough.snow()).sum();
+    assert!(held > 50.0, "the boughs hold {held} of snow");
+    assert!(simulation.fireworks().is_some(), "fireworks through the season");
+    // At midnight every hand is out of its present with a sparkler, and the bursts light the snow.
+    simulation.celebration = Some(-1.0);
+    run(&mut simulation, 0.5, AWAY);
+    simulation.celebration = Some(0.5);
+    let mut lit = false;
+    for _ in 0..240 {
+        simulation.step(DT, AWAY);
+        lit |= simulation.tree_lights().iter().any(|(light, _)| light[2] == 420.0);
+    }
+    assert!(simulation.tree().is_some_and(|tree| !tree.sparklers.is_empty()), "sparklers at midnight");
+    assert!(lit, "a burst lit the snow");
+    assert_finite(&simulation);
+    // Covered by a window, it sinks out of sight; taken away, it is gone.
+    simulation.covers = vec![[0.0, 0.0, 600.0, 900.0]];
+    run(&mut simulation, 2.0, AWAY);
+    assert!(simulation.tree().is_some_and(|tree| tree.base.y < -150.0));
+    simulation.set_new_year(false);
+    assert!(simulation.tree().is_none() && simulation.fireworks().is_none());
+}
+
+#[test]
+fn snow_falls_into_the_wallpapers_picture_and_lies_there() {
+    use crate::wallpaper::{Light, Terrain};
+    let (width, height) = (800.0, 600.0);
+    let mut simulation = SnowSimulation::new(width, height, 1.0);
+    // A field halfway off over the lower half of the screen, under a sky.
+    let (columns, rows) = (200, 150);
+    let near = (0..rows * columns).map(|i| if i / columns >= rows / 2 { 128 } else { 0 }).collect();
+    let terrain = Terrain { width: columns, height: rows, cell: 4, near, far: 0.2, close: 0.8 };
+    let light = Light { width: 50, height: 38, cell: 16, pixels: vec![230; 50 * 38 * 4], haze: [0.8, 0.82, 0.85] };
+    simulation.set_picture(Some(&terrain), Some(&light));
+    let mut buffer = vec![Sprite::default(); 20000];
+    let mut seen_in_picture = false;
+    for _ in 0..(20.0 / DT) as usize {
+        simulation.step(DT, V2::new(-100.0, -100.0));
+        let count = simulation.write_sprites(&mut buffer);
+        seen_in_picture |= buffer[..count].iter().any(|sprite| sprite.scene >= 0.0);
+    }
+    assert!(seen_in_picture, "no flake fell in the picture");
+    assert!(simulation.has_picture_dabs(), "no flake landed in the picture");
+    let (dabs, specks, size, _) = simulation.picture_dabs();
+    assert_eq!(size, (columns, rows));
+    assert!(dabs[..columns * (rows / 2 - 3)].iter().all(|dab| *dab == 0), "snow lay in the sky");
+    assert!(dabs.iter().any(|dab| *dab > 0) && specks.iter().any(|speck| *speck > 0));
+    assert!(simulation.picture_level() > 0.0 && simulation.picture_veil() > 0.0);
+    simulation.blow_away(1.0, true);
+    run(&mut simulation, 1.0, V2::new(-100.0, -100.0));
+    assert!(simulation.take_picture_cleared());
+    assert_eq!(simulation.picture_level(), 0.0);
+    assert!(!simulation.has_picture_dabs());
+}
+
+#[test]
+fn a_snowman_wanders_reels_breaks_apart_and_rises_elsewhere() {
+    use crate::snowman::{Bot, Ground};
+    use crate::wallpaper::{Light, Relief, Scene, Terrain};
+    let light = Light { width: 1, height: 1, cell: 16, pixels: vec![240; 4], haze: [0.8; 3] };
+    let terrain = Terrain { width: 1, height: 1, cell: 4, near: vec![0], far: 0.1, close: 0.9 };
+    let relief = Relief { width: 1, height: 1, cell: 2, lightness: vec![0], tops: vec![0], hold: vec![0], near: vec![0] };
+    let scene = Scene { ridges: Vec::new(), light, terrain, relief };
+    let ground = Ground::strip(&scene, V2::new(1600.0, 1000.0), 60.0);
+    let mut bot = Bot::new(ground, 0.0, true, 7).expect("somewhere to stand");
+    let start = bot.foot;
+    assert!(bot.contains(bot.middle()), "a snowball at his middle misses him");
+    let mut thrown = 0;
+    let mut now = 0.0;
+    for _ in 0..600 {
+        now += DT as f64;
+        bot.step(DT, now, true, &mut |_, _, _| thrown += 1);
+    }
+    assert!((bot.foot - start).length() > 1.0, "he never walked");
+    assert_eq!(thrown, 0, "a bot threw first");
+    bot.hit(bot.middle(), now);
+    for _ in 0..300 {
+        now += DT as f64;
+        bot.step(DT, now, true, &mut |_, _, _| thrown += 1);
+    }
+    assert_eq!(thrown, 1, "a bot hit once threw back {thrown} times");
+    let before = bot.foot;
+    bot.move_away();
+    let mut broke = false;
+    for _ in 0..240 {
+        now += DT as f64;
+        bot.step(DT, now, true, &mut |_, _, _| {});
+        broke |= bot.in_pieces();
+    }
+    assert!(broke && !bot.in_pieces(), "he didn't break apart and rise again");
+    assert!((bot.foot - before).length() > 1.0, "he rose where he broke");
+    bot.knock_out();
+    assert!(bot.knocked_out && bot.in_pieces() && !bot.contains(bot.middle()));
+    assert!(!bot.take_bursts().is_empty());
+}
+
+#[test]
+fn snowballs_fly_into_the_picture_and_out_of_it() {
+    use crate::wallpaper::{Light, Terrain};
+    let (width, height) = (800.0, 600.0);
+    let mut simulation = SnowSimulation::new(width, height, 0.0);
+    let (columns, rows) = (200, 150);
+    let near = (0..rows * columns).map(|i| if i / columns >= rows / 2 { 128 } else { 0 }).collect();
+    let terrain = Terrain { width: columns, height: rows, cell: 4, near, far: 0.2, close: 0.8 };
+    let light = Light { width: 50, height: 38, cell: 16, pixels: vec![230; 50 * 38 * 4], haze: [0.8, 0.82, 0.85] };
+    simulation.set_picture(Some(&terrain), Some(&light));
+    let target = V2::new(500.0, 150.0);
+    let token = simulation.throw_into_picture(V2::new(400.0, -20.0), target, 0.5, 12.0, 46.0, None);
+    let mut buffer = vec![Sprite::default(); 4000];
+    let mut seen = false;
+    let mut arrivals = Vec::new();
+    for _ in 0..240 {
+        simulation.step(DT, V2::new(-100.0, -100.0));
+        let count = simulation.write_sprites(&mut buffer);
+        seen |= buffer[..count].iter().any(|sprite| sprite.scene >= 0.0 && sprite.size > 10.0);
+        arrivals.extend(simulation.take_arrivals());
+    }
+    assert!(seen, "the snowball was never drawn in the picture");
+    assert_eq!(arrivals.len(), 1);
+    assert_eq!(arrivals[0].token, token);
+    assert!((arrivals[0].at - target).length() < 0.01);
+    simulation.splat(arrivals[0].at, arrivals[0].near, arrivals[0].size);
+    run(&mut simulation, 0.5, V2::new(-100.0, -100.0));
+    assert!(simulation.has_picture_dabs(), "a snowball that missed left no snow");
+    simulation.crumble_snowman(V2::new(300.0, 160.0), 150.0, 0.5, 40.0);
+    run(&mut simulation, 0.9, V2::new(-100.0, -100.0));
+    let count = simulation.write_sprites(&mut buffer);
+    assert!(buffer[..count].iter().any(|sprite| sprite.soft == 0.3 && (sprite.position.y - 150.0).abs() < 3.0), "no chunk came to rest on its floor");
+    simulation.throw_at_screen(V2::new(300.0, 200.0), 5.0, Some(0.4));
+    run(&mut simulation, 2.0, V2::new(-100.0, -100.0));
+    assert_finite(&simulation);
+}
+
+#[test]
+fn a_bot_hit_six_times_is_out_and_comes_back() {
+    use crate::snowman::{Fight, Ground};
+    use crate::wallpaper::{Light, Relief, Scene, Terrain};
+    let light = Light { width: 1, height: 1, cell: 16, pixels: vec![240; 4], haze: [0.8; 3] };
+    let terrain = Terrain { width: 1, height: 1, cell: 4, near: vec![0], far: 0.1, close: 0.9 };
+    let relief = Relief { width: 1, height: 1, cell: 2, lightness: vec![0], tops: vec![0], hold: vec![0], near: vec![0] };
+    let scene = Scene { ridges: Vec::new(), light, terrain, relief };
+    let screen = V2::new(1600.0, 1000.0);
+    let ground = Ground::strip(&scene, screen, 60.0);
+    let mut simulation = SnowSimulation::new(screen.x, screen.y, 0.0);
+    let mut fight = Fight::new(ground, 0.0, 11).expect("a fight");
+    let mut room = crate::snowman::room::Room::default();
+    let mut now = 0.0;
+    let tick = |fight: &mut Fight, simulation: &mut SnowSimulation, room: &mut crate::snowman::room::Room, now: &mut f64, seconds: f32| {
+        for _ in 0..(seconds / DT) as usize {
+            *now += DT as f64;
+            simulation.step(DT, V2::new(-100.0, -100.0));
+            fight.step(*now, simulation, V2::ZERO, &[], true, room);
+        }
+    };
+    tick(&mut fight, &mut simulation, &mut room, &mut now, 2.0);
+    let parts = fight.drawings(&room)[0].parts.len();
+    assert_eq!(parts, 3, "a whole snowman is a body, an arm and a hat");
+    // Aimed at his middle every four seconds, after a rest, the throws don't stray; one at him walking may miss.
+    while fight.bot_lives() > 0 && fight.throws < 40 {
+        let drawing = &fight.drawings(&room)[0];
+        let middle = V2::new((drawing.reach[0] + drawing.reach[2]) / 2.0, drawing.reach[1] + (drawing.reach[3] - drawing.reach[1]) * 0.47);
+        let near = fight.aim_near(middle, 0.9);
+        fight.throw_ball(middle, near, now, &mut simulation, V2::ZERO);
+        tick(&mut fight, &mut simulation, &mut room, &mut now, 4.0);
+    }
+    assert_eq!(fight.bot_lives(), 0, "forty snowballs at his middle didn't put him out");
+    tick(&mut fight, &mut simulation, &mut room, &mut now, 6.0);
+    assert_eq!(fight.bot_lives(), 6);
+    assert_eq!(fight.drawings(&room)[0].parts.len(), 3, "the bot didn't come back whole");
+    assert_finite(&simulation);
+}
+
+#[test]
+fn a_room_counts_hits_to_a_round_won_and_starts_another() {
+    use crate::snowman::room::{Heard, Room, STARTING_LIVES, State};
+    let mut room = Room::default();
+    room.opening(false);
+    assert_eq!(room.state, State::Opening);
+    room.take(Heard::Room { ticket: "t".into(), me: "me".into() }, 0.0);
+    room.take(Heard::Player { id: "ann".into(), name: "Ann".into() }, 0.0);
+    assert_eq!(room.me(), Some("me"));
+    assert_eq!(room.hearts("ann"), 5);
+    // Ann's throws at this player come back as heard; this player's own are counted as made.
+    assert_eq!(room.take(Heard::Throw { from: "ann".into(), at: "me".into() }, 1.0), Some(("ann".into(), "me".into())));
+    assert_eq!(room.lives("me"), STARTING_LIVES - 1);
+    for k in 0..STARTING_LIVES {
+        assert!(room.hit("ann", 2.0 + k as f64), "hit {k} didn't count");
+    }
+    assert_eq!(room.winner.as_deref(), Some("me"));
+    assert_eq!(room.wins("me"), 1);
+    assert!(!room.hit("ann", 3.0), "a hit counted after the round was won");
+    room.tick(30.0);
+    assert!(room.winner.is_none() && room.lives("ann") == STARTING_LIVES);
+    room.take(Heard::Closed { full: true }, 31.0);
+    assert!(matches!(room.state, State::Failed(_)) && room.players.is_empty());
 }

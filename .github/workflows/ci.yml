@@ -56,4 +56,9 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
+      # The rooms of snowball fights, which the app links: build.sh makes it for both architectures, this for the runner's.
+      - run: |
+          cargo build --locked --release --manifest-path net/Cargo.toml
+          mkdir -p build/net
+          cp net/target/release/libsnowhush_net.a build/net/
       - run: swift build -c release

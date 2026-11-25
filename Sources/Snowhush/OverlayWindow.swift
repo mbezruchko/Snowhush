@@ -1,7 +1,8 @@
 import AppKit
 
 final class OverlayWindow: NSWindow {
-    private static let desktopLevel = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopWindow)) + 1)
+    /// Behind the windows, but over the snow lying in the wallpaper.
+    private static let desktopLevel = NSWindow.Level(rawValue: PictureWindow.desktopLevel.rawValue + 1)
     /// Just under the Dock, so its icons stay in front as they grow under the pointer.
     static let belowDockLevel = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.dockWindow)) - 1)
 

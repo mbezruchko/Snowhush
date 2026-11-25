@@ -28,6 +28,7 @@ in float vRadius;
 in float vLump;
 in float vSpin;
 in float vWarm;
+in vec3 vSceneLight;
 flat in vec4 vGhost;
 flat in vec4 vPose;
 flat in vec4 vMood;
@@ -654,7 +655,7 @@ void main() {
     vec3 core = vec3(0.965, 0.975, 0.995);
     vec3 edge = vec3(0.62, 0.67, 0.77);
     vec3 color = mix(core, edge, clamp(smoothstep(0.35, 1.0, r) * 0.65 + shading, 0.0, 1.0));
-    color = mix(color, vTint.rgb, vTint.a) * light.rgb;
+    color = mix(color, vTint.rgb, vTint.a) * light.rgb * vSceneLight;
     color = mix(color, candle, vWarm * 0.7);
     a = min(1.0, a * (1.0 + vWarm * 0.8));
     fragment = vec4(color * a, a);

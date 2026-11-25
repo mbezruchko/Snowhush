@@ -26,6 +26,9 @@ struct Uniforms {
     var shake = SIMD4<Float>(0, 0, 0, 0)
     /// The pumpkins' candles: where each burns, how far its light reaches and how bright it is.
     var pumpkins = (SIMD4<Float>(0, 0, 0, 0), SIMD4<Float>(0, 0, 0, 0), SIMD4<Float>(0, 0, 0, 0))
+    /// The New Year's garland lighting the snow round the tree's foot: where, how far and how brightly, and in what colour.
+    var garland = (SIMD4<Float>(0, 0, 0, 0), SIMD4<Float>(0, 0, 0, 0), SIMD4<Float>(0, 0, 0, 0))
+    var garlandColors = (SIMD4<Float>(0, 0, 0, 0), SIMD4<Float>(0, 0, 0, 0), SIMD4<Float>(0, 0, 0, 0))
 }
 
 struct PumpkinUniforms {
@@ -52,6 +55,9 @@ final class Renderer: NSObject, MTKViewDelegate {
     var borrowedSnow: () -> [BorrowedSnow] = { [] }
     /// Called after each step, for what the step sent on to other displays.
     var stepped: () -> Void = {}
+    /// Draws the fireworks, nil once there are none, at the desktop's level behind every window, and says whether it
+    /// did; if not, they are drawn here, kept off the windows by their frames.
+    var fireworksOnDesktop: (Fireworks?, Float) -> Bool = { _, _ in false }
     /// Frames per second while the snow is being disturbed: the display's highest rate, up to 120 on ProMotion screens.
     var interactiveFrameRate = 60
     var budget = PowerBudget.full
@@ -62,6 +68,10 @@ final class Renderer: NSObject, MTKViewDelegate {
     private static let lanternReach: Float = 130
     /// Where the Dock's snow is drawn; without one it stays in the main overlay.
     var dockOverlay: DockOverlay?
+    /// Where the New Year's tree is drawn, under the snow and at the screen's full resolution.
+    var treeView: TreeView?
+    private var treeRenderer: TreeRenderer?
+    private var treeDrawn = false
     var sceneLight: (CFTimeInterval) -> (light: SIMD3<Float>, shadowTint: SIMD4<Float>, rim: SIMD4<Float>, lantern: Float) = { _ in (SIMD3(repeating: 1), .zero, .zero, 0) }
     private var ambient: (light: SIMD3<Float>, shadowTint: SIMD4<Float>, rim: SIMD4<Float>, lantern: Float) = (SIMD3(repeating: 1), .zero, .zero, 0)
     private var lanternAt = SIMD2<Float>(-10_000, -10_000)
@@ -71,6 +81,8 @@ final class Renderer: NSObject, MTKViewDelegate {
     private let queue: MTLCommandQueue
     private let spritePipeline: MTLRenderPipelineState
     private let pilePipeline: MTLRenderPipelineState
+    private var airTexture: MTLTexture?
+    private var airVersion = -1
     private let signPipeline: MTLRenderPipelineState
     private let pumpkinPipeline: MTLRenderPipelineState
     /// Drops on the glass: their bumps added up into a field, and the glass drawn from it.
@@ -249,6 +261,8 @@ final class Renderer: NSObject, MTKViewDelegate {
             if update.slideVelocity != 0 { simulation.spaceSlid(velocity: update.slideVelocity) }
         }
         simulation.setBorrowed(borrowedSnow())
+        simulation.celebration = simulation.tree != nil ? NewYear.celebration() : nil
+        simulation.fireworksPerMinute = simulation.tree != nil ? NewYear.fireworksPerMinute() : 0
         let cursor = cursorLocation()
         let changed = simulation.step(dt: dt, cursor: cursor)
         stepped()
@@ -324,16 +338,29 @@ final class Renderer: NSObject, MTKViewDelegate {
         if candles.count > 0 { uniforms.pumpkins.0 = candles[0] }
         if candles.count > 1 { uniforms.pumpkins.1 = candles[1] }
         if candles.count > 2 { uniforms.pumpkins.2 = candles[2] }
+        if let tree = simulation.tree { light(&uniforms, from: tree) }
         let uniformsLength = MemoryLayout<Uniforms>.stride
 
         let glass = sprites > 0 && simulation.hasGlassDrops ? encodeField(sprites: spriteBuffer, count: sprites, into: commandBuffer, matching: pass, uniforms: uniforms) : nil
         if !simulation.hasGlassDrops { field = nil }
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return }
         drawPumpkins(pumpkins, with: encoder, uniforms: uniforms)
+        // Far off in the sky: behind the snow.
+        if !fireworksOnDesktop(simulation.fireworks, uniforms.time), let fireworks = simulation.fireworks, !fireworks.isEmpty,
+           let treeRenderer = treeRenderer ?? makeTreeRenderer() {
+            treeRenderer.encode(fireworks.sparks, with: encoder, uniforms: TreeUniforms(origin: .zero, size: uniforms.viewSize, time: uniforms.time, shake: SIMD2(uniforms.shake.x, uniforms.shake.y)),
+                                air: pictureAir(), covers: simulation.desktopCovers)
+        }
+        // The sparklers in the hands, in front of the tree, which stands under the snow, as the hands are.
+        if let held = simulation.fireworks?.held, !held.isEmpty, let treeRenderer = treeRenderer ?? makeTreeRenderer() {
+            treeRenderer.encode(held, with: encoder, uniforms: TreeUniforms(origin: .zero, size: uniforms.viewSize, time: uniforms.time, shake: SIMD2(uniforms.shake.x, uniforms.shake.y)),
+                                air: nil, covers: [])
+        }
         drawPiles(piles.filter { !$0.isDock }, with: encoder, uniforms: uniforms, heights: heightBuffer)
         drawSigns(simulation.signs, with: encoder, uniforms: uniforms)
         if sprites > 0 {
             encoder.setRenderPipelineState(spritePipeline)
+            encoder.setVertexTexture(pictureAir(), index: 0)
             encoder.setVertexBuffer(spriteBuffer, offset: 0, index: 0)
             encoder.setVertexBytes(&uniforms, length: uniformsLength, index: 1)
             encoder.setFragmentBytes(&uniforms, length: uniformsLength, index: 1)
@@ -349,6 +376,71 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
         encoder.endEncoding()
         encodeDock(piles.filter(\.isDock), into: commandBuffer, uniforms: uniforms, heights: heightBuffer)
+        encodeTree(into: commandBuffer, uniforms: uniforms)
+    }
+
+    /// The garland's lowest bulbs, in three bunches across the tree, light the drift round its foot.
+    private func light(_ uniforms: inout Uniforms, from tree: ChristmasTree) {
+        var sums = [(place: SIMD2<Float>, color: SIMD3<Float>, count: Float)](repeating: (.zero, .zero, 0), count: 3)
+        for bulb in tree.bulbs {
+            let place = tree.bulbPosition(bulb)
+            guard place.y < tree.base.y + 80 else { continue }
+            let side = place.x < tree.base.x - 18 ? 0 : place.x > tree.base.x + 18 ? 2 : 1
+            sums[side].place += place
+            sums[side].color += bulb.color * bulb.brightness
+            sums[side].count += 1
+        }
+        let lights = sums.map { sum -> (SIMD4<Float>, SIMD4<Float>) in
+            guard sum.count > 0 else { return (.zero, .zero) }
+            let place = sum.place / sum.count
+            return (SIMD4(place.x, max(place.y - 20, tree.base.y), 60, 0.32), SIMD4(sum.color / sum.count, 0))
+        }
+        uniforms.garland = (lights[0].0, lights[1].0, lights[2].0)
+        uniforms.garlandColors = (lights[0].1, lights[1].1, lights[2].1)
+        // At midnight the bursts light the snow instead, the brightest ones.
+        guard let flashes = simulation.fireworks?.lights, !flashes.isEmpty else { return }
+        let slots = (0..<3).map { k -> (SIMD4<Float>, SIMD4<Float>) in
+            guard k < flashes.count else { return (.zero, .zero) }
+            let flash = flashes[k]
+            return (SIMD4(flash.position.x, flash.position.y, 420, flash.strength * 0.5), SIMD4(flash.color, 0))
+        }
+        uniforms.garland = (slots[0].0, slots[1].0, slots[2].0)
+        uniforms.garlandColors = (slots[0].1, slots[1].1, slots[2].1)
+    }
+
+    private func makeTreeRenderer() -> TreeRenderer? {
+        treeRenderer = try? TreeRenderer(device: device, queue: queue, pixelFormat: .bgra8Unorm)
+        return treeRenderer
+    }
+
+    /// Draws the tree into its own layer, and clears that once after the tree is gone.
+    private func encodeTree(into commandBuffer: MTLCommandBuffer, uniforms: Uniforms) {
+        guard let treeView else { return }
+        let tree = simulation.tree.flatMap { $0.base.y > -ChristmasTree.height - 30 ? $0 : nil }
+        guard tree != nil || treeDrawn else { return }
+        let layer = treeView.metalLayer
+        guard let treeRenderer = treeRenderer ?? makeTreeRenderer(), let drawable = layer.nextDrawable() else { return }
+        let pass = MTLRenderPassDescriptor()
+        pass.colorAttachments[0].texture = drawable.texture
+        pass.colorAttachments[0].loadAction = .clear
+        pass.colorAttachments[0].storeAction = .store
+        pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0)
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return }
+        if let tree {
+            let frame = treeView.frame
+            let treeUniforms = TreeUniforms(
+                origin: SIMD2(Float(frame.minX), Float(frame.minY)),
+                size: SIMD2(Float(frame.width), Float(frame.height)),
+                time: uniforms.time,
+                shake: SIMD2(uniforms.shake.x, uniforms.shake.y),
+                light: uniforms.light,
+                shadowTint: uniforms.shadowTint
+            )
+            treeRenderer.encode(tree, with: encoder, uniforms: treeUniforms)
+        }
+        encoder.endEncoding()
+        commandBuffer.present(drawable)
+        treeDrawn = tree != nil
     }
 
     /// Adds up the bumps of the drops on the glass into the field, as big as the frame drawn, for the glass to be drawn
@@ -416,6 +508,20 @@ final class Renderer: NSObject, MTKViewDelegate {
             clearDock(into: commandBuffer)
             commandBuffer.commit()
         }
+    }
+
+    /// The wallpaper's light and nearness for the flakes falling in its picture, as a texture made again only when the
+    /// wallpaper changes; one clear cell while there is none.
+    private func pictureAir() -> MTLTexture? {
+        guard airVersion != simulation.airVersion || airTexture == nil else { return airTexture }
+        airVersion = simulation.airVersion
+        let size = simulation.airSize
+        let cells = size.width > 0 ? simulation.air : [255, 255, 255, 0]
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: max(size.width, 1), height: max(size.height, 1), mipmapped: false)
+        descriptor.usage = .shaderRead
+        airTexture = device.makeTexture(descriptor: descriptor)
+        airTexture?.replace(region: MTLRegionMake2D(0, 0, descriptor.width, descriptor.height), mipmapLevel: 0, withBytes: cells, bytesPerRow: descriptor.width * 4)
+        return airTexture
     }
 
     private func drawPiles(_ piles: [PileLayer], with encoder: MTLRenderCommandEncoder, uniforms: Uniforms, heights: MTLBuffer) {

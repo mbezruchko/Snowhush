@@ -2,9 +2,10 @@
 <Package
   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
   xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
-  IgnorableNamespaces="uap desktop rescap">
+  IgnorableNamespaces="uap uap3 desktop rescap">
 
   <Identity
     Name="MykhailoBezruchko.Snowhush"
@@ -38,6 +39,9 @@
         <desktop:Extension Category="windows.startupTask" Executable="Snowhush.exe" EntryPoint="Windows.FullTrustApplication">
           <desktop:StartupTask TaskId="SnowhushStartup" Enabled="false" DisplayName="Snowhush" />
         </desktop:Extension>
+        <uap3:Extension Category="windows.protocol">
+          <uap3:Protocol Name="snowhush" Parameters="&quot;%1&quot;" />
+        </uap3:Extension>
       </Extensions>
     </Application>
   </Applications>

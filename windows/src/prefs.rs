@@ -32,11 +32,20 @@ pub struct Settings {
     pub behind_taskbar: bool,
     pub show_in_screenshots: bool,
     /// The snow also settles on what the desktop draws without a window of its own: a selection dragged across it.
-    pub deep_interaction: bool,
+    pub selection: bool,
+    /// Snow lies in the wallpaper's picture: Accumulate's Wallpaper.
+    pub wallpaper: bool,
+    /// Deep Interaction: the snow falls into the wallpaper's depth, behind what is nearer in it.
+    pub depth: bool,
+    /// How much snow lies in the wallpaper's picture, in thousandths, kept from one run to the next.
+    pub picture_level: u32,
+    /// Snowballs thrown, counted to three: until then the round tells how to throw.
+    pub fight_throws: u32,
     pub welcomed: bool,
     /// Unix seconds of the first run, or 0 for an install older than the stamp.
     pub installed_at: u32,
     pub halloween: Choice,
+    pub new_year: Choice,
     /// What falls: the kind picked last, or two mixed.
     pub picked: Picked,
     /// Drawn at the display's highest rate all the time, instead of only while something is pushed around.
@@ -48,7 +57,17 @@ pub struct Settings {
 impl Settings {
     /// Whether snow settles anywhere.
     pub fn accumulates(&self) -> bool {
-        self.ground || self.snow_on_windows
+        self.ground || self.snow_on_windows || self.wallpaper
+    }
+
+    /// Whether the wallpaper is read at all: for the snow lying in it, its depth or both.
+    pub fn reads_wallpaper(&self) -> bool {
+        self.wallpaper || self.depth
+    }
+
+    /// Whether snowmen live in the wallpaper's picture for a snowball fight: only with its depth.
+    pub fn fights(&self) -> bool {
+        self.depth
     }
 
     pub fn load() -> Settings {
@@ -72,10 +91,16 @@ impl Settings {
             over_full_screen: read(w!("showOverFullScreen")).is_some_and(|v| v != 0),
             behind_taskbar: read(w!("behindTaskbar")).is_some_and(|v| v != 0),
             show_in_screenshots: read(w!("showInScreenshots")).is_some_and(|v| v != 0),
-            deep_interaction: read(w!("deepInteraction")).is_some_and(|v| v != 0),
+            // Before Deep Interaction meant the wallpaper's depth, it meant snow settling on a selection on the desktop.
+            selection: read(w!("settleSelection")).or(read(w!("deepInteraction"))).is_some_and(|v| v != 0),
+            wallpaper: read(w!("settleWallpaper")).is_some_and(|v| v != 0),
+            depth: read(w!("wallpaperDepth")).is_none_or(|v| v != 0),
+            picture_level: read(w!("pictureLevel")).map_or(0, |v| v.min(2000)),
+            fight_throws: read(w!("fightThrows")).map_or(0, |v| v.min(3)),
             welcomed,
             installed_at,
             halloween: Choice { on: read(w!("halloweenOn")).is_some_and(|v| v != 0), skipped: read(w!("halloweenSkipped")).unwrap_or(0) },
+            new_year: Choice { on: read(w!("newYearOn")).is_some_and(|v| v != 0), skipped: read(w!("newYearSkipped")).unwrap_or(0) },
             max_performance: read(w!("performance")).is_some_and(|v| v == 1),
             opacity: read(w!("fallingOpacity")).map_or(100, |v| v.clamp(10, 100)),
             picked: Picked::load(read(w!("mode")), read(w!("autumn")), read(w!("mixed")), [read(w!("mix0")), read(w!("mix1"))]),
@@ -91,11 +116,16 @@ impl Settings {
         write(w!("showOverFullScreen"), self.over_full_screen as u32);
         write(w!("behindTaskbar"), self.behind_taskbar as u32);
         write(w!("showInScreenshots"), self.show_in_screenshots as u32);
-        write(w!("deepInteraction"), self.deep_interaction as u32);
+        write(w!("settleSelection"), self.selection as u32);
+        write(w!("settleWallpaper"), self.wallpaper as u32);
+        write(w!("wallpaperDepth"), self.depth as u32);
+        write(w!("pictureLevel"), self.picture_level);
         write(w!("welcomed"), self.welcomed as u32);
         write(w!("installedAt"), self.installed_at);
         write(w!("halloweenOn"), self.halloween.on as u32);
         write(w!("halloweenSkipped"), self.halloween.skipped);
+        write(w!("newYearOn"), self.new_year.on as u32);
+        write(w!("newYearSkipped"), self.new_year.skipped);
         write(w!("mode"), modes::number(self.picked.mode));
         write(w!("mixed"), self.picked.mixed as u32);
         write(w!("mix0"), modes::number(self.picked.mix[0]));
@@ -104,6 +134,11 @@ impl Settings {
         write(w!("performance"), self.max_performance as u32);
         write(w!("fallingOpacity"), self.opacity);
     }
+}
+
+/// Keeps the snowballs thrown on their own: the menu's copy of the settings, saved whole, never hears of them.
+pub fn keep_fight_throws(count: u32) {
+    write(w!("fightThrows"), count);
 }
 
 pub fn opens_at_login() -> bool {

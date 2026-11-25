@@ -30,7 +30,7 @@ pub const SIGN_CAPTIONS: [&str; 12] = [
 
 /// Lets Halloween be tried out on any day: SNOWHUSH_HALLOWEEN=1, and the daylight under it at any hour: SNOWHUSH_HOUR=22.
 pub fn previewed() -> bool {
-    std::env::var("SNOWHUSH_HALLOWEEN").is_ok_and(|value| value == "1")
+    crate::preview::on("halloween")
 }
 
 pub fn previewed_hour() -> Option<f32> {
@@ -66,6 +66,11 @@ impl Choice {
     /// Whether Halloween is wanted today: turned on, or come with its season and not turned off for it.
     pub fn wanted(self, today: Today) -> bool {
         self.on || today.season && self.skipped != today.year
+    }
+
+    /// Turned off, as another holiday is turned on: for the season if it is the season.
+    pub fn turned_off(self, today: Today) -> Choice {
+        Choice { on: false, skipped: if today.season { today.year } else { self.skipped } }
     }
 
     /// Turned on or off from the menu. Turned on in season, it ends with the season; any other day, it stays on.

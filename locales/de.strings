@@ -8,6 +8,7 @@
 "rain" = "Regen";
 "blossom" = "Kirschblüte";
 "halloween" = "Halloween";
+"newyear" = "Neujahr";
 "settings" = "Einstellungen";
 "behavior" = "Verhalten";
 "display" = "Darstellung";
@@ -17,6 +18,7 @@
 "surface.dock" = "Dock";
 "surface.widgets" = "Widgets";
 "surface.windows" = "Fenster";
+"surface.wallpaper" = "Hintergrund";
 "surface.panel" = "Leiste";
 "all" = "Alle";
 "melt.snow" = "Schnee schmilzt";
@@ -69,3 +71,27 @@
 /* Direct snow sculpting (macOS). */
 "snowman.gesture" = "⌥ + drag snow · stack a smaller ball on a larger one";
 "snowman.sound" = "Snow interaction sounds";
+"fight" = "Schneeballschlacht";
+"fight.invite" = "Freunde einladen";
+"fight.copy" = "Einladungslink kopieren";
+"fight.join" = "Mit kopiertem Link beitreten";
+"fight.copied" = "Link kopiert";
+"fight.nolink" = "Kein Einladungslink in der Zwischenablage";
+"fight.leave" = "Raum verlassen";
+"fight.opening" = "Raum wird geöffnet …";
+"fight.joining" = "Verbinde …";
+"fight.waiting" = "Link kopiert – warte auf Freunde";
+"fight.with" = "Mit %@";
+"fight.full" = "Der Raum ist voll";
+"fight.closed" = "Der Raum wurde geschlossen";
+"fight.failed" = "Verbindung fehlgeschlagen";
+"fight.unavailable" = "Online-Spiel ist gerade nicht verfügbar";
+"surface.selection" = "Auswahl";
+"fight.you" = "Du";
+"fight.won" = "%@ gewinnt!";
+"fight.youwon" = "Du gewinnst!";
+"fight.out" = "Du bist raus";
+"fight.wins" = "Siege";
+"fight.hint" = "⌘-Klick aufs Hintergrundbild wirft einen Schneeball";
+"fight.hint.ctrl" = "Strg-Klick aufs Hintergrundbild wirft einen Schneeball";
+"fight.hint.snowman" = "Klick auf einen Schneemann wirft einen Schneeball nach ihm";

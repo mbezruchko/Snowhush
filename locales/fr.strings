@@ -8,6 +8,7 @@
 "rain" = "Pluie";
 "blossom" = "Fleurs de cerisier";
 "halloween" = "Halloween";
+"newyear" = "Nouvel An";
 "settings" = "Réglages";
 "behavior" = "Comportement";
 "display" = "Affichage";
@@ -17,6 +18,7 @@
 "surface.dock" = "Dock";
 "surface.widgets" = "Widgets";
 "surface.windows" = "Fenêtres";
+"surface.wallpaper" = "Fond";
 "surface.panel" = "Panneau";
 "all" = "Tout";
 "melt.snow" = "Fonte de la neige";
@@ -69,3 +71,27 @@
 /* Direct snow sculpting (macOS). */
 "snowman.gesture" = "⌥ + drag snow · stack a smaller ball on a larger one";
 "snowman.sound" = "Snow interaction sounds";
+"fight" = "Bataille de boules de neige";
+"fight.invite" = "Inviter des amis";
+"fight.copy" = "Copier le lien d’invitation";
+"fight.join" = "Rejoindre avec le lien copié";
+"fight.copied" = "Lien copié";
+"fight.nolink" = "Aucun lien d’invitation dans le presse-papiers";
+"fight.leave" = "Quitter la salle";
+"fight.opening" = "Ouverture d’une salle…";
+"fight.joining" = "Connexion…";
+"fight.waiting" = "Lien copié — en attente d’amis";
+"fight.with" = "Avec %@";
+"fight.full" = "La salle est pleine";
+"fight.closed" = "La salle a été fermée";
+"fight.failed" = "Connexion impossible";
+"fight.unavailable" = "Le jeu en ligne est indisponible pour le moment";
+"surface.selection" = "Sélection";
+"fight.you" = "Toi";
+"fight.won" = "%@ gagne !";
+"fight.youwon" = "Tu as gagné !";
+"fight.out" = "Tu es éliminé";
+"fight.wins" = "Victoires";
+"fight.hint" = "⌘-clic sur le fond d’écran pour lancer une boule de neige";
+"fight.hint.ctrl" = "Ctrl-clic sur le fond d’écran pour lancer une boule de neige";
+"fight.hint.snowman" = "Clic sur un bonhomme de neige pour lui lancer une boule de neige";

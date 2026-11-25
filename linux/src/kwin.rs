@@ -30,6 +30,24 @@ struct Reports {
     switch: Arc<Mutex<Switch>>,
 }
 
+/// Takes the links to snowball fights another copy of Snowhush was opened with.
+struct Links {
+    shared: Arc<Shared>,
+}
+
+#[zbus::interface(name = "io.github.mbezruchko.Snowhush")]
+impl Links {
+    fn join(&self, link: &str) {
+        self.shared.hand_link(link.to_string());
+    }
+}
+
+/// Hands a link to a snowball fight to the copy of Snowhush already running. Returns whether it took it.
+pub fn hand_over(link: &str) -> bool {
+    let Ok(connection) = Connection::session() else { return false };
+    connection.call_method(Some(SERVICE), PATH, Some(SERVICE), "Join", &(link,)).is_ok()
+}
+
 /// The desktop last reported with its column in the grid, and whether the desktops are still sliding after the
 /// latest switch, the `count`th.
 #[derive(Default)]
@@ -153,7 +171,8 @@ pub fn serve(shared: Arc<Shared>) -> zbus::Result<Option<Connection>> {
         .name(SERVICE)?
         .allow_name_replacements(false)
         .replace_existing_names(false)
-        .serve_at(PATH, Reports { shared, switch: Arc::default() })?
+        .serve_at(PATH, Reports { shared: shared.clone(), switch: Arc::default() })?
+        .serve_at(PATH, Links { shared })?
         .build();
     match built {
         Ok(connection) => Ok(Some(connection)),
