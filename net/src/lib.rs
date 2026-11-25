@@ -9,8 +9,8 @@
 
 use std::{
     collections::{HashMap, VecDeque},
-    net::{Ipv4Addr, SocketAddr, SocketAddrV4},
     ffi::{CStr, CString, c_char},
+    net::{Ipv4Addr, SocketAddr, SocketAddrV4},
     sync::{Arc, Mutex, OnceLock},
     time::Duration,
 };
@@ -38,17 +38,34 @@ const MAX_NAME: usize = 24;
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum Event {
     /// Hosting: the room is open, and this is its invite.
-    Room { ticket: String, me: String },
+    Room {
+        ticket: String,
+        me: String,
+    },
     /// Joined a room as `me`.
-    Joined { me: String },
+    Joined {
+        me: String,
+    },
     /// Someone is in the room: told of each one already there on joining, and of each who comes after.
-    Player { id: String, name: String },
-    Left { id: String },
+    Player {
+        id: String,
+        name: String,
+    },
+    Left {
+        id: String,
+    },
     /// `from` threw a snowball at `at` and hit.
-    Throw { from: String, at: String },
+    Throw {
+        from: String,
+        at: String,
+    },
     /// The room is gone: the host left, or the way to it was lost.
-    Closed { reason: String },
-    Error { message: String },
+    Closed {
+        reason: String,
+    },
+    Error {
+        message: String,
+    },
 }
 
 /// What goes between the players.
@@ -158,19 +175,30 @@ pub fn encode_ticket(addr: &EndpointAddr) -> Result<String> {
 pub fn decode_ticket(ticket: &str) -> Result<EndpointAddr> {
     // As it may come pasted: in a link, with spaces or a line break round it.
     let ticket = ticket.trim().rsplit('/').next().unwrap_or_default();
-    let bytes = BASE64URL_NOPAD.decode(ticket.as_bytes()).map_err(|_| anyhow!("not an invite"))?;
+    let bytes = BASE64URL_NOPAD
+        .decode(ticket.as_bytes())
+        .map_err(|_| anyhow!("not an invite"))?;
     let invalid = || anyhow!("not an invite");
-    let key: &[u8; 32] = bytes.get(..32).and_then(|k| k.try_into().ok()).ok_or_else(invalid)?;
+    let key: &[u8; 32] = bytes
+        .get(..32)
+        .and_then(|k| k.try_into().ok())
+        .ok_or_else(invalid)?;
     let mut addr = EndpointAddr::new(EndpointId::from_bytes(key).map_err(|_| invalid())?);
     let count = *bytes.get(32).ok_or_else(invalid)? as usize;
     let mut at = 33;
     for _ in 0..count {
         let ip = bytes.get(at..at + 6).ok_or_else(invalid)?;
-        addr = addr.with_ip_addr(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(ip[0], ip[1], ip[2], ip[3]), u16::from_be_bytes([ip[4], ip[5]]))));
+        addr = addr.with_ip_addr(SocketAddr::V4(SocketAddrV4::new(
+            Ipv4Addr::new(ip[0], ip[1], ip[2], ip[3]),
+            u16::from_be_bytes([ip[4], ip[5]]),
+        )));
         at += 6;
     }
     if at < bytes.len() {
-        let relay: RelayUrl = std::str::from_utf8(&bytes[at..]).context("not an invite")?.parse().context("not an invite")?;
+        let relay: RelayUrl = std::str::from_utf8(&bytes[at..])
+            .context("not an invite")?
+            .parse()
+            .context("not an invite")?;
         addr = addr.with_relay_url(relay);
     }
     Ok(addr)
@@ -211,9 +239,17 @@ fn spawn_writer(mut send: SendStream, mut rx: mpsc::UnboundedReceiver<Wire>) {
 }
 
 fn clean(name: &str) -> String {
-    let name: String = name.chars().filter(|c| !c.is_control()).take(MAX_NAME).collect();
+    let name: String = name
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(MAX_NAME)
+        .collect();
     let name = name.trim().to_string();
-    if name.is_empty() { "Snowman".to_string() } else { name }
+    if name.is_empty() {
+        "Snowman".to_string()
+    } else {
+        name
+    }
 }
 
 pub async fn host(name: String, relay: Option<String>) -> Result<Arc<Room>> {
@@ -230,14 +266,21 @@ pub async fn host(name: String, relay: Option<String>) -> Result<Arc<Room>> {
         guests: Mutex::new(HashMap::new()),
         host: Mutex::new(None),
     });
-    room.tell(Event::Room { ticket: encode_ticket(&endpoint.addr())?, me: me.to_string() });
+    room.tell(Event::Room {
+        ticket: encode_ticket(&endpoint.addr())?,
+        me: me.to_string(),
+    });
     let accepting = room.clone();
     tokio::spawn(async move {
         while let Some(incoming) = accepting.endpoint.accept().await {
             let room = accepting.clone();
             tokio::spawn(async move {
-                let Ok(accepting) = incoming.accept() else { return };
-                let Ok(connection) = accepting.await else { return };
+                let Ok(accepting) = incoming.accept() else {
+                    return;
+                };
+                let Ok(connection) = accepting.await else {
+                    return;
+                };
                 let _ = welcome(room, connection).await;
             });
         }
@@ -250,7 +293,9 @@ pub async fn host(name: String, relay: Option<String>) -> Result<Arc<Room>> {
 async fn welcome(room: Arc<Room>, connection: Connection) -> Result<()> {
     let id = connection.remote_id();
     let (mut send, mut recv) = connection.accept_bi().await?;
-    let Wire::Hello { name } = tokio::time::timeout(Duration::from_secs(10), read(&mut recv)).await?? else {
+    let Wire::Hello { name } =
+        tokio::time::timeout(Duration::from_secs(10), read(&mut recv)).await??
+    else {
         bail!("no hello");
     };
     let name = clean(&name);
@@ -261,21 +306,57 @@ async fn welcome(room: Arc<Room>, connection: Connection) -> Result<()> {
             bail!("full");
         }
     }
-    write(&mut send, &Wire::Player { id: room.me.to_string(), name: room.name.clone() }).await?;
-    let present: Vec<(EndpointId, String)> =
-        room.guests.lock().unwrap().iter().filter(|(other, _)| **other != id).map(|(other, guest)| (*other, guest.name.clone())).collect();
+    write(
+        &mut send,
+        &Wire::Player {
+            id: room.me.to_string(),
+            name: room.name.clone(),
+        },
+    )
+    .await?;
+    let present: Vec<(EndpointId, String)> = room
+        .guests
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(other, _)| **other != id)
+        .map(|(other, guest)| (*other, guest.name.clone()))
+        .collect();
     for (other, other_name) in present {
-        write(&mut send, &Wire::Player { id: other.to_string(), name: other_name }).await?;
+        write(
+            &mut send,
+            &Wire::Player {
+                id: other.to_string(),
+                name: other_name,
+            },
+        )
+        .await?;
     }
     let (tx, rx) = mpsc::unbounded_channel();
     spawn_writer(send, rx);
     // The others hear of him even when he comes back, as he comes back into a fresh round.
-    room.pass_on(&Wire::Player { id: id.to_string(), name: name.clone() }, Some(id));
-    let before = room.guests.lock().unwrap().insert(id, Guest { name: name.clone(), tx, connection: connection.clone() });
+    room.pass_on(
+        &Wire::Player {
+            id: id.to_string(),
+            name: name.clone(),
+        },
+        Some(id),
+    );
+    let before = room.guests.lock().unwrap().insert(
+        id,
+        Guest {
+            name: name.clone(),
+            tx,
+            connection: connection.clone(),
+        },
+    );
     if let Some(before) = before {
         before.connection.close(0u32.into(), b"replaced");
     }
-    room.tell(Event::Player { id: id.to_string(), name });
+    room.tell(Event::Player {
+        id: id.to_string(),
+        name,
+    });
     // Throws go to everyone; who threw is who sent it, whatever it says.
     let mut last = tokio::time::Instant::now() - Duration::from_secs(1);
     while let Ok(wire) = read(&mut recv).await {
@@ -285,14 +366,23 @@ async fn welcome(room: Arc<Room>, connection: Connection) -> Result<()> {
                 continue;
             }
             last = tokio::time::Instant::now();
-            let wire = Wire::Throw { from: id.to_string(), at: at.clone() };
+            let wire = Wire::Throw {
+                from: id.to_string(),
+                at: at.clone(),
+            };
             room.pass_on(&wire, Some(id));
-            room.tell(Event::Throw { from: id.to_string(), at });
+            room.tell(Event::Throw {
+                from: id.to_string(),
+                at,
+            });
         }
     }
     {
         let mut guests = room.guests.lock().unwrap();
-        if guests.get(&id).is_none_or(|guest| guest.connection.stable_id() != connection.stable_id()) {
+        if guests
+            .get(&id)
+            .is_none_or(|guest| guest.connection.stable_id() != connection.stable_id())
+        {
             return Ok(());
         }
         guests.remove(&id);
@@ -306,9 +396,17 @@ pub async fn join(ticket: String, name: String, relay: Option<String>) -> Result
     let addr = decode_ticket(&ticket)?;
     let name = clean(&name);
     let known = (addr.id, name.clone());
-    let key = JOINED_AS.lock().unwrap().as_ref().and_then(|keys| keys.get(&known).cloned());
+    let key = JOINED_AS
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|keys| keys.get(&known).cloned());
     let endpoint = bind(relay, key).await?;
-    JOINED_AS.lock().unwrap().get_or_insert_with(HashMap::new).insert(known, endpoint.secret_key().clone());
+    JOINED_AS
+        .lock()
+        .unwrap()
+        .get_or_insert_with(HashMap::new)
+        .insert(known, endpoint.secret_key().clone());
     let me = endpoint.id();
     let connection = tokio::time::timeout(Duration::from_secs(25), endpoint.connect(addr, ALPN))
         .await
@@ -330,16 +428,27 @@ pub async fn join(ticket: String, name: String, relay: Option<String>) -> Result
     tokio::spawn(async move {
         loop {
             match read(&mut recv).await {
-                Ok(Wire::Player { id, name }) if id != listening.me.to_string() => listening.tell(Event::Player { id, name: clean(&name) }),
+                Ok(Wire::Player { id, name }) if id != listening.me.to_string() => {
+                    listening.tell(Event::Player {
+                        id,
+                        name: clean(&name),
+                    })
+                }
                 Ok(Wire::Left { id }) => listening.tell(Event::Left { id }),
                 Ok(Wire::Throw { from, at }) => listening.tell(Event::Throw { from, at }),
                 Ok(_) => {}
                 Err(_) => {
                     let reason = match connection.close_reason() {
-                        Some(iroh::endpoint::ConnectionError::ApplicationClosed(close)) if close.reason.as_ref() == b"full" => "full",
+                        Some(iroh::endpoint::ConnectionError::ApplicationClosed(close))
+                            if close.reason.as_ref() == b"full" =>
+                        {
+                            "full"
+                        }
                         _ => "gone",
                     };
-                    listening.tell(Event::Closed { reason: reason.to_string() });
+                    listening.tell(Event::Closed {
+                        reason: reason.to_string(),
+                    });
                     break;
                 }
             }
@@ -351,7 +460,10 @@ pub async fn join(ticket: String, name: String, relay: Option<String>) -> Result
 impl Room {
     /// Says that this player threw at `at` and hit.
     pub fn throw(&self, at: &str) {
-        let wire = Wire::Throw { from: self.me.to_string(), at: at.to_string() };
+        let wire = Wire::Throw {
+            from: self.me.to_string(),
+            at: at.to_string(),
+        };
         if let Some(host) = self.host.lock().unwrap().as_ref() {
             let _ = host.send(wire);
         } else {
@@ -373,11 +485,16 @@ fn string(text: *const c_char) -> Option<String> {
     if text.is_null() {
         return None;
     }
-    unsafe { CStr::from_ptr(text) }.to_str().ok().map(str::to_string)
+    unsafe { CStr::from_ptr(text) }
+        .to_str()
+        .ok()
+        .map(str::to_string)
 }
 
 fn give(text: String) -> *mut c_char {
-    CString::new(text).map(CString::into_raw).unwrap_or(std::ptr::null_mut())
+    CString::new(text)
+        .map(CString::into_raw)
+        .unwrap_or(std::ptr::null_mut())
 }
 
 fn open(making: impl std::future::Future<Output = Result<Arc<Room>>> + Send + 'static) {
@@ -385,7 +502,9 @@ fn open(making: impl std::future::Future<Output = Result<Arc<Room>>> + Send + 's
     runtime().spawn(async move {
         match making.await {
             Ok(room) => *ROOM.lock().unwrap() = Some(room),
-            Err(error) => tell_loose(Event::Error { message: format!("{error:#}") }),
+            Err(error) => tell_loose(Event::Error {
+                message: format!("{error:#}"),
+            }),
         }
     });
 }
@@ -407,7 +526,11 @@ pub mod play {
 
     /// Joins the room of `ticket` as `name`; a `joined` event says it worked, an `error` event that it didn't.
     pub fn join(ticket: &str, name: &str, relay: Option<&str>) {
-        open(super::join(ticket.to_string(), name.to_string(), relay.map(str::to_string)));
+        open(super::join(
+            ticket.to_string(),
+            name.to_string(),
+            relay.map(str::to_string),
+        ));
     }
 
     /// Says this player hit the player `at` with a snowball.
@@ -419,7 +542,11 @@ pub mod play {
 
     /// The next thing that happened; none when there is none.
     pub fn next() -> Option<Event> {
-        LOOSE.lock().unwrap().pop_front().or_else(|| ROOM.lock().unwrap().as_ref().and_then(|room| room.next()))
+        LOOSE
+            .lock()
+            .unwrap()
+            .pop_front()
+            .or_else(|| ROOM.lock().unwrap().as_ref().and_then(|room| room.next()))
     }
 
     pub fn leave() {
@@ -445,7 +572,11 @@ pub extern "C" fn sn_host(name: *const c_char, relay: *const c_char) {
 /// Joins the room of `ticket` as `name`; a `joined` event says it worked, an `error` event that it didn't.
 #[unsafe(no_mangle)]
 pub extern "C" fn sn_join(ticket: *const c_char, name: *const c_char, relay: *const c_char) {
-    play::join(&string(ticket).unwrap_or_default(), &string(name).unwrap_or_default(), string(relay).as_deref());
+    play::join(
+        &string(ticket).unwrap_or_default(),
+        &string(name).unwrap_or_default(),
+        string(relay).as_deref(),
+    );
 }
 
 /// Says this player hit the player `at` with a snowball.

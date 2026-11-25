@@ -35,7 +35,12 @@ async fn main() -> anyhow::Result<()> {
                 Event::Joined { me: id } => me = id.clone(),
                 Event::Player { id, .. } => others.push(id.clone()),
                 Event::Left { id } => others.retain(|o| o != id),
-                Event::Throw { from, at } if *at == me => answer = Some((tokio::time::Instant::now() + Duration::from_millis(1500), from.clone())),
+                Event::Throw { from, at } if *at == me => {
+                    answer = Some((
+                        tokio::time::Instant::now() + Duration::from_millis(1500),
+                        from.clone(),
+                    ))
+                }
                 Event::Closed { .. } => return Ok(()),
                 _ => {}
             }
@@ -53,7 +58,10 @@ async fn main() -> anyhow::Result<()> {
                 println!("throwing at {target}");
                 room.throw(target);
             }
-            let jitter = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.subsec_millis() as u64 % 6).unwrap_or(0);
+            let jitter = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map(|d| d.subsec_millis() as u64 % 6)
+                .unwrap_or(0);
             next_throw = now + Duration::from_secs(8 + jitter);
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
