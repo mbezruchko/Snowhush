@@ -10,7 +10,9 @@ use snowhush_core::snowman::room::Room;
 use snowhush_core::snowman::{Fight, Ground, writing};
 use snowhush_core::wallpaper::Scene;
 use windows::Win32::Foundation::{HWND, RECT};
-use windows::Win32::UI::WindowsAndMessaging::{DestroyWindow, GetWindowRect, IsWindow, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetWindowPos};
+use windows::Win32::UI::WindowsAndMessaging::{
+    DestroyWindow, GetWindowRect, IsWindow, SW_HIDE, SW_SHOWNA, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetWindowPos, ShowWindow,
+};
 use windows::core::Result;
 
 use crate::desktop::DesktopLayer;
@@ -45,6 +47,8 @@ pub struct PictureSnow {
     drawn_at: f64,
     /// Something shows on the surface.
     showing: bool,
+    /// Its window put away while a new wallpaper is read: a cleared surface could go on showing the old one's snow.
+    hidden: bool,
     /// The snowball fight in the picture, while there is one; and where the overlay's simulation starts on the display.
     fight: Option<Fight>,
     offset: V2,
@@ -93,6 +97,7 @@ impl PictureSnow {
             drawn_version: None,
             drawn_at: f64::NEG_INFINITY,
             showing: false,
+            hidden: false,
             fight: None,
             offset: V2::ZERO,
             visible: true,
@@ -133,6 +138,22 @@ impl PictureSnow {
         simulation.set_keeps_awake(false);
         simulation.set_picture(None, None);
         self.clear(gpu);
+        if !self.hidden {
+            self.hidden = true;
+            unsafe {
+                let _ = ShowWindow(self.window, SW_HIDE);
+            }
+        }
+    }
+
+    /// Brings the window back once there is something new to show in it.
+    fn reveal(&mut self) {
+        if self.showing && self.hidden {
+            self.hidden = false;
+            unsafe {
+                let _ = ShowWindow(self.window, SW_SHOWNA);
+            }
+        }
     }
 
     fn clear(&mut self, gpu: &Gpu) {
@@ -239,6 +260,7 @@ impl PictureSnow {
                 }
             } else if moved || changed || !self.showing {
                 self.showing = self.surface.present_picture(gpu, painting, view, &snowmen, &words).is_ok();
+                self.reveal();
             }
             return;
         }
@@ -251,6 +273,7 @@ impl PictureSnow {
             match self.surface.draw_picture(gpu, painting, &lying, view, &snowmen, &words) {
                 Ok(()) => {
                     self.showing = true;
+                    self.reveal();
                     self.drawn_version = Some(version);
                     self.drawn_at = now;
                 }
