@@ -3357,7 +3357,7 @@ checksum = "149309498a5f7334b12ddae0cad8aba81ce785fe91755068867e017cf98fee46"
 
 [[package]]
 name = "snowhush"
-version = "0.13.2"
+version = "0.14.0"
 dependencies = [
  "serde_json",
  "snowhush-core",
