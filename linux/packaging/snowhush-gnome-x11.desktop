@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Snowhush (GNOME X11)
+GenericName=Desktop Snow
+Comment=Snow on your desktop and windows
+Exec=snowhush-gnome-x11
+Icon=snowhush-gnome-x11
+Categories=Utility;
+Keywords=snow;winter;desktop;
+OnlyShowIn=GNOME;
+StartupNotify=false
